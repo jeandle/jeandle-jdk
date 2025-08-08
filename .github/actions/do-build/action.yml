@@ -42,7 +42,7 @@ runs:
     - name: 'Build'
       id: build
       run: >
-        make LOG=info ${{ inputs.make-target }}
+        make LOG=info ${{ inputs.make-target }} JOBS=$[$(nproc)/2]
         || bash ./.github/scripts/gen-build-failure-report.sh "$GITHUB_STEP_SUMMARY"
       shell: bash
 

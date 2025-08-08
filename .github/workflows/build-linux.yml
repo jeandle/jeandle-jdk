@@ -42,7 +42,7 @@ on:
       debug-levels:
         required: false
         type: string
-        default: '[ "release" ]'
+        default: '[ "debug", "release" ]'
       gcc-major-version:
         required: true
         type: string
@@ -72,10 +72,21 @@ jobs:
       fail-fast: false
       matrix:
         debug-level: ${{ fromJSON(inputs.debug-levels) }}
+        include:
+          - debug-level: debug
+            flags: --with-debug-level=fastdebug
+            suffix: -debug
+            llvm-flags: '-DCMAKE_BUILD_TYPE=Release -DLLVM_ENABLE_ASSERTIONS=ON'
+          - debug-level: release
+            llvm-flags: '-DCMAKE_BUILD_TYPE=Release'
 
     steps:
       - name: 'Checkout the JDK source'
         uses: actions/checkout@v4
+        with:
+          repository: ${{ github.event.pull_request.head.repo.full_name }}
+          ref: ${{ github.event.pull_request.head.ref }}
+          fetch-depth: 1
 
       - name: 'Get the BootJDK'
         id: bootjdk
@@ -114,33 +125,45 @@ jobs:
       - name: 'Build LLVM'
         run: |
           echo "github workspace: ${GITHUB_WORKSPACE}"
-          # set CO_BRANCH
+          # set CO_REPO and CO_BRANCH
           JDK_DIR=`pwd`
-          target_branch_llvm=`git log -1 | grep "CO_BRANCH" | awk -F ':| ' '{print $NF}'`
-          if [ -z "${target_branch_llvm}" ]; then
-            target_branch_llvm="main"
+          TARGET_REPO=`git log -n 1 | grep "CO_REPO" | sed -E 's/^[[:space:]]*CO_REPO[[:space:]]*:[[:space:]]*(.*)$/\1/'`
+          TARGET_BRANCH=`git log -n 1 | grep "CO_BRANCH" | sed -E 's/^[[:space:]]*CO_BRANCH[[:space:]]*:[[:space:]]*(.*)$/\1/'`
+
+          if [ -z "${TARGET_REPO}" ]; then
+            TARGET_REPO="https://github.com/jeandle/jeandle-llvm.git"
           fi
-          echo "target branch of llvm: $target_branch_llvm"
+          echo "target repo of llvm: $TARGET_REPO"
+
+          if [ -z "${TARGET_BRANCH}" ]; then
+            TARGET_BRANCH="main"
+          fi
+          echo "target branch of llvm: $TARGET_BRANCH"
 
           # clone llvm
-          cd ../
+          pushd ../
+          echo "Cloning jeandle-llvm: git clone -b ${TARGET_BRANCH} --depth=1 ${TARGET_REPO} jeandle-llvm..."
+          git clone -b ${TARGET_BRANCH} --depth=1 ${TARGET_REPO} jeandle-llvm
           LLVM_DIR=`pwd`/jeandle-llvm
-          git clone -b ${target_branch_llvm} --depth=1 https://github.com/jeandle/jeandle-llvm.git
 
           #build llvm
-          cd ${LLVM_DIR}
+          pushd ${LLVM_DIR}
+
           mkdir build
-          cd build
-          cmake -G "Unix Makefiles" -DLLVM_TARGETS_TO_BUILD=X86 -DCMAKE_BUILD_TYPE="Release" -DCMAKE_INSTALL_PREFIX="$GITHUB_WORKSPACE/install_llvm" -DLLVM_BUILD_LLVM_DYLIB=On -DLLVM_DYLIB_COMPONENTS=all ../llvm
-          cmake --build . --target install
-          cd ../../
+          pushd build
+
+          cmake -G "Unix Makefiles" -DLLVM_TARGETS_TO_BUILD=X86 ${{ matrix.llvm-flags }} -DCMAKE_INSTALL_PREFIX="$GITHUB_WORKSPACE/install_llvm${{ matrix.suffix }}" -DLLVM_BUILD_LLVM_DYLIB=ON -DLLVM_DYLIB_COMPONENTS=all ../llvm
+          cmake --build . --target install -j $[$(nproc)/2]
+          popd
+          popd # enter to root dir of jeandle
           # delete llvm repo to spare space for building jdk.
           rm -rf jeandle-llvm/
-          cd $GITHUB_WORKSPACE
-          tar czf install_llvm.tar.gz install_llvm/
+          pushd $GITHUB_WORKSPACE
+          tar czf install_llvm${{ matrix.suffix }}.tar.gz install_llvm${{ matrix.suffix }}/
 
       - name: 'Configure JDK'
         run: >
+          git log -n 1 &&
           bash configure
           --with-conf-name=${{ inputs.platform }}
           ${{ matrix.flags }}
@@ -150,7 +173,7 @@ jobs:
           --with-gtest=${{ steps.gtest.outputs.path }}
           --with-zlib=system
           --with-jmod-compress=zip-1
-          --with-jeandle-llvm=$GITHUB_WORKSPACE/install_llvm
+          --with-jeandle-llvm=$GITHUB_WORKSPACE/install_llvm${{ matrix.suffix }}
           ${{ inputs.extra-conf-options }} ${{ inputs.configure-arguments }} || (
           echo "Dumping config.log:" &&
           cat config.log &&

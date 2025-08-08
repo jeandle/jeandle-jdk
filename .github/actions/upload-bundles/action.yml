@@ -46,7 +46,7 @@ runs:
         jdk_bundle_tar_gz="$(ls build/*/bundles/jdk-*_bin${{ inputs.debug-suffix }}.tar.gz 2> /dev/null || true)"
         symbols_bundle="$(ls build/*/bundles/jdk-*_bin${{ inputs.debug-suffix }}-symbols.tar.gz 2> /dev/null || true)"
         tests_bundle="$(ls build/*/bundles/jdk-*_bin-tests${{ inputs.debug-suffix }}.tar.gz 2> /dev/null || true)"
-        llvm_bundle_tar_gz="$(ls $GITHUB_WORKSPACE/install_llvm.tar.gz 2> /dev/null || true)"
+        llvm_bundle_tar_gz="$(ls $GITHUB_WORKSPACE/install_llvm${{ inputs.debug-suffix }}.tar.gz 2> /dev/null || true)"
 
         mkdir bundles
 
@@ -63,7 +63,7 @@ runs:
           mv "$tests_bundle" "bundles/tests-${{ inputs.platform }}${{ inputs.debug-suffix }}.tar.gz"
         fi
         if [[ "$llvm_bundle_tar_gz" != "" ]]; then
-          mv "$llvm_bundle_tar_gz" "bundles/install_llvm.tar.gz"
+          mv "$llvm_bundle_tar_gz" "bundles/install_llvm${{ inputs.debug-suffix }}.tar.gz"
         fi
 
         if [[ "$jdk_bundle_zip$jdk_bundle_tar_gz$symbols_bundle$tests_bundle" != "" ]]; then

@@ -88,34 +88,47 @@ jobs:
 
           - test-name: 'hs/tier1 common'
             test-suite: 'test/hotspot/jtreg/:tier1_common'
+            debug-suffix: -debug
 
           - test-name: 'hs/tier1 compiler part 1'
             test-suite: 'test/hotspot/jtreg/:tier1_compiler_1'
+            debug-suffix: -debug
 
           - test-name: 'hs/tier1 compiler part 2'
             test-suite: 'test/hotspot/jtreg/:tier1_compiler_2'
+            debug-suffix: -debug
 
           - test-name: 'hs/tier1 compiler part 3'
             test-suite: 'test/hotspot/jtreg/:tier1_compiler_3'
+            debug-suffix: -debug
 
           - test-name: 'hs/tier1 compiler not-xcomp'
             test-suite: 'test/hotspot/jtreg/:tier1_compiler_not_xcomp'
+            debug-suffix: -debug
 
           - test-name: 'hs/tier1 gc'
             test-suite: 'test/hotspot/jtreg/:tier1_gc'
+            debug-suffix: -debug
 
           - test-name: 'hs/tier1 runtime'
             test-suite: 'test/hotspot/jtreg/:tier1_runtime'
+            debug-suffix: -debug
 
           - test-name: 'hs/tier1 serviceability'
             test-suite: 'test/hotspot/jtreg/:tier1_serviceability'
+            debug-suffix: -debug
 
           - test-name: 'lib-test/tier1'
             test-suite: 'test/lib-test/:tier1'
+            debug-suffix: -debug
 
     steps:
       - name: 'Checkout the JDK source'
         uses: actions/checkout@v4
+        with:
+          repository: ${{ github.event.pull_request.head.repo.full_name }}
+          ref: ${{ github.event.pull_request.head.ref }}
+          fetch-depth: 1
 
       - name: 'Get MSYS2'
         uses: ./.github/actions/get-msys2
@@ -161,6 +174,7 @@ jobs:
       - name: 'Run tests'
         id: run-tests
         run: >
+          git log -n 1 &&
           make test-prebuilt
           TEST='${{ matrix.test-suite }}'
           BOOT_JDK=${{ steps.bootjdk.outputs.path }}
@@ -168,7 +182,8 @@ jobs:
           JDK_IMAGE_DIR=${{ steps.bundles.outputs.jdk-path }}
           SYMBOLS_IMAGE_DIR=${{ steps.bundles.outputs.symbols-path }}
           TEST_IMAGE_DIR=${{ steps.bundles.outputs.tests-path }}
-          JTREG='JAVA_OPTIONS=-XX:-CreateCoredumpOnCrash;VERBOSE=fail,error,time;KEYWORDS=!headful'
+          JOBS=$[$(nproc)/2]
+          JTREG='JOBS=2;JAVA_OPTIONS=-XX:-CreateCoredumpOnCrash;VERBOSE=fail,error,time;KEYWORDS=!headful'
           && bash ./.github/scripts/gen-test-summary.sh "$GITHUB_STEP_SUMMARY" "$GITHUB_OUTPUT"
         env:
           PATH: ${{ steps.path.outputs.value }}
