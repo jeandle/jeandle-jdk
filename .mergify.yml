@@ -1,0 +1,13 @@
+merge_protections:
+  - name: Require a review from a maintainer.
+    if:
+      - base = main
+    success_conditions:
+      - approved-reviews-by = @Maintainer
+
+  - name: Pull request title format.
+    if:
+      - base = main
+    success_conditions:
+      - "title ~=
+        ^(fix|feat|docs|style|refactor|enhance|test|build|ci|chore|revert):"

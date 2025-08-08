@@ -24,7 +24,7 @@ Commit your code with ```git commit -s```, which adds a “Signed-off-by” line
 For code contributors, also see [Development Guide](https://github.com/jeandle/jeandle-jdk/blob/main/jeandle-docs/development-guide.md).
 
 ### 2. Create a pull request
-Fork jeandle-jdk and/or jeandle-llvm, push commits to your forked repository, and create a pull request to the upstream repository.
+Fork jeandle-jdk and/or jeandle-llvm, push commits to your forked repository, and create a pull request to the upstream repository. The title of a pull request must begin with one of the following labels to indicate the type of the pull request: fix, feat, docs, style, refactor, enhance, test, build, ci, chore, or revert.
 
 ### 3. Get a code review
 Jeandle Maintainers will regularly check for unreviewed pull requests. If a pull request has received more than one approval and all comments from Maintainers are resolved, it can be merged by any Committer.
