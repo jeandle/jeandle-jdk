@@ -627,46 +627,46 @@ void JeandleAbstractInterpreter::interpret_block(JeandleBasicBlock* block) {
 
       // Math:
 
-      case Bytecodes::_iadd: _jvm->ipush(_ir_builder.CreateAdd(_jvm->ipop(), _jvm->ipop())); break;
-      case Bytecodes::_isub: _jvm->ipush(_ir_builder.CreateSub(_jvm->ipop(), _jvm->ipop())); break;
-      case Bytecodes::_imul: _jvm->ipush(_ir_builder.CreateMul(_jvm->ipop(), _jvm->ipop())); break;
-      case Bytecodes::_idiv: _jvm->ipush(_ir_builder.CreateSDiv(_jvm->ipop(), _jvm->ipop())); break;
-      case Bytecodes::_irem: _jvm->ipush(_ir_builder.CreateSRem(_jvm->ipop(), _jvm->ipop())); break;
-      case Bytecodes::_ineg: _jvm->ipush(_ir_builder.CreateNeg(_jvm->ipop())); break;
+      case Bytecodes::_iadd: // fall through
+      case Bytecodes::_isub: // fall through
+      case Bytecodes::_imul: // fall through
+      case Bytecodes::_idiv: // fall through
+      case Bytecodes::_irem: // fall through
+      case Bytecodes::_iand: // fall through
+      case Bytecodes::_ior:  // fall through
+      case Bytecodes::_ixor: // fall through
+      case Bytecodes::_ineg: arith_op(BasicType::T_INT, code); break;
       case Bytecodes::_ishl:  // fall through
       case Bytecodes::_ishr:  // fall through
       case Bytecodes::_iushr: shift_op(BasicType::T_INT, code); break;
-      case Bytecodes::_iand: _jvm->ipush(_ir_builder.CreateAnd(_jvm->ipop(), _jvm->ipop())); break;
-      case Bytecodes::_ior: _jvm->ipush(_ir_builder.CreateOr(_jvm->ipop(), _jvm->ipop())); break;
-      case Bytecodes::_ixor: _jvm->ipush(_ir_builder.CreateXor(_jvm->ipop(), _jvm->ipop())); break;
       case Bytecodes::_iinc: increment(); break;
 
-      case Bytecodes::_ladd: _jvm->lpush(_ir_builder.CreateAdd(_jvm->lpop(), _jvm->lpop())); break;
-      case Bytecodes::_lsub: _jvm->lpush(_ir_builder.CreateSub(_jvm->lpop(), _jvm->lpop())); break;
-      case Bytecodes::_lmul: _jvm->lpush(_ir_builder.CreateMul(_jvm->lpop(), _jvm->lpop())); break;
-      case Bytecodes::_ldiv: _jvm->lpush(_ir_builder.CreateSDiv(_jvm->lpop(), _jvm->lpop())); break;
-      case Bytecodes::_lrem: _jvm->lpush(_ir_builder.CreateSRem(_jvm->lpop(), _jvm->lpop())); break;
-      case Bytecodes::_lneg: _jvm->lpush(_ir_builder.CreateNeg(_jvm->lpop())); break;
+      case Bytecodes::_ladd: // fall through
+      case Bytecodes::_lsub: // fall through
+      case Bytecodes::_lmul: // fall through
+      case Bytecodes::_ldiv: // fall through
+      case Bytecodes::_lrem: // fall through
+      case Bytecodes::_land: // fall through
+      case Bytecodes::_lor:  // fall through
+      case Bytecodes::_lxor: // fall through
+      case Bytecodes::_lneg: arith_op(BasicType::T_LONG, code); break;
       case Bytecodes::_lshl:  // fall through
       case Bytecodes::_lshr:  // fall through
       case Bytecodes::_lushr: shift_op(BasicType::T_LONG, code); break;
-      case Bytecodes::_land: _jvm->lpush(_ir_builder.CreateAnd(_jvm->lpop(), _jvm->lpop())); break;
-      case Bytecodes::_lor: _jvm->lpush(_ir_builder.CreateOr(_jvm->lpop(), _jvm->lpop())); break;
-      case Bytecodes::_lxor: _jvm->lpush(_ir_builder.CreateXor(_jvm->lpop(), _jvm->lpop())); break;
 
-      case Bytecodes::_fadd: _jvm->fpush(_ir_builder.CreateFAdd(_jvm->fpop(), _jvm->fpop())); break;
-      case Bytecodes::_fsub: Unimplemented(); break;
-      case Bytecodes::_fmul: _jvm->fpush(_ir_builder.CreateFMul(_jvm->fpop(), _jvm->fpop())); break;
-      case Bytecodes::_fdiv: Unimplemented(); break;
-      case Bytecodes::_frem: Unimplemented(); break;
-      case Bytecodes::_fneg: _jvm->fpush(_ir_builder.CreateFNeg(_jvm->fpop())); break;
+      case Bytecodes::_fadd: // fall through
+      case Bytecodes::_fsub: // fall through
+      case Bytecodes::_fmul: // fall through
+      case Bytecodes::_fdiv: // fall through
+      case Bytecodes::_frem: // fall through
+      case Bytecodes::_fneg: arith_op(BasicType::T_FLOAT, code); break;
 
-      case Bytecodes::_dadd: _jvm->dpush(_ir_builder.CreateFAdd(_jvm->dpop(), _jvm->dpop())); break;
-      case Bytecodes::_dsub: Unimplemented(); break;
-      case Bytecodes::_dmul: _jvm->dpush(_ir_builder.CreateFMul(_jvm->dpop(), _jvm->dpop())); break;
-      case Bytecodes::_ddiv: Unimplemented(); break;
-      case Bytecodes::_drem: Unimplemented(); break;
-      case Bytecodes::_dneg: _jvm->dpush(_ir_builder.CreateFNeg(_jvm->dpop())); break;
+      case Bytecodes::_dadd: // fall through
+      case Bytecodes::_dsub: // fall through
+      case Bytecodes::_dmul: // fall through
+      case Bytecodes::_ddiv: // fall through
+      case Bytecodes::_drem: // fall through
+      case Bytecodes::_dneg: arith_op(BasicType::T_DOUBLE, code); break;
 
       // Conversions:
 
@@ -1084,4 +1084,61 @@ void JeandleAbstractInterpreter::instanceof(int klass_index) {
   llvm::CallInst* call = _ir_builder.CreateCall(instanceof_func, {index_value, obj});
 
   _jvm->ipush(call);
+}
+
+void JeandleAbstractInterpreter::arith_op(BasicType type, Bytecodes::Code code) {
+  assert(type == BasicType::T_INT || type == BasicType::T_LONG ||
+         type == BasicType::T_FLOAT || type == BasicType::T_DOUBLE, "unexpected type");
+
+  llvm::Value* r = _jvm->pop(type);
+  llvm::Value* l = nullptr;
+
+  if (!(code == Bytecodes::_ineg || code == Bytecodes::_lneg ||
+      code == Bytecodes::_fneg || code == Bytecodes::_dneg)) {
+    l = _jvm->pop(type);
+  }
+
+  switch (code) {
+    // Integral
+    case Bytecodes::_iadd: // fall through
+    case Bytecodes::_ladd: _jvm->push(type, _ir_builder.CreateAdd(l, r)); break;
+    case Bytecodes::_isub: // fall through
+    case Bytecodes::_lsub: _jvm->push(type, _ir_builder.CreateSub(l, r)); break;
+    case Bytecodes::_imul: // fall through
+    case Bytecodes::_lmul: _jvm->push(type, _ir_builder.CreateMul(l, r)); break;
+    case Bytecodes::_idiv: // fall through
+    case Bytecodes::_ldiv: _jvm->push(type, _ir_builder.CreateSDiv(l, r)); break;
+    case Bytecodes::_irem: // fall through
+    case Bytecodes::_lrem: _jvm->push(type, _ir_builder.CreateSRem(l, r)); break;
+    case Bytecodes::_iand: // fall through
+    case Bytecodes::_land: _jvm->push(type, _ir_builder.CreateAnd(l, r)); break;
+    case Bytecodes::_ior:  // fall through
+    case Bytecodes::_lor:  _jvm->push(type, _ir_builder.CreateOr(l, r)); break;
+    case Bytecodes::_ixor: // fall through
+    case Bytecodes::_lxor: _jvm->push(type, _ir_builder.CreateXor(l, r)); break;
+    case Bytecodes::_ineg: // fall through
+    case Bytecodes::_lneg: {
+      assert(l == nullptr, "only one operand for negation");
+      _jvm->push(type, _ir_builder.CreateNeg(r));
+      break;
+    }
+    // Floating-Point
+    case Bytecodes::_fadd: // fall through
+    case Bytecodes::_dadd: _jvm->push(type, _ir_builder.CreateFAdd(l, r)); break;
+    case Bytecodes::_fsub: // fall through
+    case Bytecodes::_dsub: Unimplemented(); break;
+    case Bytecodes::_fmul: // fall through
+    case Bytecodes::_dmul: _jvm->push(type, _ir_builder.CreateFMul(l, r)); break;
+    case Bytecodes::_fdiv: // fall through
+    case Bytecodes::_ddiv: Unimplemented(); break;
+    case Bytecodes::_frem: // fall through
+    case Bytecodes::_drem: Unimplemented(); break;
+    case Bytecodes::_fneg: // fall through
+    case Bytecodes::_dneg: {
+      assert(l == nullptr, "only one operand for negation");
+      _jvm->push(type, _ir_builder.CreateFNeg(r));
+      break;
+    }
+    default: ShouldNotReachHere();
+  }
 }
