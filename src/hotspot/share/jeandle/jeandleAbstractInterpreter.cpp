@@ -25,7 +25,6 @@
 #include "jeandle/jeandleJavaCall.hpp"
 #include "jeandle/jeandleType.hpp"
 
-#include "jeandleAbstractInterpreter.hpp"
 #include "utilities/debug.hpp"
 #include "ci/ciMethodBlocks.hpp"
 #include "runtime/sharedRuntime.hpp"
