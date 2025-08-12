@@ -48,21 +48,19 @@ public class TestFieldAccess {
     public static void main(String[] args) throws Exception {
         int staticField = testStaticFields();
 
-        System.out.println(staticField); // Only print in main
         if (staticField == 32) {
             System.out.println("SUCCESS: Static field access is working correctly!");
         } else {
-            System.out.println("FAILURE: Static field access is not working correctly! staticCode=" + staticField);
+            System.out.println("FAILURE: Static field access is not working correctly! staticField=" + staticField);
         }
         // Test instance field operations
         MyClass obj = new MyClass();
         int instanceField = testInstanceFieldOps(obj);
 
-        System.out.println(instanceField); // Only print in main
         if (instanceField == 200) {
             System.out.println("SUCCESS: Instance field access is working correctly!");
         } else {
-            System.out.println("FAILURE: Instance field access is not working correctly! instanceCode=" + instanceField);
+            System.out.println("FAILURE: Instance field access is not working correctly! instanceField=" + instanceField);
         }
     }
 }
