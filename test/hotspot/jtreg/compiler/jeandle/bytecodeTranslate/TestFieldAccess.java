@@ -21,7 +21,8 @@
 * @test TestFieldAccess.java
 * @library /test/lib
 * @run main/othervm -XX:-TieredCompilation -Xcomp
-*      -XX:CompileCommand=compileonly,TestFieldAccess::testStaticFields
+*      -XX:CompileCommand=compileonly,TestFieldAccess::testStaticFieldOps
+*      -XX:CompileCommand=compileonly,TestFieldAccess::testInstanceFieldOps
 *      -XX:+UseJeandleCompiler compiler.jeandle.bytecodeTranslate.TestFieldAccess
 */
 
@@ -32,7 +33,7 @@ public class TestFieldAccess {
     static int sb = 20;
 
     // Static field operations
-    static int testStaticFields() {
+    static int testStaticFieldOps() {
         sb = 22; // putstatic
         int sum = sa + sb; // getstatic
         return sum;
@@ -46,14 +47,16 @@ public class TestFieldAccess {
     }
 
     public static void main(String[] args) throws Exception {
-        int staticField = testStaticFields();
+        // Test static field operations.
+        int staticField = testStaticFieldOps();
 
         if (staticField == 32) {
             System.out.println("SUCCESS: Static field access is working correctly!");
         } else {
             System.out.println("FAILURE: Static field access is not working correctly! staticField=" + staticField);
         }
-        // Test instance field operations
+        
+        // Test instance field operations.
         MyClass obj = new MyClass();
         int instanceField = testInstanceFieldOps(obj);
 
