@@ -27,11 +27,9 @@ For code contributors, also see [Development Guide](https://github.com/jeandle/j
 Fork jeandle-jdk and/or jeandle-llvm, push commits to your forked repository, and create a pull request to the upstream repository. The title of a pull request must begin with one of the following labels to indicate the type of the pull request: fix, feat, docs, style, refactor, enhance, test, build, ci, chore, or revert.
 
 ### 3. Get a code review
-Jeandle Maintainers will regularly check for unreviewed pull requests. If a pull request has received more than one approval and all comments from Maintainers are resolved, it can be merged by any Committer.
+Jeandle Maintainers will regularly check for unreviewed pull requests. If a pull request has received more than one approval and all comments from Maintainers are resolved, it can be merged by any Committer/Maintainer.
 
 If your pull request has not received a response for days, you can find potential reviewers from [Maintainers list](https://github.com/jeandle/community/blob/main/MAINTAINERS.md) and get their attention by tagging them using @name in a comment.
 
-## How to Become a Committer
-Committers are members of a community's project repository who can modify code, documents or accept contributions from other members.
-
-There is no strict protocol for becoming a committer. Typically, candidates are active contributors. If you have been continuously participating in Jeandle and made meaningful contributions, you may be recommended by existing committers and put to a vote among the commiter team.
+## How to Become a Committer/Maintainer
+See [Membership Management](https://github.com/jeandle/community/blob/main/COMMUNITY_MEMBERSHIP.md#membership-management) for more information.

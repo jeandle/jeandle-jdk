@@ -26,3 +26,23 @@ Note that ```clang-format``` modifies the files, but does not commit them. So yo
 
 ## Header Files in Hotspot Code
 The standard library macro ```assert``` used by LLVM conflicts with the macro ```assert``` used by Hotspot. In our Hotspot codebase, we consistently use the Hotspot's ```assert```. To resolve this conflict, it is necessary to include the header file ```"utilities/debug.hpp"``` after including any LLVM or stantard library headers and before using the Hotspot's ```assert```. This header file redefines the ```assert``` for Hotspot code.
+
+## Continuous Integration
+The Jeandle project consists of two code repositories: jeandle-jdk and jeandle-llvm. During development, a single feature may require changes to both repositories.
+
+To ensure the Jeandle-JDK GitHub Continuous Integration (CI) pipeline can pull the appropriate branch of jeandle-llvm for compilation and testing when such co-dependent changes exist, include the dependency information in the commit message.
+
+Specifically, in the final commit message for a series of changes in the jeandle-jdk repository that depend on a specific jeandle-llvm branch, add the URL of the jeandle-llvm repository and the name of the required branch. Therefore, the commit message in the jeandle-jdk repository will typically follow this format:
+```
+Author: <User Name> <user@example.com>
+Date:   <Date Info>
+
+    [Detailed description of modifications]
+
+    CO_REPO: https://github.com/<UserID>/jeandle-llvm.git
+    CO_BRANCH: <Branch Name>
+
+    Signed-off-by: <User Name> <user@example.com>
+```
+
+Note: The jeandle-llvm CI pipeline only compiles and tests jeandle-llvm itself. Therefore, commits within the jeandle-llvm repository are not required to specify any dependency on a jeandle-jdk branch.
