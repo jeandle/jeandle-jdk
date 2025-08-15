@@ -29,8 +29,6 @@
 #include "ci/ciMethodBlocks.hpp"
 #include "runtime/sharedRuntime.hpp"
 #include "utilities/ostream.hpp"
-#include "runtime/jniHandles.inline.hpp"
-#include "oops/instanceOop.hpp"
 
 JeandleBasicBlock::JeandleBasicBlock(int block_id,
                                      int start_bci,
@@ -736,11 +734,11 @@ void JeandleAbstractInterpreter::interpret_block(JeandleBasicBlock* block) {
 
       // References:
 
-      case Bytecodes::_getstatic: do_getstatic(); break;
-      case Bytecodes::_putstatic: do_putstatic(); break;
+      case Bytecodes::_getstatic: Unimplemented(); break;
+      case Bytecodes::_putstatic: Unimplemented(); break;
 
-      case Bytecodes::_getfield: do_getfield(); break;
-      case Bytecodes::_putfield: do_putfield(); break;
+      case Bytecodes::_getfield: Unimplemented(); break;
+      case Bytecodes::_putfield: Unimplemented(); break;
 
       case Bytecodes::_invokevirtual:    // fall through
       case Bytecodes::_invokespecial:    // fall through
@@ -1143,90 +1141,4 @@ void JeandleAbstractInterpreter::arith_op(BasicType type, Bytecodes::Code code) 
     }
     default: ShouldNotReachHere();
   }
-}
-
-// TODO: clinit_barrier check.
-// TODO: Handle field attributions like volatile, final, stable.
-void JeandleAbstractInterpreter::do_field_access(bool is_get, bool is_static) {
-  bool will_link;
-  ciField* field = _codes.get_field(will_link);
-  // TODO: Handle invalid fields.
-  if (!will_link)
-    Unimplemented();
-
-  ciInstanceKlass* field_holder = field->holder();
-  if (is_get && field->is_call_site_target() && 
-      (!(_method->holder() == field_holder && _method->is_object_initializer()))) {
-        // TODO: Uncommon trap.
-        Unimplemented();
-        return;
-      }
-
-  if (is_get) {
-    do_get_xxx(field, is_static);
-  } else {
-    do_put_xxx(field, is_static);
-  }
-}
-
-void JeandleAbstractInterpreter::do_get_xxx(ciField* field, bool is_static) {
-  int offset = field->offset_in_bytes();
-  llvm::Value* addr = nullptr;
-
-  if (is_static) {
-    addr = compute_static_field_address(field->holder(), offset);
-  } else {
-    addr = compute_instance_field_address(_jvm->apop(), offset);
-  }
-
-  llvm::Value* value = load_from_address(addr, field->layout_type());
-  _jvm->push(field->type()->basic_type(), value);
-}
-
-void JeandleAbstractInterpreter::do_put_xxx(ciField* field, bool is_static) {
-  int offset = field->offset_in_bytes();
-  llvm::Value* addr = nullptr;
-
-  llvm::Value* value = _jvm->pop(field->type()->basic_type());
-
-  if (is_static) {
-    addr = compute_static_field_address(field->holder(), offset);
-  } else {
-    addr = compute_instance_field_address(_jvm->apop(), offset);
-  }
-
-  store_to_address(addr, value, field->layout_type());
-}
-
-llvm::Value* JeandleAbstractInterpreter::compute_instance_field_address(llvm::Value* obj, int offset) {
-  return _ir_builder.CreateInBoundsGEP(llvm::Type::getInt8Ty(*_context), obj,
-                                       _ir_builder.getInt64(offset));
-}
-
-llvm::Value* JeandleAbstractInterpreter::compute_static_field_address(ciInstanceKlass* holder, int offset) {
-  llvm::Value* static_base = get_static_base_for_klass(holder);
-  return _ir_builder.CreateInBoundsGEP(llvm::Type::getInt8Ty(*_context),
-                                       static_base,
-                                       _ir_builder.getInt64(offset));
-}
-
-llvm::Value* JeandleAbstractInterpreter::load_from_address(llvm::Value* addr, BasicType type) {
-  llvm::Type* expected_ty = JeandleType::java2llvm(type, *_context);
-  return _ir_builder.CreateLoad(expected_ty, addr);
-}
-
-void JeandleAbstractInterpreter::store_to_address(llvm::Value* addr, llvm::Value* value, BasicType type) {
-  llvm::Type* expected_ty = JeandleType::java2llvm(type, *_context);
-  assert(value->getType() == expected_ty, "Value type must match field type");
-
-  llvm::StoreInst* store = _ir_builder.CreateStore(value, addr);
-}
-
-llvm::Value* JeandleAbstractInterpreter::get_static_base_for_klass(ciInstanceKlass* holder) {
-  ciInstance* java_mirror = holder->java_mirror();
-  jobject encoding = java_mirror->constant_encoding();
-  oop mirror_oop = JNIHandles::resolve_non_null(encoding);
-  return llvm::ConstantExpr::getIntToPtr(
-      llvm::ConstantInt::get(llvm::Type::getInt64Ty(*_context), reinterpret_cast<uintptr_t>((void*)mirror_oop)),
-      JeandleType::java2llvm(BasicType::T_OBJECT, *_context));
 }
