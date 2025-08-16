@@ -18,23 +18,15 @@
  *
  */
 
-#include <cassert>
-#include "llvm/IR/Type.h"
-
 #include "jeandle/jeandleJavaCall.hpp"
-#include "jeandle/jeandleCompilation.hpp"
+#include "nativeInst_aarch64.hpp"
 
-#include "utilities/debug.hpp"
+int JeandleJavaCall::call_site_size(JeandleJavaCall::Type call_type) {
+  // STATIC_CALL
+  if (call_type == JeandleJavaCall::STATIC_CALL) {
+    return NativeInstruction::instruction_size;
+  }
 
-llvm::FunctionCallee JeandleJavaCall::callee(llvm::Module& module,
-                                             ciMethod* target,
-                                             llvm::Type* return_type,
-                                             std::vector<llvm::Type*>& args_type) {
-  llvm::FunctionType* func_type = llvm::FunctionType::get(return_type, args_type, false);
-  llvm::FunctionCallee callee = module.getOrInsertFunction(FuncSigAnalyze::method_name(target), func_type);
-
-  llvm::Function* func = llvm::cast<llvm::Function>(callee.getCallee());
-  FuncSigAnalyze::setup_description(func);
-
-  return callee;
+  // DYNAMIC_CALL
+  return NativeInstruction::instruction_size + NativeMovConstReg::instruction_size;
 }

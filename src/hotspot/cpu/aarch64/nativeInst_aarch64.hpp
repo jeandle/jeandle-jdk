@@ -111,6 +111,8 @@ public:
 
   static bool is_adrp_at(address instr);
 
+  static bool is_ldr_unsigned_at(address instr);
+
   static bool is_ldr_literal_at(address instr);
 
   bool is_ldr_literal() {
