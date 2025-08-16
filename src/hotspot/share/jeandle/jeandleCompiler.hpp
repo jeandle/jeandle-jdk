@@ -22,8 +22,11 @@
 #define SHARE_JEANDLE_COMPILER_HPP
 
 #include <cassert>
+#pragma push_macro("AARCH64")
+#undef AARCH64
 #include "llvm/Support/MemoryBuffer.h"
 #include "llvm/Target/TargetMachine.h"
+#pragma pop_macro("AARCH64")
 
 #include <memory>
 

@@ -87,7 +87,10 @@
 #include "opto/c2compiler.hpp"
 #endif
 #ifdef JEANDLE
+#pragma push_macro("AARCH64")
+#undef AARCH64
 #include "jeandle/jeandleCompiler.hpp"
+#pragma pop_macro("AARCH64")
 #endif // JEANDLE
 #if INCLUDE_JVMCI
 #include "jvmci/jvmciEnv.hpp"
