@@ -281,6 +281,9 @@ AC_DEFUN_ONCE([JVM_FEATURES_CHECK_JEANDLE],
     if test "x$OPENJDK_TARGET_CPU_ARCH" = "xx86" && \
         test "x$OPENJDK_TARGET_OS" = xlinux; then
       AC_MSG_RESULT([yes])
+    elif test "x$OPENJDK_TARGET_CPU_ARCH" = "xaarch64" && \
+          test "x$OPENJDK_TARGET_OS" = xlinux; then
+      AC_MSG_RESULT([yes])
     else
       AC_MSG_RESULT([no, $OPENJDK_TARGET_OS-$OPENJDK_TARGET_CPU])
       AVAILABLE=false
