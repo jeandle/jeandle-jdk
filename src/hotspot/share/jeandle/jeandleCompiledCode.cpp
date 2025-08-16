@@ -76,7 +76,8 @@ class JeandleConstReloc : public JeandleReloc {
 
 class JeandleCallReloc : public JeandleReloc {
  public:
-  JeandleCallReloc(CallSiteInfo* call) : JeandleReloc(call->inst_offset()),
+  JeandleCallReloc(CallSiteInfo* call) :
+    JeandleReloc(call->inst_offset() - JeandleJavaCall::call_site_size(call->type())),
     _call(call) { }
 
   void emit_reloc(JeandleAssembler& assembler) override;
@@ -154,23 +155,6 @@ void JeandleCompiledCode::finalize() {
 
   // No exception support now.
   _offsets.set_value(CodeOffsets::Exceptions, 0);
-}
-
-// Get the frame size from .stack_sizes section.
-void JeandleCompiledCode::setup_frame_size() {
-  SectionInfo section_info(".stack_sizes");
-  if (!ReadELF::findSection(*_elf, section_info)) {
-    JeandleCompilation::report_jeandle_error(".stack_sizes section not found");
-    return;
-  }
-  llvm::DataExtractor data_extractor(llvm::StringRef(((char*)_obj->getBufferStart()) + section_info._offset, section_info._size),
-                                     true/* IsLittleEndian */, oopSize/* AddressSize */);
-  uint64_t offset = 0;
-  data_extractor.getUnsigned(&offset, oopSize);
-  uint64_t stack_size = data_extractor.getULEB128(&offset);
-  uint64_t frame_size = stack_size + oopSize/* return address */;
-  assert(frame_size % StackAlignmentInBytes == 0, "frame size must be aligned");
-  _frame_size = frame_size / oopSize;
 }
 
 void JeandleCompiledCode::resolve_reloc_info(JeandleAssembler& assembler) {
