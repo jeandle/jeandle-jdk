@@ -34,6 +34,21 @@ public:
     // rthread is x28 on aarch64
     return "x28";
   }
+
+  static const bool is_stack_pointer(Register reg) {
+    Unimplemented();
+    return false;
+  }
+
+  static const Register decode_dwarf_register(int dwarf_encoding) {
+    Unimplemented();
+    return noreg;
+  }
+
+private:
+  static constexpr const Register all_DwarfRegisters[Register::number_of_registers] = {
+    /* Unimplemented */
+  };
 };
 
 #endif // CPU_AARCH64_JEANDLEREGISTER_AARCH64_HPP
