@@ -19,7 +19,6 @@
  */
 
 #include <cassert>
-#include "llvm/Object/StackMapParser.h"
 #include "llvm/Support/DataExtractor.h"
 
 #include "jeandle/jeandleAssembler.hpp"
@@ -157,9 +156,10 @@ void JeandleCompiledCode::finalize() {
   _prolog_length = masm->offset();
   assembler.emit_insts(((address) _obj->getBufferStart()) + offset, code_size);
 
+  setup_frame_size();
+
   resolve_reloc_info(assembler);
 
-  setup_frame_size();
 
   // No deopt support now.
   _offsets.set_value(CodeOffsets::Deopt, 0);
@@ -221,7 +221,7 @@ void JeandleCompiledCode::resolve_reloc_info(JeandleAssembler& assembler) {
   // Step2: Resolve stackmaps.
   SectionInfo section_info(".llvm_stackmaps");
   if (ReadELF::findSection(*_elf, section_info)) {
-    llvm::StackMapParser<ELFT::Endianness> stackmaps(llvm::ArrayRef(((uint8_t*)object_start()) +
+    StackMapParser stackmaps(llvm::ArrayRef(((uint8_t*)object_start()) +
                                                      section_info._offset, section_info._size));
     for (auto record = stackmaps.records_begin(); record != stackmaps.records_end(); ++record) {
       if (CallSiteInfo* call = _call_sites.lookup(record->getID())) {
@@ -232,7 +232,7 @@ void JeandleCompiledCode::resolve_reloc_info(JeandleAssembler& assembler) {
         relocs.push_back(new JeandleCallReloc(call));
 
         // No GC support now.
-        _env->debug_info()->add_safepoint(inst_offset, new OopMap(stackmaps.getFunction(0).getStackSize(), 0));
+        _env->debug_info()->add_safepoint(inst_offset, build_oop_map(record));
 
         // No deopt support now.
         GrowableArray<ScopeValue*> *locarray = new GrowableArray<ScopeValue*>(0);
@@ -308,4 +308,57 @@ address JeandleCompiledCode::resolve_const_edge(LinkBlock& block, LinkEdge& edge
   uint64_t offset_in_section = target.getAddress() - range.getFirstBlock()->getAddress();
 
   return target_base + offset_in_section;
+}
+
+static VMReg resolve_vmreg(const StackMapParser::LocationAccessor& location, StackMapParser::LocationKind kind) {
+  if (kind == StackMapParser::LocationKind::Register) {
+    Register raw_reg = from_Dwarf2Register(location.getDwarfRegNum());
+    return raw_reg->as_VMReg();
+  } else if (kind == StackMapParser::LocationKind::Indirect) {
+    assert(from_Dwarf2Register(location.getDwarfRegNum()) == rsp, "register of indirect kind must be rsp");
+    int offset = location.getOffset();
+
+    assert(offset % VMRegImpl::stack_slot_size == 0, "misaligned stack");
+    int oop_slot = offset / VMRegImpl::stack_slot_size;
+
+    return VMRegImpl::stack2reg(oop_slot);
+  } else {
+    ShouldNotReachHere();
+  }
+}
+
+OopMap* JeandleCompiledCode::build_oop_map(StackMapParser::record_iterator& record) {
+  assert(_frame_size > 0, "frame size must be greater than zero");
+  OopMap* oop_map = new OopMap(_frame_size, 0);
+
+  for (auto location = record->location_begin(); location != record->location_end(); location++) {
+    // Extract location of base pointer.
+    auto base_location = *location;
+    StackMapParser::LocationKind base_kind = base_location.getKind();
+
+    if (base_kind != StackMapParser::LocationKind::Register &&
+        base_kind != StackMapParser::LocationKind::Indirect) {
+          continue;
+    }
+
+    // Extract location of derived pointer.
+    location++;
+    auto derived_location = *location;
+    StackMapParser::LocationKind derived_kind = derived_location.getKind();
+
+    assert(base_kind == derived_kind, "locations must be in pairs");
+    assert(base_kind != StackMapParser::LocationKind::Direct, "invalid location kind");
+
+    VMReg reg_base = resolve_vmreg(base_location, base_kind);
+    VMReg reg_derived = resolve_vmreg(derived_location, derived_kind);
+
+    if(reg_base == reg_derived) {
+      // No derived pointer.
+      oop_map->set_oop(reg_base);
+    } else {
+      // Derived pointer.
+      Unimplemented();
+    }
+  }
+  return oop_map;
 }

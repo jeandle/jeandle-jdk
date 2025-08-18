@@ -31,6 +31,15 @@ const FloatRegister::FloatRegisterImpl all_FloatRegisterImpls[FloatRegister::num
 const XMMRegister::XMMRegisterImpl     all_XMMRegisterImpls  [XMMRegister::number_of_registers   + 1];
 const KRegister::KRegisterImpl         all_KRegisterImpls    [KRegister::number_of_registers     + 1];
 
+const Register all_Dwarf2Register[Register::number_of_registers] = {
+#ifdef _LP64
+  rax, rdx, rcx, rbx, rsi, rdi, rbp, rsp,
+  r8, r9, r10, r11, r12, r13, r14, r15
+#else
+  rax, rdx, rcx, rbx, rsi, rdi, rbp, rsp
+#endif // _LP_64
+};
+
 const char * Register::RegisterImpl::name() const {
   static const char *const names[number_of_registers] = {
 #ifdef _LP64
