@@ -116,6 +116,11 @@ constexpr Register r14 = as_Register(14);
 constexpr Register r15 = as_Register(15);
 #endif // _LP64
 
+extern const Register all_Dwarf2Register[Register::number_of_registers] INTERNAL_VISIBILITY;
+
+inline const Register from_Dwarf2Register(int dwarf_encoding) {
+  return all_Dwarf2Register[dwarf_encoding];
+}
 
 // The implementation of x87 floating point registers for the ia32 architecture.
 class FloatRegister {
