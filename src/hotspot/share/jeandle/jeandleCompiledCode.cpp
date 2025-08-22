@@ -329,7 +329,7 @@ static VMReg resolve_vmreg(const StackMapParser::LocationAccessor& location, Sta
 
 OopMap* JeandleCompiledCode::build_oop_map(StackMapParser::record_iterator& record) {
   assert(_frame_size > 0, "frame size must be greater than zero");
-  OopMap* oop_map = new OopMap(_frame_size, 0);
+  OopMap* oop_map = new OopMap(frame_size_in_slots(), 0);
 
   for (auto location = record->location_begin(); location != record->location_end(); location++) {
     // Extract location of base pointer.
@@ -361,4 +361,8 @@ OopMap* JeandleCompiledCode::build_oop_map(StackMapParser::record_iterator& reco
     }
   }
   return oop_map;
+}
+
+int JeandleCompiledCode::frame_size_in_slots() {
+  return _frame_size * sizeof(intptr_t) / VMRegImpl::stack_slot_size;
 }

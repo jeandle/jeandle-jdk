@@ -130,6 +130,8 @@ class JeandleCompiledCode : public StackObj {
   address resolve_const_edge(LinkBlock& block, LinkEdge& edge, JeandleAssembler& assmebler);
 
   OopMap* build_oop_map(StackMapParser::record_iterator& record);
+
+  int frame_size_in_slots();
 };
 
 #endif // SHARE_JEANDLE_COMPILED_CODE_HPP
