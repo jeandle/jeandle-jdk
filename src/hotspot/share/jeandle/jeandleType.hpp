@@ -29,21 +29,18 @@
 #include "utilities/debug.hpp"
 #include "ci/compilerInterface.hpp"
 
-// Used for GC relative passes to distinguish java objects.
-#define OBJECT_ADDR_SPACE 1
-
 class JeandleType : public AllStatic {
  public:
 
-  // Convert a JAVA type to its LLVM type.
+  // Convert a Java type to its LLVM type.
   static llvm::Type* java2llvm(BasicType jvm_type, llvm::LLVMContext& context);
 
   static bool is_double_word_type(llvm::Type* t) {
     return t->isIntegerTy(64) || t->isDoubleTy();
   }
 
-  // Get a LLVM constant value according to a JAVA type.
-  // For example: If you want to get a LLVM value that represent a JAVA int, use int_const().
+  // Get a LLVM constant value according to a Java type.
+  // For example: If you want to get a LLVM value that represent a Java int, use int_const().
 
   static llvm::ConstantInt* int_const(llvm::IRBuilder<>& builder, uint32_t value) {
     return builder.getInt32(value);

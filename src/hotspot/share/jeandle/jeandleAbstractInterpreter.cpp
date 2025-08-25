@@ -24,6 +24,7 @@
 #include "jeandle/jeandleAbstractInterpreter.hpp"
 #include "jeandle/jeandleJavaCall.hpp"
 #include "jeandle/jeandleType.hpp"
+#include "jeandle/jeandleUtils.hpp"
 
 #include "utilities/debug.hpp"
 #include "ci/ciMethodBlocks.hpp"
@@ -418,18 +419,17 @@ void JeandleVMState::store(BasicType type, int index, llvm::Value* value) {
 }
 
 JeandleAbstractInterpreter::JeandleAbstractInterpreter(ciMethod* method,
-                                                       llvm::Function* llvm_func,
                                                        int entry_bci,
-                                                       llvm::Module& module,
+                                                       llvm::Module& target_module,
                                                        JeandleCompiledCode& code) :
                                                        _method(method),
-                                                       _llvm_func(llvm_func),
+                                                       _llvm_func(JeandleFuncSig::create_llvm_func(method, target_module)),
                                                        _entry_bci(entry_bci),
-                                                       _context(&llvm_func->getContext()),
+                                                       _context(&target_module.getContext()),
                                                        _codes(_method),
-                                                       _module(module),
+                                                       _module(target_module),
                                                        _code(code),
-                                                       _block_builder(new BasicBlockBuilder(method, _context, llvm_func)),
+                                                       _block_builder(new BasicBlockBuilder(method, _context, _llvm_func)),
                                                        _ir_builder(_block_builder->entry_block()->llvm_block()),
                                                        _statepoint_id(0),
                                                        _oop_idx(0) {
@@ -437,7 +437,7 @@ JeandleAbstractInterpreter::JeandleAbstractInterpreter(ciMethod* method,
   interpret();
 }
 
-void JeandleAbstractInterpreter::initialize_jvm_tracker() {
+void JeandleAbstractInterpreter::initialize_VM_state() {
   JeandleVMState* initial_jvm = new JeandleVMState(_method->max_stack(), _method->max_locals(), _context);
   int locals_idx = 0; // next index in locals
   int arg_idx = 0;  // next index in arguments
@@ -469,7 +469,7 @@ void JeandleAbstractInterpreter::interpret() {
   // Create branch from the entry block.
   _ir_builder.CreateBr(current->llvm_block());
 
-  initialize_jvm_tracker();
+  initialize_VM_state();
 
   current->income_block(_block_builder->entry_block(), _method, &_ir_builder);
 
@@ -719,7 +719,7 @@ void JeandleAbstractInterpreter::interpret_block(JeandleBasicBlock* block) {
 
       // Control:
 
-      case Bytecodes::_goto: _ir_builder.CreateBr(bci2block()[_codes.get_dest()]->llvm_block()); break;
+      case Bytecodes::_goto: goto_bci(_codes.get_dest()); break;
       case Bytecodes::_jsr: Unimplemented(); break;
       case Bytecodes::_ret: Unimplemented(); break;
 
@@ -867,6 +867,13 @@ void JeandleAbstractInterpreter::if_lcmp() {
   _jvm->ipush(_ir_builder.CreateSelect(lt_cmp, less_than, ne_cmp));
 }
 
+void JeandleAbstractInterpreter::goto_bci(int bci) {
+  if (bci < _codes.cur_bci()) {
+    add_safepoint_poll();
+  }
+  _ir_builder.CreateBr(bci2block()[bci]->llvm_block());
+}
+
 void JeandleAbstractInterpreter::lookup_switch() {
   Bytecode_lookupswitch sw(&_codes);
 
@@ -949,10 +956,10 @@ void JeandleAbstractInterpreter::invoke() {
   // Apply attributes and calling convention.
   call->setCallingConv(llvm::CallingConv::Hotspot_JIT);
   llvm::Attribute id_attr = llvm::Attribute::get(*_context,
-                                                 llvm::jeandle::attr::StatepointID,
+                                                 llvm::jeandle::Attribute::StatepointID,
                                                  std::to_string(id));
   llvm::Attribute patch_bytes_attr = llvm::Attribute::get(*_context,
-                                                 llvm::jeandle::attr::StatepointNumPatchBytes,
+                                                 llvm::jeandle::Attribute::StatepointNumPatchBytes,
                                                  std::to_string(JeandleJavaCall::call_site_size(call_type)));
   call->addFnAttr(id_attr);
   call->addFnAttr(patch_bytes_attr);
@@ -1076,13 +1083,8 @@ void JeandleAbstractInterpreter::instanceof(int klass_index) {
 
   // TODO: check klass's loading state.
 
-  llvm::Function* instanceof_func = _module.getFunction("jeandle.instanceof");
-  if (!instanceof_func) {
-    JeandleCompilation::report_jeandle_error("instanceof not found in template module");
-  }
-
   llvm::Value* index_value = _ir_builder.getInt32(klass_index);
-  llvm::CallInst* call = _ir_builder.CreateCall(instanceof_func, {index_value, obj});
+  llvm::CallInst* call = call_java_op("jeandle.instanceof", {index_value, obj});
 
   _jvm->ipush(call);
 }
@@ -1234,4 +1236,16 @@ llvm::Value* JeandleAbstractInterpreter::find_or_insert_oop(ciObject* oop) {
                                JeandleType::java2llvm(BasicType::T_OBJECT, *_context));
   _oops[oop_handle] = oop_value;
   return oop_value;
+}
+
+llvm::CallInst* JeandleAbstractInterpreter::call_java_op(llvm::StringRef java_op, llvm::ArrayRef<llvm::Value*> args) {
+  llvm::Function* java_op_func = _module.getFunction(java_op);
+  assert(java_op_func != nullptr, "invalid JavaOp");
+  llvm::CallInst* call_inst = _ir_builder.CreateCall(java_op_func, args);
+  call_inst->setCallingConv(llvm::CallingConv::Hotspot_JIT);
+  return call_inst;
+}
+
+void JeandleAbstractInterpreter::add_safepoint_poll() {
+  call_java_op("jeandle.safepoint_poll", {});
 }

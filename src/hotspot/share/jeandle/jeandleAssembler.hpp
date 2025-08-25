@@ -51,7 +51,16 @@ class JeandleAssembler : public StackObj {
 
   void emit_oop_reloc(uint32_t offset, jobject oop_handle);
 
+  void patch_call_vm(uint32_t offset, address target);
+
+  // Redirect an offset from the displacement to the end of the call instruction
+  static uint32_t fixup_call_inst_offset(uint32_t offset);
+
   static LinkKind get_oop_reloc_kind();
+  
+  static LinkKind get_call_vm_link_kind();
+
+  static LinkKind get_const_link_kind();
 
  private:
   MacroAssembler* _masm;

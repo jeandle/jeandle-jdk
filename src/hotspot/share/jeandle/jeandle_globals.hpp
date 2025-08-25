@@ -46,6 +46,9 @@
   develop(bool, JeandleCrashOnError, DEBUG_ONLY(true) NOT_DEBUG(false),     \
           "Crash JVM on Jeandle errors")                                    \
                                                                             \
+  product(bool, JeandleDumpRuntimeStubs, false,                             \
+          "Dump Jeandle runtime stubs")                                     \
+                                                                            \
 
 // end of JEANDLE_FLAGS
 

@@ -30,6 +30,7 @@
 #include "jeandle/jeandleJavaCall.hpp"
 #include "jeandle/jeandleReadELF.hpp"
 #include "jeandle/jeandleResourceObj.hpp"
+#include  "jeandle/jeandleUtils.hpp"
 
 #include "utilities/debug.hpp"
 #include "asm/codeBuffer.hpp"
@@ -72,6 +73,7 @@ using LinkEdge    = llvm::jitlink::Edge;
 class JeandleAssembler;
 class JeandleCompiledCode : public StackObj {
  public:
+  // For compiled Java methods.
   JeandleCompiledCode(ciEnv* env,
                       ciMethod* method) :
                       _obj(nullptr),
@@ -80,7 +82,21 @@ class JeandleCompiledCode : public StackObj {
                       _frame_size(-1),
                       _prolog_length(-1),
                       _env(env),
-                      _method(method) {}
+                      _method(method),
+                      _stub_entry(nullptr),
+                      _func_name(JeandleFuncSig::method_name(_method)) {}
+
+  // For compiled Jeandle runtime stubs.
+  JeandleCompiledCode(ciEnv* env, const char* func_name) :
+                      _obj(nullptr),
+                      _elf(nullptr),
+                      _code_buffer("JeandleCompiledStub"),
+                      _frame_size(-1),
+                      _prolog_length(-1),
+                      _env(env),
+                      _method(nullptr),
+                      _stub_entry(nullptr),
+                      _func_name(func_name) {}
 
   void install_obj(std::unique_ptr<ObjectBuffer> obj);
 
@@ -101,6 +117,9 @@ class JeandleCompiledCode : public StackObj {
 
   int frame_size() const { return _frame_size; }
 
+  address stub_entry() const { return _stub_entry; }
+  void set_stub_entry(address entry) { _stub_entry = entry; }
+
   // Generate relocations, stubs and debug information.
   void finalize();
 
@@ -109,6 +128,7 @@ class JeandleCompiledCode : public StackObj {
   std::unique_ptr<ELFObject> _elf;
   CodeBuffer _code_buffer; // Relocations and stubs.
   llvm::DenseMap<uint32_t, CallSiteInfo*> _call_sites;
+  llvm::DenseMap<uint32_t, CallSiteInfo*> _safepoints;
   llvm::StringMap<address> _const_sections;
   llvm::StringMap<jobject> _oop_handles;
   CodeOffsets _offsets;
@@ -118,6 +138,8 @@ class JeandleCompiledCode : public StackObj {
   int _prolog_length;
   ciEnv* _env;
   ciMethod* _method;
+  address _stub_entry;
+  std::string _func_name;
 
   void setup_frame_size();
 

@@ -128,6 +128,34 @@ void JeandleAssembler::emit_oop_reloc(uint32_t offset, jobject oop_handle) {
   __ code_section()->relocate(at_address, rspec, __ disp32_operand);
 }
 
+void JeandleAssembler::patch_call_vm(uint32_t operand_offset, address target) {
+  assert(operand_offset != 0, "invalid operand address");
+
+  address call_pc = __ addr_at(operand_offset - 1);
+
+  // Set insts_end to where to patch.
+  address insts_end = __ code()->insts_end();
+  __ code()->set_insts_end(call_pc);
+
+  // Patch.
+  __ call(AddressLiteral(target, relocInfo::static_call_type));
+
+  // Recover insts_end.
+  __ code()->set_insts_end(insts_end);
+}
+
+uint32_t JeandleAssembler::fixup_call_inst_offset(uint32_t offset) {
+  return offset + 4;
+}
+
 LinkKind JeandleAssembler::get_oop_reloc_kind() {
   return LinkKind_x86_64::RequestGOTAndTransformToPCRel32GOTLoadREXRelaxable;
+}
+
+LinkKind JeandleAssembler::get_call_vm_link_kind() {
+  return LinkKind_x86_64::BranchPCRel32;
+}
+
+LinkKind JeandleAssembler::get_const_link_kind() {
+  return LinkKind_x86_64::Delta32;
 }

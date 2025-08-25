@@ -18,38 +18,28 @@
  *
  */
 
-#ifndef SHARE_JEANDLE_JAVA_CALL_HPP
-#define SHARE_JEANDLE_JAVA_CALL_HPP
+#ifndef SHARE_JEANDLE_RUNTIME_DEFINED_JAVA_OPS_HPP
+#define SHARE_JEANDLE_RUNTIME_DEFINED_JAVA_OPS_HPP
 
 #include <cassert>
-#include "llvm/IR/Function.h"
-#include "llvm/IR/Type.h"
+#include "llvm/IR/Module.h"
 
 #include "utilities/debug.hpp"
-#include "ci/ciMethod.hpp"
 #include "memory/allStatic.hpp"
 
-class JeandleJavaCall : public AllStatic {
+class RuntimeDefinedJavaOps : public AllStatic {
  public:
+  static bool define_all(llvm::Module& template_module);
 
-  enum Type {
-    // Static calls dispatch directly to the verified entry point of a method and
-    // are used for static calls and non−inlined virtual calls that have only one receiver.
-    STATIC_CALL,
+  static void reset_state() { _error_msg = nullptr; }
+  static void set_failed(const char* error_msg) { assert(error_msg != nullptr, "why we failed?"); _error_msg = error_msg; }
+  static bool failed() { return _error_msg != nullptr; }
+  static const char* error_msg() { return _error_msg; }
 
-    // Dynamic calls dispatch to the unverified entry point of a method and are
-    // preceded by an instruction that places an inline cache holder in a register.
-    DYNAMIC_CALL,
+ private:
+  static const char* _error_msg;
 
-    NOT_A_CALL,
-  };
-
-  static llvm::FunctionCallee callee(llvm::Module& target_module,
-                                     ciMethod* target,
-                                     llvm::Type* return_type,
-                                     std::vector<llvm::Type*>& args_type);
-
-  static int call_site_size(Type call_type);
+  static void define_metadata(llvm::Module& template_module);
 };
 
-#endif // SHARE_JEANDLE_JAVA_CALL_HPP
+#endif // SHARE_JEANDLE_RUNTIME_DEFINED_JAVA_OPS_HPP

@@ -60,7 +60,7 @@ class JeandleCompiler : public AbstractCompiler {
   // Read the template file into a global read-only memory buffer to ensure thread safety.
   std::unique_ptr<llvm::MemoryBuffer> _template_buffer;
 
-  void initialize_template_buffer();
+  bool initialize_template_buffer();
 };
 
 #endif // SHARE_JEANDLE_COMPILER_HPP

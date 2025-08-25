@@ -29,7 +29,9 @@
 
 #include "jeandle/jeandleCompilation.hpp"
 #include "jeandle/jeandleCompiler.hpp"
+#include "jeandle/jeandleRuntimeRoutine.hpp"
 #include "jeandle/jeandleType.hpp"
+#include "jeandle/templatemodule/jeandleRuntimeDefinedJavaOps.hpp"
 #include "runtime/arguments.hpp"
 
 JeandleCompiler::JeandleCompiler(llvm::TargetMachine* target_machine) :
@@ -63,27 +65,41 @@ JeandleCompiler* JeandleCompiler::create() {
 
 void JeandleCompiler::initialize() {
   if (should_perform_init()) {
+    if (!JeandleRuntimeRoutine::generate(target_machine(), data_layout())) {
+      set_state(failed);
+      return;
+    }
+    if (!initialize_template_buffer()) {
+      set_state(failed);
+      return;
+    }
     set_state(initialized);
-    initialize_template_buffer();
   }
 }
 
-void JeandleCompiler::compile_method(ciEnv* env, ciMethod* target, int entry_bci, bool install_code, DirectiveSet* directive){
+void JeandleCompiler::compile_method(ciEnv* env, ciMethod* target, int entry_bci, bool install_code, DirectiveSet* directive) {
   ResourceMark rm;
-  JeandleCompilation compilation(this, env, target, entry_bci, install_code, _template_buffer.get());
+  JeandleCompilation compilation(target_machine(), data_layout(), env, target, entry_bci, install_code, _template_buffer.get());
 }
 
 void JeandleCompiler::print_timers() {
   return;
 }
 
-void JeandleCompiler::initialize_template_buffer() {
+bool JeandleCompiler::initialize_template_buffer() {
   llvm::LLVMContext tmp_context;
   llvm::SMDiagnostic error;
 
   std::unique_ptr<llvm::Module> template_module = llvm::parseIRFile(Arguments::get_jeandle_template_path(), error, tmp_context);
+  assert(template_module != nullptr, "cannot create template module");
   if (template_module == nullptr) {
-    fatal("Failed to parse template module: %s", Arguments::get_jeandle_template_path());
+    return false;
+  }
+
+  bool failed = RuntimeDefinedJavaOps::define_all(*template_module);
+  assert(!failed, "cannot define runtime defined JavaOps: %s", RuntimeDefinedJavaOps::error_msg());
+  if (failed) {
+    return false;
   }
 
   llvm::SmallVector<char, 0> bitcode_buffer;
@@ -91,7 +107,6 @@ void JeandleCompiler::initialize_template_buffer() {
   llvm::WriteBitcodeToFile(*template_module, bitcode_stream);
 
   _template_buffer = std::make_unique<llvm::SmallVectorMemoryBuffer>(std::move(bitcode_buffer), "template module", false);
-  if (_template_buffer == nullptr) {
-    fatal("Failed to initialize template buffer");
-  }
+  assert(_template_buffer != nullptr, "cannot initialize template module buffer");
+  return _template_buffer != nullptr;
 }

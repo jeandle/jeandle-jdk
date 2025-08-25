@@ -25,6 +25,7 @@
 #include "llvm/IR/Module.h"
 #include "llvm/IR/Function.h"
 #include "llvm/IR/LLVMContext.h"
+#include "llvm/Target/TargetMachine.h"
 
 #include <memory>
 
@@ -35,11 +36,26 @@
 #include "ci/ciMethod.hpp"
 #include "memory/arena.hpp"
 
-class JeandleCompiler;
 class JeandleCompilation : public StackObj {
  public:
-  JeandleCompilation(JeandleCompiler* compiler, ciEnv* env, ciMethod* method,
-                     int entry_bci, bool install_code, llvm::MemoryBuffer* template_buffer);
+  // Compile a Java method.
+  JeandleCompilation(llvm::TargetMachine* target_machine,
+                     llvm::DataLayout* data_layout,
+                     ciEnv* env,
+                     ciMethod* method,
+                     int entry_bci,
+                     bool install_code,
+                     llvm::MemoryBuffer* template_buffer);
+
+  // Compile a runtime stub that call a JeandleRuntimeRoutine.
+  JeandleCompilation(llvm::TargetMachine* target_machine,
+                     llvm::DataLayout* data_layout,
+                     ciEnv* env,
+                     std::unique_ptr<llvm::LLVMContext> context,
+                     const char* name,
+                     address c_func,
+                     llvm::FunctionType* func_type);
+
   ~JeandleCompilation() = default;
 
   static JeandleCompilation* current() { return (JeandleCompilation*) ciEnv::current()->compiler_data(); }
@@ -54,37 +70,33 @@ class JeandleCompilation : public StackObj {
   static void report_jeandle_error(const char* msg) { JeandleCompilation::current()->report_error(msg); }
   static bool jeandle_error_occurred() { return JeandleCompilation::current()->error_occurred(); }
 
+  JeandleCompiledCode* compiled_code() { return &_code; }
+
   Arena* arena() { return _arena; }
 
  private:
   Arena* _arena; // Hold compilation life-time objects (JeandleCompilationResourceObj).
-  JeandleCompiler* _compiler;
+  llvm::TargetMachine* _target_machine;
+  llvm::DataLayout* _data_layout;
   ciEnv* _env;
   ciMethod* _method;
   int _entry_bci;
-  llvm::LLVMContext _context;
+  std::unique_ptr<llvm::LLVMContext> _context;
   std::unique_ptr<llvm::Module> _llvm_module;
-  llvm::Function* _llvm_func;
   std::string _comp_start_time;
 
   JeandleCompiledCode _code; // Compiled code.
 
   const char* _error_msg;
 
-  void initialize(llvm::MemoryBuffer* template_buffer);
+  void initialize();
+  void setup_llvm_module(llvm::MemoryBuffer* template_buffer);
   void compile_java_method();
   void compile_module();
   void install_code();
 
   void dump_obj();
   void dump_ir(bool optimized);
-};
-
-class FuncSigAnalyze : public AllStatic {
- public:
-  static llvm::Function* get(ciMethod* method, llvm::Module& module);
-  static std::string method_name(ciMethod* method);
-  static void setup_description(llvm::Function* func);
 };
 
 #endif // SHARE_JEANDLE_COMPILATION_HPP

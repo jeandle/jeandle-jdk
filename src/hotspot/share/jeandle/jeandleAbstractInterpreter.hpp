@@ -201,9 +201,8 @@ class BasicBlockBuilder : public JeandleCompilationResourceObj {
 class JeandleAbstractInterpreter : public StackObj {
  public:
   JeandleAbstractInterpreter(ciMethod* method,
-                             llvm::Function* llvm_func,
                              int entry_bci,
-                             llvm::Module& module,
+                             llvm::Module& target_module,
                              JeandleCompiledCode& code);
 
  private:
@@ -230,7 +229,7 @@ class JeandleAbstractInterpreter : public StackObj {
   // Contains all blocks to interpret. Sorted by reverse-post-order.
   std::vector<JeandleBasicBlock*> _work_list;
 
-  void initialize_jvm_tracker();
+  void initialize_VM_state();
   void interpret();
   void interpret_block(JeandleBasicBlock* block);
 
@@ -242,12 +241,17 @@ class JeandleAbstractInterpreter : public StackObj {
   void if_zero(llvm::CmpInst::Predicate p);
   void if_icmp(llvm::CmpInst::Predicate p);
   void if_lcmp();
+  void goto_bci(int bci);
   void lookup_switch();
   void invoke();
   void stack_op(Bytecodes::Code code);
   void shift_op(BasicType type, Bytecodes::Code code);
   void instanceof(int klass_index);
   void arith_op(BasicType type, Bytecodes::Code code);
+
+  llvm::CallInst* call_java_op(llvm::StringRef java_op, llvm::ArrayRef<llvm::Value*> args);
+
+  void add_safepoint_poll();
 
   llvm::DenseMap<int, JeandleBasicBlock*>& bci2block() { return _block_builder->bci2block(); }
 

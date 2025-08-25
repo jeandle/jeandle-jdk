@@ -20,6 +20,7 @@
 
 /*
  * @test
+ * @requires os.arch=="x86_64"
  * @library /test/lib
  * @build jdk.test.lib.Asserts
  * @run main/othervm -XX:-TieredCompilation -Xcomp

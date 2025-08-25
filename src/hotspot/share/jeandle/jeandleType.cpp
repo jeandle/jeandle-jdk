@@ -18,6 +18,9 @@
  *
  */
 
+#include <cassert>
+#include "llvm/IR/Jeandle/Metadata.h"
+
 #include "jeandle/jeandleType.hpp"
 
 llvm::Type* JeandleType::java2llvm(BasicType java_type, llvm::LLVMContext& context) {
@@ -42,9 +45,9 @@ llvm::Type* JeandleType::java2llvm(BasicType java_type, llvm::LLVMContext& conte
     case BasicType::T_LONG:
       return llvm::Type::getInt64Ty(context);
     case BasicType::T_OBJECT:
-      return llvm::PointerType::get(context, OBJECT_ADDR_SPACE);
+      return llvm::PointerType::get(context, llvm::jeandle::AddrSpace::JavaHeapAddrSpace);
     case BasicType::T_ARRAY:
-      return llvm::PointerType::get(context, OBJECT_ADDR_SPACE);
+      return llvm::PointerType::get(context, llvm::jeandle::AddrSpace::JavaHeapAddrSpace);
     case BasicType::T_VOID:
       return llvm::Type::getVoidTy(context);
     case BasicType::T_ADDRESS:

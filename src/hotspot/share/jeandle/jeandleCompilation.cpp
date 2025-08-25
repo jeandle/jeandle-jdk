@@ -45,33 +45,35 @@
 #include <string>
 
 #include "jeandle/jeandleAbstractInterpreter.hpp"
+#include "jeandle/jeandleCallVM.hpp"
 #include "jeandle/jeandleCompilation.hpp"
 #include "jeandle/jeandleCompiler.hpp"
 #include "jeandle/jeandleType.hpp"
+#include "jeandle/jeandleUtils.hpp"
 
 #include "utilities/debug.hpp"
 #include "ci/ciUtilities.inline.hpp"
 #include "logging/log.hpp"
 #include "runtime/sharedRuntime.hpp"
 
-JeandleCompilation::JeandleCompilation(JeandleCompiler* compiler,
+JeandleCompilation::JeandleCompilation(llvm::TargetMachine* target_machine,
+                                       llvm::DataLayout* data_layout,
                                        ciEnv* env,
                                        ciMethod* method,
                                        int entry_bci,
                                        bool should_install,
                                        llvm::MemoryBuffer* template_buffer) :
-                                       _compiler(compiler),
+                                       _target_machine(target_machine),
+                                       _data_layout(data_layout),
                                        _env(env),
                                        _method(method),
                                        _entry_bci(entry_bci),
-                                       _context(),
+                                       _context(std::make_unique<llvm::LLVMContext>()),
                                        _code(env, method),
                                        _error_msg(nullptr) {
   // Setup compilation.
-  initialize(template_buffer);
-
-  // Get the the LLVM function definition.
-  _llvm_func = FuncSigAnalyze::get(method, *_llvm_module);
+  initialize();
+  setup_llvm_module(template_buffer);
 
   // Let's compile.
   compile_java_method();
@@ -85,15 +87,81 @@ JeandleCompilation::JeandleCompilation(JeandleCompiler* compiler,
     return;
   }
 
-  if (JeandleDumpObjects) {
-    dump_obj();
-  }
-
   // Install code.
   if (should_install) {
     install_code();
   }
 
+}
+
+JeandleCompilation::JeandleCompilation(llvm::TargetMachine* target_machine,
+                                       llvm::DataLayout* data_layout,
+                                       ciEnv* env,
+                                       std::unique_ptr<llvm::LLVMContext> context,
+                                       const char* name,
+                                       address c_func,
+                                       llvm::FunctionType* func_type) :
+                                       _target_machine(target_machine),
+                                       _data_layout(data_layout),
+                                       _env(env),
+                                       _method(nullptr),
+                                       _entry_bci(-1),
+                                       _context(std::move(context)),
+                                       _llvm_module(std::make_unique<llvm::Module>(name, *_context)),
+                                       _code(_env, name),
+                                       _error_msg(nullptr) {
+  initialize();
+
+  _llvm_module->setDataLayout(*_data_layout);
+  JeandleCallVM::generate_call_VM(name, c_func, func_type, *_llvm_module);
+
+#ifdef ASSERT
+  // Verify.
+  if (llvm::verifyModule(*_llvm_module, &llvm::errs())) {
+    if (JeandleCrashOnError)
+      report_vm_error(__FILE__, __LINE__, "module verify failed in Jeandle stub compilation");
+    return;
+  }
+#endif
+
+  if (JeandleDumpRuntimeStubs) {
+    dump_ir(false);
+  }
+
+    // Optimize.
+  llvm::jeandle::optimize(_llvm_module.get(), llvm::OptimizationLevel::O3);
+
+  if (JeandleDumpRuntimeStubs) {
+    dump_ir(true);
+  }
+
+  // Compile the module to an object file.
+  compile_module();
+
+  if (JeandleDumpRuntimeStubs) {
+    dump_obj();
+  }
+
+  assert(!error_occurred(), "Jeandle stub compilation should not fail");
+  if (error_occurred()) {
+    return;
+  }
+
+  _code.finalize();
+
+  assert(!error_occurred(), "Jeandle stub compilation should not fail");
+  if (error_occurred()) {
+    return;
+  }
+
+  RuntimeStub *rs = RuntimeStub::new_runtime_stub(name,
+                                                  _code.code_buffer(),
+                                                  CodeOffsets::frame_never_safe,
+                                                  _code.frame_size(),
+                                                  _env->debug_info()->_oopmaps,
+                                                  false);
+  assert(rs != nullptr && rs->is_runtime_stub(), "sanity check");
+  _code.set_stub_entry(rs->entry_point());
 }
 
 void JeandleCompilation::install_code() {
@@ -106,14 +174,14 @@ void JeandleCompilation::install_code() {
                         _env->debug_info()->_oopmaps,
                         _code.exception_handler_table(),
                         _code.implicit_exception_table(),
-                        _compiler,
+                        CompilerThread::current()->compiler(),
                         false, // temporary value
                         false, // temporary value
                         false, // temporary value
                         0); // temporary value
 }
 
-void JeandleCompilation::initialize(llvm::MemoryBuffer* template_buffer) {
+void JeandleCompilation::initialize() {
   _arena = Thread::current()->resource_area();
   _env->set_compiler_data(this);
 
@@ -125,14 +193,16 @@ void JeandleCompilation::initialize(llvm::MemoryBuffer* template_buffer) {
   _env->debug_info()->set_oopmaps(new OopMapSet());
   _env->set_dependencies(new Dependencies(_env));
 
-  // Get timestamp to mark dump file.
+  // Get timestamp to mark dump files.
   auto now = std::chrono::system_clock::now();
   auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(now.time_since_epoch());
   _comp_start_time = std::to_string(duration.count());
+}
 
-  // Get template module from global memory buffer.
+void JeandleCompilation::setup_llvm_module(llvm::MemoryBuffer* template_buffer) {
+  // Get template module from the global memory buffer.
   llvm::Expected<std::unique_ptr<llvm::Module>> module_or_error =
-      parseBitcodeFile(template_buffer->getMemBufferRef(), _context);
+      parseBitcodeFile(template_buffer->getMemBufferRef(), *_context);
   if (!module_or_error) {
     report_jeandle_error("Failed to parse template bitcode");
     return;
@@ -140,14 +210,14 @@ void JeandleCompilation::initialize(llvm::MemoryBuffer* template_buffer) {
   _llvm_module = std::move(module_or_error.get());
   assert(_llvm_module != nullptr, "invalid llvm module");
 
-  _llvm_module->setModuleIdentifier(FuncSigAnalyze::method_name(_method));
-  _llvm_module->setDataLayout(*(_compiler->data_layout()));
+  _llvm_module->setModuleIdentifier(JeandleFuncSig::method_name(_method));
+  _llvm_module->setDataLayout(*_data_layout);
 }
 
 void JeandleCompilation::compile_java_method() {
   // Build basic blocks. Then fill basic blocks with LLVM IR.
   {
-    JeandleAbstractInterpreter interpret(_method, _llvm_func, _entry_bci, *_llvm_module, _code);
+    JeandleAbstractInterpreter interpret(_method, _entry_bci, *_llvm_module, _code);
   }
 
   if (error_occurred()) {
@@ -156,8 +226,8 @@ void JeandleCompilation::compile_java_method() {
 
 #ifdef ASSERT
   // Verify.
-  if (llvm::verifyFunction(*_llvm_func, &llvm::errs())) {
-    report_error("verify failed");
+  if (llvm::verifyModule(*_llvm_module, &llvm::errs())) {
+    report_error("module verify failed in Jeandle compilation");
     return;
   }
 #endif
@@ -175,6 +245,10 @@ void JeandleCompilation::compile_java_method() {
 
   // Compile the module to an object file.
   compile_module();
+
+  if (JeandleDumpObjects) {
+    dump_obj();
+  }
 
   if (error_occurred()) {
     return;
@@ -194,7 +268,7 @@ void JeandleCompilation::compile_module() {
     llvm::legacy::PassManager pm;
     llvm::MCContext *ctx;
 
-    if (_compiler->target_machine()->addPassesToEmitMC(pm, ctx, obj_stream)) {
+    if (_target_machine->addPassesToEmitMC(pm, ctx, obj_stream)) {
       JeandleCompilation::report_jeandle_error("target does not support MC emission");
       return;
     }
@@ -224,9 +298,7 @@ static std::string construct_dump_path(const std::string& method_name,
 }
 
 void JeandleCompilation::dump_obj() {
-  std::string dump_path = construct_dump_path(FuncSigAnalyze::method_name(_method),
-                                              _comp_start_time,
-                                              ".o");
+  std::string dump_path = construct_dump_path(_llvm_module->getModuleIdentifier(), _comp_start_time, ".o");
 
   std::error_code err_code;
   llvm::raw_fd_ostream dump_stream(dump_path, err_code);
@@ -240,9 +312,7 @@ void JeandleCompilation::dump_obj() {
 }
 
 void JeandleCompilation::dump_ir(bool optimized) {
-  std::string dump_path = construct_dump_path(FuncSigAnalyze::method_name(_method),
-                                              _comp_start_time,
-                                              optimized ? "-optimized.ll" : ".ll");
+  std::string dump_path = construct_dump_path(_llvm_module->getModuleIdentifier(), _comp_start_time, optimized ? "-optimized.ll" : ".ll");
 
   std::error_code err_code;
   llvm::raw_fd_ostream dump_stream(dump_path, err_code, llvm::sys::fs::OF_TextWithCRLF);
@@ -255,60 +325,4 @@ void JeandleCompilation::dump_ir(bool optimized) {
   }
 
   _llvm_module->print(dump_stream, nullptr);
-}
-
-
-llvm::Function* FuncSigAnalyze::get(ciMethod* method, llvm::Module& module) {
-  llvm::SmallVector<llvm::Type*> args;
-  llvm::LLVMContext &context = module.getContext();
-
-  // Reciever is the first argument.
-  if (!method->is_static()) {
-    args.push_back(JeandleType::java2llvm(BasicType::T_OBJECT, context));
-  }
-
-  ciSignature* sig = method->signature();
-  for (int i = 0; i < sig->count(); i++) {
-    args.push_back(JeandleType::java2llvm(sig->type_at(i)->basic_type(), context));
-  }
-
-  llvm::FunctionType* func_type =
-      llvm::FunctionType::get(JeandleType::java2llvm(sig->return_type()->basic_type(), context),
-                              args,
-                              false);
-  llvm::Function* func = llvm::Function::Create(func_type,
-                                                llvm::GlobalValue::ExternalLinkage,
-                                                method_name(method),
-                                                module);
-
-  setup_description(func);
-
-  func->addFnAttr(llvm::Attribute::get(context, llvm::jeandle::attr::JavaMethod));
-
-  return func;
-}
-
-std::string FuncSigAnalyze::method_name(ciMethod* method) {
-  std::string class_name = std::string(method->holder()->name()->as_utf8());
-  std::replace(class_name.begin(), class_name.end(), '/', '_');
-
-  std::string method_name = std::string(method->name()->as_utf8());
-  std::replace(method_name.begin(), method_name.end(), '/', '_');
-
-  std::string sig_name = std::string(method->signature()->as_symbol()->as_utf8());
-  std::replace(sig_name.begin(), sig_name.end(), '/', '_');
-
-  return class_name
-         + "_" + method_name
-         + "_" + sig_name;
-}
-
-void FuncSigAnalyze::setup_description(llvm::Function* func) {
-  func->setCallingConv(llvm::CallingConv::Hotspot_JIT);
-
-  func->setGC(llvm::jeandle::JeandleGC);
-
-  if (UseCompressedOops) {
-    func->addFnAttr(llvm::Attribute::get(func->getContext(), llvm::jeandle::attr::UseCompressedOops));
-  }
 }

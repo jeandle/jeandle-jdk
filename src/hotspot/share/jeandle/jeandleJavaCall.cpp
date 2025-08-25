@@ -19,23 +19,26 @@
  */
 
 #include <cassert>
+#include "llvm/IR/Jeandle/GCStrategy.h"
 #include "llvm/IR/Type.h"
 
 #include "jeandle/jeandleJavaCall.hpp"
 #include "jeandle/jeandleCompilation.hpp"
+#include "jeandle/jeandleUtils.hpp"
 
 #include "utilities/debug.hpp"
 #include "code/nativeInst.hpp"
 
-llvm::FunctionCallee JeandleJavaCall::callee(llvm::Module& module,
+llvm::FunctionCallee JeandleJavaCall::callee(llvm::Module& target_module,
                                              ciMethod* target,
                                              llvm::Type* return_type,
                                              std::vector<llvm::Type*>& args_type) {
   llvm::FunctionType* func_type = llvm::FunctionType::get(return_type, args_type, false);
-  llvm::FunctionCallee callee = module.getOrInsertFunction(FuncSigAnalyze::method_name(target), func_type);
+  llvm::FunctionCallee callee = target_module.getOrInsertFunction(JeandleFuncSig::method_name(target), func_type);
 
   llvm::Function* func = llvm::cast<llvm::Function>(callee.getCallee());
-  FuncSigAnalyze::setup_description(func);
+  func->setCallingConv(llvm::CallingConv::Hotspot_JIT);
+  func->setGC(llvm::jeandle::JeandleGC);
 
   return callee;
 }
