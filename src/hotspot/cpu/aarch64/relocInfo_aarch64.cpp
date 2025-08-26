@@ -89,11 +89,15 @@ void Relocation::pd_set_call_destination(address x) {
   assert(pd_call_destination(addr()) == x, "fail in reloc");
 }
 
-void Relocation::pd_set_jeandle_data_value(address x, intptr_t o) {
-  assert(type() == relocInfo::jeandle_section_word_type, "unexpected reloc type: %d", type());
-  assert(o == 0, "sanity");
+void Relocation::pd_set_jeandle_data_value(address x, bool verify_only) {
+  assert(type() == relocInfo::jeandle_section_word_type ||
+         type() == relocInfo::jeandle_oop_type,
+         "unexpected reloc type: %d", type());
+  if (verify_only) {
+    return;
+  }
 
-  // should be adrp or ldr for consts relocation
+  // should be adrp or ldr
   address insn_addr = addr();
   if (NativeInstruction::is_adrp_at(insn_addr)) {
     ptrdiff_t offset = x - insn_addr;

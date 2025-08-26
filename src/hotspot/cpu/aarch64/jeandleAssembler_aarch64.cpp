@@ -118,3 +118,15 @@ void JeandleAssembler::emit_const_reloc(uint32_t operand_offset, LinkKind kind, 
   RelocationHolder rspec = jeandle_section_word_Relocation::spec(reloc_target, CodeBuffer::SECT_CONSTS);
   __ code_section()->relocate(at_addr, rspec);
 }
+
+void JeandleAssembler::emit_oop_reloc(uint32_t offset, jobject oop_handle) {
+  address at_addr = __ code()->insts_begin() + offset;
+  int index = __ oop_recorder()->find_index(oop_handle);
+  RelocationHolder rspec = jeandle_oop_Relocation::spec(index);
+  __ code_section()->relocate(at_addr, rspec);
+}
+
+bool JeandleAssembler::is_oop_reloc_kind(LinkKind kind) {
+  return kind == LinkKind_aarch64::RequestGOTAndTransformToPage21 ||
+         kind == LinkKind_aarch64::RequestGOTAndTransformToPageOffset12;
+}

@@ -194,7 +194,7 @@ void JeandleCompiledCode::resolve_reloc_info(JeandleAssembler& assembler) {
           return;
         }
         relocs.push_back(new JeandleConstReloc(*block, edge, target_addr));
-      } else if (!target.isDefined() && edge.getKind() == assembler.get_oop_reloc_kind()) {
+      } else if (!target.isDefined() && JeandleAssembler::is_oop_reloc_kind(edge.getKind())) {
         // Oop relocations.
         assert((*(target.getName())).starts_with("oop_handle"), "invalid oop relocation name");
         relocs.push_back(new JeandleOopReloc(block->getAddress().getValue() + edge.getOffset(), _oop_handles[(*(target.getName()))]));

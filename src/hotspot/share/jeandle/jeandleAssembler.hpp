@@ -51,7 +51,7 @@ class JeandleAssembler : public StackObj {
 
   void emit_oop_reloc(uint32_t offset, jobject oop_handle);
 
-  static LinkKind get_oop_reloc_kind();
+  static bool is_oop_reloc_kind(LinkKind kind);
 
  private:
   MacroAssembler* _masm;

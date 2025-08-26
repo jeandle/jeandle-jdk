@@ -128,6 +128,6 @@ void JeandleAssembler::emit_oop_reloc(uint32_t offset, jobject oop_handle) {
   __ code_section()->relocate(at_address, rspec, __ disp32_operand);
 }
 
-LinkKind JeandleAssembler::get_oop_reloc_kind() {
-  return LinkKind_x86_64::RequestGOTAndTransformToPCRel32GOTLoadREXRelaxable;
+bool JeandleAssembler::is_oop_reloc_kind(LinkKind kind) {
+  return kind == LinkKind_x86_64::RequestGOTAndTransformToPCRel32GOTLoadREXRelaxable;
 }

@@ -420,7 +420,7 @@ bool NativeInstruction::is_adrp_at(address instr) {
 
 bool NativeInstruction::is_ldr_unsigned_at(address instr) {
   unsigned insn = *(unsigned*)instr;
-  return (Instruction_aarch64::extract(insn, 31, 22) & 0b0011111101) == 0b0011110101;
+  return (Instruction_aarch64::extract(insn, 31, 22) & 0b0011101101) == 0b0011100101;
 }
 
 bool NativeInstruction::is_ldr_literal_at(address instr) {
