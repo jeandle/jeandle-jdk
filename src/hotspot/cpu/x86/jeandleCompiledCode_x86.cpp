@@ -29,11 +29,11 @@ void JeandleCompiledCode::setup_frame_size() {
     return;
   }
   llvm::DataExtractor data_extractor(llvm::StringRef(((char*)_obj->getBufferStart()) + section_info._offset, section_info._size),
-                                     true/* IsLittleEndian */, oopSize/* AddressSize */);
+                                     true/* IsLittleEndian */, BytesPerWord/* AddressSize */);
   uint64_t offset = 0;
-  data_extractor.getUnsigned(&offset, oopSize);
+  data_extractor.getUnsigned(&offset, BytesPerWord);
   uint64_t stack_size = data_extractor.getULEB128(&offset);
-  uint64_t frame_size = stack_size + oopSize/* return address */;
+  uint64_t frame_size = stack_size + BytesPerWord/* return address */;
   assert(frame_size % StackAlignmentInBytes == 0, "frame size must be aligned");
-  _frame_size = frame_size / oopSize;
+  _frame_size = frame_size / BytesPerWord;
 }

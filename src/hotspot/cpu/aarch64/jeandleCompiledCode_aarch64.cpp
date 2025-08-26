@@ -30,9 +30,9 @@ void JeandleCompiledCode::setup_frame_size() {
   }
 
   llvm::DataExtractor data_extractor(llvm::StringRef(((char*)_obj->getBufferStart()) + section_info._offset, section_info._size),
-                                     true/* IsLittleEndian */, oopSize/* AddressSize */);
+                                     true/* IsLittleEndian */, BytesPerWord/* AddressSize */);
   uint64_t offset = 0;
-  data_extractor.getUnsigned(&offset, oopSize);
+  data_extractor.getUnsigned(&offset, BytesPerWord);
   uint64_t frame_size_in_bytes = data_extractor.getULEB128(&offset);
   assert(frame_size_in_bytes % StackAlignmentInBytes == 0, "frame size must be aligned");
   _frame_size = frame_size_in_bytes / BytesPerWord;
