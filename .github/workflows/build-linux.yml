@@ -62,11 +62,14 @@ on:
       make-arguments:
         required: false
         type: string
+      runs-on:
+        required: true
+        type: string
 
 jobs:
   build-linux:
     name: build
-    runs-on: ${{ inputs.platform == 'linux-aarch64' && 'ubuntu-22.04-arm' || 'ubuntu-22.04' }}
+    runs-on: ${{ inputs.runs-on }}
 
     strategy:
       fail-fast: false

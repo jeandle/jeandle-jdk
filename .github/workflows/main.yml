@@ -130,6 +130,7 @@ jobs:
       gcc-major-version: '10'
       configure-arguments: ${{ github.event.inputs.configure-arguments }}
       make-arguments: ${{ github.event.inputs.make-arguments }}
+      runs-on: ubuntu-22.04
     if: needs.prepare.outputs.linux-x64 == 'true'
 
   build-linux-aarch64:
@@ -141,6 +142,7 @@ jobs:
       gcc-major-version: '10'
       configure-arguments: ${{ github.event.inputs.configure-arguments }}
       make-arguments: ${{ github.event.inputs.make-arguments }}
+      runs-on: ubuntu-22.04-arm
     if: needs.prepare.outputs.linux-aarch64 == 'true'
 
   ###
