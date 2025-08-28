@@ -1212,14 +1212,14 @@ llvm::Value* JeandleAbstractInterpreter::compute_static_field_address(ciInstance
 
 llvm::Value* JeandleAbstractInterpreter::load_from_address(llvm::Value* addr, BasicType type) {
   llvm::Type* expected_ty = JeandleType::java2llvm(type, *_context);
-  return _ir_builder.CreateLoad(expected_ty, addr);
+  return _ir_builder.CreateLoad(expected_ty, addr, true /* volatile */);
 }
 
 void JeandleAbstractInterpreter::store_to_address(llvm::Value* addr, llvm::Value* value, BasicType type) {
   llvm::Type* expected_ty = JeandleType::java2llvm(type, *_context);
   assert(value->getType() == expected_ty, "Value type must match field type");
 
-  llvm::StoreInst* store = _ir_builder.CreateStore(value, addr);
+  llvm::StoreInst* store = _ir_builder.CreateStore(value, addr, true /* volatile */);
 }
 
 llvm::Value* JeandleAbstractInterpreter::find_or_insert_oop(ciObject* oop) {
