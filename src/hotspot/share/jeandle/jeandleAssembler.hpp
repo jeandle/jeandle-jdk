@@ -56,11 +56,11 @@ class JeandleAssembler : public StackObj {
   // Redirect an offset from the displacement to the end of the call instruction
   static uint32_t fixup_call_inst_offset(uint32_t offset);
 
-  static LinkKind get_oop_reloc_kind();
-  
-  static LinkKind get_call_vm_link_kind();
+  static bool is_oop_reloc_kind(LinkKind kind);
 
-  static LinkKind get_const_link_kind();
+  static bool is_call_vm_link_kind(LinkKind kind);
+
+  static bool is_const_link_kind(LinkKind kind);
 
  private:
   MacroAssembler* _masm;

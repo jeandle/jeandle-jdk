@@ -148,14 +148,14 @@ uint32_t JeandleAssembler::fixup_call_inst_offset(uint32_t offset) {
   return offset + 4;
 }
 
-LinkKind JeandleAssembler::get_oop_reloc_kind() {
-  return LinkKind_x86_64::RequestGOTAndTransformToPCRel32GOTLoadREXRelaxable;
+bool JeandleAssembler::is_oop_reloc_kind(LinkKind kind) {
+  return kind == LinkKind_x86_64::RequestGOTAndTransformToPCRel32GOTLoadREXRelaxable;
 }
 
-LinkKind JeandleAssembler::get_call_vm_link_kind() {
-  return LinkKind_x86_64::BranchPCRel32;
+bool JeandleAssembler::is_call_vm_link_kind(LinkKind kind) {
+  return kind == LinkKind_x86_64::BranchPCRel32;
 }
 
-LinkKind JeandleAssembler::get_const_link_kind() {
-  return LinkKind_x86_64::Delta32;
+bool JeandleAssembler::is_const_link_kind(LinkKind kind) {
+  return kind == LinkKind_x86_64::Delta32;
 }
