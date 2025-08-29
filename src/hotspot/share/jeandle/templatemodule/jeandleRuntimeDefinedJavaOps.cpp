@@ -24,7 +24,7 @@
 
 #include "jeandle/templatemodule/jeandleRuntimeDefinedJavaOps.hpp"
 #include "jeandle/jeandleRuntimeRoutine.hpp"
-#include "jeandle/jeandleRegister.hpp
+#include "jeandle/jeandleRegister.hpp"
 
 #include "utilities/debug.hpp"
 #include "runtime/javaThread.hpp"
