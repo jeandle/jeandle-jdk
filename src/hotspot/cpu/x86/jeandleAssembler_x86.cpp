@@ -152,10 +152,10 @@ bool JeandleAssembler::is_oop_reloc_kind(LinkKind kind) {
   return kind == LinkKind_x86_64::RequestGOTAndTransformToPCRel32GOTLoadREXRelaxable;
 }
 
-bool JeandleAssembler::is_call_vm_link_kind(LinkKind kind) {
+bool JeandleAssembler::is_call_vm_reloc_kind(LinkKind kind) {
   return kind == LinkKind_x86_64::BranchPCRel32;
 }
 
-bool JeandleAssembler::is_const_link_kind(LinkKind kind) {
+bool JeandleAssembler::is_const_reloc_kind(LinkKind kind) {
   return kind == LinkKind_x86_64::Delta32;
 }

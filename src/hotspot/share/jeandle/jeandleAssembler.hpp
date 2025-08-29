@@ -58,9 +58,9 @@ class JeandleAssembler : public StackObj {
 
   static bool is_oop_reloc_kind(LinkKind kind);
 
-  static bool is_call_vm_link_kind(LinkKind kind);
+  static bool is_call_vm_reloc_kind(LinkKind kind);
 
-  static bool is_const_link_kind(LinkKind kind);
+  static bool is_const_reloc_kind(LinkKind kind);
 
  private:
   MacroAssembler* _masm;

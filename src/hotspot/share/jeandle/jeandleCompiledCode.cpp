@@ -208,7 +208,7 @@ void JeandleCompiledCode::resolve_reloc_info(JeandleAssembler& assembler) {
     for (auto& edge : block->edges()) {
       auto& target = edge.getTarget();
 
-      if (!target.isDefined() && JeandleAssembler::is_call_vm_link_kind(edge.getKind())) {
+      if (!target.isDefined() && JeandleAssembler::is_call_vm_reloc_kind(edge.getKind())) {
         // Call VM relocations.
         address target_addr = JeandleRuntimeRoutine::get_stub_entry(*target.getName());
         JeandleCallVMReloc* call_vm_reloc = new JeandleCallVMReloc(*block, edge, target_addr);
@@ -219,7 +219,7 @@ void JeandleCompiledCode::resolve_reloc_info(JeandleAssembler& assembler) {
         _safepoints[call_inst_offset] = new CallSiteInfo(0/* statepoint_id */, JeandleJavaCall::STATIC_CALL, target_addr, 0/* bci */);
         relocs.push_back(call_vm_reloc);
 
-      } else if (target.isDefined() && JeandleAssembler::is_const_link_kind(edge.getKind())) {
+      } else if (target.isDefined() && JeandleAssembler::is_const_reloc_kind(edge.getKind())) {
         // Const relocations.
         assert(target.getSection().getName().starts_with(".rodata"), "invalid const section");
         address target_addr = resolve_const_edge(*block, edge, assembler);
