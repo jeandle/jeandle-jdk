@@ -19,7 +19,7 @@ cd jeandle-llvm
 mkdir build
 cd build
 cmake -G "Unix Makefiles" -DLLVM_TARGETS_TO_BUILD=X86 -DCMAKE_BUILD_TYPE="Release" -DCMAKE_INSTALL_PREFIX="/home/jeandle-llvm-install" -DLLVM_BUILD_LLVM_DYLIB=On -DLLVM_DYLIB_COMPONENTS=all ../llvm
-cmake --build . --target install
+cmake --build . --target install --parallel
 ```
 
 3. Clone jeandle-jdk:
