@@ -18,23 +18,23 @@
  *
  */
 
-#ifndef CPU_X86_JEANDLEREGISTER_X86_HPP
-#define CPU_X86_JEANDLEREGISTER_X86_HPP
+#ifndef CPU_AARCH64_JEANDLEREGISTER_AARCH64_HPP
+#define CPU_AARCH64_JEANDLEREGISTER_AARCH64_HPP
 
+#include "memory/allStatic.hpp"
 #include "utilities/debug.hpp"
-#include "register_x86.hpp"
 
-#ifdef _LP64
 class JeandleRegister : public AllStatic {
 public:
   static const char* get_stack_pointer() {
-    return rsp->name();
+    Unimplemented();
+    return nullptr;
   }
 
   static const char* get_current_thread_pointer() {
-    return r15->name();
+    Unimplemented();
+    return nullptr;
   }
 };
-#endif // _LP64
 
-#endif // CPU_X86_JEANDLEREGISTER_X86_HPP
+#endif // CPU_AARCH64_JEANDLEREGISTER_AARCH64_HPP
