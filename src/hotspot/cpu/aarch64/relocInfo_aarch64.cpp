@@ -89,6 +89,36 @@ void Relocation::pd_set_call_destination(address x) {
   assert(pd_call_destination(addr()) == x, "fail in reloc");
 }
 
+void Relocation::pd_set_jeandle_data_value(address x, bool verify_only) {
+  assert(type() == relocInfo::jeandle_section_word_type ||
+         type() == relocInfo::jeandle_oop_type,
+         "unexpected reloc type: %d", type());
+  if (verify_only) {
+    return;
+  }
+
+  // should be adrp or ldr
+  address insn_addr = addr();
+  if (NativeInstruction::is_adrp_at(insn_addr)) {
+    ptrdiff_t offset = x - insn_addr;
+    uintptr_t pc_page = (uintptr_t)insn_addr >> 12;
+    uintptr_t adr_page = (uintptr_t)x >> 12;
+    offset = adr_page - pc_page;
+    int offset_lo = offset & 3;
+    offset >>= 2;
+    Instruction_aarch64::spatch(insn_addr, 23, 5, offset);
+    Instruction_aarch64::patch(insn_addr, 30, 29, offset_lo);
+  } else if (NativeInstruction::is_ldr_unsigned_at(insn_addr)) {
+    uintptr_t dest = (uintptr_t)x;
+    int offset_lo = dest & 0xfff;
+    uint32_t size = Instruction_aarch64::extract(*(uint32_t*)insn_addr, 31, 30);
+    Instruction_aarch64::patch(insn_addr, 21, 10, offset_lo >> size);
+    guarantee(((dest >> size) << size) == dest, "misaligned target");
+  } else {
+    ShouldNotReachHere();
+  }
+}
+
 void trampoline_stub_Relocation::pd_fix_owner_after_move() {
   NativeCall* call = nativeCall_at(owner());
   assert(call->raw_destination() == owner(), "destination should be empty");

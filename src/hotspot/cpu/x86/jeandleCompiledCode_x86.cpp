@@ -18,26 +18,22 @@
  *
  */
 
-#include <cassert>
-#include "llvm/IR/Jeandle/GCStrategy.h"
-#include "llvm/IR/Type.h"
-
-#include "jeandle/jeandleJavaCall.hpp"
+#include "jeandle/jeandleCompiledCode.hpp"
 #include "jeandle/jeandleCompilation.hpp"
-#include "jeandle/jeandleUtils.hpp"
 
-#include "utilities/debug.hpp"
-
-llvm::FunctionCallee JeandleJavaCall::callee(llvm::Module& target_module,
-                                             ciMethod* target,
-                                             llvm::Type* return_type,
-                                             std::vector<llvm::Type*>& args_type) {
-  llvm::FunctionType* func_type = llvm::FunctionType::get(return_type, args_type, false);
-  llvm::FunctionCallee callee = target_module.getOrInsertFunction(JeandleFuncSig::method_name(target), func_type);
-
-  llvm::Function* func = llvm::cast<llvm::Function>(callee.getCallee());
-  func->setCallingConv(llvm::CallingConv::Hotspot_JIT);
-  func->setGC(llvm::jeandle::JeandleGC);
-
-  return callee;
+// Get the frame size from .stack_sizes section.
+void JeandleCompiledCode::setup_frame_size() {
+  SectionInfo section_info(".stack_sizes");
+  if (!ReadELF::findSection(*_elf, section_info)) {
+    JeandleCompilation::report_jeandle_error(".stack_sizes section not found");
+    return;
+  }
+  llvm::DataExtractor data_extractor(llvm::StringRef(((char*)_obj->getBufferStart()) + section_info._offset, section_info._size),
+                                     true/* IsLittleEndian */, BytesPerWord/* AddressSize */);
+  uint64_t offset = 0;
+  data_extractor.getUnsigned(&offset, BytesPerWord);
+  uint64_t stack_size = data_extractor.getULEB128(&offset);
+  uint64_t frame_size = stack_size + BytesPerWord/* return address */;
+  assert(frame_size % StackAlignmentInBytes == 0, "frame size must be aligned");
+  _frame_size = frame_size / BytesPerWord;
 }
