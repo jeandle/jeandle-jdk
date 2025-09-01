@@ -127,12 +127,22 @@ void JeandleAssembler::emit_oop_reloc(uint32_t offset, jobject oop_handle) {
 }
 
 void JeandleAssembler::patch_call_vm(uint32_t operand_offset, address target) {
-  Unimplemented();
+  address call_pc = __ addr_at(operand_offset);
+
+  // Set insts_ent to where to patch
+  address insts_end = __ code()->insts_end();
+  __ code()->set_insts_end(call_pc);
+
+  Address call_addr = Address(target, relocInfo::static_call_type);
+  // FIXME: Do we need trampoline call here?
+  __ bl(call_addr);
+
+  // Recover insts_end
+  __ code()->set_insts_end(insts_end);
 }
 
 uint32_t JeandleAssembler::fixup_call_inst_offset(uint32_t offset) {
-  Unimplemented();
-  return 0;
+  return offset;
 }
 
 bool JeandleAssembler::is_oop_reloc_kind(LinkKind kind) {
@@ -141,11 +151,10 @@ bool JeandleAssembler::is_oop_reloc_kind(LinkKind kind) {
 }
 
 bool JeandleAssembler::is_call_vm_reloc_kind(LinkKind kind) {
-  Unimplemented();
-  return false;
+  return kind == LinkKind_aarch64::Branch26PCRel;
 }
 
 bool JeandleAssembler::is_const_reloc_kind(LinkKind kind) {
-  Unimplemented();
-  return false;
+  return kind == LinkKind_aarch64::Page21 ||
+         kind == LinkKind_aarch64::PageOffset12;
 }

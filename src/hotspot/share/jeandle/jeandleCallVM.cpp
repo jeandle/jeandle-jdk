@@ -53,6 +53,18 @@ void JeandleCallVM::generate_call_VM(const char* name, address c_func, llvm::Fun
                                                         read_sp_args);
   ir_builder.CreateStore(sp_value, last_Java_sp_ptr);
 
+  llvm::Value* last_Java_pc_ptr = ir_builder.CreateIntToPtr(ir_builder.getInt64((uint64_t)JavaThread::last_Java_pc_offset()),
+                                                            llvm::PointerType::get(context, llvm::jeandle::AddrSpace::TLSAddrSpace));
+#ifdef AARCH64
+  // we need to set last_Java_pc for aarch64
+  llvm::Type* ptr_type = llvm::PointerType::get(ir_builder.getInt64Ty(), llvm::jeandle::AddrSpace::CHeapAddrSpace);
+  llvm::Value* sp_addr = ir_builder.CreateIntToPtr(sp_value, ptr_type);
+  // get last java pc from sp + 8, i.e. LR
+  llvm::Value* last_pc_addr = ir_builder.CreateGEP(ptr_type, sp_addr, ir_builder.getInt64(1));
+  llvm::Value* last_pc = ir_builder.CreateLoad(ptr_type, last_pc_addr);
+  ir_builder.CreateStore(last_pc, last_Java_pc_ptr);
+#endif
+
   // Make arguments.
   llvm::SmallVector<llvm::Value*> args;
   for (llvm::Value& arg : llvm_func->args()) {
@@ -72,8 +84,6 @@ void JeandleCallVM::generate_call_VM(const char* name, address c_func, llvm::Fun
   ir_builder.CreateStore(ir_builder.getInt64((intptr_t)nullptr), last_Java_sp_ptr);
 
   // Clear the last_Java_pc.
-  llvm::Value* last_Java_pc_ptr = ir_builder.CreateIntToPtr(ir_builder.getInt64((uint64_t)JavaThread::last_Java_pc_offset()),
-                                                            llvm::PointerType::get(context, llvm::jeandle::AddrSpace::TLSAddrSpace));
   ir_builder.CreateStore(ir_builder.getInt64((intptr_t)nullptr), last_Java_pc_ptr);
 
   // Return.
