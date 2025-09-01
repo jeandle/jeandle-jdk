@@ -240,7 +240,10 @@ class JeandleAbstractInterpreter : public StackObj {
   void increment();
   void if_zero(llvm::CmpInst::Predicate p);
   void if_icmp(llvm::CmpInst::Predicate p);
-  void if_lcmp();
+  void if_acmp(llvm::CmpInst::Predicate p);
+  void if_null(llvm::CmpInst::Predicate p);
+  void fcmp(BasicType type, bool true_if_unordered);
+  void lcmp();
   void goto_bci(int bci);
   void lookup_switch();
   void invoke();

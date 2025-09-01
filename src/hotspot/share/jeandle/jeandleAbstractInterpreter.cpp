@@ -706,16 +706,16 @@ void JeandleAbstractInterpreter::interpret_block(JeandleBasicBlock* block) {
       case Bytecodes::_if_icmpge: if_icmp(llvm::CmpInst::ICMP_SGE); break;
       case Bytecodes::_if_icmple: if_icmp(llvm::CmpInst::ICMP_SLE); break;
 
-      case Bytecodes::_lcmp: if_lcmp(); break;
+      case Bytecodes::_lcmp: lcmp(); break;
 
-      case Bytecodes::_fcmpl: Unimplemented(); break;
-      case Bytecodes::_fcmpg: Unimplemented(); break;
+      case Bytecodes::_fcmpl: fcmp(T_FLOAT, false); break;
+      case Bytecodes::_fcmpg: fcmp(T_FLOAT, true); break;
 
-      case Bytecodes::_dcmpl: Unimplemented(); break;
-      case Bytecodes::_dcmpg: Unimplemented(); break;
+      case Bytecodes::_dcmpl: fcmp(T_DOUBLE, false); break;
+      case Bytecodes::_dcmpg: fcmp(T_DOUBLE, true); break;
 
-      case Bytecodes::_if_acmpeq: Unimplemented(); break;
-      case Bytecodes::_if_acmpne: Unimplemented(); break;
+      case Bytecodes::_if_acmpeq: if_acmp(llvm::CmpInst::ICMP_EQ); break;
+      case Bytecodes::_if_acmpne: if_acmp(llvm::CmpInst::ICMP_NE); break;
 
       // Control:
 
@@ -765,8 +765,8 @@ void JeandleAbstractInterpreter::interpret_block(JeandleBasicBlock* block) {
 
       case Bytecodes::_multianewarray: Unimplemented(); break;
 
-      case Bytecodes::_ifnull: Unimplemented(); break;
-      case Bytecodes::_ifnonnull: Unimplemented(); break;
+      case Bytecodes::_ifnull: if_null(llvm::CmpInst::ICMP_EQ); break;
+      case Bytecodes::_ifnonnull: if_null(llvm::CmpInst::ICMP_NE); break;
 
       case Bytecodes::_goto_w: Unimplemented(); break;
       case Bytecodes::_jsr_w: Unimplemented(); break;
@@ -857,7 +857,7 @@ void JeandleAbstractInterpreter::if_icmp(llvm::CmpInst::Predicate p) {
   _ir_builder.CreateCondBr(cond, bci2block()[_codes.get_dest()]->llvm_block(), bci2block()[_codes.next_bci()]->llvm_block());
 }
 
-void JeandleAbstractInterpreter::if_lcmp() {
+void JeandleAbstractInterpreter::lcmp() {
   llvm::Value* r = _jvm->lpop();
   llvm::Value* l = _jvm->lpop();
   llvm::Value* ne_cmp = _ir_builder.CreateICmpNE(l, r);
@@ -865,6 +865,44 @@ void JeandleAbstractInterpreter::if_lcmp() {
   llvm::Value* lt_cmp = _ir_builder.CreateICmpSLT(l, r);
   llvm::Value* less_than = JeandleType::int_const(_ir_builder, -1);
   _jvm->ipush(_ir_builder.CreateSelect(lt_cmp, less_than, ne_cmp));
+}
+
+void JeandleAbstractInterpreter::if_acmp(llvm::CmpInst::Predicate p) {
+  llvm::Value* r = _jvm->apop();
+  llvm::Value* l = _jvm->apop();
+  llvm::Value* cond = _ir_builder.CreateICmp(p, l, r);
+  _ir_builder.CreateCondBr(cond, bci2block()[_codes.get_dest()]->llvm_block(), bci2block()[_codes.next_bci()]->llvm_block());
+}
+
+void JeandleAbstractInterpreter::if_null(llvm::CmpInst::Predicate p) {
+  llvm::Value* v = _jvm->apop();
+  llvm::Value* cond = _ir_builder.CreateICmp(p, v, llvm::ConstantPointerNull::get(llvm::cast<llvm::PointerType>(v->getType())));
+  _ir_builder.CreateCondBr(cond, bci2block()[_codes.get_dest()]->llvm_block(), bci2block()[_codes.next_bci()]->llvm_block());
+}
+
+/*
+ *  U  L  G  E  Inst         Flag
+ * ---------------------------------------------------
+ *  1 -1  1  0  fcmpg,dcmpg  true_if_unordered = true
+ * -1 -1  1  0  fcmpl,dcmpl  true_if_unordered = false
+ */
+void JeandleAbstractInterpreter::fcmp(BasicType type, bool true_if_unordered) {
+  assert(type == BasicType::T_FLOAT || type == BasicType::T_DOUBLE, "type must be float or double");
+  llvm::Value* r = (type == BasicType::T_FLOAT) ? _jvm->fpop() : _jvm->dpop();
+  llvm::Value* l = (type == BasicType::T_FLOAT) ? _jvm->fpop() : _jvm->dpop();
+
+  llvm::Value* negative_case = nullptr;
+  llvm::Value* non_negative_case = nullptr;
+  if (true_if_unordered) {
+    negative_case     = _ir_builder.CreateFCmpOLT(l, r);
+    non_negative_case = _ir_builder.CreateFCmpUGT(l, r);
+  } else {
+    negative_case     = _ir_builder.CreateFCmpULT(l, r);
+    non_negative_case = _ir_builder.CreateFCmpOGT(l, r);
+  }
+
+  non_negative_case = _ir_builder.CreateZExt(non_negative_case, JeandleType::java2llvm(BasicType::T_INT, *_context));
+  _jvm->ipush(_ir_builder.CreateSelect(negative_case, JeandleType::int_const(_ir_builder, -1), non_negative_case));
 }
 
 void JeandleAbstractInterpreter::goto_bci(int bci) {
