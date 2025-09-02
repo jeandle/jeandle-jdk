@@ -103,7 +103,7 @@ void JeandleAssembler::emit_ic_check() {
   __ jump_cc(Assembler::notEqual, RuntimeAddress(SharedRuntime::get_ic_miss_stub()));
 
   // Align to 8 byte.
-  int nops_cnt = 8 - ((__ code()->insts_size() - insts_size) & 0x3);
+  int nops_cnt = 8 - ((__ code()->insts_size() - insts_size) & 0x7);
   if (nops_cnt > 0)
     __ nop(nops_cnt);
 }

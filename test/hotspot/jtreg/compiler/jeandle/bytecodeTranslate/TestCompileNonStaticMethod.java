@@ -23,6 +23,9 @@
  * @run main/othervm -XX:-TieredCompilation -Xcomp
  *      -XX:CompileCommand=compileonly,compiler.jeandle.bytecodeTranslate.TestCall::callSuccessfully
  *      -XX:+UseJeandleCompiler compiler.jeandle.bytecodeTranslate.TestCompileNonStaticMethod
+ * @run main/othervm -XX:-UseCompressedOops -XX:-TieredCompilation -Xcomp
+ *      -XX:CompileCommand=compileonly,compiler.jeandle.bytecodeTranslate.TestCall::callSuccessfully
+ *      -XX:+UseJeandleCompiler compiler.jeandle.bytecodeTranslate.TestCompileNonStaticMethod
  */
 
 package compiler.jeandle.bytecodeTranslate;
