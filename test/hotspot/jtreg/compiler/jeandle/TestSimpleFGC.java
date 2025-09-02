@@ -24,11 +24,11 @@
  * @build jdk.test.whitebox.WhiteBox
  * @run driver jdk.test.lib.helpers.ClassFileInstaller jdk.test.whitebox.WhiteBox
  * @run main/othervm -Xbootclasspath/a:. -XX:+UnlockDiagnosticVMOptions -XX:+WhiteBoxAPI
- *      -XX:CompileCommand=compileonly,TestSimpleFGC::test0
- *      -XX:CompileCommand=compileonly,TestSimpleFGC::test1
- *      -XX:CompileCommand=compileonly,TestSimpleFGC::test2
+ *      -XX:CompileCommand=compileonly,TestSimpleFGC::test*
  *      -Xcomp -XX:-TieredCompilation -XX:+UseJeandleCompiler TestSimpleFGC
  */
+
+import java.lang.reflect.Method;
 
 import jdk.test.lib.Asserts;
 import jdk.test.whitebox.WhiteBox;
@@ -38,29 +38,46 @@ public class TestSimpleFGC {
 
     private static int sa = 10;
 
-    public static void main(String[] args) {
+    private static volatile boolean stop = false;
+
+    public static void main(String[] args) throws Exception {
         MyClass a = new MyClass();
         test0(a);
         test1(a);
         test2();
+
+        {
+            new Thread(() -> {
+                test3(a);
+            }).start();
+
+            Method method = TestSimpleFGC.class.getDeclaredMethod("test3", MyClass.class);
+            while (!wb.isMethodCompiled(method)) {
+                Thread.yield();
+            }
+
+            Thread.sleep(100);
+
+            wb.fullGC();
+
+            Thread.sleep(100);
+
+            stop = true;
+        }
     }
 
     static MyClass createObj() {
         return new MyClass();
     }
 
-    static void triggerGC() {
-        wb.fullGC();
-    }
-
     static void test0(MyClass a) {
-        triggerGC();
+        wb.fullGC();
         Asserts.assertEquals(a.getA(), 1);
     }
 
     static void test1(MyClass a) {
         a.b = 3;
-        triggerGC();
+        wb.fullGC();
         Asserts.assertEquals(a.b, 3);
         a.b = 4;
         Asserts.assertEquals(a.b, 4);
@@ -70,8 +87,14 @@ public class TestSimpleFGC {
         sa = 12;
         Asserts.assertEquals(sa, 12);
         sa= 13;
-        triggerGC();
+        wb.fullGC();
         Asserts.assertEquals(sa, 13);
+    }
+
+    static void test3(MyClass a) {
+        while (!stop) {
+            Asserts.assertEquals(a.getA(), 1);
+        }
     }
 }
 

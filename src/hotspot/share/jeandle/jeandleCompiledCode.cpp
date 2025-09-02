@@ -295,7 +295,7 @@ void JeandleCompiledCode::resolve_reloc_info(JeandleAssembler& assembler) {
         _env->debug_info()->end_safepoint(inst_offset);
 
       } else if (CallSiteInfo* safepoint = _safepoints[record->getInstructionOffset()]) {
-        // TODO: Add debug information for safepoints.
+        _env->debug_info()->add_safepoint(record->getInstructionOffset(), build_oop_map(record));
       }
     }
   }

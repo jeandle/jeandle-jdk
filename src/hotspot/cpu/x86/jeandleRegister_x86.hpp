@@ -40,17 +40,14 @@ public:
   }
 
   static const Register decode_dwarf_register(int dwarf_encoding) {
-    return all_DwarfRegisters[dwarf_encoding];
+    assert(dwarf_encoding >=0 && dwarf_encoding < Register::number_of_registers, "invalid dwarf register number");
+    return _dwarf_registers[dwarf_encoding];
   }
 
 private:
-  static constexpr const Register all_DwarfRegisters[Register::number_of_registers] = {
-#ifdef _LP64
+  static constexpr const Register _dwarf_registers[Register::number_of_registers] = {
     rax, rdx, rcx, rbx, rsi, rdi, rbp, rsp,
     r8, r9, r10, r11, r12, r13, r14, r15
-#else
-    rax, rdx, rcx, rbx, rsi, rdi, rbp, rsp
-#endif // _LP_64
   };
 };
 #endif // _LP64

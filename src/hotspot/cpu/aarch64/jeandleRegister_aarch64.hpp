@@ -46,7 +46,7 @@ public:
   }
 
 private:
-  static constexpr const Register all_DwarfRegisters[Register::number_of_registers] = {
+  static constexpr const Register _dwarf_registers[Register::number_of_registers] = {
     /* Unimplemented */
   };
 };
