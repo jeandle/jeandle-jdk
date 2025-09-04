@@ -29,6 +29,7 @@
 #include "jeandle/jeandleType.hpp"
 #include "jeandle/jeandleUtils.hpp"
 
+#include "logging/log.hpp"
 #include "utilities/debug.hpp"
 #include "ci/ciMethodBlocks.hpp"
 #include "runtime/sharedRuntime.hpp"
@@ -940,6 +941,17 @@ void JeandleAbstractInterpreter::invoke() {
   assert(declared_signature != nullptr, "cannot be null");
   assert(will_link == target->is_loaded(), "");
 
+  if (target->is_loaded() && target->check_intrinsic_candidate()) {
+    if (inline_intrinsic(target)) {
+      if (log_is_enabled(Debug, jeandle)) {
+        ResourceMark rm;
+        stringStream ss;
+        target->print_name(&ss);
+        log_debug(jeandle)("Method `%s` is parsed as intrinsic", ss.as_string());
+      }
+      return;
+    };
+  }
   const Bytecodes::Code bc = _codes.cur_bc();
 
   // Construct arguments.
@@ -1008,6 +1020,22 @@ void JeandleAbstractInterpreter::invoke() {
   if (return_type != BasicType::T_VOID) {
     _jvm->push(return_type, call);
   }
+}
+
+bool JeandleAbstractInterpreter::inline_intrinsic(const ciMethod* target) {
+  switch(target->intrinsic_id()) {
+    case vmIntrinsics::_dabs: {
+      _jvm->dpush(_ir_builder.CreateIntrinsic(JeandleType::java2llvm(BasicType::T_DOUBLE, *_context), llvm::Intrinsic::fabs, {_jvm->dpop()}));
+      break;
+    }
+    case vmIntrinsicID::_fabs: {
+      _jvm->fpush(_ir_builder.CreateIntrinsic(JeandleType::java2llvm(BasicType::T_FLOAT, *_context), llvm::Intrinsic::fabs, {_jvm->fpop()}));
+      break;
+    }
+    default:
+      return false;
+  }
+  return true;
 }
 
 void JeandleAbstractInterpreter::stack_op(Bytecodes::Code code) {

@@ -98,6 +98,7 @@ class outputStream;
   LOG_TAG(install) \
   LOG_TAG(interpreter) \
   LOG_TAG(itables) \
+  LOG_TAG(jeandle) \
   LOG_TAG(jfr) \
   LOG_TAG(jit) \
   LOG_TAG(jni) \
