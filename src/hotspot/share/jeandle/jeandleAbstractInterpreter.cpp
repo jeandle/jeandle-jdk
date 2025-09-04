@@ -672,23 +672,23 @@ void JeandleAbstractInterpreter::interpret_block(JeandleBasicBlock* block) {
       // Conversions:
 
       case Bytecodes::_i2l: _jvm->lpush(_ir_builder.CreateSExt(_jvm->ipop(), JeandleType::java2llvm(BasicType::T_LONG, *_context))); break;
-      case Bytecodes::_i2f: Unimplemented(); break;
-      case Bytecodes::_i2d: Unimplemented(); break;
-      case Bytecodes::_i2b: Unimplemented(); break;
-      case Bytecodes::_i2c: Unimplemented(); break;
-      case Bytecodes::_i2s: Unimplemented(); break;
+      case Bytecodes::_i2f: _jvm->fpush(_ir_builder.CreateSIToFP(_jvm->ipop(), JeandleType::java2llvm(BasicType::T_FLOAT, *_context))); break;
+      case Bytecodes::_i2d: _jvm->dpush(_ir_builder.CreateSIToFP(_jvm->ipop(), JeandleType::java2llvm(BasicType::T_DOUBLE, *_context))); break;
+      case Bytecodes::_i2b: _jvm->ipush(_ir_builder.CreateSExt(_ir_builder.CreateTrunc(_jvm->ipop(), llvm::Type::getInt8Ty(*_context)), JeandleType::java2llvm(BasicType::T_INT, *_context))); break;
+      case Bytecodes::_i2c: _jvm->ipush(_ir_builder.CreateZExt(_ir_builder.CreateTrunc(_jvm->ipop(), llvm::Type::getInt16Ty(*_context)), JeandleType::java2llvm(BasicType::T_INT, *_context))); break;
+      case Bytecodes::_i2s: _jvm->ipush(_ir_builder.CreateSExt(_ir_builder.CreateTrunc(_jvm->ipop(), llvm::Type::getInt16Ty(*_context)), JeandleType::java2llvm(BasicType::T_INT, *_context))); break;
 
-      case Bytecodes::_l2i: Unimplemented(); break;
-      case Bytecodes::_l2f: Unimplemented(); break;
-      case Bytecodes::_l2d: Unimplemented(); break;
+      case Bytecodes::_l2i: _jvm->ipush(_ir_builder.CreateTrunc(_jvm->lpop(), JeandleType::java2llvm(BasicType::T_INT, *_context))); break;
+      case Bytecodes::_l2f: _jvm->fpush(_ir_builder.CreateSIToFP(_jvm->lpop(), JeandleType::java2llvm(BasicType::T_FLOAT, *_context))); break;
+      case Bytecodes::_l2d: _jvm->dpush(_ir_builder.CreateSIToFP(_jvm->lpop(), JeandleType::java2llvm(BasicType::T_DOUBLE, *_context))); break;
 
-      case Bytecodes::_f2i: Unimplemented(); break;
-      case Bytecodes::_f2l: Unimplemented(); break;
-      case Bytecodes::_f2d: Unimplemented(); break;
+      case Bytecodes::_f2i: _jvm->ipush(_ir_builder.CreateIntrinsic(JeandleType::java2llvm(BasicType::T_INT, *_context), llvm::Intrinsic::fptosi_sat, {_jvm->fpop()})); break;
+      case Bytecodes::_f2l: _jvm->lpush(_ir_builder.CreateIntrinsic(JeandleType::java2llvm(BasicType::T_LONG, *_context), llvm::Intrinsic::fptosi_sat, {_jvm->fpop()})); break;
+      case Bytecodes::_f2d: _jvm->dpush(_ir_builder.CreateFPExt(_jvm->fpop(), JeandleType::java2llvm(BasicType::T_DOUBLE, *_context))); break;
 
-      case Bytecodes::_d2i: Unimplemented(); break;
-      case Bytecodes::_d2l: Unimplemented(); break;
-      case Bytecodes::_d2f: Unimplemented(); break;
+      case Bytecodes::_d2i: _jvm->ipush(_ir_builder.CreateIntrinsic(JeandleType::java2llvm(BasicType::T_INT, *_context), llvm::Intrinsic::fptosi_sat, {_jvm->dpop()})); break;
+      case Bytecodes::_d2l: _jvm->lpush(_ir_builder.CreateIntrinsic(JeandleType::java2llvm(BasicType::T_LONG, *_context), llvm::Intrinsic::fptosi_sat, {_jvm->dpop()})); break;
+      case Bytecodes::_d2f: _jvm->fpush(_ir_builder.CreateFPTrunc(_jvm->dpop(), JeandleType::java2llvm(BasicType::T_FLOAT, *_context))); break;
 
       // Comparisons:
 

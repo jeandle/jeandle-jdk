@@ -26,22 +26,15 @@
 llvm::Type* JeandleType::java2llvm(BasicType java_type, llvm::LLVMContext& context) {
   switch (java_type) {
     case BasicType::T_BOOLEAN:
-      return llvm::Type::getInt32Ty(context);
     case BasicType::T_CHAR:
-      Unimplemented();
-      return nullptr;
+    case BasicType::T_BYTE:
+    case BasicType::T_SHORT:
+    case BasicType::T_INT:
+      return llvm::Type::getInt32Ty(context);
     case BasicType::T_FLOAT:
       return llvm::Type::getFloatTy(context);
     case BasicType::T_DOUBLE:
       return llvm::Type::getDoubleTy(context);
-    case BasicType::T_BYTE:
-      Unimplemented();
-      return nullptr;
-    case BasicType::T_SHORT:
-      Unimplemented();
-      return nullptr;
-    case BasicType::T_INT:
-      return llvm::Type::getInt32Ty(context);
     case BasicType::T_LONG:
       return llvm::Type::getInt64Ty(context);
     case BasicType::T_OBJECT:
