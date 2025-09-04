@@ -49,22 +49,22 @@ class CallSiteInfo : public JeandleCompilationResourceObj {
                _type(type),
                _target(target),
                _bci(bci),
-               _inst_offset(0) {}
+               _pc_offset(0) {}
 
   JeandleJavaCall::Type type() const { return _type; }
   uint32_t statepoint_id() const { return _statepoint_id; }
   address target() const { return _target; }
   int bci() const { return _bci; }
 
-  uint32_t inst_offset() const { return _inst_offset; }
-  void set_inst_offset(uint32_t offset) { _inst_offset = offset; }
+  uint32_t pc_offset() const { return _pc_offset; }
+  void set_pc_offset(uint32_t offset) { _pc_offset = offset; }
 
  private:
   uint32_t _statepoint_id; // Used to distinguish each call site in stackmaps.
   JeandleJavaCall::Type _type;
   address _target;
   int _bci;
-  uint32_t _inst_offset; // Instruction offset (from the start of the containing function).
+  uint32_t _pc_offset; // Instruction offset (from the start of the containing function).
 };
 
 using ObjectBuffer = llvm::MemoryBuffer;
@@ -118,6 +118,12 @@ class JeandleCompiledCode : public StackObj {
   ImplicitExceptionTable* implicit_exception_table() { return &_implicit_exception_table; }
 
   int frame_size() const { return _frame_size; }
+
+  int prolog_length() const { return _prolog_length; }
+
+  ciEnv* env() const { return _env; }
+
+  ciMethod* method() const { return _method; }
 
   address stub_entry() const { return _stub_entry; }
   void set_stub_entry(address entry) { _stub_entry = entry; }
