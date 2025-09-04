@@ -20,6 +20,9 @@
 
 /**
  * @test
+ * @summary Fix relocation type of call_vm
+ *  issue: https://github.com/jeandle/jeandle-jdk/issues/63
+ *
  * @library /test/lib
  * @requires os.arch=="amd64" | os.arch=="x86_64"
  * @build jdk.test.whitebox.WhiteBox
@@ -39,7 +42,6 @@ import jdk.test.whitebox.WhiteBox;
 public class TestRuntimeCallRelocation {
     private final static WhiteBox wb = WhiteBox.getWhiteBox();
     static volatile boolean stop = false;
-    static int count = 0;
 
     public static void main(String[] args) throws Exception {
         new Thread(() -> {
