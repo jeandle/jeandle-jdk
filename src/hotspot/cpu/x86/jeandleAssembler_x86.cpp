@@ -72,6 +72,20 @@ void JeandleAssembler::patch_static_call_site(CallSiteInfo* call) {
   __ code()->set_insts_end(insts_end);
 }
 
+void JeandleAssembler::patch_vm_call_site(CallSiteInfo* call) {
+  assert(call->inst_offset() != 0, "invalid call instruction address");
+  assert(call->type() == JeandleJavaCall::Type::VM_CALL, "legal call type");
+  address patch_pc =  __ addr_at(call->inst_offset() - JeandleJavaCall::call_site_size(JeandleJavaCall::Type::VM_CALL));
+
+  address insts_end = __ code()->insts_end();
+  __ code()->set_insts_end(patch_pc);
+
+  __ mov64(r10, (int64_t)call->target());
+  __ call(r10);
+
+  __ code()->set_insts_end(insts_end);
+}
+
 void JeandleAssembler::patch_ic_call_site(CallSiteInfo* call) {
   assert(call->inst_offset() != 0, "invalid call instruction address");
   assert(call->type() == JeandleJavaCall::Type::DYNAMIC_CALL, "legal call type");

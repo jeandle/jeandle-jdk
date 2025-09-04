@@ -26,13 +26,15 @@
 #include "llvm/IR/Function.h"
 #include "llvm/IR/LLVMContext.h"
 
+#include "jeandle/jeandleCompiledCode.hpp"
+
 #include "utilities/debug.hpp"
 #include "utilities/globalDefinitions.hpp"
 
 class JeandleCallVM : public AllStatic {
  public:
   // Generate stubs that call JeandleRuntimeRoutine.
-  static void generate_call_VM(const char* name, address c_func, llvm::FunctionType* func_type, llvm::Module& target_module);
+  static void generate_call_VM(const char* name, address c_func, llvm::FunctionType* func_type, llvm::Module& target_module, JeandleCompiledCode& code);
 };
 
 #endif // SHARE_JEANDLE_CALL_VM_HPP

@@ -101,6 +101,10 @@ class JeandleCallReloc : public JeandleReloc {
       assembler.patch_static_call_site(_call);
     }
 
+    if (_call->type() == JeandleJavaCall::Type::VM_CALL) {
+      assembler.patch_vm_call_site(_call);
+    }
+
     if (_call->type() == JeandleJavaCall::Type::DYNAMIC_CALL) {
       assembler.patch_ic_call_site(_call);
     }
@@ -250,6 +254,10 @@ void JeandleCompiledCode::resolve_reloc_info(JeandleAssembler& assembler) {
         call->set_inst_offset(inst_offset);
 
         relocs.push_back(new JeandleCallReloc(call));
+
+        if (call->type() == JeandleJavaCall::VM_CALL) {
+          continue;
+        }
 
         // No GC support now.
         _env->debug_info()->add_safepoint(inst_offset, new OopMap(stackmaps.getFunction(0).getStackSize(), 0));
