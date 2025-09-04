@@ -138,7 +138,7 @@ void JeandleAssembler::patch_call_vm(uint32_t operand_offset, address target) {
   __ code()->set_insts_end(call_pc);
 
   // Patch.
-  __ call(AddressLiteral(target, relocInfo::static_call_type));
+  __ call(AddressLiteral(target, relocInfo::runtime_call_type));
 
   // Recover insts_end.
   __ code()->set_insts_end(insts_end);
