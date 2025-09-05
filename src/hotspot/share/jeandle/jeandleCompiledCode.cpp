@@ -181,6 +181,8 @@ void JeandleCompiledCode::finalize() {
 
   resolve_reloc_info(assembler);
 
+  _code_buffer.finalize_stubs(); // generate shared trampoline stubs
+
   setup_frame_size();
 
   // No deopt support now.

@@ -152,9 +152,7 @@ void JeandleAssembler::patch_call_vm(uint32_t operand_offset, address target) {
   address insts_end = __ code()->insts_end();
   __ code()->set_insts_end(call_pc);
 
-  Address call_addr = Address(target, relocInfo::static_call_type);
-  // FIXME: Do we need trampoline call here?
-  __ bl(call_addr);
+  __ trampoline_call(Address(target, relocInfo::runtime_call_type));
 
   // Recover insts_end
   __ code()->set_insts_end(insts_end);
