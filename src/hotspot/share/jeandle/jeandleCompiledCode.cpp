@@ -181,7 +181,11 @@ void JeandleCompiledCode::finalize() {
 
   resolve_reloc_info(assembler);
 
-  _code_buffer.finalize_stubs(); // generate shared trampoline stubs
+  // generate shared trampoline stubs
+  if (!_code_buffer.finalize_stubs()) {
+    JeandleCompilation::report_jeandle_error("code cache full");
+    return;
+  }
 
   setup_frame_size();
 
