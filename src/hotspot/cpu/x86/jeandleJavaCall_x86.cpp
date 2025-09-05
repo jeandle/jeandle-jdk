@@ -28,8 +28,8 @@ int JeandleJavaCall::call_site_size(JeandleJavaCall::Type call_type) {
   }
 
   if (call_type == JeandleJavaCall::Type::VM_CALL) {
-    // movabs + call
-    return NativeMovConstReg::instruction_size + 2;
+    // No need to patch on x86
+    return 0;
   }
 
   // DYNAMIC_CALL

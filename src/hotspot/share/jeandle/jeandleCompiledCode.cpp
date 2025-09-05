@@ -257,10 +257,6 @@ void JeandleCompiledCode::resolve_reloc_info(JeandleAssembler& assembler) {
 
         relocs.push_back(new JeandleCallReloc(call));
 
-        if (call->type() == JeandleJavaCall::VM_CALL) {
-          continue;
-        }
-
         // No GC support now.
         _env->debug_info()->add_safepoint(inst_offset, new OopMap(stackmaps.getFunction(0).getStackSize(), 0));
 
@@ -274,8 +270,10 @@ void JeandleCompiledCode::resolve_reloc_info(JeandleAssembler& assembler) {
         DebugToken *locvals = _env->debug_info()->create_scope_values(locarray);
         DebugToken *expvals = _env->debug_info()->create_scope_values(exparray);
         DebugToken *monvals = _env->debug_info()->create_monitor_values(monarray);
-
-        assert(_method, "invalid Java method");
+        
+        if (call->type() != JeandleJavaCall::VM_CALL) {
+          assert(_method, "invalid Java method");
+        }
         _env->debug_info()->describe_scope(inst_offset,
                                           methodHandle(),
                                           _method,
