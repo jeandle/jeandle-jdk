@@ -148,7 +148,7 @@ void JeandleAssembler::emit_oop_reloc(uint32_t offset, jobject oop_handle) {
 void JeandleAssembler::patch_call_vm(uint32_t operand_offset, address target) {
   address call_pc = __ addr_at(operand_offset);
 
-  // Set insts_ent to where to patch
+  // Set insts_end to where to patch
   address insts_end = __ code()->insts_end();
   __ code()->set_insts_end(call_pc);
 
