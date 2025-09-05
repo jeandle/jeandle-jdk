@@ -60,6 +60,9 @@ public class TestRuntimeCallRelocation {
 
     static void test() {
         while (!stop) {
+            // GC triggers the unloading of nmethods, and during nmethod unloading,
+            // an assertion checks the alignment of call instructions. If the call
+            // site is relocated with incorrent type, the assertion will fail.
             wb.fullGC();
         }
     }
