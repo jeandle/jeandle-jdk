@@ -272,6 +272,7 @@ void JeandleCompiledCode::resolve_reloc_info(JeandleAssembler& assembler) {
         DebugToken *monvals = _env->debug_info()->create_monitor_values(monarray);
         
         if (call->type() != JeandleJavaCall::VM_CALL) {
+          // If we are not compiling a call vm stub, there must be a valid Java method.
           assert(_method, "invalid Java method");
         }
         _env->debug_info()->describe_scope(inst_offset,

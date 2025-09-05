@@ -73,7 +73,7 @@ void JeandleAssembler::patch_static_call_site(CallSiteInfo* call) {
 }
 
 void JeandleAssembler::patch_vm_call_site(CallSiteInfo* call) {
-  // We don't have to preserve last_Java_pc as it's already on stack
+  // No need to patch vm call site on x86.
 }
 
 void JeandleAssembler::patch_ic_call_site(CallSiteInfo* call) {

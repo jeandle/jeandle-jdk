@@ -28,7 +28,7 @@ int JeandleJavaCall::call_site_size(JeandleJavaCall::Type call_type) {
   }
 
   if (call_type == JeandleJavaCall::Type::VM_CALL) {
-    // No need to patch on x86
+    // No need to patch vm call site on x86.
     return 0;
   }
 

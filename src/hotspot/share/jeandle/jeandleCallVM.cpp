@@ -74,7 +74,7 @@ void JeandleCallVM::generate_call_VM(const char* name, address c_func, llvm::Fun
   code.call_sites()[0] = new CallSiteInfo(0 /* statepoint id */, call_type, c_func, 0 /* bci */);
   llvm::Attribute id_attr = llvm::Attribute::get(context,
                                                  llvm::jeandle::Attribute::StatepointID,
-                                                 std::to_string(0));
+                                                 "0");
   llvm::Attribute patch_bytes_attr = llvm::Attribute::get(context,
                                                           llvm::jeandle::Attribute::StatepointNumPatchBytes,
                                                           std::to_string(JeandleJavaCall::call_site_size(call_type)));
