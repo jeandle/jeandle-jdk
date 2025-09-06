@@ -29,27 +29,27 @@
 #include "utilities/debug.hpp"
 #include "runtime/javaThread.hpp"
 #include "runtime/safepointMechanism.hpp"
-
-#define DEF_JAVA_OP(name, return_type, args_type, lower_phase)                              \
-  void define_##name(llvm::Module& template_module) {                                       \
-    if (RuntimeDefinedJavaOps::failed()) { return; }                                        \
-    llvm::LLVMContext& context = template_module.getContext();                              \
-    llvm::FunctionType* func_type = llvm::FunctionType::get(return_type, args_type, false); \
-    llvm::Function* func = llvm::Function::Create(func_type,                                \
-                                                  llvm::Function::PrivateLinkage,           \
-                                                  "jeandle."#name,                          \
-                                                  template_module);                         \
-    func->addFnAttr("lower-phase", #lower_phase);                                           \
-    func->addFnAttr(llvm::Attribute::NoInline);                                             \
-    func->setCallingConv(llvm::CallingConv::Hotspot_JIT);                                   \
-    llvm::BasicBlock* entry_block = llvm::BasicBlock::Create(context, "entry", func);       \
-    llvm::IRBuilder<> ir_builder(entry_block);                                              \
+//                  name, lower_phase, return_type, arg_types
+#define DEF_JAVA_OP(name, lower_phase, return_type, ...)                                        \
+  void define_##name(llvm::Module& template_module) {                                           \
+    if (RuntimeDefinedJavaOps::failed()) { return; }                                            \
+    llvm::LLVMContext& context = template_module.getContext();                                  \
+    llvm::FunctionType* func_type = llvm::FunctionType::get(return_type, {__VA_ARGS__}, false); \
+    llvm::Function* func = llvm::Function::Create(func_type,                                    \
+                                                  llvm::Function::PrivateLinkage,               \
+                                                  "jeandle."#name,                              \
+                                                  template_module);                             \
+    func->addFnAttr("lower-phase", #lower_phase);                                               \
+    func->addFnAttr(llvm::Attribute::NoInline);                                                 \
+    func->setCallingConv(llvm::CallingConv::Hotspot_JIT);                                       \
+    llvm::BasicBlock* entry_block = llvm::BasicBlock::Create(context, "entry", func);           \
+    llvm::IRBuilder<> ir_builder(entry_block);
 
 #define JAVA_OP_END }
 
 namespace {
 
-DEF_JAVA_OP(current_thread, llvm::PointerType::get(context, llvm::jeandle::AddrSpace::CHeapAddrSpace), {}, 0)
+DEF_JAVA_OP(current_thread, 0, llvm::PointerType::get(context, llvm::jeandle::AddrSpace::CHeapAddrSpace))
   llvm::NamedMDNode* thread_register = template_module.getNamedMetadata(llvm::jeandle::Metadata::CurrentThread);
   assert(thread_register != nullptr, "current_thread metadata must exist");
   llvm::Value* read_register_args[] = {llvm::MetadataAsValue::get(context, thread_register->getOperand(0))};
@@ -62,7 +62,7 @@ DEF_JAVA_OP(current_thread, llvm::PointerType::get(context, llvm::jeandle::AddrS
   ir_builder.CreateRet(current_thread_ptr);
 JAVA_OP_END
 
-DEF_JAVA_OP(safepoint_poll, llvm::Type::getVoidTy(context), {}, 1)
+DEF_JAVA_OP(safepoint_poll, 1, llvm::Type::getVoidTy(context))
   llvm::BasicBlock* return_block = llvm::BasicBlock::Create(context, "return", func);
   llvm::BasicBlock* do_safepoint_block = llvm::BasicBlock::Create(context, "do_safepoint", func);
 

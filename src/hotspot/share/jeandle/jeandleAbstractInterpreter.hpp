@@ -279,6 +279,8 @@ class JeandleAbstractInterpreter : public StackObj {
 
   void do_get_xxx(ciField* field, bool is_static);
   void do_put_xxx(ciField* field, bool is_static);
+
+  void throw_exception();
 };
 
 #endif // SHARE_JEANDLE_ABSTRACT_INTERPRETER_HPP
