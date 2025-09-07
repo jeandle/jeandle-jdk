@@ -25,13 +25,15 @@
 #include "asm/macroAssembler.inline.hpp"
 #include "code/codeBlob.hpp"
 #include "memory/resourceArea.hpp"
+#include "oops/oopsHierarchy.hpp"
 #include "runtime/frame.hpp"
 #include "runtime/interfaceSupport.inline.hpp"
 
 #define __ masm->
 
 // When a Jeandle compiled method throwing an exception, patch its return address to exceptional_exit blob.
-JRT_ENTRY(void, JeandleRuntimeRoutine::install_exceptional_return(oop exception, JavaThread* current))
+JRT_ENTRY(void, JeandleRuntimeRoutine::install_exceptional_return(oopDesc* exception, JavaThread* current))
+  assert(oopDesc::is_oop(exception), "must be a valid oop");
   RegisterMap r_map(current,
                     RegisterMap::UpdateMap::skip,
                     RegisterMap::ProcessFrames::include,

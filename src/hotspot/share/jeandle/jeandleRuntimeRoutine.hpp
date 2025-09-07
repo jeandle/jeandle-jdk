@@ -72,7 +72,7 @@ class JeandleRuntimeRoutine : public AllStatic {
 
   static void safepoint_handler(JavaThread* current);
 
-  static void install_exceptional_return(oop exception, JavaThread* current);
+  static void install_exceptional_return(oopDesc* exception, JavaThread* current);
 
   static address get_exception_handler(JavaThread* current);
 
