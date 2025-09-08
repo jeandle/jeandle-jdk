@@ -20,6 +20,8 @@
 
 #include "llvm/IR/Attributes.h"
 #include "llvm/IR/Jeandle/Attributes.h"
+#include "llvm/IR/Jeandle/Metadata.h"
+
 
 #include "jeandle/jeandleAbstractInterpreter.hpp"
 #include "jeandle/jeandleJavaCall.hpp"
@@ -1129,13 +1131,36 @@ void JeandleAbstractInterpreter::arith_op(BasicType type, Bytecodes::Code code) 
     case Bytecodes::_fadd: // fall through
     case Bytecodes::_dadd: _jvm->push(type, _ir_builder.CreateFAdd(l, r)); break;
     case Bytecodes::_fsub: // fall through
-    case Bytecodes::_dsub: Unimplemented(); break;
+    case Bytecodes::_dsub: _jvm->push(type, _ir_builder.CreateFSub(l, r)); break;
     case Bytecodes::_fmul: // fall through
     case Bytecodes::_dmul: _jvm->push(type, _ir_builder.CreateFMul(l, r)); break;
     case Bytecodes::_fdiv: // fall through
-    case Bytecodes::_ddiv: Unimplemented(); break;
+    case Bytecodes::_ddiv: _jvm->push(type, _ir_builder.CreateFDiv(l, r)); break;
     case Bytecodes::_frem: // fall through
-    case Bytecodes::_drem: Unimplemented(); break;
+    case Bytecodes::_drem: {
+      llvm::Type* float_type = llvm::Type::getFloatTy(*_context);
+      llvm::Type* double_type = llvm::Type::getDoubleTy(*_context);
+      llvm::Type* return_type = nullptr;
+      std::vector<llvm::Type*> args_type;
+      address call_addr = nullptr;
+      if (code == Bytecodes::_frem) {
+        return_type = float_type;
+        args_type = {float_type, float_type};
+        call_addr = CAST_FROM_FN_PTR(address, SharedRuntime::frem);
+      } else {
+        return_type = double_type;
+        args_type = {double_type, double_type};
+        call_addr = CAST_FROM_FN_PTR(address, SharedRuntime::drem);
+      }
+      llvm::FunctionType* func_type = llvm::FunctionType::get(return_type, args_type, false);
+      llvm::PointerType* func_ptr_type = llvm::PointerType::get(func_type, llvm::jeandle::AddrSpace::CHeapAddrSpace);
+      llvm::Value* func_addr = _ir_builder.getInt64((intptr_t)call_addr);
+      llvm::Value* func_ptr = _ir_builder.CreateIntToPtr(func_addr, func_ptr_type);
+      llvm::CallInst* call = _ir_builder.CreateCall(func_type, func_ptr, {l, r});
+      call->setCallingConv(llvm::CallingConv::C);
+      _jvm->push(type, call);
+      break;
+    }
     case Bytecodes::_fneg: // fall through
     case Bytecodes::_dneg: {
       assert(l == nullptr, "only one operand for negation");
