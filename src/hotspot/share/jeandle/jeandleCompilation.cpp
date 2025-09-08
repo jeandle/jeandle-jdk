@@ -158,7 +158,7 @@ JeandleCompilation::JeandleCompilation(llvm::TargetMachine* target_machine,
                                                   _code.code_buffer(),
                                                   CodeOffsets::frame_never_safe,
                                                   _code.frame_size(),
-                                                  nullptr, //TODO: generate oopmaps for runtime_stub.
+                                                  _env->debug_info()->_oopmaps,
                                                   false);
   assert(rs != nullptr && rs->is_runtime_stub(), "sanity check");
   _code.set_stub_entry(rs->entry_point());

@@ -568,7 +568,7 @@ bool CompilerConfig::check_args_consistency(bool status) {
 }
 
 void CompilerConfig::ergo_initialize() {
-#if !COMPILER1_OR_COMPILER2 && !COMPILER2_OR_JEANDLE
+#if !COMPILER1_OR_COMPILER2 && !defined(JEANDLE)
   return;
 #endif
 

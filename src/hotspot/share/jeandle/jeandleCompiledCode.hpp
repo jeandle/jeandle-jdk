@@ -48,23 +48,18 @@ class CallSiteInfo : public JeandleCompilationResourceObj {
                _statepoint_id(statepoint_id),
                _type(type),
                _target(target),
-               _bci(bci),
-               _pc_offset(0) {}
+               _bci(bci) {}
 
   JeandleJavaCall::Type type() const { return _type; }
   uint32_t statepoint_id() const { return _statepoint_id; }
   address target() const { return _target; }
   int bci() const { return _bci; }
 
-  uint32_t pc_offset() const { return _pc_offset; }
-  void set_pc_offset(uint32_t offset) { _pc_offset = offset; }
-
  private:
   uint32_t _statepoint_id; // Used to distinguish each call site in stackmaps.
   JeandleJavaCall::Type _type;
   address _target;
   int _bci;
-  uint32_t _pc_offset; // Instruction offset (from the start of the containing function).
 };
 
 using ObjectBuffer = llvm::MemoryBuffer;
@@ -119,12 +114,6 @@ class JeandleCompiledCode : public StackObj {
 
   int frame_size() const { return _frame_size; }
 
-  int prolog_length() const { return _prolog_length; }
-
-  ciEnv* env() const { return _env; }
-
-  ciMethod* method() const { return _method; }
-
   address stub_entry() const { return _stub_entry; }
   void set_stub_entry(address entry) { _stub_entry = entry; }
 
@@ -136,7 +125,7 @@ class JeandleCompiledCode : public StackObj {
   std::unique_ptr<ELFObject> _elf;
   CodeBuffer _code_buffer; // Relocations and stubs.
   llvm::DenseMap<uint32_t, CallSiteInfo*> _call_sites;
-  llvm::DenseMap<uint32_t, CallSiteInfo*> _safepoints;
+  llvm::DenseMap<int, CallSiteInfo*> _safepoints;
   llvm::StringMap<address> _const_sections;
   llvm::StringMap<jobject> _oop_handles;
   CodeOffsets _offsets;
