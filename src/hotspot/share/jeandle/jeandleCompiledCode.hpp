@@ -125,7 +125,7 @@ class JeandleCompiledCode : public StackObj {
   std::unique_ptr<ELFObject> _elf;
   CodeBuffer _code_buffer; // Relocations and stubs.
   llvm::DenseMap<uint32_t, CallSiteInfo*> _call_sites;
-  llvm::DenseMap<int, CallSiteInfo*> _safepoints;
+  llvm::DenseMap<int, CallSiteInfo*> _vm_call_sites;
   llvm::StringMap<address> _const_sections;
   llvm::StringMap<jobject> _oop_handles;
   CodeOffsets _offsets;
