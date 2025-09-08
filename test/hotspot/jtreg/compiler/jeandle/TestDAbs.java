@@ -20,6 +20,8 @@
 
 /**
  * @test
+ * @summary Fix incorrent inst offset for duplicated statepoints.
+ *  issue: https://github.com/jeandle/jeandle-jdk/issues/64
  * @library /test/lib
  * @run main/othervm -Xbatch -Xcomp -XX:-TieredCompilation -XX:+UseJeandleCompiler -XX:CompileCommand=compileonly,TestDAbs::main TestDAbs
  */

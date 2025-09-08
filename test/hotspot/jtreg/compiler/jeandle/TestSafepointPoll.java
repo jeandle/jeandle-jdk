@@ -20,6 +20,8 @@
 
 /**
  * @test
+ * @summary Support the safepoint poll and related to a issue about incorrect alignment of patch address
+ *  issue: https://github.com/jeandle/jeandle-jdk/issues/63
  * @library /test/lib
  * @build jdk.test.whitebox.WhiteBox
  * @run driver jdk.test.lib.helpers.ClassFileInstaller jdk.test.whitebox.WhiteBox

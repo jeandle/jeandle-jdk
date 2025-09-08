@@ -93,7 +93,7 @@ class JeandleConstReloc : public JeandleReloc {
 class JeandleSafepointReloc : public JeandleReloc {
  public:
   JeandleSafepointReloc(int inst_end_offset, ciEnv* env, ciMethod* method, OopMap* oop_map, CallSiteInfo* call) :
-    JeandleReloc(inst_end_offset - JeandleJavaCall::call_site_size(call->type())/* beginning offset of a call instruction */),
+    JeandleReloc(inst_end_offset - JeandleJavaCall::call_site_size(call->type())/* beginning of a call instruction */),
     _env(env), _method(method), _oop_map(oop_map), _call(call) {}
 
   int inst_end_offset() {
@@ -164,10 +164,10 @@ void JeandleSafepointReloc::process_oop_map() {
   assert(inst_end_offset() >= 0, "pc offset must be initialized");
   assert(_fixed_up, "offset must be fixed up");
 
-  int safepoint_pc_offset = inst_end_offset();
+  int safepoint_offset = inst_end_offset();
 
   DebugInformationRecorder* recorder = _env->debug_info();
-  recorder->add_safepoint(safepoint_pc_offset, _oop_map);
+  recorder->add_safepoint(safepoint_offset, _oop_map);
 
   // No deopt support now.
   GrowableArray<ScopeValue*> *locarray = new GrowableArray<ScopeValue*>(0);
@@ -186,7 +186,7 @@ void JeandleSafepointReloc::process_oop_map() {
     assert(_method, "invalid Java method");
   }
 #endif
-  recorder->describe_scope(safepoint_pc_offset,
+  recorder->describe_scope(safepoint_offset,
                            methodHandle(),
                            _method,
                            _call->bci(),
@@ -200,7 +200,7 @@ void JeandleSafepointReloc::process_oop_map() {
                            expvals,
                            monvals);
 
-  recorder->end_safepoint(safepoint_pc_offset);
+  recorder->end_safepoint(safepoint_offset);
 }
 
 } // anonymous namespace
