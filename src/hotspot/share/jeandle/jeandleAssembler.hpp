@@ -35,11 +35,13 @@ class JeandleAssembler : public StackObj {
  public:
   JeandleAssembler(MacroAssembler* masm) : _masm(masm) {}
 
-  void emit_static_call_stub(CallSiteInfo* call);
+  void emit_static_call_stub(int inst_offset, CallSiteInfo* call);
 
-  void patch_static_call_site(CallSiteInfo* call);
+  void patch_static_call_site(int inst_offset, CallSiteInfo* call);
 
-  void patch_ic_call_site(CallSiteInfo* call);
+  void patch_vm_call_site(int inst_offset, CallSiteInfo* call);
+
+  void patch_ic_call_site(int inst_offset, CallSiteInfo* call);
 
   void emit_ic_check();
 
@@ -47,14 +49,14 @@ class JeandleAssembler : public StackObj {
 
   void emit_consts(address consts_start, uint64_t consts_size);
 
-  void emit_const_reloc(uint32_t offset, LinkKind kind, int64_t addend, address target);
+  void emit_const_reloc(int offset, LinkKind kind, int64_t addend, address target);
 
-  void emit_oop_reloc(uint32_t offset, jobject oop_handle);
+  void emit_oop_reloc(int offset, jobject oop_handle);
 
-  void patch_call_vm(uint32_t offset, address target);
+  void patch_call_vm(int offset, address target);
 
   // Redirect an offset from the displacement to the end of the call instruction
-  static uint32_t fixup_call_inst_offset(uint32_t offset);
+  static int fixup_call_inst_offset(int offset);
 
   static bool is_oop_reloc_kind(LinkKind kind);
 

@@ -27,6 +27,11 @@ int JeandleJavaCall::call_site_size(JeandleJavaCall::Type call_type) {
     return NativeInstruction::instruction_size;
   }
 
+  if (call_type == JeandleJavaCall::VM_CALL) {
+    // adr + str + mov + movk + movk + blr
+    return NativeInstruction::instruction_size * 6;
+  }
+
   // DYNAMIC_CALL
   return NativeInstruction::instruction_size + NativeMovConstReg::instruction_size;
 }

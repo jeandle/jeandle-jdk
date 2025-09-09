@@ -568,7 +568,7 @@ bool CompilerConfig::check_args_consistency(bool status) {
 }
 
 void CompilerConfig::ergo_initialize() {
-#if !COMPILER1_OR_COMPILER2
+#if !COMPILER1_OR_COMPILER2 && !defined(JEANDLE)
   return;
 #endif
 
@@ -641,5 +641,15 @@ void CompilerConfig::ergo_initialize() {
     LoopStripMiningIterShortLoop = LoopStripMiningIter / 10;
   }
 #endif // COMPILER2
+
+#ifdef JEANDLE
+  // TODO: Support compressed oops later.
+  if (UseJeandleCompiler) {
+    if (FLAG_IS_CMDLINE(UseCompressedOops) && UseCompressedOops) {
+      warning("UseCompressedOops is disabled until jeandle supports compressed oops.");
+    }
+    UseCompressedOops = false;
+  }
+#endif // JEANDLE
 }
 

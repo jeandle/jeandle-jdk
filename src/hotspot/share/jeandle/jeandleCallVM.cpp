@@ -19,19 +19,24 @@
  */
 
 #include <cassert>
+#include "llvm/IR/Attributes.h"
 #include "llvm/IR/IRBuilder.h"
+#include "llvm/IR/Jeandle/Attributes.h"
 #include "llvm/IR/Jeandle/Metadata.h"
+#include "llvm/IR/Jeandle/GCStrategy.h"
 
+#include "jeandle/jeandleJavaCall.hpp"
 #include "jeandle/jeandleUtils.hpp"
 #include "jeandle/jeandleCallVM.hpp"
 #include "jeandle/jeandleRegister.hpp"
 
-void JeandleCallVM::generate_call_VM(const char* name, address c_func, llvm::FunctionType* func_type, llvm::Module& target_module) {
+void JeandleCallVM::generate_call_VM(const char* name, address c_func, llvm::FunctionType* func_type, llvm::Module& target_module, JeandleCompiledCode& code) {
   llvm::Function* llvm_func = llvm::Function::Create(func_type,
                                                      llvm::Function::ExternalLinkage,
                                                      name,
                                                      target_module);
   llvm_func->setCallingConv(llvm::CallingConv::Hotspot_JIT);
+  llvm_func->setGC(llvm::jeandle::JeandleGC);
   llvm::LLVMContext& context = target_module.getContext();
 
   // Add needed metadatas.
@@ -65,6 +70,16 @@ void JeandleCallVM::generate_call_VM(const char* name, address c_func, llvm::Fun
   llvm::Value* c_func_ptr = ir_builder.CreateIntToPtr(c_func_addr, c_func_ptr_type);
   llvm::CallInst* call_c_func = ir_builder.CreateCall(func_type, c_func_ptr, args);
   call_c_func->setCallingConv(llvm::CallingConv::C);
+  JeandleJavaCall::Type call_type = JeandleJavaCall::Type::VM_CALL;
+  code.call_sites()[0] = new CallSiteInfo(0 /* statepoint id */, call_type, c_func, 0 /* bci */);
+  llvm::Attribute id_attr = llvm::Attribute::get(context,
+                                                 llvm::jeandle::Attribute::StatepointID,
+                                                 "0");
+  llvm::Attribute patch_bytes_attr = llvm::Attribute::get(context,
+                                                          llvm::jeandle::Attribute::StatepointNumPatchBytes,
+                                                          std::to_string(JeandleJavaCall::call_site_size(call_type)));
+  call_c_func->addFnAttr(id_attr);
+  call_c_func->addFnAttr(patch_bytes_attr);
 
   // TODO: Check exceptions.
 

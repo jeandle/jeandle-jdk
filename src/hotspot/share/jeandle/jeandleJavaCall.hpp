@@ -41,6 +41,9 @@ class JeandleJavaCall : public AllStatic {
     // preceded by an instruction that places an inline cache holder in a register.
     DYNAMIC_CALL,
 
+    // For call vm stub, will call runtime routines
+    VM_CALL,
+
     NOT_A_CALL,
   };
 

@@ -644,7 +644,7 @@ void CompileBroker::compilation_init_phase1(JavaThread* THREAD) {
   }
 #endif // COMPILER1
 
-#ifdef COMPILER2_OR_JEANDLE
+#if COMPILER2_OR_JEANDLE
   if (true JVMCI_ONLY( && !UseJVMCICompiler)) {
     if (_c2_count > 0) {
 #ifdef JEANDLE

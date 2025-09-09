@@ -113,7 +113,7 @@ JeandleCompilation::JeandleCompilation(llvm::TargetMachine* target_machine,
   initialize();
 
   _llvm_module->setDataLayout(*_data_layout);
-  JeandleCallVM::generate_call_VM(name, c_func, func_type, *_llvm_module);
+  JeandleCallVM::generate_call_VM(name, c_func, func_type, *_llvm_module, _code);
 
 #ifdef ASSERT
   // Verify.

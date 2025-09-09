@@ -22,9 +22,12 @@
 #define SHARE_JEANDLE_RUNTIME_ROUTINE_HPP
 
 #include <cassert>
+#pragma push_macro("AARCH64")
+#undef AARCH64
 #include "llvm/IR/Jeandle/Metadata.h"
 #include "llvm/IR/Module.h"
 #include "llvm/Target/TargetMachine.h"
+#pragma pop_macro("AARCH64")
 
 #include "utilities/debug.hpp"
 #include "memory/allStatic.hpp"

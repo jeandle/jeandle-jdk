@@ -18,23 +18,27 @@
  *
  */
 
-#ifndef SHARE_JEANDLE_CALL_VM_HPP
-#define SHARE_JEANDLE_CALL_VM_HPP
+/**
+ * @test
+ * @summary Fix incorrent inst offset for duplicated statepoints.
+ *  issue: https://github.com/jeandle/jeandle-jdk/issues/64
+ * @library /test/lib
+ * @run main/othervm -Xbatch -Xcomp -XX:-TieredCompilation -XX:+UseJeandleCompiler -XX:CompileCommand=compileonly,TestDAbs::main TestDAbs
+ */
 
-#include <cassert>
-#include "llvm/IR/Module.h"
-#include "llvm/IR/Function.h"
-#include "llvm/IR/LLVMContext.h"
+import java.lang.Math;
 
-#include "jeandle/jeandleCompiledCode.hpp"
+import jdk.test.lib.Asserts;
 
-#include "utilities/debug.hpp"
-#include "utilities/globalDefinitions.hpp"
+public class TestDAbs {
+    public static void main(String[] args) {
+        double r=0.0;
 
-class JeandleCallVM : public AllStatic {
- public:
-  // Generate stubs that call JeandleRuntimeRoutine.
-  static void generate_call_VM(const char* name, address c_func, llvm::FunctionType* func_type, llvm::Module& target_module, JeandleCompiledCode& code);
-};
+        for (int i=0;i<10;i++ ) {
+            double v = (double)i;
+            r += Math.abs(v);
+        }
 
-#endif // SHARE_JEANDLE_CALL_VM_HPP
+        Asserts.assertEquals(r, 45.0);
+    }
+}

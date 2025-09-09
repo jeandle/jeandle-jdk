@@ -27,6 +27,11 @@ int JeandleJavaCall::call_site_size(JeandleJavaCall::Type call_type) {
     return NativeJump::instruction_size;
   }
 
+  if (call_type == JeandleJavaCall::Type::VM_CALL) {
+    // No need to patch vm call site on x86.
+    return 0;
+  }
+
   // DYNAMIC_CALL
   return NativeJump::instruction_size + NativeMovConstReg::instruction_size;
 }

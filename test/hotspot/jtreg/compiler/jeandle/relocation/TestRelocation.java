@@ -20,7 +20,6 @@
 
 /*
  * @test
- * @requires os.arch=="x86_64"
  * @library /test/lib
  * @build jdk.test.lib.Asserts
  * @run main/othervm -XX:-TieredCompilation -Xcomp
@@ -34,12 +33,21 @@ import jdk.test.lib.Asserts;
 
 public class TestRelocation {
     public static void main(String[] args) {
-        Asserts.assertEquals(20.0f, test1(1.0f));
-        Asserts.assertEquals(24.0f, test2(1.0f));
-        Asserts.assertEquals(29.0f, test3(1.0f));
-        Asserts.assertEquals(32.0f, test4(1.0f));
-        Asserts.assertEquals(37.0f, test5(1.0f));
-        Asserts.assertEquals(47.0f, test6(1.0f));
+        Asserts.assertEquals(20.0f, testStatic1(1.0f));
+        Asserts.assertEquals(24.0f, testStatic2(1.0f));
+        Asserts.assertEquals(29.0f, testStatic3(1.0f));
+        Asserts.assertEquals(32.0f, testStatic4(1.0f));
+        Asserts.assertEquals(37.0f, testStatic5(1.0f));
+        Asserts.assertEquals(47.0f, testStatic6(1.0f));
+
+        // Test dynamic call
+        TestRelocation instance = new TestRelocation();
+        Asserts.assertEquals(20.0f, instance.testDynamic1(1.0f));
+        Asserts.assertEquals(24.0f, instance.testDynamic2(1.0f));
+        Asserts.assertEquals(29.0f, instance.testDynamic3(1.0f));
+        Asserts.assertEquals(32.0f, instance.testDynamic4(1.0f));
+        Asserts.assertEquals(37.0f, instance.testDynamic5(1.0f));
+        Asserts.assertEquals(47.0f, instance.testDynamic6(1.0f));
     }
     private static float callee1(float a) {
       return a += 2.0f;
@@ -49,42 +57,85 @@ public class TestRelocation {
       return a += 3.0f;
     }
 
-    private static float test1(float n) {
+    private static float testStatic1(float n) {
         n += callee1(n);
         n += callee2(n);
         n += 4.0f;
         n += 5.0f;
         return n;
     }
-    private static float test2(float n) {
+    private static float testStatic2(float n) {
         n += callee1(n);
         n += 4.0f;
         n += callee2(n);
         n += 5.0f;
         return n;
     }
-    private static float test3(float n) {
+    private static float testStatic3(float n) {
         n += callee1(n);
         n += 4.0f;
         n += 5.0f;
         n += callee2(n);
         return n;
     }
-    private static float test4(float n) {
+    private static float testStatic4(float n) {
         n += 4.0f;
         n += callee1(n);
         n += callee2(n);
         n += 5.0f;
         return n;
     }
-    private static float test5(float n) {
+    private static float testStatic5(float n) {
         n += 4.0f;
         n += callee1(n);
         n += 5.0f;
         n += callee2(n);
         return n;
     }
-    private static float test6(float n) {
+    private static float testStatic6(float n) {
+        n += 4.0f;
+        n += 5.0f;
+        n += callee1(n);
+        n += callee2(n);
+        return n;
+    }
+
+    private float testDynamic1(float n) {
+        n += callee1(n);
+        n += callee2(n);
+        n += 4.0f;
+        n += 5.0f;
+        return n;
+    }
+    private float testDynamic2(float n) {
+        n += callee1(n);
+        n += 4.0f;
+        n += callee2(n);
+        n += 5.0f;
+        return n;
+    }
+    private float testDynamic3(float n) {
+        n += callee1(n);
+        n += 4.0f;
+        n += 5.0f;
+        n += callee2(n);
+        return n;
+    }
+    private float testDynamic4(float n) {
+        n += 4.0f;
+        n += callee1(n);
+        n += callee2(n);
+        n += 5.0f;
+        return n;
+    }
+    private float testDynamic5(float n) {
+        n += 4.0f;
+        n += callee1(n);
+        n += 5.0f;
+        n += callee2(n);
+        return n;
+    }
+    private float testDynamic6(float n) {
         n += 4.0f;
         n += 5.0f;
         n += callee1(n);

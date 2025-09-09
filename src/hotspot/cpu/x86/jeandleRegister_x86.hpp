@@ -34,6 +34,21 @@ public:
   static const char* get_current_thread_pointer() {
     return r15->name();
   }
+
+  static const bool is_stack_pointer(Register reg) {
+    return reg == rsp;
+  }
+
+  static const Register decode_dwarf_register(int dwarf_encoding) {
+    assert(dwarf_encoding >=0 && dwarf_encoding < Register::number_of_registers, "invalid dwarf register number");
+    return _dwarf_registers[dwarf_encoding];
+  }
+
+private:
+  static constexpr const Register _dwarf_registers[Register::number_of_registers] = {
+    rax, rdx, rcx, rbx, rsi, rdi, rbp, rsp,
+    r8, r9, r10, r11, r12, r13, r14, r15
+  };
 };
 #endif // _LP64
 
