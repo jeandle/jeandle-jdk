@@ -30,6 +30,7 @@
 #include "utilities/debug.hpp"
 #include "asm/macroAssembler.hpp"
 #include "ci/ciEnv.hpp"
+#include "code/vmreg.inline.hpp"
 
 namespace {
 

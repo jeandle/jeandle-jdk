@@ -155,8 +155,9 @@ void JeandleAssembler::patch_call_vm(int inst_offset, address target) {
 }
 
 int JeandleAssembler::fixup_call_inst_offset(int offset) {
-  assert(offset >= 0, "invalid offset")
-  return offset;
+  assert(offset >= 0, "invalid offset");
+  // point to the end of call instruction
+  return offset + NativeInstruction::instruction_size;
 }
 
 bool JeandleAssembler::is_oop_reloc_kind(LinkKind kind) {
