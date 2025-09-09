@@ -21,9 +21,11 @@
 /**
  * @test
  * @requires os.arch=="amd64" | os.arch=="x86_64"
- * @run main/othervm -XX:CompileCommand=compileonly,TestThrow::testThrow
- *      -Xcomp -XX:-TieredCompilation -XX:+UseJeandleCompiler TestThrow
+ * @run main/othervm -XX:CompileCommand=compileonly,compiler.jeandle.exception.TestThrow::testThrow
+ *      -Xcomp -XX:-TieredCompilation -XX:+UseJeandleCompiler compiler.jeandle.exception.TestThrow
  */
+
+package compiler.jeandle.exception;
 
  public class TestThrow {
     public static void main(String[] args) throws RuntimeException {
