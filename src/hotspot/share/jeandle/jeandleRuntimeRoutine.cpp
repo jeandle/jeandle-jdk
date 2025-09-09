@@ -81,6 +81,6 @@ JRT_ENTRY(void, JeandleRuntimeRoutine::safepoint_handler(JavaThread* current))
 JRT_END
 
 // Wrap SharedRuntime::raw_exception_handler_for_return_address to check safepoints on exit.
-JRT_ENTRY(address, JeandleRuntimeRoutine::get_exception_handler(JavaThread* current))
+JRT_LEAF(address, JeandleRuntimeRoutine::get_exception_handler(JavaThread* current))
   return SharedRuntime::raw_exception_handler_for_return_address(current, current->exception_pc());
 JRT_END
