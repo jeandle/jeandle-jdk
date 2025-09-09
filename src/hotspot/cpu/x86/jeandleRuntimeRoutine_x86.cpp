@@ -58,6 +58,7 @@ JRT_END
 // then jump to.
 // The exception oop and the exception pc have been set by
 // JeandleRuntimeRoutine::install_exceptional_return.
+// On exit, we have exception oop in rax and exception pc in rdx.
 void JeandleRuntimeRoutine::generate_exceptional_return() {
   // Allocate space for the code
   ResourceMark rm;
@@ -66,6 +67,10 @@ void JeandleRuntimeRoutine::generate_exceptional_return() {
   MacroAssembler* masm = new MacroAssembler(&buffer);
 
   address start = __ pc();
+
+#ifdef ASSERT
+  __ check_stack_alignment(rsp, "stack not aligned in Jeandle exceptional return");
+#endif
 
   // Get the exception pc
   __ movptr(rax, Address(r15_thread, JavaThread::exception_pc_offset()));
