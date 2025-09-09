@@ -24,8 +24,9 @@
 #include <cassert>
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ExecutionEngine/JITLink/JITLink.h"
-#include "llvm/Support/MemoryBuffer.h"
 #include "llvm/Object/ELFObjectFile.h"
+#include "llvm/Object/StackMapParser.h"
+#include "llvm/Support/MemoryBuffer.h"
 
 #include "jeandle/jeandleJavaCall.hpp"
 #include "jeandle/jeandleReadELF.hpp"
@@ -47,28 +48,24 @@ class CallSiteInfo : public JeandleCompilationResourceObj {
                _statepoint_id(statepoint_id),
                _type(type),
                _target(target),
-               _bci(bci),
-               _inst_offset(0) {}
+               _bci(bci) {}
 
   JeandleJavaCall::Type type() const { return _type; }
   uint32_t statepoint_id() const { return _statepoint_id; }
   address target() const { return _target; }
   int bci() const { return _bci; }
 
-  uint32_t inst_offset() const { return _inst_offset; }
-  void set_inst_offset(uint32_t offset) { _inst_offset = offset; }
-
  private:
   uint32_t _statepoint_id; // Used to distinguish each call site in stackmaps.
   JeandleJavaCall::Type _type;
   address _target;
   int _bci;
-  uint32_t _inst_offset; // Instruction offset (from the start of the containing function).
 };
 
 using ObjectBuffer = llvm::MemoryBuffer;
 using LinkBlock   = llvm::jitlink::Block;
 using LinkEdge    = llvm::jitlink::Edge;
+using StackMapParser = llvm::StackMapParser<ELFT::Endianness>;
 
 class JeandleAssembler;
 class JeandleCompiledCode : public StackObj {
@@ -128,7 +125,7 @@ class JeandleCompiledCode : public StackObj {
   std::unique_ptr<ELFObject> _elf;
   CodeBuffer _code_buffer; // Relocations and stubs.
   llvm::DenseMap<uint32_t, CallSiteInfo*> _call_sites;
-  llvm::DenseMap<uint32_t, CallSiteInfo*> _safepoints;
+  llvm::DenseMap<int, CallSiteInfo*> _vm_call_sites;
   llvm::StringMap<address> _const_sections;
   llvm::StringMap<jobject> _oop_handles;
   CodeOffsets _offsets;
@@ -148,6 +145,10 @@ class JeandleCompiledCode : public StackObj {
   // Lookup address of const section in CodeBuffer.
   address lookup_const_section(llvm::StringRef name, JeandleAssembler& assmebler);
   address resolve_const_edge(LinkBlock& block, LinkEdge& edge, JeandleAssembler& assmebler);
+
+  OopMap* build_oop_map(StackMapParser::record_iterator& record);
+
+  int frame_size_in_slots();
 };
 
 #endif // SHARE_JEANDLE_COMPILED_CODE_HPP
