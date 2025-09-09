@@ -72,6 +72,10 @@ void JeandleAssembler::patch_static_call_site(CallSiteInfo* call) {
   __ code()->set_insts_end(insts_end);
 }
 
+void JeandleAssembler::patch_vm_call_site(CallSiteInfo* call) {
+  // No need to patch vm call site on x86.
+}
+
 void JeandleAssembler::patch_ic_call_site(CallSiteInfo* call) {
   assert(call->inst_offset() != 0, "invalid call instruction address");
   assert(call->type() == JeandleJavaCall::Type::DYNAMIC_CALL, "legal call type");
@@ -138,7 +142,7 @@ void JeandleAssembler::patch_call_vm(uint32_t operand_offset, address target) {
   __ code()->set_insts_end(call_pc);
 
   // Patch.
-  __ call(AddressLiteral(target, relocInfo::static_call_type));
+  __ call(AddressLiteral(target, relocInfo::runtime_call_type));
 
   // Recover insts_end.
   __ code()->set_insts_end(insts_end);

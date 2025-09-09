@@ -67,6 +67,7 @@ jobs:
           - 'hs/tier1 compiler part 1'
           - 'hs/tier1 compiler part 2'
           - 'hs/tier1 compiler part 3'
+          - 'hs/tier1 compiler jeandle'
           - 'hs/tier1 compiler not-xcomp'
           - 'hs/tier1 gc'
           - 'hs/tier1 runtime'
@@ -100,6 +101,10 @@ jobs:
 
           - test-name: 'hs/tier1 compiler part 3'
             test-suite: 'test/hotspot/jtreg/:tier1_compiler_3'
+            debug-suffix: -debug
+
+          - test-name: 'hs/tier1 compiler jeandle'
+            test-suite: 'test/hotspot/jtreg/:tier1_compiler_jeandle'
             debug-suffix: -debug
 
           - test-name: 'hs/tier1 compiler not-xcomp'

@@ -21,19 +21,18 @@
 #ifndef CPU_AARCH64_JEANDLEREGISTER_AARCH64_HPP
 #define CPU_AARCH64_JEANDLEREGISTER_AARCH64_HPP
 
-#include "memory/allStatic.hpp"
 #include "utilities/debug.hpp"
+#include "register_aarch64.hpp"
 
 class JeandleRegister : public AllStatic {
 public:
   static const char* get_stack_pointer() {
-    Unimplemented();
-    return nullptr;
+    return sp->name();
   }
 
   static const char* get_current_thread_pointer() {
-    Unimplemented();
-    return nullptr;
+    // rthread is x28 on aarch64
+    return "x28";
   }
 };
 

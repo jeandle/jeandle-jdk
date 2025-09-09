@@ -69,6 +69,25 @@ void JeandleAssembler::patch_static_call_site(CallSiteInfo* call) {
   __ code()->set_insts_end(insts_end);
 }
 
+void JeandleAssembler::patch_vm_call_site(CallSiteInfo* call) {
+  assert(call->type() == JeandleJavaCall::VM_CALL, "illegal call type");
+  const int call_site_size = JeandleJavaCall::call_site_size(JeandleJavaCall::VM_CALL);
+  address patch_pc = __ addr_at(call->inst_offset() - call_site_size);
+
+  address insts_end = __ code()->insts_end();
+  __ code()->set_insts_end(patch_pc);
+  Label return_pc;
+  return_pc.add_patch_at(__ code(), __ locator());
+  // set last_Java_pc
+  __ adr(rscratch1, return_pc);
+  __ str(rscratch1, Address(rthread, JavaThread::frame_anchor_offset() +
+                                     JavaFrameAnchor::last_Java_pc_offset()));
+  __ movptr(rscratch2, (uintptr_t)call->target());
+  __ blr(rscratch2);
+  __ bind(return_pc);
+  __ code()->set_insts_end(insts_end);
+}
+
 void JeandleAssembler::patch_ic_call_site(CallSiteInfo* call) {
   assert(call->inst_offset() != 0, "invalid call instruction address");
   assert(call->type() == JeandleJavaCall::DYNAMIC_CALL, "illegal call type");
@@ -127,12 +146,20 @@ void JeandleAssembler::emit_oop_reloc(uint32_t offset, jobject oop_handle) {
 }
 
 void JeandleAssembler::patch_call_vm(uint32_t operand_offset, address target) {
-  Unimplemented();
+  address call_pc = __ addr_at(operand_offset);
+
+  // Set insts_end to where to patch
+  address insts_end = __ code()->insts_end();
+  __ code()->set_insts_end(call_pc);
+
+  __ trampoline_call(Address(target, relocInfo::runtime_call_type));
+
+  // Recover insts_end
+  __ code()->set_insts_end(insts_end);
 }
 
 uint32_t JeandleAssembler::fixup_call_inst_offset(uint32_t offset) {
-  Unimplemented();
-  return 0;
+  return offset;
 }
 
 bool JeandleAssembler::is_oop_reloc_kind(LinkKind kind) {
@@ -141,11 +168,10 @@ bool JeandleAssembler::is_oop_reloc_kind(LinkKind kind) {
 }
 
 bool JeandleAssembler::is_call_vm_reloc_kind(LinkKind kind) {
-  Unimplemented();
-  return false;
+  return kind == LinkKind_aarch64::Branch26PCRel;
 }
 
 bool JeandleAssembler::is_const_reloc_kind(LinkKind kind) {
-  Unimplemented();
-  return false;
+  return kind == LinkKind_aarch64::Page21 ||
+         kind == LinkKind_aarch64::PageOffset12;
 }

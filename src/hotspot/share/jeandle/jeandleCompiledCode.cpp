@@ -101,6 +101,10 @@ class JeandleCallReloc : public JeandleReloc {
       assembler.patch_static_call_site(_call);
     }
 
+    if (_call->type() == JeandleJavaCall::Type::VM_CALL) {
+      assembler.patch_vm_call_site(_call);
+    }
+
     if (_call->type() == JeandleJavaCall::Type::DYNAMIC_CALL) {
       assembler.patch_ic_call_site(_call);
     }
@@ -176,6 +180,12 @@ void JeandleCompiledCode::finalize() {
   assembler.emit_insts(((address) _obj->getBufferStart()) + offset, code_size);
 
   resolve_reloc_info(assembler);
+
+  // generate shared trampoline stubs
+  if (!_code_buffer.finalize_stubs()) {
+    JeandleCompilation::report_jeandle_error("code cache full");
+    return;
+  }
 
   setup_frame_size();
 
@@ -264,8 +274,11 @@ void JeandleCompiledCode::resolve_reloc_info(JeandleAssembler& assembler) {
         DebugToken *locvals = _env->debug_info()->create_scope_values(locarray);
         DebugToken *expvals = _env->debug_info()->create_scope_values(exparray);
         DebugToken *monvals = _env->debug_info()->create_monitor_values(monarray);
-
-        assert(_method, "invalid Java method");
+        
+        if (call->type() != JeandleJavaCall::VM_CALL) {
+          // If we are not compiling a call vm stub, there must be a valid Java method.
+          assert(_method, "invalid Java method");
+        }
         _env->debug_info()->describe_scope(inst_offset,
                                           methodHandle(),
                                           _method,

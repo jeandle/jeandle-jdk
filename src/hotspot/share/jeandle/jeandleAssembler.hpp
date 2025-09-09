@@ -39,6 +39,8 @@ class JeandleAssembler : public StackObj {
 
   void patch_static_call_site(CallSiteInfo* call);
 
+  void patch_vm_call_site(CallSiteInfo* call);
+
   void patch_ic_call_site(CallSiteInfo* call);
 
   void emit_ic_check();
