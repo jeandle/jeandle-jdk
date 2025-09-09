@@ -81,12 +81,6 @@ public class FileCheck {
                           .stream()
                           .map(str -> str.replaceAll("\\s+", " ").trim())
                           .collect(Collectors.toList());
-
-
-        System.out.println("Read file: " + files.get(0));
-        for (String str : this.lines) {
-            System.out.println(str);
-        }
     }
 
     private String getMethodSignature(Method method) {
