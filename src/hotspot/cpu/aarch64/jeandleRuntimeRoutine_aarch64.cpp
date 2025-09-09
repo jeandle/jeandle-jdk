@@ -20,6 +20,9 @@
 
 #include "jeandle/jeandleRuntimeRoutine.hpp"
 
+#include "utilities/debug.hpp
+#include "runtime/interfaceSupport.inline.hpp"
+
 #define __ masm->
 
 JRT_ENTRY(void, JeandleRuntimeRoutine::install_exceptional_return(oopDesc* exception, JavaThread* current))
