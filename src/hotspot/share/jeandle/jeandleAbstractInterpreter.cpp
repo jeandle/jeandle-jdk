@@ -1170,6 +1170,8 @@ void JeandleAbstractInterpreter::rem_op(BasicType type, Bytecodes::Code code) {
   llvm::Value* func_addr = _ir_builder.getInt64((intptr_t)call_addr);
   llvm::Value* func_ptr = _ir_builder.CreateIntToPtr(func_addr, func_ptr_type);
   // call the runtime routine directly
+  llvm::Value* r = _jvm->pop(type);
+  llvm::Value* l = _jvm->pop(type);
   llvm::CallInst* call = _ir_builder.CreateCall(func_type, func_ptr, {l, r});
   call->setCallingConv(llvm::CallingConv::C);
   _jvm->push(type, call);
