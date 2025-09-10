@@ -1,0 +1,192 @@
+/*
+ * Copyright (c) 2025, the Jeandle-JDK Authors. All Rights Reserved.
+ * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
+ *
+ * This code is free software; you can redistribute it and/or modify it
+ * under the terms of the GNU General Public License version 2 only, as
+ * published by the Free Software Foundation.
+ *
+ * This code is distributed in the hope that it will be useful, but WITHOUT
+ * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
+ * FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General Public License
+ * version 2 for more details (a copy is included in the LICENSE file that
+ * accompanied this code).
+ *
+ * You should have received a copy of the GNU General Public License version
+ * 2 along with this work; if not, write to the Free Software Foundation,
+ * Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301 USA.
+ *
+ */
+
+package compiler/jeandle/bytecodeTranslate/arithmetic;
+
+super public class Cmp {
+    public static Method testIfIcmpeq:"(II)Z" stack 2 locals 2 {
+        iload_0;
+        iload_1;
+        if_icmpeq 9;
+        iconst_0;
+        goto 10;
+        iconst_1;
+        ireturn;
+    }
+    public static Method testIfIcmpne:"(II)Z" stack 2 locals 2 {
+        iload_0;
+        iload_1;
+        if_icmpne 9;
+        iconst_0;
+        goto 10;
+        iconst_1;
+        ireturn;
+    }
+    public static Method testIfIcmplt:"(II)Z" stack 2 locals 2 {
+        iload_0;
+        iload_1;
+        if_icmplt 9;
+        iconst_0;
+        goto 10;
+        iconst_1;
+        ireturn;
+    }
+    public static Method testIfIcmple:"(II)Z" stack 2 locals 2 {
+        iload_0;
+        iload_1;
+        if_icmple 9;
+        iconst_0;
+        goto 10;
+        iconst_1;
+        ireturn;
+    }
+    public static Method testIfIcmpgt:"(II)Z" stack 2 locals 2 {
+        iload_0;
+        iload_1;
+        if_icmpgt 9;
+        iconst_0;
+        goto 10;
+        iconst_1;
+        ireturn;
+    }
+    public static Method testIfIcmpge:"(II)Z" stack 2 locals 2 {
+        iload_0;
+        iload_1;
+        if_icmpge 9;
+        iconst_0;
+        goto 10;
+        iconst_1;
+        ireturn;
+    }
+    public static Method testLcmp:"(JJ)I" stack 4 locals 4 {
+        lload_0;
+        lload_2;
+        lcmp;
+        ifle 8;
+        iconst_1;
+        ireturn;
+        lload_0;
+        lload_2;
+        lcmp;
+        ifne 16;
+        iconst_0;
+        ireturn;
+        iconst_m1;
+        ireturn;
+    }
+    public static Method testIfAcmpeq:"(Ljava/lang/Object;Ljava/lang/Object;)Z" stack 2 locals 2 {
+        aload_0;
+        aload_1;
+        if_acmpeq 9;
+        iconst_0;
+        goto 10;
+        iconst_1;
+        ireturn;
+    }
+    public static Method testIfAcmpne:"(Ljava/lang/Object;Ljava/lang/Object;)Z" stack 2 locals 2 {
+        aload_0;
+        aload_1;
+        if_acmpne 9;
+        iconst_0;
+        goto 10;
+        iconst_1;
+        ireturn;
+    }
+    public static Method testIfNull:"(Ljava/lang/Object;)Z" stack 1 locals 1 {
+        aload_0;
+        ifnull 8;
+        iconst_0;
+        goto 9;
+        iconst_1;
+        ireturn;
+    }
+    public static Method testIfNonNull:"(Ljava/lang/Object;)Z" stack 1 locals 1 {
+        aload_0;
+        ifnonnull 8;
+        iconst_0;
+        goto 9;
+        iconst_1;
+        ireturn;
+    }
+    public static Method testFcmpl:"(FF)I" stack 2 locals 2 {
+        fload_0;
+        fload_1;
+        fcmpl;
+        ifle 8;
+        iconst_1;
+        ireturn;
+        fload_0;
+        fload_1;
+        fcmpl;
+        ifge 16;
+        iconst_m1;
+        ireturn;
+        iconst_0;
+        ireturn;
+    }
+    public static Method testFcmpg:"(FF)I" stack 2 locals 2 {
+        fload_0;
+        fload_1;
+        fcmpg;
+        ifle 8;
+        iconst_1;
+        ireturn;
+        fload_0;
+        fload_1;
+        fcmpg;
+        ifge 16;
+        iconst_m1;
+        ireturn;
+        iconst_0;
+        ireturn;
+    }
+    public static Method testDcmpl:"(DD)I" stack 4 locals 4 {
+        dload_0;
+        dload_2;
+        dcmpl;
+        ifle 8;
+        iconst_1;
+        ireturn;
+        dload_0;
+        dload_2;
+        dcmpl;
+        ifge 16;
+        iconst_m1;
+        ireturn;
+        iconst_0;
+        ireturn;
+    }
+    public static Method testDcmpg:"(DD)I" stack 4 locals 4 {
+        dload_0;
+        dload_2;
+        dcmpg;
+        ifle 8;
+        iconst_1;
+        ireturn;
+        dload_0;
+        dload_2;
+        dcmpg;
+        ifge 16;
+        iconst_m1;
+        ireturn;
+        iconst_0;
+        ireturn;
+    }
+}
