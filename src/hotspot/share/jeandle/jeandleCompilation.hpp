@@ -96,7 +96,6 @@ class JeandleCompilation : public StackObj {
   void setup_llvm_module(llvm::MemoryBuffer* template_buffer);
   void compile_java_method();
   void compile_module();
-  void add_llvm_attributes();
   void install_code();
 
   void dump_obj();

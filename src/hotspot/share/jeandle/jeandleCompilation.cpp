@@ -259,8 +259,6 @@ void JeandleCompilation::compile_java_method() {
 }
 
 void JeandleCompilation::compile_module() {
-  add_llvm_attributes();
-
   // Hold binary codes.
   llvm::SmallVector<char, 0> obj_buffer;
 
@@ -282,19 +280,6 @@ void JeandleCompilation::compile_module() {
                                                                 _llvm_module->getModuleIdentifier(),
                                                                 false);
   _code.install_obj(std::move(object));
-}
-
-void JeandleCompilation::add_llvm_attributes() {
-  for (auto& func : _llvm_module->functions()) {
-    func.addFnAttr(llvm::Attribute::NoCfCheck);
-    if (_method != nullptr) {
-#if defined(AMD64)
-      func.addFnAttr("patchable-function-entry", "5");
-#elif defined(AARCH64)
-      func.addFnAttr("patchable-function-entry", "1");
-#endif
-    }
-  }
 }
 
 static std::string construct_dump_path(const std::string& method_name,

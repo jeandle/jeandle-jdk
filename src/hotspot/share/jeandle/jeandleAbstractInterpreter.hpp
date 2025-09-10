@@ -28,6 +28,8 @@
 #include "llvm/IR/LLVMContext.h"
 
 #include <vector>
+// include macros.hpp before jeandleCompilation.hpp, otherwise AARCH64_ONLY macro won't work.
+#include "utilities/macros.hpp"
 
 #include "jeandle/jeandleCompilation.hpp"
 
@@ -261,6 +263,9 @@ class JeandleAbstractInterpreter : public StackObj {
 
   int _oop_idx;
   std::string next_oop_name() { return std::string("oop_handle_") + std::to_string(_oop_idx++); }
+
+  // count of reserved nop for patch_verified_entry
+  int get_verified_entry_size() { return AMD64_ONLY(5) AARCH64_ONLY(1) NOT_AMD64(NOT_AARCH64(0)); }
 
   // Implementation of _get* and _put* bytecodes.
   void do_getstatic() { do_field_access(true, true); }

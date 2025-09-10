@@ -250,7 +250,6 @@ void JeandleCompiledCode::finalize() {
     assembler.emit_ic_check();
   }
 
-  // TODO: NativeJump::patch_verified_entry requires the first instruction of verified entry >= 5 bytes.
   _offsets.set_value(CodeOffsets::Verified_Entry, masm->offset());
   _prolog_length = masm->offset();
   assembler.emit_insts(((address) _obj->getBufferStart()) + offset, code_size);
