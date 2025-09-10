@@ -242,7 +242,10 @@ class JeandleAbstractInterpreter : public StackObj {
   void increment();
   void if_zero(llvm::CmpInst::Predicate p);
   void if_icmp(llvm::CmpInst::Predicate p);
-  void if_lcmp();
+  void if_acmp(llvm::CmpInst::Predicate p);
+  void if_null(llvm::CmpInst::Predicate p);
+  void fcmp(BasicType type, bool true_if_unordered);
+  void lcmp();
   void goto_bci(int bci);
   void lookup_switch();
   void invoke();
@@ -250,6 +253,7 @@ class JeandleAbstractInterpreter : public StackObj {
   void shift_op(BasicType type, Bytecodes::Code code);
   void instanceof(int klass_index);
   void arith_op(BasicType type, Bytecodes::Code code);
+  void rem_op(BasicType type, Bytecodes::Code code);
 
   llvm::CallInst* call_java_op(llvm::StringRef java_op, llvm::ArrayRef<llvm::Value*> args);
 
