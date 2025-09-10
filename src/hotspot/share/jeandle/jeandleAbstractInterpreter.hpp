@@ -251,6 +251,7 @@ class JeandleAbstractInterpreter : public StackObj {
   void shift_op(BasicType type, Bytecodes::Code code);
   void instanceof(int klass_index);
   void arith_op(BasicType type, Bytecodes::Code code);
+  void rem_op(BasicType type, Bytecodes::Code code);
 
   llvm::CallInst* call_java_op(llvm::StringRef java_op, llvm::ArrayRef<llvm::Value*> args);
 
