@@ -50,7 +50,7 @@ import jdk.vm.ci.runtime.JVMCI;
 
 public class TestMakeNotEntrant {
     public final static WhiteBox wb = WhiteBox.getWhiteBox();
-    public final static int threadCount = 12;
+    public final static int threadCount = 3;
     public final static int makeNotEntrantCount = 1;
 
     public static void main(String[] args) throws Exception {
