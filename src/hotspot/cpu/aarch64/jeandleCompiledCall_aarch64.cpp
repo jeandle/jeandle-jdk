@@ -18,20 +18,27 @@
  *
  */
 
-#include "jeandle/jeandleJavaCall.hpp"
+#include "jeandle/jeandleCompiledCall.hpp"
 #include "nativeInst_aarch64.hpp"
 
-int JeandleJavaCall::call_site_size(JeandleJavaCall::Type call_type) {
-  // STATIC_CALL
-  if (call_type == JeandleJavaCall::STATIC_CALL) {
-    return NativeInstruction::instruction_size;
-  }
+int JeandleCompiledCall::call_site_size(JeandleCompiledCall::Type call_type) {
+  return call_site_patch_size(call_type);
+}
 
-  if (call_type == JeandleJavaCall::VM_CALL) {
-    // adr + str + mov + movk + movk + blr
-    return NativeInstruction::instruction_size * 6;
+int JeandleCompiledCall::call_site_patch_size(JeandleCompiledCall::Type call_type) {
+  assert(call_type != JeandleCompiledCall::NOT_A_CALL, "sanity");
+  switch (call_type) {
+    case JeandleCompiledCall::STATIC_CALL:
+      return NativeInstruction::instruction_size;
+    case JeandleCompiledCall::DYNAMIC_CALL:
+      returnNativeInstruction::instruction_size + NativeMovConstReg::instruction_size;
+    case JeandleCompiledCall::ROUTINE_CALL:
+      return NativeInstruction::instruction_size;
+    case JeandleCompiledCall::STUB_C_CALL:
+      // adr + str + mov + movk + movk + blr
+      NativeInstruction::instruction_size * 6;
+    default:
+      ShouldNotReachHere();
+      break;
   }
-
-  // DYNAMIC_CALL
-  return NativeInstruction::instruction_size + NativeMovConstReg::instruction_size;
 }

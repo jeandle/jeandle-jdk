@@ -46,9 +46,17 @@
   def(exceptional_return)
 
 // JeandleRuntimeRoutine contains C/C++/Assembly routines that can be called from Jeandle compiled code.
+// There are two ways to call a JeandleRuntimeRoutine: directly calling an assembly routine or calling
+// a C/C++ routine through a runtime stub.
+//
+// For assembly routines, we directly use their addresses to generate function calls in LLVM IR.
+//
+// For C/C++ routines, before jumping into the C/C++ function, we use a runtime stub to help adjust the VM
+// state similar to what call_VM does, then the runtime stub uses the C/C++ function address to generate
+// a function call into it. The runtime stubs are compiled by LLVM for every C/C++ routine.
 class JeandleRuntimeRoutine : public AllStatic {
  public:
-  // Generate all routine stubs.
+  // Generate all routines.
   static bool generate(llvm::TargetMachine* target_machine, llvm::DataLayout* data_layout);
 
 // Define all routines' llvm::FunctionCallee.

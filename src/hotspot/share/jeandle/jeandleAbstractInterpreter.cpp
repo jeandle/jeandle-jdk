@@ -20,11 +20,12 @@
 
 #include "llvm/IR/Attributes.h"
 #include "llvm/IR/Jeandle/Attributes.h"
+#include "llvm/IR/Jeandle/GCStrategy.h"
 #include "llvm/IR/Jeandle/Metadata.h"
 
 
 #include "jeandle/jeandleAbstractInterpreter.hpp"
-#include "jeandle/jeandleJavaCall.hpp"
+#include "jeandle/jeandleCompiledCall.hpp"
 #include "jeandle/jeandleRuntimeRoutine.hpp"
 #include "jeandle/jeandleType.hpp"
 #include "jeandle/jeandleUtils.hpp"
@@ -432,10 +433,9 @@ JeandleAbstractInterpreter::JeandleAbstractInterpreter(ciMethod* method,
                                                        _context(&target_module.getContext()),
                                                        _codes(_method),
                                                        _module(target_module),
-                                                       _code(code),
+                                                       _compiled_code(code),
                                                        _block_builder(new BasicBlockBuilder(method, _context, _llvm_func)),
                                                        _ir_builder(_block_builder->entry_block()->llvm_block()),
-                                                       _statepoint_id(0),
                                                        _oop_idx(0) {
   // Fill basic blocks with LLVM IR.
   interpret();
@@ -974,20 +974,24 @@ void JeandleAbstractInterpreter::invoke() {
 
   // Declare callee function type.
   BasicType return_type = declared_signature->return_type()->basic_type();
-  llvm::FunctionCallee callee = JeandleJavaCall::callee(_module, target, JeandleType::java2llvm(return_type, *_context), args_type);
+  llvm::FunctionType* func_type = llvm::FunctionType::get(JeandleType::java2llvm(return_type, *_context), args_type, false);
+  llvm::FunctionCallee callee = _module.getOrInsertFunction(JeandleFuncSig::method_name(target), func_type);
+  llvm::Function* func = llvm::cast<llvm::Function>(callee.getCallee());
+  func->setCallingConv(llvm::CallingConv::Hotspot_JIT);
+  func->setGC(llvm::jeandle::JeandleGC);
 
   // Decide call type and detination.
-  JeandleJavaCall::Type call_type = JeandleJavaCall::Type::NOT_A_CALL;
+  JeandleCompiledCall::Type call_type = JeandleCompiledCall::NOT_A_CALL;
   address dest = nullptr;
   switch (bc) {
     case Bytecodes::_invokevirtual:  // fall through
     case Bytecodes::_invokeinterface: {
-      call_type = JeandleJavaCall::Type::DYNAMIC_CALL;
+      call_type = JeandleCompiledCall::DYNAMIC_CALL;
       dest = SharedRuntime::get_resolve_virtual_call_stub();
       break;
     }
     case Bytecodes::_invokestatic: {
-      call_type = JeandleJavaCall::Type::STATIC_CALL;
+      call_type = JeandleCompiledCall::STATIC_CALL;
       dest = SharedRuntime::get_resolve_static_call_stub();
       break;
     }
@@ -996,12 +1000,12 @@ void JeandleAbstractInterpreter::invoke() {
     default: ShouldNotReachHere();
   }
 
-  assert(call_type != JeandleJavaCall::Type::NOT_A_CALL, "legal call type");
+  assert(call_type != JeandleCompiledCall::NOT_A_CALL, "legal call type");
   assert(dest != nullptr, "legal destination");
 
   // Record this call.
-  uint32_t id = next_statepoint_id();
-  _code.call_sites()[id] = new CallSiteInfo(id, call_type, dest, _codes.cur_bci());
+  uint32_t id = _compiled_code.next_statepoint_id();
+  _compiled_code.push_non_routine_call_site(new CallSiteInfo(call_type, dest, _codes.cur_bci(), id));
 
   // Create the call instruction.
   llvm::CallInst* call = _ir_builder.CreateCall(callee, args);
@@ -1013,7 +1017,7 @@ void JeandleAbstractInterpreter::invoke() {
                                                  std::to_string(id));
   llvm::Attribute patch_bytes_attr = llvm::Attribute::get(*_context,
                                                  llvm::jeandle::Attribute::StatepointNumPatchBytes,
-                                                 std::to_string(JeandleJavaCall::call_site_size(call_type)));
+                                                 std::to_string(JeandleCompiledCall::call_site_patch_size(call_type)));
   call->addFnAttr(id_attr);
   call->addFnAttr(patch_bytes_attr);
 
@@ -1258,7 +1262,7 @@ llvm::Value* JeandleAbstractInterpreter::find_or_insert_oop(ciObject* oop) {
     return oop_value;
   }
   llvm::StringRef oop_name = next_oop_name();
-  _code.oop_handles()[oop_name] = oop_handle;
+  _compiled_code.oop_handles()[oop_name] = oop_handle;
   llvm::Value* oop_value = _module.getOrInsertGlobal(
                                oop_name,
                                JeandleType::java2llvm(BasicType::T_OBJECT, *_context));

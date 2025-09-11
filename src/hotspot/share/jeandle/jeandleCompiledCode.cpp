@@ -91,58 +91,86 @@ class JeandleConstReloc : public JeandleReloc {
   address _target;
 };
 
-class JeandleSafepointReloc : public JeandleReloc {
+class JeandleCallReloc : public JeandleReloc {
  public:
-  JeandleSafepointReloc(int inst_end_offset, ciEnv* env, ciMethod* method, OopMap* oop_map, CallSiteInfo* call) :
-    JeandleReloc(inst_end_offset - JeandleJavaCall::call_site_size(call->type())/* beginning of a call instruction */),
+  JeandleCallReloc(int inst_end_offset, ciEnv* env, ciMethod* method, OopMap* oop_map, CallSiteInfo* call) :
+    JeandleReloc(inst_end_offset - JeandleCompiledCall::call_site_size(call->type())/* beginning of a call instruction */),
     _env(env), _method(method), _oop_map(oop_map), _call(call) {}
 
-  int inst_end_offset() {
-    return offset() + JeandleJavaCall::call_site_size(_call->type());
-  }
+  void emit_reloc(JeandleAssembler& assembler) override {
+    process_oop_map();
 
- protected:
-  CallSiteInfo* call() const { return _call; }
-  void process_oop_map();
+    switch (_call->type()) {
+      case JeandleCompiledCall::STATIC_CALL:
+        assembler.emit_static_call_stub(offset(), _call);
+        assembler.patch_static_call_site(offset(), _call);
+        break;
+
+      case JeandleCompiledCall::STUB_C_CALL:
+        assembler.patch_stub_C_call_site(offset(), _call);
+        break;
+
+      case JeandleCompiledCall::DYNAMIC_CALL:
+        assembler.patch_ic_call_site(offset(), _call);
+        break;
+
+      case JeandleCompiledCall::ROUTINE_CALL:
+        assembler.patch_routine_call_site(offset(), _call->target());
+        break;
+
+      default:
+        ShouldNotReachHere();
+        break;
+    }
+  }
 
  private:
   ciEnv* _env;
   ciMethod* _method;
   OopMap* _oop_map;
   CallSiteInfo* _call;
-};
+  int inst_end_offset() { return offset() + JeandleCompiledCall::call_site_size(_call->type()); }
 
-class JeandleCallVMReloc : public JeandleSafepointReloc {
- public:
-  JeandleCallVMReloc(int inst_end_offset, ciEnv* env, ciMethod* method, OopMap* oop_map, CallSiteInfo* call) :
-    JeandleSafepointReloc(inst_end_offset, env, method, oop_map, call) {}
+  void process_oop_map() {
+    assert(_oop_map != nullptr, "oopmap must be initialized");
+    assert(inst_end_offset() >= 0, "pc offset must be initialized");
+    assert(_fixed_up, "offset must be fixed up");
 
-  void emit_reloc(JeandleAssembler& assembler) override {
-    process_oop_map();
-    assembler.patch_call_vm(offset(), call()->target());
-  }
-};
+    DebugInformationRecorder* recorder = _env->debug_info();
+    recorder->add_safepoint(inst_end_offset(), _oop_map);
 
-class JeandleCallReloc : public JeandleSafepointReloc {
- public:
-  JeandleCallReloc(int inst_end_offset, ciEnv* env, ciMethod* method, OopMap* oop_map, CallSiteInfo* call) :
-    JeandleSafepointReloc(inst_end_offset, env, method, oop_map, call) {}
+    // No deopt support now.
+    GrowableArray<ScopeValue*> *locarray = new GrowableArray<ScopeValue*>(0);
+    GrowableArray<ScopeValue*> *exparray = new GrowableArray<ScopeValue*>(0);
 
-  void emit_reloc(JeandleAssembler& assembler) override {
-    process_oop_map();
+    // No monitor support now.
+    GrowableArray<MonitorValue*> *monarray = new GrowableArray<MonitorValue*>(0);
 
-    if (call()->type() == JeandleJavaCall::Type::STATIC_CALL) {
-      assembler.emit_static_call_stub(offset(), call());
-      assembler.patch_static_call_site(offset(), call());
+    DebugToken *locvals = recorder->create_scope_values(locarray);
+    DebugToken *expvals = recorder->create_scope_values(exparray);
+    DebugToken *monvals = recorder->create_monitor_values(monarray);
+
+#ifdef ASSERT
+    if (_call->type() != JeandleCompiledCall::STUB_C_CALL) {
+      // If we are not compiling a call vm stub, there must be a valid Java method.
+      assert(_method, "invalid Java method");
     }
+#endif
+    recorder->describe_scope(inst_end_offset(),
+                             methodHandle(),
+                             _method,
+                             _call->bci(),
+                             false,
+                             false,
+                             false,
+                             false,
+                             false,
+                             false,
+                             locvals,
+                             expvals,
+                             monvals);
 
-    if (call()->type() == JeandleJavaCall::Type::VM_CALL) {
-      assembler.patch_vm_call_site(offset(), call());
-    }
-
-    if (call()->type() == JeandleJavaCall::Type::DYNAMIC_CALL) {
-      assembler.patch_ic_call_site(offset(), call());
-    }
+    recorder->end_safepoint(inst_end_offset());
   }
 };
 
@@ -159,50 +187,6 @@ class JeandleOopReloc : public JeandleReloc {
  private:
   jobject _oop_handle;
 };
-
-void JeandleSafepointReloc::process_oop_map() {
-  assert(_oop_map != nullptr, "oopmap must be initialized");
-  assert(inst_end_offset() >= 0, "pc offset must be initialized");
-  assert(_fixed_up, "offset must be fixed up");
-
-  int safepoint_offset = inst_end_offset();
-
-  DebugInformationRecorder* recorder = _env->debug_info();
-  recorder->add_safepoint(safepoint_offset, _oop_map);
-
-  // No deopt support now.
-  GrowableArray<ScopeValue*> *locarray = new GrowableArray<ScopeValue*>(0);
-  GrowableArray<ScopeValue*> *exparray = new GrowableArray<ScopeValue*>(0);
-
-  // No monitor support now.
-  GrowableArray<MonitorValue*> *monarray = new GrowableArray<MonitorValue*>(0);
-
-  DebugToken *locvals = recorder->create_scope_values(locarray);
-  DebugToken *expvals = recorder->create_scope_values(exparray);
-  DebugToken *monvals = recorder->create_monitor_values(monarray);
-
-#ifdef ASSERT
-  if (call()->type() != JeandleJavaCall::VM_CALL) {
-    // If we are not compiling a call vm stub, there must be a valid Java method.
-    assert(_method, "invalid Java method");
-  }
-#endif
-  recorder->describe_scope(safepoint_offset,
-                           methodHandle(),
-                           _method,
-                           _call->bci(),
-                           false,
-                           false,
-                           false,
-                           false,
-                           false,
-                           false,
-                           locvals,
-                           expvals,
-                           monvals);
-
-  recorder->end_safepoint(safepoint_offset);
-}
 
 } // anonymous namespace
 
@@ -294,14 +278,16 @@ void JeandleCompiledCode::resolve_reloc_info(JeandleAssembler& assembler) {
     for (auto& edge : block->edges()) {
       auto& target = edge.getTarget();
 
-      if (!target.isDefined() && JeandleAssembler::is_call_vm_reloc_kind(edge.getKind())) {
-        // Call VM relocations.
+      if (!target.isDefined() && JeandleAssembler::is_routine_call_reloc_kind(edge.getKind())) {
+        // Routine call relocations.
         address target_addr = JeandleRuntimeRoutine::get_routine_entry(*target.getName());
 
-        int inst_end_offset = JeandleAssembler::fixup_call_inst_offset(static_cast<int>(block->getAddress().getValue() + edge.getOffset()));
+        int inst_end_offset = JeandleAssembler::fixup_native_call_inst_offset(static_cast<int>(block->getAddress().getValue() + edge.getOffset()));
 
         // TODO: Set the right bci.
-        _vm_call_sites[inst_end_offset] = new CallSiteInfo(0/* statepoint_id */, JeandleJavaCall::STATIC_CALL, target_addr, -1/* bci */);
+        _routine_call_sites[inst_end_offset] = new CallSiteInfo(JeandleCompiledCall::ROUTINE_CALL,
+                                                                target_addr,
+                                                                -1/* bci */);
       } else if (target.isDefined() && JeandleAssembler::is_const_reloc_kind(edge.getKind())) {
         // Const relocations.
         assert(target.getSection().getName().starts_with(".rodata"), "invalid const section");
@@ -331,10 +317,14 @@ void JeandleCompiledCode::resolve_reloc_info(JeandleAssembler& assembler) {
       int inst_end_offset = static_cast<int>(record->getInstructionOffset());
       assert(inst_end_offset >=0, "invalid pc offset");
 
-      if (CallSiteInfo* call = _call_sites.lookup(record->getID())) {
-        relocs.push_back(new JeandleCallReloc(inst_end_offset, _env, _method, build_oop_map(record), call));
-      } else if (CallSiteInfo* vm_call = _vm_call_sites[inst_end_offset]) {
-        relocs.push_back(new JeandleCallVMReloc(inst_end_offset, _env, _method, build_oop_map(record), vm_call));
+      CallSiteInfo* call_info = nullptr;
+      if (record->getID() < _non_routine_call_sites.size()) {
+        call_info = _non_routine_call_sites[record->getID()];
+      } else {
+        call_info = _routine_call_sites[inst_end_offset];
+      }
+      if (call_info) {
+        relocs.push_back(new JeandleCallReloc(inst_end_offset, _env, _method, build_oop_map(record), call_info));
       }
     }
   }

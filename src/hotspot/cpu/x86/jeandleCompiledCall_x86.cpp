@@ -18,20 +18,31 @@
  *
  */
 
-#include "jeandle/jeandleJavaCall.hpp"
+#include "jeandle/jeandleCompiledCall.hpp"
 #include "nativeInst_x86.hpp"
 
-int JeandleJavaCall::call_site_size(JeandleJavaCall::Type call_type) {
-  // STATIC_CALL
-  if (call_type == JeandleJavaCall::Type::STATIC_CALL) {
+int JeandleCompiledCall::call_site_size(JeandleCompiledCall::Type call_type) {
+  if (call_type == JeandleCompiledCall::STUB_C_CALL) {
     return NativeJump::instruction_size;
   }
 
-  if (call_type == JeandleJavaCall::Type::VM_CALL) {
-    // No need to patch vm call site on x86.
-    return 0;
-  }
+  return call_site_patch_size(call_type);
+}
 
-  // DYNAMIC_CALL
-  return NativeJump::instruction_size + NativeMovConstReg::instruction_size;
+int JeandleCompiledCall::call_site_patch_size(JeandleCompiledCall::Type call_type) {
+  assert(call_type != JeandleCompiledCall::NOT_A_CALL, "sanity");
+  switch (call_type) {
+    case JeandleCompiledCall::STATIC_CALL:
+      return NativeJump::instruction_size;
+    case JeandleCompiledCall::DYNAMIC_CALL:
+      return NativeJump::instruction_size + NativeMovConstReg::instruction_size;
+    case JeandleCompiledCall::ROUTINE_CALL:
+      return NativeJump::instruction_size;
+    case JeandleCompiledCall::STUB_C_CALL:
+      // No need to patch stub C call site on x86. So we return 0 here.
+      return 0;
+    default:
+      ShouldNotReachHere();
+      break;
+  }
 }
