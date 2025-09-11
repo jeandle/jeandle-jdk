@@ -52,6 +52,7 @@ public class TestMakeNotEntrant {
     public final static WhiteBox wb = WhiteBox.getWhiteBox();
     public final static int threadCount = 3;
     public final static int makeNotEntrantCount = 1;
+    public static volatile boolean finish = false;
 
     public static void main(String[] args) throws Exception {
         if (args.length == 1 && args[0].equals("true")) {
@@ -84,6 +85,8 @@ public class TestMakeNotEntrant {
                 count--;
             }
         }
+        Thread.sleep(100);
+        finish = true;
     }
 
     public static Method getMethod(String methodName, Class<?>... parameterTypes) throws Exception {
@@ -115,7 +118,7 @@ public class TestMakeNotEntrant {
     }
 
     public static void loopTest() {
-        while (true) {
+        while (!finish) {
             add(2, 2); // update return value
             if (add(1, 2) != 3) {
                 Asserts.fail();
