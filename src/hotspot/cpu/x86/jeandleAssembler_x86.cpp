@@ -147,7 +147,7 @@ void JeandleAssembler::emit_oop_reloc(int offset, jobject oop_handle) {
   __ code_section()->relocate(at_address, rspec, __ disp32_operand);
 }
 
-int JeandleAssembler::fixup_native_call_inst_offset(int offset) {
+int JeandleAssembler::fixup_routine_call_inst_offset(int offset) {
   assert(offset >= 0, "invalid offset");
   return offset - NativeJump::data_offset + NativeJump::instruction_size;
 }

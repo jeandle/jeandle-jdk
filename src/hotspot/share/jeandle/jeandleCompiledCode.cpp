@@ -282,7 +282,7 @@ void JeandleCompiledCode::resolve_reloc_info(JeandleAssembler& assembler) {
         // Routine call relocations.
         address target_addr = JeandleRuntimeRoutine::get_routine_entry(*target.getName());
 
-        int inst_end_offset = JeandleAssembler::fixup_native_call_inst_offset(static_cast<int>(block->getAddress().getValue() + edge.getOffset()));
+        int inst_end_offset = JeandleAssembler::fixup_routine_call_inst_offset(static_cast<int>(block->getAddress().getValue() + edge.getOffset()));
 
         // TODO: Set the right bci.
         _routine_call_sites[inst_end_offset] = new CallSiteInfo(JeandleCompiledCall::ROUTINE_CALL,

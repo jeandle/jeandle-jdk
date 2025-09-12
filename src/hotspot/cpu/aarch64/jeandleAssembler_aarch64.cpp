@@ -31,7 +31,7 @@
 #define __ _masm->
 
 void JeandleAssembler::emit_static_call_stub(int inst_offset, CallSiteInfo* call) {
-  assert(call->type() == JeandleJavaCall::STATIC_CALL, "illegal call type");
+  assert(call->type() == JeandleCompiledCall::STATIC_CALL, "illegal call type");
   address call_address = __ addr_at(inst_offset);
 
   // same as C1 call_stub_size()
@@ -55,7 +55,7 @@ void JeandleAssembler::emit_static_call_stub(int inst_offset, CallSiteInfo* call
 }
 
 void JeandleAssembler::patch_static_call_site(int inst_offset, CallSiteInfo* call) {
-  assert(call->type() == JeandleJavaCall::STATIC_CALL, "illegal call type");
+  assert(call->type() == JeandleCompiledCall::STATIC_CALL, "illegal call type");
   address call_address = __ addr_at(inst_offset);
 
   address insts_end = __ code()->insts_end();
@@ -68,7 +68,7 @@ void JeandleAssembler::patch_static_call_site(int inst_offset, CallSiteInfo* cal
 }
 
 void JeandleAssembler::patch_stub_C_call_site(int inst_offset, CallSiteInfo* call) {
-  assert(call->type() == JeandleJavaCall::STUB_C_CALL, "illegal call type");
+  assert(call->type() == JeandleCompiledCall::STUB_C_CALL, "illegal call type");
   address patch_pc = __ addr_at(inst_offset);
 
   address insts_end = __ code()->insts_end();
@@ -154,7 +154,7 @@ void JeandleAssembler::emit_oop_reloc(int offset, jobject oop_handle) {
   __ code_section()->relocate(at_addr, rspec);
 }
 
-int JeandleAssembler::fixup_native_call_inst_offset(int offset) {
+int JeandleAssembler::fixup_routine_call_inst_offset(int offset) {
   assert(offset >= 0, "invalid offset");
   // point to the end of call instruction
   return offset + NativeInstruction::instruction_size;
