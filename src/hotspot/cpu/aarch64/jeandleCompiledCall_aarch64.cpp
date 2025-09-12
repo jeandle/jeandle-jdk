@@ -31,12 +31,12 @@ int JeandleCompiledCall::call_site_patch_size(JeandleCompiledCall::Type call_typ
     case JeandleCompiledCall::STATIC_CALL:
       return NativeInstruction::instruction_size;
     case JeandleCompiledCall::DYNAMIC_CALL:
-      returnNativeInstruction::instruction_size + NativeMovConstReg::instruction_size;
+      return NativeInstruction::instruction_size + NativeMovConstReg::instruction_size;
     case JeandleCompiledCall::ROUTINE_CALL:
       return NativeInstruction::instruction_size;
     case JeandleCompiledCall::STUB_C_CALL:
       // adr + str + mov + movk + movk + blr
-      NativeInstruction::instruction_size * 6;
+      return NativeInstruction::instruction_size * 6;
     default:
       ShouldNotReachHere();
       break;
