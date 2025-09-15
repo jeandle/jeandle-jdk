@@ -80,7 +80,7 @@ class JeandleCompiledCode : public StackObj {
                       _prolog_length(-1),
                       _env(env),
                       _method(method),
-                      _stub_entry(nullptr),
+                      _routine_entry(nullptr),
                       _func_name(JeandleFuncSig::method_name(_method)) {}
 
   // For compiled Jeandle runtime stubs.
@@ -92,7 +92,7 @@ class JeandleCompiledCode : public StackObj {
                       _prolog_length(-1),
                       _env(env),
                       _method(nullptr),
-                      _stub_entry(nullptr),
+                      _routine_entry(nullptr),
                       _func_name(func_name) {}
 
   void install_obj(std::unique_ptr<ObjectBuffer> obj);
@@ -114,8 +114,8 @@ class JeandleCompiledCode : public StackObj {
 
   int frame_size() const { return _frame_size; }
 
-  address stub_entry() const { return _stub_entry; }
-  void set_stub_entry(address entry) { _stub_entry = entry; }
+  address routine_entry() const { return _routine_entry; }
+  void set_routine_entry(address entry) { _routine_entry = entry; }
 
   // Generate relocations, stubs and debug information.
   void finalize();
@@ -135,7 +135,7 @@ class JeandleCompiledCode : public StackObj {
   int _prolog_length;
   ciEnv* _env;
   ciMethod* _method;
-  address _stub_entry;
+  address _routine_entry;
   std::string _func_name;
 
   void setup_frame_size();

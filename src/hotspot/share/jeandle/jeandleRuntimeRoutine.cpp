@@ -26,27 +26,35 @@
 #include "runtime/interfaceSupport.inline.hpp"
 #include "runtime/safepoint.hpp"
 
-#define GEN_ROUTINE_STUB(c_func, return_type, args_type)                                       \
-  {                                                                                            \
-    std::unique_ptr<llvm::LLVMContext> context_ptr = std::make_unique<llvm::LLVMContext>();    \
-    llvm::LLVMContext& context = *context_ptr;                                                 \
-    llvm::FunctionType* func_type = llvm::FunctionType::get(return_type, args_type, false);    \
-    ResourceMark rm;                                                                           \
-    JeandleCompilation compilation(target_machine,                                             \
-                                   data_layout,                                                \
-                                   CompilerThread::current()->env(),                           \
-                                   std::move(context_ptr),                                     \
-                                   #c_func,                                                    \
-                                   CAST_FROM_FN_PTR(address, c_func),                          \
-                                   func_type);                                                 \
-    if (compilation.error_occurred()) { return false; }                                        \
-    _stub_entry.insert({llvm::StringRef(#c_func), compilation.compiled_code()->stub_entry()}); \
+#define GEN_C_ROUTINE_STUB(c_func, return_type, ...)                                                 \
+  {                                                                                                  \
+    std::unique_ptr<llvm::LLVMContext> context_ptr = std::make_unique<llvm::LLVMContext>();          \
+    llvm::LLVMContext& context = *context_ptr;                                                       \
+    llvm::FunctionType* func_type = llvm::FunctionType::get(return_type, {__VA_ARGS__}, false);      \
+    ResourceMark rm;                                                                                 \
+    JeandleCompilation compilation(target_machine,                                                   \
+                                   data_layout,                                                      \
+                                   CompilerThread::current()->env(),                                 \
+                                   std::move(context_ptr),                                           \
+                                   #c_func,                                                          \
+                                   CAST_FROM_FN_PTR(address, c_func),                                \
+                                   func_type);                                                       \
+    if (compilation.error_occurred()) { return false; }                                              \
+    _routine_entry.insert({llvm::StringRef(#c_func), compilation.compiled_code()->routine_entry()}); \
   }
 
-llvm::StringMap<address> JeandleRuntimeRoutine::_stub_entry;
+#define GEN_ASSEMBLY_ROUTINE_BLOB(name) \
+  generate_##name();
+
+llvm::StringMap<address> JeandleRuntimeRoutine::_routine_entry;
 
 bool JeandleRuntimeRoutine::generate(llvm::TargetMachine* target_machine, llvm::DataLayout* data_layout) {
-  ALL_JEANDLE_ROUTINES(GEN_ROUTINE_STUB);
+  // C/C++ functions:
+  ALL_JEANDLE_C_ROUTINES(GEN_C_ROUTINE_STUB);
+
+  // Assembly blobs:
+  ALL_JEANDLE_ASSEMBLY_ROUTINES(GEN_ASSEMBLY_ROUTINE_BLOB);
+
   return true;
 }
 
@@ -70,4 +78,9 @@ JRT_ENTRY(void, JeandleRuntimeRoutine::safepoint_handler(JavaThread* current))
   SafepointMechanism::process_if_requested_with_exit_check(current, false /* check asyncs */);
 
   state->set_at_poll_safepoint(false);
+JRT_END
+
+// Wrap SharedRuntime::raw_exception_handler_for_return_address to check safepoints on exit.
+JRT_LEAF(address, JeandleRuntimeRoutine::get_exception_handler(JavaThread* current))
+  return SharedRuntime::raw_exception_handler_for_return_address(current, current->exception_pc());
 JRT_END

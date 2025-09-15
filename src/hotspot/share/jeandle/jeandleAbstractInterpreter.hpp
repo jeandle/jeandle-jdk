@@ -247,6 +247,7 @@ class JeandleAbstractInterpreter : public StackObj {
   void goto_bci(int bci);
   void lookup_switch();
   void invoke();
+  bool inline_intrinsic(const ciMethod* target);
   void stack_op(Bytecodes::Code code);
   void shift_op(BasicType type, Bytecodes::Code code);
   void instanceof(int klass_index);
@@ -283,6 +284,8 @@ class JeandleAbstractInterpreter : public StackObj {
 
   void do_get_xxx(ciField* field, bool is_static);
   void do_put_xxx(ciField* field, bool is_static);
+
+  void throw_exception();
 };
 
 #endif // SHARE_JEANDLE_ABSTRACT_INTERPRETER_HPP

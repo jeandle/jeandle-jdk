@@ -34,39 +34,58 @@
 #include "runtime/javaThread.hpp"
 #include "utilities/globalDefinitions.hpp"
 
-//------------------------------------------------------------------------------------------------------
-//   |     c_func      |       return_type             |                    args_type
-//------------------------------------------------------------------------------------------------------
-#define ALL_JEANDLE_ROUTINES(def)                                                                                                     \
-  def(safepoint_handler, llvm::Type::getVoidTy(context), {llvm::PointerType::get(context, llvm::jeandle::AddrSpace::CHeapAddrSpace)})
+//------------------------------------------------------------------------------------------------------------
+//   |        c_func            |       return_type             |                    arg_types
+//------------------------------------------------------------------------------------------------------------
+#define ALL_JEANDLE_C_ROUTINES(def)                                                                                                             \
+  def(safepoint_handler,          llvm::Type::getVoidTy(context), llvm::PointerType::get(context, llvm::jeandle::AddrSpace::CHeapAddrSpace))    \
+  def(install_exceptional_return, llvm::Type::getVoidTy(context), llvm::PointerType::get(context, llvm::jeandle::AddrSpace::JavaHeapAddrSpace), \
+                                                                  llvm::PointerType::get(context, llvm::jeandle::AddrSpace::CHeapAddrSpace))
 
-// JeandleRuntimeRoutine contains C/C++ functions that can be called from Jeandle compiled code.
+#define ALL_JEANDLE_ASSEMBLY_ROUTINES(def) \
+  def(exceptional_return)
+
+// JeandleRuntimeRoutine contains C/C++/Assembly routines that can be called from Jeandle compiled code.
 class JeandleRuntimeRoutine : public AllStatic {
  public:
   // Generate all routine stubs.
   static bool generate(llvm::TargetMachine* target_machine, llvm::DataLayout* data_layout);
 
 // Define all routines' llvm::FunctionCallee.
-#define DEF_LLVM_CALLEE(c_func, return_type, args_type)                                             \
+#define DEF_LLVM_CALLEE(c_func, return_type, ...)                                                   \
   static llvm::FunctionCallee c_func##_callee(llvm::Module& target_module) {                        \
     llvm::LLVMContext& context = target_module.getContext();                                        \
-    llvm::FunctionType* func_type = llvm::FunctionType::get(return_type, args_type, false);         \
+    llvm::FunctionType* func_type = llvm::FunctionType::get(return_type, {__VA_ARGS__}, false);     \
     llvm::FunctionCallee callee = target_module.getOrInsertFunction(#c_func, func_type);            \
     llvm::cast<llvm::Function>(callee.getCallee())->setCallingConv(llvm::CallingConv::Hotspot_JIT); \
     return callee;                                                                                  \
   }
 
-  ALL_JEANDLE_ROUTINES(DEF_LLVM_CALLEE);
+  ALL_JEANDLE_C_ROUTINES(DEF_LLVM_CALLEE);
 
-  static address get_stub_entry(llvm::StringRef name) {
-    assert(_stub_entry.contains(name), "invalid runtime routine");
-    return _stub_entry.lookup(name);
+  static address get_routine_entry(llvm::StringRef name) {
+    assert(_routine_entry.contains(name), "invalid runtime routine");
+    return _routine_entry.lookup(name);
   }
 
  private:
-  static llvm::StringMap<address> _stub_entry;
+  static llvm::StringMap<address> _routine_entry; // All the routines.
+
+  // C/C++ routine implementations:
 
   static void safepoint_handler(JavaThread* current);
+
+  static void install_exceptional_return(oopDesc* exception, JavaThread* current);
+
+  static address get_exception_handler(JavaThread* current);
+
+  // Assembly routine implementations:
+
+#define DEF_ASSEMBLY_ROUTINE(name)               \
+  static void generate_##name();                 \
+  static constexpr const char* _##name = #name;
+
+  ALL_JEANDLE_ASSEMBLY_ROUTINES(DEF_ASSEMBLY_ROUTINE);
 };
 
 #endif // SHARE_JEANDLE_RUNTIME_ROUTINE_HPP

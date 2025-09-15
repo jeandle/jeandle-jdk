@@ -161,7 +161,7 @@ JeandleCompilation::JeandleCompilation(llvm::TargetMachine* target_machine,
                                                   _env->debug_info()->_oopmaps,
                                                   false);
   assert(rs != nullptr && rs->is_runtime_stub(), "sanity check");
-  _code.set_stub_entry(rs->entry_point());
+  _code.set_routine_entry(rs->entry_point());
 }
 
 void JeandleCompilation::install_code() {

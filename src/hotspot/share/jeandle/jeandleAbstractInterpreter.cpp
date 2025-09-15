@@ -25,9 +25,11 @@
 
 #include "jeandle/jeandleAbstractInterpreter.hpp"
 #include "jeandle/jeandleJavaCall.hpp"
+#include "jeandle/jeandleRuntimeRoutine.hpp"
 #include "jeandle/jeandleType.hpp"
 #include "jeandle/jeandleUtils.hpp"
 
+#include "logging/log.hpp"
 #include "utilities/debug.hpp"
 #include "ci/ciMethodBlocks.hpp"
 #include "runtime/sharedRuntime.hpp"
@@ -754,7 +756,7 @@ void JeandleAbstractInterpreter::interpret_block(JeandleBasicBlock* block) {
       case Bytecodes::_anewarray: Unimplemented(); break;
 
       case Bytecodes::_arraylength: Unimplemented(); break;
-      case Bytecodes::_athrow: Unimplemented(); break;
+      case Bytecodes::_athrow: throw_exception(); break;
       case Bytecodes::_checkcast: Unimplemented(); break;
       case Bytecodes::_instanceof: instanceof(_codes.get_index_u2()); break;
 
@@ -939,6 +941,17 @@ void JeandleAbstractInterpreter::invoke() {
   assert(declared_signature != nullptr, "cannot be null");
   assert(will_link == target->is_loaded(), "");
 
+  if (target->is_loaded() && target->check_intrinsic_candidate()) {
+    if (inline_intrinsic(target)) {
+      if (log_is_enabled(Debug, jeandle)) {
+        ResourceMark rm;
+        stringStream ss;
+        target->print_name(&ss);
+        log_debug(jeandle)("Method `%s` is parsed as intrinsic", ss.as_string());
+      }
+      return;
+    };
+  }
   const Bytecodes::Code bc = _codes.cur_bc();
 
   // Construct arguments.
@@ -1007,6 +1020,22 @@ void JeandleAbstractInterpreter::invoke() {
   if (return_type != BasicType::T_VOID) {
     _jvm->push(return_type, call);
   }
+}
+
+bool JeandleAbstractInterpreter::inline_intrinsic(const ciMethod* target) {
+  switch(target->intrinsic_id()) {
+    case vmIntrinsics::_dabs: {
+      _jvm->dpush(_ir_builder.CreateIntrinsic(JeandleType::java2llvm(BasicType::T_DOUBLE, *_context), llvm::Intrinsic::fabs, {_jvm->dpop()}));
+      break;
+    }
+    case vmIntrinsicID::_fabs: {
+      _jvm->fpush(_ir_builder.CreateIntrinsic(JeandleType::java2llvm(BasicType::T_FLOAT, *_context), llvm::Intrinsic::fabs, {_jvm->fpop()}));
+      break;
+    }
+    default:
+      return false;
+  }
+  return true;
 }
 
 void JeandleAbstractInterpreter::stack_op(Bytecodes::Code code) {
@@ -1215,6 +1244,28 @@ void JeandleAbstractInterpreter::rem_op(BasicType type, Bytecodes::Code code) {
   _jvm->push(type, call);
 }
 
+llvm::CallInst* JeandleAbstractInterpreter::call_java_op(llvm::StringRef java_op, llvm::ArrayRef<llvm::Value*> args) {
+  llvm::Function* java_op_func = _module.getFunction(java_op);
+  assert(java_op_func != nullptr, "invalid JavaOp");
+  llvm::CallInst* call_inst = _ir_builder.CreateCall(java_op_func, args);
+  call_inst->setCallingConv(llvm::CallingConv::Hotspot_JIT);
+  return call_inst;
+}
+
+llvm::Value* JeandleAbstractInterpreter::find_or_insert_oop(ciObject* oop) {
+  jobject oop_handle = oop->constant_encoding();
+  if (llvm::Value* oop_value = _oops.lookup(oop_handle)) {
+    return oop_value;
+  }
+  llvm::StringRef oop_name = next_oop_name();
+  _code.oop_handles()[oop_name] = oop_handle;
+  llvm::Value* oop_value = _module.getOrInsertGlobal(
+                               oop_name,
+                               JeandleType::java2llvm(BasicType::T_OBJECT, *_context));
+  _oops[oop_handle] = oop_value;
+  return oop_value;
+}
+
 // TODO: clinit_barrier check.
 // TODO: Handle field attributions like volatile, final, stable.
 void JeandleAbstractInterpreter::do_field_access(bool is_get, bool is_static) {
@@ -1293,28 +1344,29 @@ void JeandleAbstractInterpreter::store_to_address(llvm::Value* addr, llvm::Value
   llvm::StoreInst* store = _ir_builder.CreateStore(value, addr);
 }
 
-llvm::Value* JeandleAbstractInterpreter::find_or_insert_oop(ciObject* oop) {
-  jobject oop_handle = oop->constant_encoding();
-  if (llvm::Value* oop_value = _oops.lookup(oop_handle)) {
-    return oop_value;
-  }
-  llvm::StringRef oop_name = next_oop_name();
-  _code.oop_handles()[oop_name] = oop_handle;
-  llvm::Value* oop_value = _module.getOrInsertGlobal(
-                               oop_name,
-                               JeandleType::java2llvm(BasicType::T_OBJECT, *_context));
-  _oops[oop_handle] = oop_value;
-  return oop_value;
-}
-
-llvm::CallInst* JeandleAbstractInterpreter::call_java_op(llvm::StringRef java_op, llvm::ArrayRef<llvm::Value*> args) {
-  llvm::Function* java_op_func = _module.getFunction(java_op);
-  assert(java_op_func != nullptr, "invalid JavaOp");
-  llvm::CallInst* call_inst = _ir_builder.CreateCall(java_op_func, args);
-  call_inst->setCallingConv(llvm::CallingConv::Hotspot_JIT);
-  return call_inst;
-}
-
 void JeandleAbstractInterpreter::add_safepoint_poll() {
   call_java_op("jeandle.safepoint_poll", {});
+}
+
+void JeandleAbstractInterpreter::throw_exception() {
+  // Call install_exceptional_return.
+  llvm::Value* exception_oop = _jvm->apop();
+  llvm::CallInst* current_thread = call_java_op("jeandle.current_thread", {});
+  llvm::CallInst* call_inst = _ir_builder.CreateCall(JeandleRuntimeRoutine::install_exceptional_return_callee(_module),
+                                                    {exception_oop, current_thread});
+  call_inst->setCallingConv(llvm::CallingConv::Hotspot_JIT);
+
+  // Return
+  llvm::Type* ret_type = _llvm_func->getReturnType();
+  if (ret_type->isVoidTy()) {
+    _ir_builder.CreateRetVoid();;
+  } else if (ret_type->isIntegerTy()) {
+    _ir_builder.CreateRet(llvm::ConstantInt::get(ret_type, 0));
+  } else if (ret_type->isFloatTy() || ret_type->isDoubleTy()) {
+    _ir_builder.CreateRet(llvm::ConstantFP::get(ret_type, 0.0));
+  } else if (ret_type->isPointerTy()) {
+    _ir_builder.CreateRet(llvm::ConstantPointerNull::get(llvm::cast<llvm::PointerType>(ret_type)));
+  } else {
+    ShouldNotReachHere();
+  }
 }

@@ -295,7 +295,7 @@ void JeandleCompiledCode::resolve_reloc_info(JeandleAssembler& assembler) {
 
       if (!target.isDefined() && JeandleAssembler::is_call_vm_reloc_kind(edge.getKind())) {
         // Call VM relocations.
-        address target_addr = JeandleRuntimeRoutine::get_stub_entry(*target.getName());
+        address target_addr = JeandleRuntimeRoutine::get_routine_entry(*target.getName());
 
         int inst_end_offset = JeandleAssembler::fixup_call_inst_offset(static_cast<int>(block->getAddress().getValue() + edge.getOffset()));
 
