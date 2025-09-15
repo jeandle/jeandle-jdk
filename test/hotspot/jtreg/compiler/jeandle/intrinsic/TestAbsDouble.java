@@ -60,7 +60,6 @@ public class TestAbsDouble {
         // check IR
         checker.checkNext("entry:");
         checker.checkNext("br label %bci_0");
-        checker.checkNext("");
         checker.checkNext("bci_0:");
         // the llvm intrinsic is used
         checker.checkNext("call double @llvm.fabs.f64(double %0)");
