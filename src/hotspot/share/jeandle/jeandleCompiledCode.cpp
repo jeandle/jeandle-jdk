@@ -94,7 +94,7 @@ class JeandleConstReloc : public JeandleReloc {
 class JeandleCallReloc : public JeandleReloc {
  public:
   JeandleCallReloc(int inst_end_offset, ciEnv* env, ciMethod* method, OopMap* oop_map, CallSiteInfo* call) :
-    JeandleReloc(inst_end_offset - JeandleCompiledCall::call_site_size(call->type())/* beginning of a call instruction */),
+    JeandleReloc(inst_end_offset - JeandleCompiledCall::call_site_size(call->type()) /* beginning of a call instruction */),
     _env(env), _method(method), _oop_map(oop_map), _call(call) {}
 
   void emit_reloc(JeandleAssembler& assembler) override {

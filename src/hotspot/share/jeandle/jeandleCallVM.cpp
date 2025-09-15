@@ -71,10 +71,11 @@ void JeandleCallVM::generate_call_VM(const char* name, address c_func, llvm::Fun
   llvm::CallInst* call_c_func = ir_builder.CreateCall(func_type, c_func_ptr, args);
   call_c_func->setCallingConv(llvm::CallingConv::C);
   JeandleCompiledCall::Type call_type = JeandleCompiledCall::STUB_C_CALL;
-  code.push_non_routine_call_site(new CallSiteInfo(call_type, c_func, -1/* bci */, code.next_statepoint_id()));
+  uint64_t statepoint_id = code.next_statepoint_id();
+  code.push_non_routine_call_site(new CallSiteInfo(call_type, c_func, -1 /* bci */, statepoint_id));
   llvm::Attribute id_attr = llvm::Attribute::get(context,
                                                  llvm::jeandle::Attribute::StatepointID,
-                                                 "0");
+                                                 std::to_string(statepoint_id));
   llvm::Attribute patch_bytes_attr = llvm::Attribute::get(context,
                                                           llvm::jeandle::Attribute::StatepointNumPatchBytes,
                                                           std::to_string(JeandleCompiledCall::call_site_patch_size(call_type)));
