@@ -24,11 +24,12 @@
 #include <cassert>
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ExecutionEngine/JITLink/JITLink.h"
+#include "llvm/IR/Statepoint.h"
 #include "llvm/Object/ELFObjectFile.h"
 #include "llvm/Object/StackMapParser.h"
 #include "llvm/Support/MemoryBuffer.h"
 
-#include "jeandle/jeandleJavaCall.hpp"
+#include "jeandle/jeandleCompiledCall.hpp"
 #include "jeandle/jeandleReadELF.hpp"
 #include "jeandle/jeandleResourceObj.hpp"
 #include  "jeandle/jeandleUtils.hpp"
@@ -41,25 +42,34 @@
 
 class CallSiteInfo : public JeandleCompilationResourceObj {
  public:
-  CallSiteInfo(uint32_t statepoint_id,
-               JeandleJavaCall::Type type,
+  CallSiteInfo(JeandleCompiledCall::Type type,
                address target,
-               int bci) :
-               _statepoint_id(statepoint_id),
+               int bci,
+               uint64_t statepoint_id = llvm::StatepointDirectives::DefaultStatepointID) :
                _type(type),
                _target(target),
-               _bci(bci) {}
+               _bci(bci),
+               _statepoint_id(statepoint_id) {
+#ifdef ASSERT
+    // We don't need to assign a unique statepoint id for each routine call site, only call type and target is used.
+    bool use_default_statepoint_id = (statepoint_id == llvm::StatepointDirectives::DefaultStatepointID);
+    bool is_routine_call = (type == JeandleCompiledCall::ROUTINE_CALL);
+    assert(use_default_statepoint_id == is_routine_call, "routine calls should use the default statepoint id");
+#endif // ASSERT
+  }
 
-  JeandleJavaCall::Type type() const { return _type; }
-  uint32_t statepoint_id() const { return _statepoint_id; }
+  JeandleCompiledCall::Type type() const { return _type; }
+  uint64_t statepoint_id() const { return _statepoint_id; }
   address target() const { return _target; }
   int bci() const { return _bci; }
 
  private:
-  uint32_t _statepoint_id; // Used to distinguish each call site in stackmaps.
-  JeandleJavaCall::Type _type;
+  JeandleCompiledCall::Type _type;
   address _target;
   int _bci;
+
+  // Used to distinguish each call site in stackmaps.
+  uint64_t _statepoint_id;
 };
 
 using ObjectBuffer = llvm::MemoryBuffer;
@@ -97,7 +107,8 @@ class JeandleCompiledCode : public StackObj {
 
   void install_obj(std::unique_ptr<ObjectBuffer> obj);
 
-  llvm::DenseMap<uint32_t, CallSiteInfo*>& call_sites() { return _call_sites; }
+  void push_non_routine_call_site(CallSiteInfo* call_site) { _non_routine_call_sites.push_back(call_site); }
+  uint64_t next_statepoint_id() { return _non_routine_call_sites.size(); }
 
   llvm::StringMap<jobject>& oop_handles() { return _oop_handles; }
 
@@ -124,8 +135,16 @@ class JeandleCompiledCode : public StackObj {
   std::unique_ptr<ObjectBuffer> _obj; // Compiled instructions.
   std::unique_ptr<ELFObject> _elf;
   CodeBuffer _code_buffer; // Relocations and stubs.
-  llvm::DenseMap<uint32_t, CallSiteInfo*> _call_sites;
-  llvm::DenseMap<int, CallSiteInfo*> _vm_call_sites;
+
+  // Call sites in our compiled code:
+  // Note that the main different between routine calls and non-routine calls is, routine calls are found
+  // from relocation of compiled objects directly, and non-routine calls are found from stackmaps then
+  // matched with the compile-time generated statepoint id.
+  llvm::DenseMap<int, CallSiteInfo*> _routine_call_sites; // Contains all routine call sites, constructed from
+                                                          // relocations of compiled object in resolve_reloc_info.
+  llvm::SmallVector<CallSiteInfo*> _non_routine_call_sites; // Contains all other call sites,
+                                                            // constructed during LLVM IR generating.
+
   llvm::StringMap<address> _const_sections;
   llvm::StringMap<jobject> _oop_handles;
   CodeOffsets _offsets;

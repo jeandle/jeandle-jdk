@@ -31,7 +31,7 @@
 #define __ _masm->
 
 void JeandleAssembler::emit_static_call_stub(int inst_offset, CallSiteInfo* call) {
-  assert(call->type() == JeandleJavaCall::STATIC_CALL, "illegal call type");
+  assert(call->type() == JeandleCompiledCall::STATIC_CALL, "illegal call type");
   address call_address = __ addr_at(inst_offset);
 
   // same as C1 call_stub_size()
@@ -55,7 +55,7 @@ void JeandleAssembler::emit_static_call_stub(int inst_offset, CallSiteInfo* call
 }
 
 void JeandleAssembler::patch_static_call_site(int inst_offset, CallSiteInfo* call) {
-  assert(call->type() == JeandleJavaCall::STATIC_CALL, "illegal call type");
+  assert(call->type() == JeandleCompiledCall::STATIC_CALL, "illegal call type");
   address call_address = __ addr_at(inst_offset);
 
   address insts_end = __ code()->insts_end();
@@ -67,8 +67,8 @@ void JeandleAssembler::patch_static_call_site(int inst_offset, CallSiteInfo* cal
   __ code()->set_insts_end(insts_end);
 }
 
-void JeandleAssembler::patch_vm_call_site(int inst_offset, CallSiteInfo* call) {
-  assert(call->type() == JeandleJavaCall::VM_CALL, "illegal call type");
+void JeandleAssembler::patch_stub_C_call_site(int inst_offset, CallSiteInfo* call) {
+  assert(call->type() == JeandleCompiledCall::STUB_C_CALL, "illegal call type");
   address patch_pc = __ addr_at(inst_offset);
 
   address insts_end = __ code()->insts_end();
@@ -85,9 +85,22 @@ void JeandleAssembler::patch_vm_call_site(int inst_offset, CallSiteInfo* call) {
   __ code()->set_insts_end(insts_end);
 }
 
+void JeandleAssembler::patch_routine_call_site(int inst_offset, address target) {
+  address call_pc = __ addr_at(inst_offset);
+
+  // Set insts_end to where to patch
+  address insts_end = __ code()->insts_end();
+  __ code()->set_insts_end(call_pc);
+
+  __ trampoline_call(Address(target, relocInfo::runtime_call_type));
+
+  // Recover insts_end
+  __ code()->set_insts_end(insts_end);
+}
+
 void JeandleAssembler::patch_ic_call_site(int inst_offset, CallSiteInfo* call) {
   assert(inst_offset >= 0, "invalid call instruction address");
-  assert(call->type() == JeandleJavaCall::DYNAMIC_CALL, "illegal call type");
+  assert(call->type() == JeandleCompiledCall::DYNAMIC_CALL, "illegal call type");
 
   address call_address = __ addr_at(inst_offset);
 
@@ -141,20 +154,7 @@ void JeandleAssembler::emit_oop_reloc(int offset, jobject oop_handle) {
   __ code_section()->relocate(at_addr, rspec);
 }
 
-void JeandleAssembler::patch_call_vm(int inst_offset, address target) {
-  address call_pc = __ addr_at(inst_offset);
-
-  // Set insts_end to where to patch
-  address insts_end = __ code()->insts_end();
-  __ code()->set_insts_end(call_pc);
-
-  __ trampoline_call(Address(target, relocInfo::runtime_call_type));
-
-  // Recover insts_end
-  __ code()->set_insts_end(insts_end);
-}
-
-int JeandleAssembler::fixup_call_inst_offset(int offset) {
+int JeandleAssembler::fixup_routine_call_inst_offset(int offset) {
   assert(offset >= 0, "invalid offset");
   // point to the end of call instruction
   return offset + NativeInstruction::instruction_size;
@@ -165,7 +165,7 @@ bool JeandleAssembler::is_oop_reloc_kind(LinkKind kind) {
          kind == LinkKind_aarch64::RequestGOTAndTransformToPageOffset12;
 }
 
-bool JeandleAssembler::is_call_vm_reloc_kind(LinkKind kind) {
+bool JeandleAssembler::is_routine_call_reloc_kind(LinkKind kind) {
   return kind == LinkKind_aarch64::Branch26PCRel;
 }
 

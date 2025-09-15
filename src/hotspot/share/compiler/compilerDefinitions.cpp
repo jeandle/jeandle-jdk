@@ -40,6 +40,7 @@ const char* compilertype2name_tab[compiler_number_of_types] = {
   "",
   "c1",
   "c2",
+  "jeandle",
   "jvmci"
 };
 
@@ -652,4 +653,3 @@ void CompilerConfig::ergo_initialize() {
   }
 #endif // JEANDLE
 }
-

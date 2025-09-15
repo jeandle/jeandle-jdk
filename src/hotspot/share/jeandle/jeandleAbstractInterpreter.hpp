@@ -212,12 +212,9 @@ class JeandleAbstractInterpreter : public StackObj {
   llvm::LLVMContext* _context;
   ciBytecodeStream _codes;
   llvm::Module& _module;
-  JeandleCompiledCode& _code;
+  JeandleCompiledCode& _compiled_code;
   BasicBlockBuilder* _block_builder;
   llvm::IRBuilder<> _ir_builder;
-
-  // Assign a unique statepoint id for each statepoint.
-  uint32_t _statepoint_id;
 
   // Record oop values.
   llvm::DenseMap<jobject, llvm::Value*> _oops;
@@ -259,8 +256,6 @@ class JeandleAbstractInterpreter : public StackObj {
   void add_safepoint_poll();
 
   llvm::DenseMap<int, JeandleBasicBlock*>& bci2block() { return _block_builder->bci2block(); }
-
-  uint32_t next_statepoint_id() { return _statepoint_id++; }
 
   llvm::Value* find_or_insert_oop(ciObject* oop);
 

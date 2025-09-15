@@ -33,7 +33,8 @@
 
 class JeandleCallVM : public AllStatic {
  public:
-  // Generate stubs that call JeandleRuntimeRoutine.
+  // Generate stubs that call Jeandle C/C++ routines.
+  // For more information, see JeandleRuntimeRoutine.
   static void generate_call_VM(const char* name, address c_func, llvm::FunctionType* func_type, llvm::Module& target_module, JeandleCompiledCode& code);
 };
 

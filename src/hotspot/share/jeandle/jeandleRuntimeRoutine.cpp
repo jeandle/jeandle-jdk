@@ -49,17 +49,17 @@
 llvm::StringMap<address> JeandleRuntimeRoutine::_routine_entry;
 
 bool JeandleRuntimeRoutine::generate(llvm::TargetMachine* target_machine, llvm::DataLayout* data_layout) {
-  // C/C++ functions:
+  // For each C/C++ function, compile a runtime stub to wrap it.
   ALL_JEANDLE_C_ROUTINES(GEN_C_ROUTINE_STUB);
 
-  // Assembly blobs:
+  // Generate assembly routines.
   ALL_JEANDLE_ASSEMBLY_ROUTINES(GEN_ASSEMBLY_ROUTINE_BLOB);
 
   return true;
 }
 
 //=============================================================================
-//                        Jeandle Runtime Routines
+//                      Jeandle Runtime C/C++ Routines
 //=============================================================================
 
 JRT_ENTRY(void, JeandleRuntimeRoutine::safepoint_handler(JavaThread* current))
@@ -80,7 +80,6 @@ JRT_ENTRY(void, JeandleRuntimeRoutine::safepoint_handler(JavaThread* current))
   state->set_at_poll_safepoint(false);
 JRT_END
 
-// Wrap SharedRuntime::raw_exception_handler_for_return_address to check safepoints on exit.
 JRT_LEAF(address, JeandleRuntimeRoutine::get_exception_handler(JavaThread* current))
   return SharedRuntime::raw_exception_handler_for_return_address(current, current->exception_pc());
 JRT_END

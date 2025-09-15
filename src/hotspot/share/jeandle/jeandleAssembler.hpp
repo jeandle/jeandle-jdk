@@ -39,7 +39,9 @@ class JeandleAssembler : public StackObj {
 
   void patch_static_call_site(int inst_offset, CallSiteInfo* call);
 
-  void patch_vm_call_site(int inst_offset, CallSiteInfo* call);
+  void patch_stub_C_call_site(int inst_offset, CallSiteInfo* call);
+
+  void patch_routine_call_site(int offset, address target);
 
   void patch_ic_call_site(int inst_offset, CallSiteInfo* call);
 
@@ -53,14 +55,12 @@ class JeandleAssembler : public StackObj {
 
   void emit_oop_reloc(int offset, jobject oop_handle);
 
-  void patch_call_vm(int offset, address target);
-
   // Redirect an offset from the displacement to the end of the call instruction
-  static int fixup_call_inst_offset(int offset);
+  static int fixup_routine_call_inst_offset(int offset);
 
   static bool is_oop_reloc_kind(LinkKind kind);
 
-  static bool is_call_vm_reloc_kind(LinkKind kind);
+  static bool is_routine_call_reloc_kind(LinkKind kind);
 
   static bool is_const_reloc_kind(LinkKind kind);
 
