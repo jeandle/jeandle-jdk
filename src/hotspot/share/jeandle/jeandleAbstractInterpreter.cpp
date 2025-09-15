@@ -1270,42 +1270,6 @@ llvm::Value* JeandleAbstractInterpreter::find_or_insert_oop(ciObject* oop) {
   return oop_value;
 }
 
-class JeandleAccessFence : public StackObj {
-  using AtomicOrder = llvm::AtomicOrdering;
- public:
-  JeandleAccessFence(llvm::IRBuilder<>& ir_builder, bool is_write, bool is_volatile) : _ir_builder(ir_builder),
-    _leading_membar(nullptr), _is_write(is_write), _is_volatile(is_volatile) {
-    if (_is_write) {
-      if (_is_volatile) {
-        _leading_membar = _ir_builder.CreateFence(AtomicOrder::Release);
-      }
-    } else { // read
-      if (_is_volatile && support_IRIW_for_not_multiple_copy_atomic_cpu) {
-        _leading_membar = _ir_builder.CreateFence(AtomicOrder::SequentiallyConsistent);
-      }
-    }
-  }
-
-  ~JeandleAccessFence() {
-    if (_is_write) {
-      if (_is_volatile && !support_IRIW_for_not_multiple_copy_atomic_cpu) {
-        _ir_builder.CreateFence(AtomicOrder::SequentiallyConsistent);
-      }
-    } else { // read
-      if (_is_volatile) {
-        assert(_leading_membar == nullptr || support_IRIW_for_not_multiple_copy_atomic_cpu, "no leading membar expected");
-        _ir_builder.CreateFence(AtomicOrder::Acquire);
-      }
-    }
-  }
-
- private:
-  llvm::IRBuilder<>& _ir_builder;
-  llvm::FenceInst* _leading_membar;
-  bool _is_write;
-  bool _is_volatile;
-};
-
 // TODO: clinit_barrier check.
 // TODO: Handle field attributions like final, stable.
 void JeandleAbstractInterpreter::do_field_access(bool is_get, bool is_static) {
@@ -1377,16 +1341,28 @@ llvm::Value* JeandleAbstractInterpreter::compute_static_field_address(ciInstance
 llvm::Value* JeandleAbstractInterpreter::load_from_address(llvm::Value* addr, BasicType type, bool is_volatile) {
   llvm::Type* expected_ty = JeandleType::java2llvm(type, *_context);
 
-  JeandleAccessFence fence(_ir_builder, false, is_volatile);
-  return _ir_builder.CreateLoad(expected_ty, addr, is_volatile);
+  llvm::LoadInst* load_inst = _ir_builder.CreateLoad(expected_ty, addr);
+
+  if (is_volatile) {
+    load_inst->setAtomic(llvm::AtomicOrdering::SequentiallyConsistent);
+  } else {
+    load_inst->setAtomic(llvm::AtomicOrdering::Unordered);
+  }
+
+  return load_inst;
 }
 
 void JeandleAbstractInterpreter::store_to_address(llvm::Value* addr, llvm::Value* value, BasicType type, bool is_volatile) {
   llvm::Type* expected_ty = JeandleType::java2llvm(type, *_context);
   assert(value->getType() == expected_ty, "Value type must match field type");
 
-  JeandleAccessFence fence(_ir_builder, true, is_volatile);
-  llvm::StoreInst* store = _ir_builder.CreateStore(value, addr, is_volatile);
+  llvm::StoreInst* store_inst = _ir_builder.CreateStore(value, addr);
+
+  if (is_volatile) {
+    store_inst->setAtomic(llvm::AtomicOrdering::SequentiallyConsistent);
+  } else {
+    store_inst->setAtomic(llvm::AtomicOrdering::Unordered);
+  }
 }
 
 void JeandleAbstractInterpreter::add_safepoint_poll() {
