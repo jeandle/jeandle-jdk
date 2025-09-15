@@ -28,7 +28,6 @@ void JeandleFuncSig::setup_description(llvm::Function* func) {
 
   func->setGC(llvm::jeandle::JeandleGC);
 
-  func->addFnAttr("branch-target-enforcement", "false");
   func->addFnAttr("patchable-function-entry", "1");
 
   if (UseCompressedOops) {
