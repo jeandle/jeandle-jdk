@@ -50,10 +50,12 @@ class CallSiteInfo : public JeandleCompilationResourceObj {
                _target(target),
                _bci(bci),
                _statepoint_id(statepoint_id) {
+#ifdef ASSERT
     // We don't need to assign a unique statepoint id for each routine call site, only call type and target is used.
     bool use_default_statepoint_id = (statepoint_id == llvm::StatepointDirectives::DefaultStatepointID);
     bool is_routine_call = (type == JeandleCompiledCall::ROUTINE_CALL);
     assert(use_default_statepoint_id == is_routine_call, "routine calls should use the default statepoint id");
+#endif // ASSERT
   }
 
   JeandleCompiledCall::Type type() const { return _type; }
