@@ -22,6 +22,10 @@
 #include "nativeInst_aarch64.hpp"
 
 int JeandleCompiledCall::call_site_size(JeandleCompiledCall::Type call_type) {
+  if (call_type == JeandleCompiledCall::ROUTINE_CALL) {
+    return NativeInstruction::instruction_size;
+  }
+
   return call_site_patch_size(call_type);
 }
 
@@ -33,7 +37,8 @@ int JeandleCompiledCall::call_site_patch_size(JeandleCompiledCall::Type call_typ
     case JeandleCompiledCall::DYNAMIC_CALL:
       return NativeInstruction::instruction_size + NativeMovConstReg::instruction_size;
     case JeandleCompiledCall::ROUTINE_CALL:
-      return NativeInstruction::instruction_size;
+      // No need to patch routine call site.
+      return 0;
     case JeandleCompiledCall::STUB_C_CALL:
       // adr + str + mov + movk + movk + blr
       return NativeInstruction::instruction_size * 6;

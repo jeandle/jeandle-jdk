@@ -22,8 +22,12 @@
 #include "nativeInst_x86.hpp"
 
 int JeandleCompiledCall::call_site_size(JeandleCompiledCall::Type call_type) {
-  if (call_type == JeandleCompiledCall::STUB_C_CALL) {
-    return NativeJump::instruction_size;
+  switch (call_type) {
+    case JeandleCompiledCall::ROUTINE_CALL:
+    case JeandleCompiledCall::STUB_C_CALL:
+      return NativeJump::instruction_size;
+    default:
+      break;
   }
 
   return call_site_patch_size(call_type);
@@ -37,7 +41,8 @@ int JeandleCompiledCall::call_site_patch_size(JeandleCompiledCall::Type call_typ
     case JeandleCompiledCall::DYNAMIC_CALL:
       return NativeJump::instruction_size + NativeMovConstReg::instruction_size;
     case JeandleCompiledCall::ROUTINE_CALL:
-      return NativeJump::instruction_size;
+      // No need to patch routine call site.
+      return 0;
     case JeandleCompiledCall::STUB_C_CALL:
       // No need to patch stub C call site on x86. So we return 0 here.
       return 0;
