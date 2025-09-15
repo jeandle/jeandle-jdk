@@ -67,13 +67,3 @@ std::string JeandleFuncSig::method_name(ciMethod* method) {
          + "_" + method_name
          + "_" + sig_name;
 }
-
-void JeandleFuncSig::setup_description(llvm::Function* func) {
-  func->setCallingConv(llvm::CallingConv::Hotspot_JIT);
-
-  func->setGC(llvm::jeandle::JeandleGC);
-
-  if (UseCompressedOops) {
-    func->addFnAttr(llvm::Attribute::get(func->getContext(), llvm::jeandle::Attribute::UseCompressedOops));
-  }
-}

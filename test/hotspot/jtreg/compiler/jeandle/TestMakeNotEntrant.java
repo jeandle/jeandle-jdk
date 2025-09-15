@@ -30,8 +30,16 @@
  *      -Xcomp -XX:-TieredCompilation -Xbatch -Xlog:jit+compilation=debug
  *      -XX:CompileCommand=compileonly,TestMakeNotEntrant::loopTest
  *      -XX:CompileCommand=compileonly,TestMakeNotEntrant::add
+ *      -XX:CompileCommand=dontinline,TestMakeNotEntrant::add
  *      -XX:+UnlockExperimentalVMOptions -XX:+EnableJVMCI
  *      -XX:+UseJeandleCompiler TestMakeNotEntrant true
+ * @run main/othervm/native -Xbootclasspath/a:. -XX:+UnlockDiagnosticVMOptions -XX:+WhiteBoxAPI
+ *      -Xcomp -XX:-TieredCompilation -Xbatch -Xlog:jit+compilation=debug
+ *      -XX:CompileCommand=compileonly,TestMakeNotEntrant::loopTest
+ *      -XX:CompileCommand=compileonly,TestMakeNotEntrant::add
+ *      -XX:CompileCommand=dontinline,TestMakeNotEntrant::add
+ *      -XX:+UnlockExperimentalVMOptions -XX:+EnableJVMCI
+ *      -XX:-UseJeandleCompiler TestMakeNotEntrant true
  */
 
 import java.lang.management.RuntimeMXBean;
@@ -51,7 +59,7 @@ import jdk.vm.ci.runtime.JVMCI;
 public class TestMakeNotEntrant {
     public final static WhiteBox wb = WhiteBox.getWhiteBox();
     public final static int threadCount = 3;
-    public final static int makeNotEntrantCount = 1;
+    public final static int makeNotEntrantCount = 3;
     public static volatile boolean finish = false;
 
     public static void main(String[] args) throws Exception {
@@ -119,8 +127,16 @@ public class TestMakeNotEntrant {
 
     public static void loopTest() {
         while (!finish) {
-            add(2, 2); // update return value
+            /* patching verified_entry without reserved 5-byte header in x86_64, the following cases will occur.
+             * 1、SIGILL: exit_value not zero, can be observed.
+             * 2、SIGSEGV: exit_value not zero, can be observed.
+             * 3、Nothing happened but hurt header code. In "TestMakeNotEntrant::add" method, it will lose the add operation.
+             *    Thus, modify the return value, and then check it.
+             */
             if (add(1, 2) != 3) {
+                Asserts.fail();
+            }
+            if (add(2, 2) != 4) {
                 Asserts.fail();
             }
         }

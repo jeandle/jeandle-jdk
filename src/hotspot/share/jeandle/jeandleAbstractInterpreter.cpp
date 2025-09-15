@@ -435,8 +435,6 @@ JeandleAbstractInterpreter::JeandleAbstractInterpreter(ciMethod* method,
                                                        _ir_builder(_block_builder->entry_block()->llvm_block()),
                                                        _statepoint_id(0),
                                                        _oop_idx(0) {
-  _llvm_func->addFnAttr(llvm::Attribute::NoCfCheck);
-  _llvm_func->addFnAttr("patchable-function-entry", std::to_string(get_verified_entry_size()));
   // Fill basic blocks with LLVM IR.
   interpret();
 }
