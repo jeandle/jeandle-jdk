@@ -68,6 +68,13 @@ public class TestSafepointPoll {
             fileCheck.checkNext("%0 = load volatile i64, ptr addrspace(2) inttoptr");
             fileCheck.checkNext("%1 = icmp eq i64 %0, -2");
             fileCheck.checkNext("br i1 %1, label %return, label %do_safepoint");
+            fileCheck.checkNext("return:");
+            fileCheck.checkNext("ret void");
+            fileCheck.checkNext("do_safepoint:");
+            fileCheck.checkNext("%2 = call hotspotcc ptr @jeandle.current_thread()");
+            fileCheck.checkNext("call hotspotcc void @safepoint_handler(ptr %2)");
+            fileCheck.checkNext("br label %return");
+            fileCheck.checkNext("}");
         }
     }
 
