@@ -73,7 +73,7 @@ DEF_JAVA_OP(safepoint_poll, 1, llvm::Type::getVoidTy(context))
   llvm::Value* poll_word_ptr = ir_builder.CreateIntToPtr(ir_builder.getInt64((uint64_t)JavaThread::polling_word_offset()),
                                                          llvm::PointerType::get(context, llvm::jeandle::AddrSpace::TLSAddrSpace));
   // Do poll.
-  llvm::Value* poll_word = ir_builder.CreateLoad(intptr_type, poll_word_ptr);
+  llvm::Value* poll_word = ir_builder.CreateLoad(intptr_type, poll_word_ptr, true /* is_volatile */);
   llvm::Value* if_safepoint = ir_builder.CreateICmp(llvm::CmpInst::ICMP_EQ,
                                                     poll_word,
                                                     llvm::ConstantInt::get(intptr_type, ~SafepointMechanism::poll_bit()));
