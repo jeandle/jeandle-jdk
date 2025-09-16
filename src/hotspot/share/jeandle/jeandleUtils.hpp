@@ -34,7 +34,7 @@ class JeandleFuncSig : public AllStatic {
   // Create a llvm function according to the Java method.
   static llvm::Function* create_llvm_func(ciMethod* method, llvm::Module& target_module);
   static std::string method_name(ciMethod* method);
-  static void setup_description(llvm::Function* func);
+  static void setup_description(llvm::Function* func, bool is_stub = false);
 };
 
 #endif // SHARE_JEANDLE_UTILS_HPP

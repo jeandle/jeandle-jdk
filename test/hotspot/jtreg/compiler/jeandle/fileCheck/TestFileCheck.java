@@ -39,7 +39,7 @@ public class TestFileCheck {
             FileCheck fileCheck = new FileCheck(currentDir,
                                                 TestFileCheck.class.getDeclaredMethod("add", int.class, int.class),
                                                 false);
-            fileCheck.check("define hotspotcc i32 @\"compiler_jeandle_fileCheck_TestFileCheck_add_(II)I\"(i32 %0, i32 %1) #3 gc \"hotspotgc\" {");
+            fileCheck.check("define hotspotcc i32 @\"compiler_jeandle_fileCheck_TestFileCheck_add_(II)I\"(i32 %0, i32 %1)");
             fileCheck.checkNext("entry:");
             fileCheck.checkNext("br label %bci_0");
         }

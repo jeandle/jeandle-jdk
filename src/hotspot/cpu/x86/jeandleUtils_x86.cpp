@@ -23,13 +23,15 @@
 
 #include "jeandle/jeandleUtils.hpp"
 
-void JeandleFuncSig::setup_description(llvm::Function* func) {
+void JeandleFuncSig::setup_description(llvm::Function* func, bool is_stub) {
   func->setCallingConv(llvm::CallingConv::Hotspot_JIT);
 
   func->setGC(llvm::jeandle::JeandleGC);
 
+  if (!is_stub) {
+    func->addFnAttr("patchable-function-entry", "5");
+  }
   func->addFnAttr(llvm::Attribute::NoCfCheck);
-  func->addFnAttr("patchable-function-entry", "5");
 
   if (UseCompressedOops) {
     func->addFnAttr(llvm::Attribute::get(func->getContext(), llvm::jeandle::Attribute::UseCompressedOops));

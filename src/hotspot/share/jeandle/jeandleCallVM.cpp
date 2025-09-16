@@ -35,9 +35,7 @@ void JeandleCallVM::generate_call_VM(const char* name, address c_func, llvm::Fun
                                                      llvm::Function::ExternalLinkage,
                                                      name,
                                                      target_module);
-  llvm_func->setCallingConv(llvm::CallingConv::Hotspot_JIT);
-  llvm_func->setGC(llvm::jeandle::JeandleGC);
-  llvm_func->addFnAttr(llvm::Attribute::NoCfCheck);
+  JeandleFuncSig::setup_description(llvm_func, true /* is_stub */);
   llvm::LLVMContext& context = target_module.getContext();
 
   // Add needed metadatas.

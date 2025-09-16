@@ -128,10 +128,18 @@ public class TestMakeNotEntrant {
     public static void loopTest() {
         while (!finish) {
             /* patching verified_entry without reserved 5-byte header in x86_64, the following cases will occur.
-             * 1、SIGILL: exit_value not zero, can be observed.
-             * 2、SIGSEGV: exit_value not zero, can be observed.
-             * 3、Nothing happened but hurt header code. In "TestMakeNotEntrant::add" method, it will lose the add operation.
-             *    Thus, modify the return value, and then check it.
+             * 1、SIGILL: The exit value of current process is not zero, can be observed.
+             * 2、SIGSEGV: The exit value of current process is not zero, can be observed.
+             * 3、Nothing happened but hurt header code, cannot be directly observed.
+             *    The compiled code of Method "TestMakeNotEntrant::add" is
+             *      0x0000:   push   %rbp
+             *      0x0001:   lea    (%rsi,%rdx,1),%eax
+             *      0x0004:   pop    %rbp
+             *      0x0005:   ret
+             *    so, the instruction "lea    (%rsi,%rdx,1) will definitely be modified when patching verified_entry,
+             *    and we can check the eax register to determine whether this instruction has been corrupted.
+             *    However, a single check is not sufficient because no other instructions in this loop will modify the eax register.
+             *    Therefore, after the first check, we change the return value and check it again.
              */
             if (add(1, 2) != 3) {
                 Asserts.fail();
