@@ -80,6 +80,7 @@ public class FileCheck {
         this.lines = Files.readAllLines(files.get(0))
                           .stream()
                           .map(str -> str.replaceAll("\\s+", " ").trim())
+                          .filter(str -> !str.isEmpty())
                           .collect(Collectors.toList());
     }
 

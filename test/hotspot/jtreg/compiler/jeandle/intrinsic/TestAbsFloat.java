@@ -60,7 +60,6 @@ public class TestAbsFloat {
         // check IR
         checker.checkNext("entry:");
         checker.checkNext("br label %bci_0");
-        checker.checkNext("");
         checker.checkNext("bci_0:");
         // the llvm intrinsic is used
         checker.checkNext("call float @llvm.fabs.f32(float %0)");
