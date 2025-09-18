@@ -27,6 +27,7 @@
 #include "jeandle/jeandleRegister.hpp"
 
 #include "utilities/debug.hpp"
+#include "oops/arrayOop.hpp"
 #include "runtime/javaThread.hpp"
 #include "runtime/safepointMechanism.hpp"
 //                  name, lower_phase, return_type, arg_types
@@ -109,6 +110,9 @@ bool RuntimeDefinedJavaOps::define_all(llvm::Module& template_module) {
   // Define all necessary metadata nodes:
   define_metadata(template_module);
 
+  // Define all global variables.
+  define_global_variables(template_module);
+
   // Define all runtime defined JavaOps:
   define_current_thread(template_module);
   define_safepoint_poll(template_module);
@@ -132,4 +136,20 @@ void RuntimeDefinedJavaOps::define_metadata(llvm::Module& template_module) {
     llvm::NamedMDNode* metadata_node = template_module.getOrInsertNamedMetadata(llvm::jeandle::Metadata::StackPointer);
     metadata_node->addOperand(stack_pointer);
   }
+}
+
+void RuntimeDefinedJavaOps::define_global_variables(llvm::Module& template_module) {
+  llvm::LLVMContext& context = template_module.getContext();
+  llvm::IRBuilder<> ir_builder(context);
+
+  // Define a global variable in template module.
+  auto define_global = [&](const llvm::StringRef name, llvm::Type* type, uint64_t value) {
+    llvm::GlobalVariable* global_var = template_module.getGlobalVariable(name);
+    assert(global_var && global_var->isDeclaration(), "unexpected declaration");
+
+    global_var->setInitializer(llvm::ConstantInt::get(type, value));
+    global_var->setConstant(true);
+  };
+
+  define_global("arrayOopDesc.length_offset_in_bytes", llvm::Type::getInt32Ty(context), static_cast<uint64_t>(arrayOopDesc::length_offset_in_bytes()));
 }

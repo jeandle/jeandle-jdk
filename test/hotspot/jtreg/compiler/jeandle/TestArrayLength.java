@@ -18,29 +18,22 @@
  *
  */
 
-#ifndef SHARE_JEANDLE_RUNTIME_DEFINED_JAVA_OPS_HPP
-#define SHARE_JEANDLE_RUNTIME_DEFINED_JAVA_OPS_HPP
+import jdk.test.lib.Asserts;
 
-#include <cassert>
-#include "llvm/IR/Module.h"
+/**
+ * @test
+ * @summary Support arraylength
+ * issue: https://github.com/jeandle/jeandle-jdk/issues/29
+ * @library /test/lib
+ * @run main/othervm -Xcomp -XX:-TieredCompilation -XX:CompileCommand=compileonly,TestArrayLength::getArrayLength
+ * -XX:+UseJeandleCompiler TestArrayLength
+ */
+public class TestArrayLength {
+    public static void main(String[] args) {
+        Asserts.assertEquals(getArrayLength(new int[10]), 10);
+    }
 
-#include "utilities/debug.hpp"
-#include "memory/allStatic.hpp"
-
-class RuntimeDefinedJavaOps : public AllStatic {
- public:
-  static bool define_all(llvm::Module& template_module);
-
-  static void reset_state() { _error_msg = nullptr; }
-  static void set_failed(const char* error_msg) { assert(error_msg != nullptr, "why we failed?"); _error_msg = error_msg; }
-  static bool failed() { return _error_msg != nullptr; }
-  static const char* error_msg() { return _error_msg; }
-
- private:
-  static const char* _error_msg;
-
-  static void define_metadata(llvm::Module& template_module);
-  static void define_global_variables(llvm::Module& template_module);
-};
-
-#endif // SHARE_JEANDLE_RUNTIME_DEFINED_JAVA_OPS_HPP
+    public static int getArrayLength(int[] a) {
+        return a.length;
+    }
+}

@@ -768,7 +768,7 @@ void JeandleAbstractInterpreter::interpret_block(JeandleBasicBlock* block) {
       case Bytecodes::_newarray: Unimplemented(); break;
       case Bytecodes::_anewarray: Unimplemented(); break;
 
-      case Bytecodes::_arraylength: Unimplemented(); break;
+      case Bytecodes::_arraylength: arraylength(); break;
       case Bytecodes::_athrow: throw_exception(); break;
       case Bytecodes::_checkcast: Unimplemented(); break;
       case Bytecodes::_instanceof: instanceof(_codes.get_index_u2()); break;
@@ -1412,4 +1412,11 @@ void JeandleAbstractInterpreter::throw_exception() {
   } else {
     ShouldNotReachHere();
   }
+}
+
+void JeandleAbstractInterpreter::arraylength() {
+    // TODO: need null pointer check in the future
+    llvm::Value* array_oop = _jvm->apop();
+    llvm::CallInst* call = call_java_op("jeandle.arraylength", {array_oop});
+    _jvm->ipush(call);
 }
