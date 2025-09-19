@@ -22,16 +22,17 @@
 #define SHARE_JEANDLE_ABSTRACT_INTERPRETER_HPP
 
 #include <cassert>
-#include "llvm/IR/BasicBlock.h"
 #include "llvm/ADT/DenseMap.h"
+#include "llvm/ADT/SmallPtrSet.h"
+#include "llvm/ADT/SmallVector.h"
+#include "llvm/IR/BasicBlock.h"
 #include "llvm/IR/IRBuilder.h"
 #include "llvm/IR/LLVMContext.h"
-
-#include <vector>
 
 #include "jeandle/jeandleCompilation.hpp"
 
 #include "utilities/debug.hpp"
+#include "ci/ciMethodBlocks.hpp"
 #include "ci/compilerInterface.hpp"
 #include "memory/allocation.hpp"
 #include "utilities/bitMap.inline.hpp"
@@ -47,9 +48,9 @@ class JeandleVMState : public JeandleCompilationResourceObj {
 
   JeandleVMState* copy(MethodLivenessResult liveness);
 
-  // Create a new JeandleVMState by constructing phi nodes from a existing block.
-  static JeandleVMState* create_phi_from(JeandleBasicBlock* from,
-                                         JeandleBasicBlock* self,
+  // Create a new JeandleVMState by constructing phi nodes from an existing block.
+  static JeandleVMState* create_phi_from(JeandleBasicBlock* self,
+                                         JeandleBasicBlock* from,
                                          MethodLivenessResult liveness,
                                          llvm::IRBuilder<>* ir_builder);
 
@@ -110,18 +111,18 @@ class JeandleVMState : public JeandleCompilationResourceObj {
   void dstore(int index, llvm::Value* value) { store(BasicType::T_DOUBLE, index, value); }
 
  private:
-  std::vector<llvm::Value*> _stack;
-  std::vector<llvm::Value*> _locals;
+  llvm::SmallVector<llvm::Value*> _stack;
+  llvm::SmallVector<llvm::Value*> _locals;
 
   llvm::LLVMContext* _context;
 };
 
 class JeandleBasicBlock : public JeandleCompilationResourceObj {
  public:
-  JeandleBasicBlock(int block_id, int start_bci, llvm::BasicBlock* llvm_block);
+  JeandleBasicBlock(int block_id, int start_bci, int limit_bci, llvm::BasicBlock* llvm_block, ciBlock* ci_block);
 
   // Update the JeandleVMState according to the predecessor block's stack values and locals.
-  bool income_block(JeandleBasicBlock* income, ciMethod* method, llvm::IRBuilder<>* ir_builder);
+  bool merge_VM_state_from(JeandleBasicBlock* from, ciMethod* method, llvm::IRBuilder<>* ir_builder);
 
   enum Flag {
     no_flag                       = 0,
@@ -134,34 +135,47 @@ class JeandleBasicBlock : public JeandleCompilationResourceObj {
   void clear(Flag f)                             { _flags &= ~f; }
   bool is_set(Flag f) const                      { return (_flags & f) != 0; }
 
-  std::vector<JeandleBasicBlock*>& successors() { return _successors; }
-  void add_successors(JeandleBasicBlock* successor) {
+  llvm::SmallPtrSet<JeandleBasicBlock*, 8>& successors() { return _successors; }
+  void add_successor(JeandleBasicBlock* successor) {
     assert(successor != nullptr, "successor can not be null");
-    _successors.push_back(successor);
+    _successors.insert(successor);
   }
 
-  std::vector<JeandleBasicBlock*>& predecessors() { return _predecessors; }
-  void add_predecessors(JeandleBasicBlock* predecessor) { _predecessors.push_back(predecessor); }
+  llvm::SmallPtrSet<JeandleBasicBlock*, 8>& predecessors() { return _predecessors; }
+  void add_predecessor(JeandleBasicBlock* predecessor) {
+    assert(predecessor != nullptr, "predecessor can not be null");
+    _predecessors.insert(predecessor);
+  }
 
   int reverse_post_order() const { return _reverse_post_order; }
   void set_reverse_post_order(int order) {  _reverse_post_order = order; }
 
-  JeandleVMState* jvm_tracker() { return _jvm; }
-  void set_jvm_tracker(JeandleVMState* jvm) { _jvm = jvm; }
+  JeandleVMState* VM_state() { return _jvm; }
+  void set_VM_state(JeandleVMState* jvm) { _jvm = jvm; }
 
   int block_id() const { return _block_id; }
   int start_bci() const { return _start_bci; }
-  llvm::BasicBlock* llvm_block() { return _llvm_block; }
+  int limit_bci() const { return _limit_bci; }
+  llvm::BasicBlock* header_llvm_block() { return _header_llvm_block; }
+
+  bool is_handler() { return _ci_block->is_handler(); }
+  int exeption_range_start_bci() { return _ci_block->ex_start_bci(); }
+  int exeption_range_limit_bci() { return _ci_block->ex_start_bci(); }
 
  private:
   int _block_id;
-  std::vector<JeandleBasicBlock*> _predecessors;
-  std::vector<JeandleBasicBlock*> _successors;
   int _flags;
   int _start_bci;
-  llvm::BasicBlock* _llvm_block;
+  int _limit_bci;
   int _reverse_post_order;
+
   JeandleVMState* _jvm;
+
+  llvm::SmallPtrSet<JeandleBasicBlock*, 8> _predecessors;
+  llvm::SmallPtrSet<JeandleBasicBlock*, 8> _successors;
+
+  llvm::BasicBlock* _header_llvm_block;
+  ciBlock* _ci_block;
 
   // The JeandleVMState recording the initial state of a loop header.
   // When a loop tail block is interpreted, we need to update the loop header's
@@ -173,17 +187,23 @@ class BasicBlockBuilder : public JeandleCompilationResourceObj {
  public:
   BasicBlockBuilder(ciMethod* method, llvm::LLVMContext* context, llvm::Function* llvm_func);
 
-  llvm::DenseMap<int, JeandleBasicBlock*>& bci2block() { return _bci2block; }
+  llvm::SmallVector<JeandleBasicBlock*>& bci2block() { return _bci2block; }
 
   JeandleBasicBlock* entry_block() { return _entry_block; }
 
+  static void connect_block(JeandleBasicBlock* child_block, JeandleBasicBlock* parent_block) {
+    assert(child_block != nullptr && parent_block != nullptr, "connecting nullptr");
+    child_block->add_predecessor(parent_block);
+    parent_block->add_successor(child_block);
+  }
+
  private:
-  llvm::DenseMap<int, JeandleBasicBlock*> _bci2block;
+  llvm::SmallVector<JeandleBasicBlock*> _bci2block;
   ciMethod* _method;
+  ciMethodBlocks* _ci_blocks;
   llvm::LLVMContext* _context;
   llvm::Function* _llvm_func;
   JeandleBasicBlock* _entry_block; // a dummy block holding initial stack/locals state.
-  int _next_block_id;
 
   // For loop marking and ordering.
   ResourceBitMap _active;
@@ -191,6 +211,8 @@ class BasicBlockBuilder : public JeandleCompilationResourceObj {
   int _next_block_order;
 
   void generate_blocks();
+  void setup_exception_handlers();
+  void setup_control_flow();
   JeandleBasicBlock* make_block_at(int bci, JeandleBasicBlock* current);
 
   void mark_loops();
@@ -224,7 +246,7 @@ class JeandleAbstractInterpreter : public StackObj {
   JeandleVMState* _jvm;
 
   // Contains all blocks to interpret. Sorted by reverse-post-order.
-  std::vector<JeandleBasicBlock*> _work_list;
+  llvm::SmallVector<JeandleBasicBlock*> _work_list;
 
   void initialize_VM_state();
   void interpret();
@@ -255,7 +277,7 @@ class JeandleAbstractInterpreter : public StackObj {
 
   void add_safepoint_poll();
 
-  llvm::DenseMap<int, JeandleBasicBlock*>& bci2block() { return _block_builder->bci2block(); }
+  llvm::SmallVector<JeandleBasicBlock*>& bci2block() { return _block_builder->bci2block(); }
 
   llvm::Value* find_or_insert_oop(ciObject* oop);
 
@@ -280,6 +302,7 @@ class JeandleAbstractInterpreter : public StackObj {
   void do_get_xxx(ciField* field, bool is_static);
   void do_put_xxx(ciField* field, bool is_static);
 
+  void dispatch_exception_for(int bci);
   void throw_exception();
 };
 

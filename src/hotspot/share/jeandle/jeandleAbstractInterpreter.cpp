@@ -36,210 +36,6 @@
 #include "runtime/sharedRuntime.hpp"
 #include "utilities/ostream.hpp"
 
-JeandleBasicBlock::JeandleBasicBlock(int block_id,
-                                     int start_bci,
-                                     llvm::BasicBlock* llvm_block) :
-                                     _block_id(block_id),
-                                     _flags(no_flag),
-                                     _start_bci(start_bci),
-                                     _llvm_block(llvm_block),
-                                     _reverse_post_order(-1),
-                                     _jvm(nullptr),
-                                     _initial_loop_header(nullptr) {}
-
-bool JeandleBasicBlock::income_block(JeandleBasicBlock* income, ciMethod* method, llvm::IRBuilder<>* ir_builder) {
-  JeandleVMState* income_jvm = income->jvm_tracker();
-
-  if (_jvm == nullptr) {
-    if (is_set(is_compiled)) {
-      // A compiled block with null JeandleVMState.
-      return false;
-    }
-
-    MethodLivenessResult liveness = method->liveness_at_bci(_start_bci);
-    if (_predecessors.size() == 1) {
-      // Just one predecessor. Copy its JeandleVMState.
-      assert(!is_set(is_loop_header), "should not be a loop header");
-      _jvm = income_jvm->copy(liveness);
-    } else {
-      // More than one predecessors. Set up phi nodes.
-      _jvm = JeandleVMState::create_phi_from(income, this, liveness, ir_builder);
-    }
-
-    if (is_set(is_loop_header)) {
-      // Copy loop header's initial JeandleVMState.
-      _initial_loop_header = new JeandleVMState(_jvm);
-    }
-
-    return true;
-
-  } else if (!is_set(is_compiled)) {
-    assert(_predecessors.size() > 1, "more than one predecessors are needed for phi nodes");
-    return _jvm->phi(income);
-  } else if (is_set(is_loop_header)) {
-    assert(_initial_loop_header != nullptr, "loop header initial JeandleVMState is needed");
-    return _initial_loop_header->phi(income);
-  }
-
-  // Bad bytecodes.
-  return false;
-}
-
-BasicBlockBuilder::BasicBlockBuilder(ciMethod* method,
-                                     llvm::LLVMContext* context,
-                                     llvm::Function* llvm_func) :
-                                     _bci2block(),
-                                     _method(method),
-                                     _context(context),
-                                     _llvm_func(llvm_func),
-                                     _entry_block(new JeandleBasicBlock(-1, -1, llvm::BasicBlock::Create(*_context, "entry", _llvm_func))),
-                                     _next_block_id(0),
-                                     _active(),
-                                     _visited(),
-                                     _next_block_order(-1) {
-  generate_blocks();
-  mark_loops();
-}
-
-void BasicBlockBuilder::generate_blocks() {
-  // ciMethodBlocks helps to cut bytecodes into basic blocks.
-  ciMethodBlocks* ci_blocks = _method->get_method_blocks();
-
-  ciBytecodeStream codes(_method);
-
-  JeandleBasicBlock* current = _entry_block;
-
-  int end_bci = _method->code_size();
-
-  while (codes.next() != ciBytecodeStream::EOBC()) {
-    int cur_bci = codes.cur_bci();
-
-    if (ci_blocks->is_block_start(cur_bci)) {
-      current = make_block_at(cur_bci, current);
-    }
-
-    assert(current != nullptr, "basic block can not be null");
-
-    switch (codes.cur_bc()) {
-      // Track bytecodes that affect the control flow.
-      case Bytecodes::_athrow:  // fall through
-      case Bytecodes::_ret:     // fall through
-      case Bytecodes::_ireturn: // fall through
-      case Bytecodes::_lreturn: // fall through
-      case Bytecodes::_freturn: // fall through
-      case Bytecodes::_dreturn: // fall through
-      case Bytecodes::_areturn: // fall through
-      case Bytecodes::_return:
-        current = nullptr;
-        break;
-
-      case Bytecodes::_ifeq:      // fall through
-      case Bytecodes::_ifne:      // fall through
-      case Bytecodes::_iflt:      // fall through
-      case Bytecodes::_ifge:      // fall through
-      case Bytecodes::_ifgt:      // fall through
-      case Bytecodes::_ifle:      // fall through
-      case Bytecodes::_if_icmpeq: // fall through
-      case Bytecodes::_if_icmpne: // fall through
-      case Bytecodes::_if_icmplt: // fall through
-      case Bytecodes::_if_icmpge: // fall through
-      case Bytecodes::_if_icmpgt: // fall through
-      case Bytecodes::_if_icmple: // fall through
-      case Bytecodes::_if_acmpeq: // fall through
-      case Bytecodes::_if_acmpne: // fall through
-      case Bytecodes::_ifnull:    // fall through
-      case Bytecodes::_ifnonnull:
-        if (codes.next_bci() < end_bci) {
-          make_block_at(codes.next_bci(), current);
-        }
-        make_block_at(codes.get_dest(), current);
-        current = nullptr;
-        break;
-
-      case Bytecodes::_goto:
-        make_block_at(codes.get_dest(), current);
-        current = nullptr;
-        break;
-
-      case Bytecodes::_goto_w:
-        make_block_at(codes.get_far_dest(), current);
-        current = nullptr;
-        break;
-
-      case Bytecodes::_lookupswitch: {
-        // Set block for each case.
-        Bytecode_lookupswitch sw(&codes);
-        int length = sw.number_of_pairs();
-        for (int i = 0; i < length; i++) {
-          make_block_at(cur_bci + sw.pair_at(i).offset(), current);
-        }
-        make_block_at(cur_bci + sw.default_offset(), current);
-        current = nullptr;
-        break;
-      }
-
-      default:
-        break;
-    }
-  }
-}
-
-JeandleBasicBlock* BasicBlockBuilder::make_block_at(int bci, JeandleBasicBlock* current) {
-  JeandleBasicBlock* b = _bci2block[bci];
-
-  if (b == nullptr) {
-    b = new JeandleBasicBlock(_next_block_id++, bci, llvm::BasicBlock::Create(*_context, "bci_" + std::to_string(bci), _llvm_func));
-    _bci2block[bci] = b;
-  }
-
-  if (current != nullptr) {
-    current->add_successors(b);
-    b->add_predecessors(current);
-  }
-
-  return b;
-}
-
-void BasicBlockBuilder::mark_loops() {
-  ResourceMark rm;
-
-  _active.initialize(_next_block_id);
-  _visited.initialize(_next_block_id);
-  _next_block_order = _next_block_id - 1;
-
-  mark_loops(_bci2block[0]);
-
-  // Remove dangling Resource pointers before the ResourceMark goes out-of-scope.
-  _active.resize(0);
-  _visited.resize(0);
-}
-
-void BasicBlockBuilder::mark_loops(JeandleBasicBlock* block) {
-  int block_id = block->block_id();
-
-  if (_visited.at(block_id)) {
-    if (_active.at(block_id)) {
-      // Reached block via backward branch.
-      block->set(JeandleBasicBlock::is_loop_header);
-    }
-    return;
-  }
-
-  // Set active and visited bits before successors are processed.
-  _visited.set_bit(block_id);
-  _active.set_bit(block_id);
-
-  for (JeandleBasicBlock* suc : block->successors()) {
-    mark_loops(suc);
-  }
-
-  // Clear active-bit after all successors are processed.
-  _active.clear_bit(block_id);
-
-  // Reverse-post-order numbering of all blocks.
-  block->set_reverse_post_order(_next_block_order--);
-}
-
 JeandleVMState::JeandleVMState(int max_stack, int max_locals, llvm::LLVMContext *context) :
                                _stack(), _locals(max_locals), _context(context) {
   _stack.reserve(max_stack);
@@ -267,14 +63,14 @@ JeandleVMState* JeandleVMState::copy(MethodLivenessResult liveness) {
   return copied;
 }
 
-JeandleVMState* JeandleVMState::create_phi_from(JeandleBasicBlock* from,
-                                                JeandleBasicBlock* self,
+JeandleVMState* JeandleVMState::create_phi_from(JeandleBasicBlock* self,
+                                                JeandleBasicBlock* from,
                                                 MethodLivenessResult liveness,
                                                 llvm::IRBuilder<>* ir_builder) {
-  JeandleVMState* from_jvm = from->jvm_tracker();
+  JeandleVMState* from_jvm = from->VM_state();
   JeandleVMState* new_jvm = new JeandleVMState(from_jvm->_stack.capacity(), from_jvm->_locals.size(), from_jvm->_context);
 
-  ir_builder->SetInsertPoint(self->llvm_block());
+  ir_builder->SetInsertPoint(self->header_llvm_block());
 
   for (size_t i = 0; i < from_jvm->_locals.size(); i++) {
     if (from_jvm->_locals[i] == nullptr) {
@@ -287,7 +83,7 @@ JeandleVMState* JeandleVMState::create_phi_from(JeandleBasicBlock* from,
     }
 
     llvm::PHINode* phi_node = ir_builder->CreatePHI(from_jvm->_locals[i]->getType(), 2, "");
-    phi_node->addIncoming(from_jvm->_locals[i], from->llvm_block());
+    phi_node->addIncoming(from_jvm->_locals[i], from->header_llvm_block());
     new_jvm->_locals[i] = phi_node;
   }
 
@@ -298,22 +94,52 @@ JeandleVMState* JeandleVMState::create_phi_from(JeandleBasicBlock* from,
     }
 
     llvm::PHINode* phi_node = ir_builder->CreatePHI(from_jvm->_stack[i]->getType(), 2, "");
-    phi_node->addIncoming(from_jvm->_stack[i], from->llvm_block());
+    phi_node->addIncoming(from_jvm->_stack[i], from->header_llvm_block());
     new_jvm->_stack.push_back(phi_node);
   }
 
   return new_jvm;
 }
 
-bool JeandleVMState::phi(JeandleBasicBlock* income) {
-  if (!match(income->jvm_tracker())) {
+static bool match_values(llvm::SmallVector<llvm::Value*>& v_a, llvm::SmallVector<llvm::Value*>& v_b) {
+  if (v_a.size() != v_b.size()) {
     return false;
   }
 
-  std::vector<llvm::Value*>& in_locals = income->jvm_tracker()->_locals;
-  std::vector<llvm::Value*>& in_stack = income->jvm_tracker()->_stack;
+  for (size_t i = 0; i < v_a.size(); i++) {
+    if (v_a[i] == nullptr) {
+      if (v_b[i] != nullptr) {
+        return false;
+      }
+      continue;
+    }
 
-  llvm::BasicBlock* in_block = income->llvm_block();
+    if (v_b[i] == nullptr) {
+      return false;
+    }
+
+    // For call instructions, getType() returns the return type.
+    if (v_a[i]->getType() != v_b[i]->getType()) {
+      return false;
+    }
+  }
+
+  return true;
+}
+
+bool JeandleVMState::match(JeandleVMState* jvm) {
+  return _locals.size() == jvm->_locals.size() && match_values(_stack, jvm->_stack);
+}
+
+bool JeandleVMState::phi(JeandleBasicBlock* income) {
+  if (!match(income->VM_state())) {
+    return false;
+  }
+
+  llvm::SmallVector<llvm::Value*>& in_locals = income->VM_state()->_locals;
+  llvm::SmallVector<llvm::Value*>& in_stack = income->VM_state()->_stack;
+
+  llvm::BasicBlock* in_block = income->header_llvm_block();
 
   // Create phi nodes for locals.
   for (size_t i = 0; i < _locals.size(); i++) {
@@ -343,36 +169,6 @@ bool JeandleVMState::phi(JeandleBasicBlock* income) {
   }
 
   return true;
-}
-
-static bool match_values(std::vector<llvm::Value*>& v_a, std::vector<llvm::Value*>& v_b) {
-  if (v_a.size() != v_b.size()) {
-    return false;
-  }
-
-  for (size_t i = 0; i < v_a.size(); i++) {
-    if (v_a[i] == nullptr) {
-      if (v_b[i] != nullptr) {
-        return false;
-      }
-      continue;
-    }
-
-    if (v_b[i] == nullptr) {
-      return false;
-    }
-
-    // For call instructions, getType() returns the return type.
-    if (v_a[i]->getType() != v_b[i]->getType()) {
-      return false;
-    }
-  }
-
-  return true;
-}
-
-bool JeandleVMState::match(JeandleVMState* jvm) {
-  return _locals.size() == jvm->_locals.size() && match_values(_stack, jvm->_stack);
 }
 
 // Stack operations:
@@ -423,6 +219,253 @@ void JeandleVMState::store(BasicType type, int index, llvm::Value* value) {
   }
 }
 
+JeandleBasicBlock::JeandleBasicBlock(int block_id,
+                                     int start_bci,
+                                     int limit_bci,
+                                     llvm::BasicBlock* header_llvm_block,
+                                     ciBlock* ci_block) :
+                                     _block_id(block_id),
+                                     _flags(no_flag),
+                                     _start_bci(start_bci),
+                                     _limit_bci(limit_bci),
+                                     _reverse_post_order(-1),
+                                     _jvm(nullptr),
+                                     _predecessors(),
+                                     _successors(),
+                                     _header_llvm_block(header_llvm_block),
+                                     _ci_block(ci_block),
+                                     _initial_loop_header(nullptr) { tty->print("Creating block for bci %d\n", start_bci); }
+
+bool JeandleBasicBlock::merge_VM_state_from(JeandleBasicBlock* from, ciMethod* method, llvm::IRBuilder<>* ir_builder) {
+  JeandleVMState* from_jvm = from->VM_state();
+
+  if (_jvm == nullptr) {
+    if (is_set(is_compiled)) {
+      // A compiled block with null JeandleVMState.
+      return false;
+    }
+
+    MethodLivenessResult liveness = method->liveness_at_bci(_start_bci);
+    if (_predecessors.size() == 1) {
+      // Just one predecessor. Copy its JeandleVMState.
+      assert(!is_set(is_loop_header), "should not be a loop header");
+      _jvm = from_jvm->copy(liveness);
+    } else {
+      // More than one predecessors. Set up phi nodes.
+      _jvm = JeandleVMState::create_phi_from(this, from, liveness, ir_builder);
+    }
+
+    if (is_set(is_loop_header)) {
+      // Copy loop header's initial JeandleVMState.
+      _initial_loop_header = new JeandleVMState(_jvm);
+    }
+
+    return true;
+
+  } else if (!is_set(is_compiled)) {
+    assert(_predecessors.size() > 1, "more than one predecessors are needed for phi nodes");
+    return _jvm->phi(from);
+  } else if (is_set(is_loop_header)) {
+    assert(_initial_loop_header != nullptr, "loop header initial JeandleVMState is needed");
+    return _initial_loop_header->phi(from);
+  }
+
+  // Bad bytecodes.
+  return false;
+}
+
+BasicBlockBuilder::BasicBlockBuilder(ciMethod* method,
+                                     llvm::LLVMContext* context,
+                                     llvm::Function* llvm_func) :
+                                     _bci2block(method->code_size()),
+                                     _method(method),
+                                     _ci_blocks(_method->get_method_blocks()),
+                                     _context(context),
+                                     _llvm_func(llvm_func),
+                                     _entry_block(new JeandleBasicBlock(-1, -1, -1, llvm::BasicBlock::Create(*_context, "entry", _llvm_func), nullptr)),
+                                     _active(),
+                                     _visited(),
+                                     _next_block_order(-1) {
+  generate_blocks();
+  setup_exception_handlers();
+  setup_control_flow();
+  mark_loops();
+}
+
+void BasicBlockBuilder::generate_blocks() {
+  // Create all basic blocks according to ciMethodBlocks.
+  ciBytecodeStream codes(_method);
+  JeandleBasicBlock* current = nullptr;
+  while (codes.next() != ciBytecodeStream::EOBC()) {
+    int bci = codes.cur_bci();
+    if (_ci_blocks->is_block_start(bci)) {
+      // Current position start a new basic block.
+      ciBlock* block = _ci_blocks->block_containing(bci);
+      assert(block != nullptr, "must be valid basic block");
+      current = new JeandleBasicBlock(block->index(),
+                                      bci,
+                                      block->limit_bci(),
+                                      llvm::BasicBlock::Create(*_context, "bci_" + std::to_string(bci), _llvm_func),
+                                      block);
+      _bci2block[bci] = current;
+    } else {
+      // Current position is a part of the previous basic block.
+      assert(bci > 0, "bci 0 must be the start of a basic block");
+      _bci2block[bci] = current;
+    }
+  }
+#ifdef ASSERT
+  // Are we have a basic block for each bci now?
+  codes.reset_to_bci(0);
+  while (codes.next() != ciBytecodeStream::EOBC()) {
+    int bci = codes.cur_bci();
+    tty->print("finding bci %d\n", bci);
+    assert(_bci2block[bci] != nullptr, "invalid basic block");
+  }
+#endif // ASSERT
+}
+
+void BasicBlockBuilder::setup_exception_handlers() {
+  // Connect all basic blocks according to exception handling information.
+  ciBytecodeStream codes(_method);
+  while (codes.next() != ciBytecodeStream::EOBC()) {
+    int bci = codes.cur_bci();
+    JeandleBasicBlock* block = _bci2block[bci];
+    if (block->is_handler()) {
+      int covered_bci = block->exeption_range_start_bci();
+      while (covered_bci < block->exeption_range_limit_bci()) {
+        connect_block(block, _bci2block[bci]);
+        covered_bci = block->limit_bci(); // Jump to the next block.
+      }
+    }
+  }
+}
+
+void BasicBlockBuilder::setup_control_flow() {
+  // Connect all basic blocks according to control flow transfer instructions.
+  ciBytecodeStream codes(_method);
+
+  JeandleBasicBlock* current = _entry_block;
+  int limit_bci = _method->code_size();
+
+  while (codes.next() != ciBytecodeStream::EOBC()) {
+      int cur_bci = codes.cur_bci();
+
+    if (_ci_blocks->is_block_start(cur_bci)) {
+      if (current != nullptr) {
+        connect_block(_bci2block[cur_bci], current);
+      }
+      current = _bci2block[cur_bci];
+    }
+
+    assert(current != nullptr, "basic block can not be null");
+
+    switch (codes.cur_bc()) {
+      // Track bytecodes that affect the control flow.
+      case Bytecodes::_athrow:  // fall through
+      case Bytecodes::_ret:     // fall through
+      case Bytecodes::_ireturn: // fall through
+      case Bytecodes::_lreturn: // fall through
+      case Bytecodes::_freturn: // fall through
+      case Bytecodes::_dreturn: // fall through
+      case Bytecodes::_areturn: // fall through
+      case Bytecodes::_return:
+        current = nullptr;
+        break;
+
+      case Bytecodes::_ifeq:      // fall through
+      case Bytecodes::_ifne:      // fall through
+      case Bytecodes::_iflt:      // fall through
+      case Bytecodes::_ifge:      // fall through
+      case Bytecodes::_ifgt:      // fall through
+      case Bytecodes::_ifle:      // fall through
+      case Bytecodes::_if_icmpeq: // fall through
+      case Bytecodes::_if_icmpne: // fall through
+      case Bytecodes::_if_icmplt: // fall through
+      case Bytecodes::_if_icmpge: // fall through
+      case Bytecodes::_if_icmpgt: // fall through
+      case Bytecodes::_if_icmple: // fall through
+      case Bytecodes::_if_acmpeq: // fall through
+      case Bytecodes::_if_acmpne: // fall through
+      case Bytecodes::_ifnull:    // fall through
+      case Bytecodes::_ifnonnull:
+        if (codes.next_bci() < limit_bci) {
+          connect_block(_bci2block[codes.next_bci()], current);
+        }
+        connect_block(_bci2block[codes.get_dest()], current);
+        current = nullptr;
+        break;
+
+      case Bytecodes::_goto:
+        connect_block(_bci2block[codes.get_dest()], current);
+        current = nullptr;
+        break;
+
+      case Bytecodes::_goto_w:
+        connect_block(_bci2block[codes.get_far_dest()], current);
+        current = nullptr;
+        break;
+
+      case Bytecodes::_lookupswitch: {
+        // Set block for each case.
+        Bytecode_lookupswitch sw(&codes);
+        int length = sw.number_of_pairs();
+        for (int i = 0; i < length; i++) {
+          connect_block(_bci2block[cur_bci + sw.pair_at(i).offset()], current);
+        }
+        connect_block(_bci2block[cur_bci + sw.default_offset()], current);
+        current = nullptr;
+        break;
+      }
+
+      default:
+        break;
+    }
+  }
+}
+
+void BasicBlockBuilder::mark_loops() {
+  ResourceMark rm;
+
+  int num_blocks = _ci_blocks->num_blocks();
+
+  _active.initialize(num_blocks);
+  _visited.initialize(num_blocks);
+  _next_block_order = num_blocks - 1;
+
+  mark_loops(_bci2block[0]);
+
+  // Remove dangling Resource pointers before the ResourceMark goes out-of-scope.
+  _active.resize(0);
+  _visited.resize(0);
+}
+
+void BasicBlockBuilder::mark_loops(JeandleBasicBlock* block) {
+  int block_id = block->block_id();
+
+  if (_visited.at(block_id)) {
+    if (_active.at(block_id)) {
+      // Reached block via backward branch.
+      block->set(JeandleBasicBlock::is_loop_header);
+    }
+    return;
+  }
+
+  // Set active and visited bits before successors are processed.
+  _visited.set_bit(block_id);
+  _active.set_bit(block_id);
+
+  for (JeandleBasicBlock* suc : block->successors()) {
+    mark_loops(suc);
+  }
+
+  // Clear active-bit after all successors are processed.
+  _active.clear_bit(block_id);
+
+  // Reverse-post-order numbering of all blocks.
+  block->set_reverse_post_order(_next_block_order--);
+}
+
 JeandleAbstractInterpreter::JeandleAbstractInterpreter(ciMethod* method,
                                                        int entry_bci,
                                                        llvm::Module& target_module,
@@ -435,7 +478,7 @@ JeandleAbstractInterpreter::JeandleAbstractInterpreter(ciMethod* method,
                                                        _module(target_module),
                                                        _compiled_code(code),
                                                        _block_builder(new BasicBlockBuilder(method, _context, _llvm_func)),
-                                                       _ir_builder(_block_builder->entry_block()->llvm_block()),
+                                                       _ir_builder(_block_builder->entry_block()->header_llvm_block()),
                                                        _oop_idx(0) {
   // Fill basic blocks with LLVM IR.
   interpret();
@@ -461,7 +504,7 @@ void JeandleAbstractInterpreter::initialize_VM_state() {
     locals_idx += type->size();
   }
 
-  _block_builder->entry_block()->set_jvm_tracker(initial_jvm);
+  _block_builder->entry_block()->set_VM_state(initial_jvm);
 }
 
 void JeandleAbstractInterpreter::interpret() {
@@ -471,11 +514,11 @@ void JeandleAbstractInterpreter::interpret() {
   add_to_work_list(current);
 
   // Create branch from the entry block.
-  _ir_builder.CreateBr(current->llvm_block());
+  _ir_builder.CreateBr(current->header_llvm_block());
 
   initialize_VM_state();
 
-  current->income_block(_block_builder->entry_block(), _method, &_ir_builder);
+  current->merge_VM_state_from(_block_builder->entry_block(), _method, &_ir_builder);
 
   // Iterate all blocks
   while (_work_list.size() > 0) {
@@ -490,10 +533,10 @@ void JeandleAbstractInterpreter::interpret() {
 void JeandleAbstractInterpreter::interpret_block(JeandleBasicBlock* block) {
   assert(block != nullptr, "compile a null block");
 
-  _ir_builder.SetInsertPoint(block->llvm_block());
+  _ir_builder.SetInsertPoint(block->header_llvm_block());
 
   _block = block;
-  _jvm = block->jvm_tracker();
+  _jvm = block->VM_state();
   assert(_jvm != nullptr, "JeandleVMState should not be null");
 
   _codes.reset_to_bci(block->start_bci());
@@ -787,15 +830,15 @@ void JeandleAbstractInterpreter::interpret_block(JeandleBasicBlock* block) {
   }
 
   // All blocks should has their terminator.
-  if (block->llvm_block()->getTerminator() == nullptr) {
-    _ir_builder.CreateBr(bci2block()[_codes.cur_bci()]->llvm_block());
+  if (block->header_llvm_block()->getTerminator() == nullptr) {
+    _ir_builder.CreateBr(bci2block()[_codes.cur_bci()]->header_llvm_block());
   }
 
   block->set(JeandleBasicBlock::is_compiled);
 
   // Add all successors to work list and set up their JeandleVMStates.
   for (JeandleBasicBlock* suc : block->successors()) {
-    if (!suc->income_block(block, _method, &_ir_builder)) {
+    if (!suc->merge_VM_state_from(block, _method, &_ir_builder)) {
       JeandleCompilation::report_jeandle_error("failed to create phi nodes");
       return;
     }
@@ -851,14 +894,18 @@ void JeandleAbstractInterpreter::increment() {
 void JeandleAbstractInterpreter::if_zero(llvm::CmpInst::Predicate p) {
   llvm::Value* v = _jvm->ipop();
   llvm::Value* cond = _ir_builder.CreateICmp(p, v, JeandleType::int_const(_ir_builder, 0));
-  _ir_builder.CreateCondBr(cond, bci2block()[_codes.get_dest()]->llvm_block(), bci2block()[_codes.next_bci()]->llvm_block());
+  _ir_builder.CreateCondBr(cond,
+                           bci2block()[_codes.get_dest()]->header_llvm_block(),
+                           bci2block()[_codes.next_bci()]->header_llvm_block());
 }
 
 void JeandleAbstractInterpreter::if_icmp(llvm::CmpInst::Predicate p) {
   llvm::Value* r = _jvm->ipop();
   llvm::Value* l = _jvm->ipop();
   llvm::Value* cond = _ir_builder.CreateICmp(p, l, r);
-  _ir_builder.CreateCondBr(cond, bci2block()[_codes.get_dest()]->llvm_block(), bci2block()[_codes.next_bci()]->llvm_block());
+  _ir_builder.CreateCondBr(cond,
+                           bci2block()[_codes.get_dest()]->header_llvm_block(),
+                           bci2block()[_codes.next_bci()]->header_llvm_block());
 }
 
 void JeandleAbstractInterpreter::lcmp() {
@@ -875,13 +922,17 @@ void JeandleAbstractInterpreter::if_acmp(llvm::CmpInst::Predicate p) {
   llvm::Value* r = _jvm->apop();
   llvm::Value* l = _jvm->apop();
   llvm::Value* cond = _ir_builder.CreateICmp(p, l, r);
-  _ir_builder.CreateCondBr(cond, bci2block()[_codes.get_dest()]->llvm_block(), bci2block()[_codes.next_bci()]->llvm_block());
+  _ir_builder.CreateCondBr(cond,
+                           bci2block()[_codes.get_dest()]->header_llvm_block(),
+                           bci2block()[_codes.next_bci()]->header_llvm_block());
 }
 
 void JeandleAbstractInterpreter::if_null(llvm::CmpInst::Predicate p) {
   llvm::Value* v = _jvm->apop();
   llvm::Value* cond = _ir_builder.CreateICmp(p, v, llvm::ConstantPointerNull::get(llvm::cast<llvm::PointerType>(v->getType())));
-  _ir_builder.CreateCondBr(cond, bci2block()[_codes.get_dest()]->llvm_block(), bci2block()[_codes.next_bci()]->llvm_block());
+  _ir_builder.CreateCondBr(cond,
+                           bci2block()[_codes.get_dest()]->header_llvm_block(),
+                           bci2block()[_codes.next_bci()]->header_llvm_block());
 }
 
 /*
@@ -913,7 +964,7 @@ void JeandleAbstractInterpreter::goto_bci(int bci) {
   if (bci < _codes.cur_bci()) {
     add_safepoint_poll();
   }
-  _ir_builder.CreateBr(bci2block()[bci]->llvm_block());
+  _ir_builder.CreateBr(bci2block()[bci]->header_llvm_block());
 }
 
 void JeandleAbstractInterpreter::lookup_switch() {
@@ -923,12 +974,12 @@ void JeandleAbstractInterpreter::lookup_switch() {
   int cur_bci = _codes.cur_bci();
 
   llvm::Value* key = _jvm->ipop();
-  llvm::BasicBlock* default_block = bci2block()[cur_bci + sw.default_offset()]->llvm_block();
+  llvm::BasicBlock* default_block = bci2block()[cur_bci + sw.default_offset()]->header_llvm_block();
   llvm::SwitchInst* switch_inst = _ir_builder.CreateSwitch(key, default_block, length);
 
   for (int i = 0; i < length; i++) {
     LookupswitchPair pair = sw.pair_at(i);
-    switch_inst->addCase(JeandleType::int_const(_ir_builder, pair.match()), bci2block()[cur_bci + pair.offset()]->llvm_block());
+    switch_inst->addCase(JeandleType::int_const(_ir_builder, pair.match()), bci2block()[cur_bci + pair.offset()]->header_llvm_block());
   }
 }
 
@@ -960,8 +1011,8 @@ void JeandleAbstractInterpreter::invoke() {
     bc == Bytecodes::_invokevirtual   ||
     bc == Bytecodes::_invokeinterface;
   const int arg_size = declared_signature->count() + reciever;
-  std::vector<llvm::Value*> args(arg_size);
-  std::vector<llvm::Type*> args_type(arg_size);
+  llvm::SmallVector<llvm::Value*> args(arg_size);
+  llvm::SmallVector<llvm::Type*> args_type(arg_size);
   for (int i = declared_signature->count() - 1; i >= 0; --i) {
     BasicType type = declared_signature->type_at(i)->basic_type();
     args[i + reciever] = _jvm->pop(type);
@@ -1221,7 +1272,7 @@ void JeandleAbstractInterpreter::rem_op(BasicType type, Bytecodes::Code code) {
   assert(type == BasicType::T_FLOAT || type == BasicType::T_DOUBLE, "unexpected type");
   assert(code == Bytecodes::_frem || code == Bytecodes::_drem, "unexpected byte code");
   llvm::Type* return_type = nullptr;
-  std::vector<llvm::Type*> args_type;
+  llvm::SmallVector<llvm::Type*> args_type;
   address call_addr;
 
   if (code == Bytecodes::_frem) {
