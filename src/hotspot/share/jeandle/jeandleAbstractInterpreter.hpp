@@ -48,19 +48,18 @@ class JeandleVMState : public JeandleCompilationResourceObj {
 
   JeandleVMState* copy(MethodLivenessResult liveness);
 
-  // Create a new JeandleVMState by constructing phi nodes from an existing block.
-  static JeandleVMState* create_phi_from(JeandleBasicBlock* self,
-                                         JeandleBasicBlock* from,
-                                         MethodLivenessResult liveness,
-                                         llvm::IRBuilder<>* ir_builder);
-
-  // Add incoming values for phi nodes. Return false if type check fails.
-  bool phi(JeandleBasicBlock* income);
-
   // Check with another JeandleVMState if all stack values are same types and locals sizes are the same.
   bool match(JeandleVMState* jvm);
 
+  // Add incoming values for phi nodes. Return false if type check fails.
+  bool update_phi_nodes(JeandleVMState* income_jvm, llvm::BasicBlock* income_block);
+
   // Stack operations:
+
+  size_t stack_size() const { return _stack.size(); }
+  size_t max_stack() const { return _stack.capacity(); }
+
+  llvm::Value* stack_at(int index) { return _stack[index]; }
 
   void ipush(llvm::Value* value) { push(BasicType::T_INT, value); }
   llvm::Value* ipop() { return pop(BasicType::T_INT); }
@@ -87,10 +86,12 @@ class JeandleVMState : public JeandleCompilationResourceObj {
   // Local variables operations:
 
   size_t locals_size() const { return _locals.size(); }
+  size_t max_locals() const { return _locals.size(); }
 
   void invalidate_local(int index) { _locals[index] = nullptr; }
 
-  llvm::Value* local_at(int index) { return _locals[index]; }
+  llvm::Value* locals_at(int index) { return _locals[index]; }
+  void set_locals_at(int index, llvm::Value* value) { _locals[index] = value; }
 
   llvm::Value* iload(int index) { return load(BasicType::T_INT, index); }
   void istore(int index, llvm::Value* value) { store(BasicType::T_INT, index, value); }
@@ -180,7 +181,9 @@ class JeandleBasicBlock : public JeandleCompilationResourceObj {
   // The JeandleVMState recording the initial state of a loop header.
   // When a loop tail block is interpreted, we need to update the loop header's
   // phi nodes. Use this variable to find the right phi nodes to update.
-  JeandleVMState* _initial_loop_header;
+  JeandleVMState* _initial_jvm;
+
+  void initialize_VM_state_from(JeandleBasicBlock* from, MethodLivenessResult liveness, llvm::IRBuilder<>* ir_builder);
 };
 
 class BasicBlockBuilder : public JeandleCompilationResourceObj {

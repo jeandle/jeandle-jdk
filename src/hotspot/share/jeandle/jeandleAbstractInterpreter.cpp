@@ -63,63 +63,29 @@ JeandleVMState* JeandleVMState::copy(MethodLivenessResult liveness) {
   return copied;
 }
 
-JeandleVMState* JeandleVMState::create_phi_from(JeandleBasicBlock* self,
-                                                JeandleBasicBlock* from,
-                                                MethodLivenessResult liveness,
-                                                llvm::IRBuilder<>* ir_builder) {
-  JeandleVMState* from_jvm = from->VM_state();
-  JeandleVMState* new_jvm = new JeandleVMState(from_jvm->_stack.capacity(), from_jvm->_locals.size(), from_jvm->_context);
-
-  ir_builder->SetInsertPoint(self->header_llvm_block());
-
-  for (size_t i = 0; i < from_jvm->_locals.size(); i++) {
-    if (from_jvm->_locals[i] == nullptr) {
-      continue;
-    }
-
-    // Use method liveness to invalidate dead locals.
-    if (liveness.is_valid() && !liveness.at(i)) {
-      continue;
-    }
-
-    llvm::PHINode* phi_node = ir_builder->CreatePHI(from_jvm->_locals[i]->getType(), 2, "");
-    phi_node->addIncoming(from_jvm->_locals[i], from->header_llvm_block());
-    new_jvm->_locals[i] = phi_node;
-  }
-
-  for (size_t i = 0; i < from_jvm->_stack.size(); i++) {
-    if (from_jvm->_stack[i] == nullptr) {
-      new_jvm->_stack.push_back(nullptr);
-      continue;
-    }
-
-    llvm::PHINode* phi_node = ir_builder->CreatePHI(from_jvm->_stack[i]->getType(), 2, "");
-    phi_node->addIncoming(from_jvm->_stack[i], from->header_llvm_block());
-    new_jvm->_stack.push_back(phi_node);
-  }
-
-  return new_jvm;
-}
-
-static bool match_values(llvm::SmallVector<llvm::Value*>& v_a, llvm::SmallVector<llvm::Value*>& v_b) {
-  if (v_a.size() != v_b.size()) {
+bool JeandleVMState::match(JeandleVMState* to_match) {
+  if (_locals.size() != to_match->_locals.size()) {
     return false;
   }
 
-  for (size_t i = 0; i < v_a.size(); i++) {
-    if (v_a[i] == nullptr) {
-      if (v_b[i] != nullptr) {
+  if (_stack.size() != to_match->_stack.size()) {
+    return false;
+  }
+
+  for (size_t i = 0; i < _stack.size(); i++) {
+    if (_stack[i] == nullptr) {
+      if (to_match->_stack[i] != nullptr) {
         return false;
       }
       continue;
     }
 
-    if (v_b[i] == nullptr) {
+    if (to_match->_stack[i] == nullptr) {
       return false;
     }
 
     // For call instructions, getType() returns the return type.
-    if (v_a[i]->getType() != v_b[i]->getType()) {
+    if (_stack[i]->getType() != to_match->_stack[i]->getType()) {
       return false;
     }
   }
@@ -127,19 +93,13 @@ static bool match_values(llvm::SmallVector<llvm::Value*>& v_a, llvm::SmallVector
   return true;
 }
 
-bool JeandleVMState::match(JeandleVMState* jvm) {
-  return _locals.size() == jvm->_locals.size() && match_values(_stack, jvm->_stack);
-}
-
-bool JeandleVMState::phi(JeandleBasicBlock* income) {
-  if (!match(income->VM_state())) {
+bool JeandleVMState::update_phi_nodes(JeandleVMState* income_jvm, llvm::BasicBlock* income_block) {
+  if (!match(income_jvm)) {
     return false;
   }
 
-  llvm::SmallVector<llvm::Value*>& in_locals = income->VM_state()->_locals;
-  llvm::SmallVector<llvm::Value*>& in_stack = income->VM_state()->_stack;
-
-  llvm::BasicBlock* in_block = income->header_llvm_block();
+  llvm::SmallVector<llvm::Value*>& income_locals = income_jvm->_locals;
+  llvm::SmallVector<llvm::Value*>& income_stack = income_jvm->_stack;
 
   // Create phi nodes for locals.
   for (size_t i = 0; i < _locals.size(); i++) {
@@ -149,12 +109,12 @@ bool JeandleVMState::phi(JeandleBasicBlock* income) {
 
     llvm::PHINode* phi_node = llvm::cast<llvm::PHINode>(_locals[i]);
 
-    if (in_locals[i] == nullptr || phi_node->getType() != in_locals[i]->getType()) {
+    if (income_locals[i] == nullptr || phi_node->getType() != income_locals[i]->getType()) {
       invalidate_local(i);
       continue;
     }
 
-    phi_node->addIncoming(in_locals[i], in_block);
+    phi_node->addIncoming(income_locals[i], income_block);
   }
 
   // Create phi nodes for stack.
@@ -165,7 +125,7 @@ bool JeandleVMState::phi(JeandleBasicBlock* income) {
 
     llvm::PHINode* phi_node = llvm::cast<llvm::PHINode>(_stack[i]);
 
-    phi_node->addIncoming(in_stack[i], in_block);
+    phi_node->addIncoming(income_stack[i], income_block);
   }
 
   return true;
@@ -234,7 +194,7 @@ JeandleBasicBlock::JeandleBasicBlock(int block_id,
                                      _successors(),
                                      _header_llvm_block(header_llvm_block),
                                      _ci_block(ci_block),
-                                     _initial_loop_header(nullptr) { tty->print("Creating block for bci %d\n", start_bci); }
+                                     _initial_jvm(nullptr) { tty->print("Creating block for bci %d\n", start_bci); }
 
 bool JeandleBasicBlock::merge_VM_state_from(JeandleBasicBlock* from, ciMethod* method, llvm::IRBuilder<>* ir_builder) {
   JeandleVMState* from_jvm = from->VM_state();
@@ -252,26 +212,60 @@ bool JeandleBasicBlock::merge_VM_state_from(JeandleBasicBlock* from, ciMethod* m
       _jvm = from_jvm->copy(liveness);
     } else {
       // More than one predecessors. Set up phi nodes.
-      _jvm = JeandleVMState::create_phi_from(this, from, liveness, ir_builder);
+      initialize_VM_state_from(from, liveness, ir_builder);
     }
 
     if (is_set(is_loop_header)) {
       // Copy loop header's initial JeandleVMState.
-      _initial_loop_header = new JeandleVMState(_jvm);
+      _initial_jvm = new JeandleVMState(_jvm);
     }
 
     return true;
 
   } else if (!is_set(is_compiled)) {
     assert(_predecessors.size() > 1, "more than one predecessors are needed for phi nodes");
-    return _jvm->phi(from);
+    return _jvm->update_phi_nodes(from->VM_state(), from->header_llvm_block());
   } else if (is_set(is_loop_header)) {
-    assert(_initial_loop_header != nullptr, "loop header initial JeandleVMState is needed");
-    return _initial_loop_header->phi(from);
+    assert(_initial_jvm != nullptr, "loop header initial JeandleVMState is needed");
+    return _initial_jvm->update_phi_nodes(from->VM_state(), from->header_llvm_block());
   }
 
   // Bad bytecodes.
   return false;
+}
+
+void JeandleBasicBlock::initialize_VM_state_from(JeandleBasicBlock* from, MethodLivenessResult liveness, llvm::IRBuilder<>* ir_builder) {
+  assert(_jvm == nullptr, "cannot initialize twice");
+  JeandleVMState* from_jvm = from->VM_state();
+  _jvm = new JeandleVMState(from_jvm->max_stack(), from_jvm->max_locals(), &ir_builder->getContext());
+
+  ir_builder->SetInsertPoint(_header_llvm_block);
+
+  for (size_t i = 0; i < from_jvm->locals_size(); i++) {
+    if (from_jvm->locals_at(i) == nullptr) {
+      continue;
+    }
+
+    // Use method liveness to invalidate dead locals.
+    if (liveness.is_valid() && !liveness.at(i)) {
+      continue;
+    }
+
+    llvm::PHINode* phi_node = ir_builder->CreatePHI(from_jvm->locals_at(i)->getType(), 2);
+    phi_node->addIncoming(from_jvm->locals_at(i), from->header_llvm_block());
+    _jvm->set_locals_at(i, phi_node);
+  }
+
+  for (size_t i = 0; i < from_jvm->stack_size(); i++) {
+    if (from_jvm->stack_at(i) == nullptr) {
+      _jvm->raw_push(nullptr);
+      continue;
+    }
+
+    llvm::PHINode* phi_node = ir_builder->CreatePHI(from_jvm->stack_at(i)->getType(), 2);
+    phi_node->addIncoming(from_jvm->stack_at(i), from->header_llvm_block());
+    _jvm->raw_push(phi_node);
+  }
 }
 
 BasicBlockBuilder::BasicBlockBuilder(ciMethod* method,
@@ -315,7 +309,7 @@ void BasicBlockBuilder::generate_blocks() {
     }
   }
 #ifdef ASSERT
-  // Are we have a basic block for each bci now?
+  // Do we have a basic block for each bci now?
   codes.reset_to_bci(0);
   while (codes.next() != ciBytecodeStream::EOBC()) {
     int bci = codes.cur_bci();
