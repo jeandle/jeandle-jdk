@@ -1617,6 +1617,10 @@ void ciEnv::find_dynamic_call_sites() {
 }
 
 void ciEnv::dump_compile_data(outputStream* out) {
+  if (UseJeandleCompiler) {
+    // TODO: handle dump_compile_data
+    return;
+  }
   CompileTask* task = this->task();
   if (task) {
 #ifdef COMPILER2
