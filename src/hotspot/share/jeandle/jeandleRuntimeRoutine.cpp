@@ -22,6 +22,7 @@
 #include "jeandle/jeandleRuntimeRoutine.hpp"
 
 #include "jeandle/__hotspotHeadersBegin__.hpp"
+#include "memory/oopFactory.hpp"
 #include "runtime/sharedRuntime.hpp"
 #include "runtime/stubRoutines.hpp"
 #include "runtime/frame.hpp"
@@ -105,4 +106,10 @@ JRT_ENTRY(address, JeandleRuntimeRoutine::search_landingpad(JavaThread* current)
   uint64_t handler_pc_offset = exception_table.find_handler(static_cast<uint64_t>(pc - nm->code_begin()));
 
   return nm->code_begin() + handler_pc_offset;
+JRT_END
+
+// Array allocation
+JRT_ENTRY(void, JeandleRuntimeRoutine::new_typeArray(int type, int length, JavaThread* current))
+  oop obj = oopFactory::new_typeArray(static_cast<BasicType>(type), length, current);
+  current->set_vm_result(obj);
 JRT_END

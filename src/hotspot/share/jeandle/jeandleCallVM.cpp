@@ -92,5 +92,21 @@ void JeandleCallVM::generate_call_VM(const char* name, address c_func, llvm::Fun
   ir_builder.CreateStore(ir_builder.getInt64((intptr_t)nullptr), last_Java_pc_ptr);
 
   // Return.
-  ir_builder.CreateRetVoid();
+  if (func_type->getReturnType()->isVoidTy()) {
+    ir_builder.CreateRetVoid();
+  } else {
+      llvm::Value* ret_val = call_c_func;
+      
+      // If the return type is a pointer type (object), we need to load from vm_result field
+      if (func_type->getReturnType()->isPointerTy()) {
+          llvm::PointerType* ptr_type = llvm::cast<llvm::PointerType>(func_type->getReturnType());
+          if (ptr_type->getAddressSpace() == llvm::jeandle::AddrSpace::JavaHeapAddrSpace) {
+              llvm::Value* vm_result_ptr = ir_builder.CreateIntToPtr(ir_builder.getInt64((uint64_t)JavaThread::vm_result_offset()),
+                                                                llvm::PointerType::get(context, llvm::jeandle::AddrSpace::TLSAddrSpace));
+              ret_val = ir_builder.CreateLoad(func_type->getReturnType(), vm_result_ptr);
+          }
+      }
+
+      ir_builder.CreateRet(ret_val);
+  }
 }
