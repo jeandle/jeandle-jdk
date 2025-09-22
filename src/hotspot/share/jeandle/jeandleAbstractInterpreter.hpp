@@ -199,91 +199,120 @@ class BasicBlockBuilder : public JeandleCompilationResourceObj {
 
 // Convert java bytecodes to llvm ir.
 class JeandleAbstractInterpreter : public StackObj {
- public:
-  JeandleAbstractInterpreter(ciMethod* method,
-                             int entry_bci,
-                             llvm::Module& target_module,
-                             JeandleCompiledCode& code);
+public:
+    JeandleAbstractInterpreter(ciMethod *method,
+                               int entry_bci,
+                               llvm::Module &target_module,
+                               JeandleCompiledCode &code);
 
- private:
-  ciMethod* _method;
-  llvm::Function* _llvm_func;
-  int _entry_bci;
-  llvm::LLVMContext* _context;
-  ciBytecodeStream _codes;
-  llvm::Module& _module;
-  JeandleCompiledCode& _compiled_code;
-  BasicBlockBuilder* _block_builder;
-  llvm::IRBuilder<> _ir_builder;
+private:
+    ciMethod *_method;
+    llvm::Function *_llvm_func;
+    int _entry_bci;
+    llvm::LLVMContext *_context;
+    ciBytecodeStream _codes;
+    llvm::Module &_module;
+    JeandleCompiledCode &_compiled_code;
+    BasicBlockBuilder *_block_builder;
+    llvm::IRBuilder<> _ir_builder;
 
-  // Record oop values.
-  llvm::DenseMap<jobject, llvm::Value*> _oops;
+    // Record oop values.
+    llvm::DenseMap<jobject, llvm::Value *> _oops;
 
-  // The JeandleBasicBlock and its JeandleVMState currently being interpreted.
-  JeandleBasicBlock* _block;
-  JeandleVMState* _jvm;
+    // The JeandleBasicBlock and its JeandleVMState currently being interpreted.
+    JeandleBasicBlock *_block;
+    JeandleVMState *_jvm;
 
-  // Contains all blocks to interpret. Sorted by reverse-post-order.
-  std::vector<JeandleBasicBlock*> _work_list;
+    // Contains all blocks to interpret. Sorted by reverse-post-order.
+    std::vector<JeandleBasicBlock *> _work_list;
 
-  void initialize_VM_state();
-  void interpret();
-  void interpret_block(JeandleBasicBlock* block);
+    void initialize_VM_state();
 
-  void add_to_work_list(JeandleBasicBlock* block);
+    void interpret();
 
-  // Bytecode related process:
-  void load_constant();
-  void increment();
-  void if_zero(llvm::CmpInst::Predicate p);
-  void if_icmp(llvm::CmpInst::Predicate p);
-  void if_acmp(llvm::CmpInst::Predicate p);
-  void if_null(llvm::CmpInst::Predicate p);
-  void fcmp(BasicType type, bool true_if_unordered);
-  void lcmp();
-  void goto_bci(int bci);
-  void lookup_switch();
-  void table_switch();
-  void invoke();
-  bool inline_intrinsic(const ciMethod* target);
-  void stack_op(Bytecodes::Code code);
-  void shift_op(BasicType type, Bytecodes::Code code);
-  void instanceof(int klass_index);
-  void arith_op(BasicType type, Bytecodes::Code code);
+    void interpret_block(JeandleBasicBlock *block);
 
-  llvm::CallInst* call_java_op(llvm::StringRef java_op, llvm::ArrayRef<llvm::Value*> args);
-  llvm::CallInst* call_runtime_routine(llvm::FunctionCallee callee, llvm::ArrayRef<llvm::Value*> arg, bool is_leaf = false);
+    void add_to_work_list(JeandleBasicBlock *block);
 
-  void add_safepoint_poll();
+    // Bytecode related process:
+    void load_constant();
 
-  llvm::DenseMap<int, JeandleBasicBlock*>& bci2block() { return _block_builder->bci2block(); }
+    void increment();
 
-  llvm::Value* find_or_insert_oop(ciObject* oop);
+    void if_zero(llvm::CmpInst::Predicate p);
 
-  int _oop_idx;
-  std::string next_oop_name() { return std::string("oop_handle_") + std::to_string(_oop_idx++); }
+    void if_icmp(llvm::CmpInst::Predicate p);
 
-  // Implementation of _get* and _put* bytecodes.
-  void do_getstatic() { do_field_access(true, true); }
-  void do_getfield() { do_field_access(true, false); }
-  void do_putstatic() { do_field_access(false, true); }
-  void do_putfield() { do_field_access(false, false); }
+    void if_acmp(llvm::CmpInst::Predicate p);
 
-  // Common code for making initial checks and forming addresses.
-  void do_field_access(bool is_get, bool is_static);
+    void if_null(llvm::CmpInst::Predicate p);
 
-  // Helper methods for field access.
-  llvm::Value* compute_instance_field_address(llvm::Value* obj, int offset);
-  llvm::Value* compute_static_field_address(ciInstanceKlass* holder, int offset);
-  llvm::Value* load_from_address(llvm::Value* addr, BasicType type, bool is_volatile);
-  void store_to_address(llvm::Value* addr, llvm::Value* value, BasicType type, bool is_volatile);
+    void fcmp(BasicType type, bool true_if_unordered);
 
-  void do_get_xxx(ciField* field, bool is_static);
-  void do_put_xxx(ciField* field, bool is_static);
+    void lcmp();
 
-  void throw_exception();
+    void goto_bci(int bci);
 
-  void arraylength();
+    void lookup_switch();
+
+    void table_switch();
+
+    void invoke();
+
+    bool inline_intrinsic(const ciMethod *target);
+
+    void stack_op(Bytecodes::Code code);
+
+    void shift_op(BasicType type, Bytecodes::Code code);
+
+    void instanceof(int klass_index);
+
+    void arith_op(BasicType type, Bytecodes::Code code);
+
+    llvm::CallInst *call_java_op(llvm::StringRef java_op, llvm::ArrayRef<llvm::Value *> args);
+
+    llvm::CallInst *
+    call_runtime_routine(llvm::FunctionCallee callee, llvm::ArrayRef<llvm::Value *> arg, bool is_leaf = false);
+
+    void add_safepoint_poll();
+
+    llvm::DenseMap<int, JeandleBasicBlock *> &bci2block() { return _block_builder->bci2block(); }
+
+    llvm::Value *find_or_insert_oop(ciObject *oop);
+
+    int _oop_idx;
+
+    std::string next_oop_name() { return std::string("oop_handle_") + std::to_string(_oop_idx++); }
+
+    // Implementation of _get* and _put* bytecodes.
+    void do_getstatic() { do_field_access(true, true); }
+
+    void do_getfield() { do_field_access(true, false); }
+
+    void do_putstatic() { do_field_access(false, true); }
+
+    void do_putfield() { do_field_access(false, false); }
+
+    // Common code for making initial checks and forming addresses.
+    void do_field_access(bool is_get, bool is_static);
+
+    // Helper methods for field access.
+    llvm::Value *compute_instance_field_address(llvm::Value *obj, int offset);
+
+    llvm::Value *compute_static_field_address(ciInstanceKlass *holder, int offset);
+
+    llvm::Value *load_from_address(llvm::Value *addr, BasicType type, bool is_volatile);
+
+    void store_to_address(llvm::Value *addr, llvm::Value *value, BasicType type, bool is_volatile);
+
+    void do_get_xxx(ciField *field, bool is_static);
+
+    void do_put_xxx(ciField *field, bool is_static);
+
+    void throw_exception();
+
+    void arraylength();
+
+    void newarray(int dtype);
 };
-
 #endif // SHARE_JEANDLE_ABSTRACT_INTERPRETER_HPP

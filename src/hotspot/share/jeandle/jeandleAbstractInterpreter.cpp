@@ -765,7 +765,7 @@ void JeandleAbstractInterpreter::interpret_block(JeandleBasicBlock* block) {
       case Bytecodes::_invokedynamic: invoke(); break;
 
       case Bytecodes::_new: Unimplemented(); break;
-      case Bytecodes::_newarray: Unimplemented(); break;
+      case Bytecodes::_newarray: newarray(_codes.get_index_u1()); break;
       case Bytecodes::_anewarray: Unimplemented(); break;
 
       case Bytecodes::_arraylength: arraylength(); break;
@@ -1419,4 +1419,28 @@ void JeandleAbstractInterpreter::arraylength() {
     llvm::Value* array_oop = _jvm->apop();
     llvm::CallInst* call = call_java_op("jeandle.arraylength", {array_oop});
     _jvm->ipush(call);
+}
+
+void JeandleAbstractInterpreter::newarray(int dtype){
+    llvm::Value* length = _jvm->ipop();
+    // Get array type from bytecode
+    BasicType type = static_cast<BasicType>(_codes.get_index_u1());
+    llvm::FunctionCallee callee;
+    switch (type) {
+        case T_BOOLEAN: callee = JeandleRuntimeRoutine::new_boolArray_callee(_module); break;
+        case T_CHAR:    callee = JeandleRuntimeRoutine::new_charArray_callee(_module); break;
+        case T_FLOAT:   callee = JeandleRuntimeRoutine::new_floatArray_callee(_module); break;
+        case T_DOUBLE:  callee = JeandleRuntimeRoutine::new_doubleArray_callee(_module); break;
+        case T_BYTE:    callee = JeandleRuntimeRoutine::new_byteArray_callee(_module); break;
+        case T_SHORT:   callee = JeandleRuntimeRoutine::new_shortArray_callee(_module); break;
+        case T_INT:     callee = JeandleRuntimeRoutine::new_intArray_callee(_module); break;
+        case T_LONG:    callee = JeandleRuntimeRoutine::new_longArray_callee(_module); break;
+        default:
+            ShouldNotReachHere();
+            return;
+    }
+    llvm::CallInst* current_thread = call_java_op("jeandle.current_thread", {});
+    llvm::CallInst* call_inst = _ir_builder.CreateCall(callee, {length, current_thread});
+    call_inst->setCallingConv(llvm::CallingConv::Hotspot_JIT);
+    _jvm->apush(call_inst);
 }

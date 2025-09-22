@@ -91,3 +91,40 @@ JRT_END
 JRT_LEAF(address, JeandleRuntimeRoutine::get_exception_handler(JavaThread* current))
   return SharedRuntime::raw_exception_handler_for_return_address(current, current->exception_pc());
 JRT_END
+
+
+//=============================================================================
+//                      Array Allocation Routines
+//=============================================================================
+
+JRT_ENTRY(typeArrayOop, JeandleRuntimeRoutine::new_boolArray(int length, JavaThread* current))
+    return oopFactory::new_boolArray(length, current);
+JRT_END
+
+JRT_ENTRY(typeArrayOop, JeandleRuntimeRoutine::new_charArray(int length, JavaThread* current))
+    return oopFactory::new_charArray(length, current);
+JRT_END
+
+JRT_ENTRY(typeArrayOop, JeandleRuntimeRoutine::new_floatArray(int length, JavaThread* current))
+    return oopFactory::new_floatArray(length, current);
+JRT_END
+
+JRT_ENTRY(typeArrayOop, JeandleRuntimeRoutine::new_doubleArray(int length, JavaThread* current))
+    return oopFactory::new_doubleArray(length, current);
+JRT_END
+
+JRT_ENTRY(typeArrayOop, JeandleRuntimeRoutine::new_byteArray(int length, JavaThread* current))
+    return oopFactory::new_byteArray(length, current);
+JRT_END
+
+JRT_ENTRY(typeArrayOop, JeandleRuntimeRoutine::new_shortArray(int length, JavaThread* current))
+    return oopFactory::new_shortArray(length, current);
+JRT_END
+
+JRT_ENTRY(typeArrayOop, JeandleRuntimeRoutine::new_intArray(int length, JavaThread* current))
+    return oopFactory::new_intArray(length, current);
+JRT_END
+
+JRT_ENTRY(typeArrayOop, JeandleRuntimeRoutine::new_longArray(int length, JavaThread* current))
+    return oopFactory::new_longArray(length, current);
+JRT_END

@@ -27,6 +27,7 @@
 #include "llvm/IR/Jeandle/Metadata.h"
 #include "llvm/IR/Module.h"
 #include "llvm/Target/TargetMachine.h"
+#include "memory/oopFactory.hpp"
 #pragma pop_macro("AARCH64")
 
 #include "utilities/debug.hpp"
@@ -40,6 +41,30 @@
 #define ALL_JEANDLE_C_ROUTINES(def)                                                                                                             \
   def(safepoint_handler,          llvm::Type::getVoidTy(context), llvm::PointerType::get(context, llvm::jeandle::AddrSpace::CHeapAddrSpace))    \
   def(install_exceptional_return, llvm::Type::getVoidTy(context), llvm::PointerType::get(context, llvm::jeandle::AddrSpace::JavaHeapAddrSpace), \
+                                                                  llvm::PointerType::get(context, llvm::jeandle::AddrSpace::CHeapAddrSpace)) \
+  def(new_boolArray,              llvm::PointerType::get(context, llvm::jeandle::AddrSpace::JavaHeapAddrSpace),                              \
+                                                                  llvm::Type::getInt32Ty(context),                                            \
+                                                                  llvm::PointerType::get(context, llvm::jeandle::AddrSpace::CHeapAddrSpace))  \
+  def(new_charArray,              llvm::PointerType::get(context, llvm::jeandle::AddrSpace::JavaHeapAddrSpace),                              \
+                                                                  llvm::Type::getInt32Ty(context),                                            \
+                                                                  llvm::PointerType::get(context, llvm::jeandle::AddrSpace::CHeapAddrSpace))  \
+  def(new_floatArray,             llvm::PointerType::get(context, llvm::jeandle::AddrSpace::JavaHeapAddrSpace),                              \
+                                                                  llvm::Type::getInt32Ty(context),                                            \
+                                                                  llvm::PointerType::get(context, llvm::jeandle::AddrSpace::CHeapAddrSpace))  \
+  def(new_doubleArray,            llvm::PointerType::get(context, llvm::jeandle::AddrSpace::JavaHeapAddrSpace),                              \
+                                                                  llvm::Type::getInt32Ty(context),                                            \
+                                                                  llvm::PointerType::get(context, llvm::jeandle::AddrSpace::CHeapAddrSpace))  \
+  def(new_byteArray,              llvm::PointerType::get(context, llvm::jeandle::AddrSpace::JavaHeapAddrSpace),                              \
+                                                                  llvm::Type::getInt32Ty(context),                                            \
+                                                                  llvm::PointerType::get(context, llvm::jeandle::AddrSpace::CHeapAddrSpace))  \
+  def(new_shortArray,             llvm::PointerType::get(context, llvm::jeandle::AddrSpace::JavaHeapAddrSpace),                              \
+                                                                  llvm::Type::getInt32Ty(context),                                            \
+                                                                  llvm::PointerType::get(context, llvm::jeandle::AddrSpace::CHeapAddrSpace))  \
+  def(new_intArray,               llvm::PointerType::get(context, llvm::jeandle::AddrSpace::JavaHeapAddrSpace),                              \
+                                                                  llvm::Type::getInt32Ty(context),                                            \
+                                                                  llvm::PointerType::get(context, llvm::jeandle::AddrSpace::CHeapAddrSpace))  \
+  def(new_longArray,              llvm::PointerType::get(context, llvm::jeandle::AddrSpace::JavaHeapAddrSpace),                              \
+                                                                  llvm::Type::getInt32Ty(context),                                            \
                                                                   llvm::PointerType::get(context, llvm::jeandle::AddrSpace::CHeapAddrSpace))
 
 #define ALL_JEANDLE_ASSEMBLY_ROUTINES(def) \
@@ -109,6 +134,16 @@ class JeandleRuntimeRoutine : public AllStatic {
   static void install_exceptional_return(oopDesc* exception, JavaThread* current);
 
   static address get_exception_handler(JavaThread* current);
+
+    // Array allocation routines:
+  static typeArrayOop new_boolArray(int length, JavaThread* current);
+  static typeArrayOop new_charArray(int length, JavaThread* current);
+  static typeArrayOop new_floatArray(int length, JavaThread* current);
+  static typeArrayOop new_doubleArray(int length, JavaThread* current);
+  static typeArrayOop new_byteArray(int length, JavaThread* current);
+  static typeArrayOop new_shortArray(int length, JavaThread* current);
+  static typeArrayOop new_intArray(int length, JavaThread* current);
+  static typeArrayOop new_longArray(int length, JavaThread* current);
 
   // Assembly routine implementations:
 
