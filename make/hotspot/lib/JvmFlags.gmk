@@ -95,9 +95,7 @@ JVM_CFLAGS += \
     #
 
 ifeq ($(INCLUDE_JEANDLE), true)
-  JVM_CFLAGS += \
-      `$(JEANDLE_LLVM_DIR)/bin/llvm-config --cflags` \
-      #
+  JVM_CFLAGS += -I$(JEANDLE_LLVM_DIR)/include
 endif
 
 # -DDONT_USE_PRECOMPILED_HEADER will exclude all includes in precompiled.hpp.
