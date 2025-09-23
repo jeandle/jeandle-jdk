@@ -24,7 +24,7 @@
 #include "jeandle/llvm_begin_macros.hpp"
 #include "llvm/IR/Jeandle/Attributes.h"
 #include "llvm/IR/Jeandle/GCStrategy.h"
-
+#include "jeandle/llvm_end_macros.hpp"
 
 llvm::Function* JeandleFuncSig::create_llvm_func(ciMethod* method, llvm::Module& target_module) {
   llvm::SmallVector<llvm::Type*> args;

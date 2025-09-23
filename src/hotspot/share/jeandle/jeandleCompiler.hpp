@@ -27,8 +27,8 @@
 #include "llvm/Target/TargetMachine.h"
 
 #include <memory>
-
 #include "jeandle/llvm_end_macros.hpp"
+
 #include "compiler/abstractCompiler.hpp"
 #include "compiler/compilerDirectives.hpp"
 

@@ -26,8 +26,8 @@
 
 #include "jeandle/llvm_begin_macros.hpp"
 #include "llvm/Support/DataExtractor.h"
-
 #include "jeandle/llvm_end_macros.hpp"
+
 #include "asm/macroAssembler.hpp"
 #include "ci/ciEnv.hpp"
 #include "code/vmreg.inline.hpp"

@@ -31,6 +31,7 @@
 #include "llvm/Support/SmallVectorMemoryBuffer.h"
 #include "llvm/Support/SourceMgr.h"
 #include "llvm/TargetParser/Host.h"
+#include "jeandle/llvm_end_macros.hpp"
 
 #include "runtime/arguments.hpp"
 JeandleCompiler::JeandleCompiler(llvm::TargetMachine* target_machine) :

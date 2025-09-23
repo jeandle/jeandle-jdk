@@ -24,8 +24,8 @@
 #include "jeandle/llvm_begin_macros.hpp"
 #include "llvm/IR/Function.h"
 #include "llvm/IR/Type.h"
-
 #include "jeandle/llvm_end_macros.hpp"
+
 #include "ci/ciMethod.hpp"
 #include "memory/allStatic.hpp"
 

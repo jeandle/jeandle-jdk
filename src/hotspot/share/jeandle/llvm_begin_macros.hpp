@@ -18,7 +18,13 @@
  *
  */
 
- #pragma push_macro("AARCH64")
- #undef AARCH64
- #undef assert
- #include <cassert>
+#pragma push_macro("AARCH64")
+#undef AARCH64
+// Need to undef assert from stdlib. Then redefine our assert.
+#ifdef JEANDLE
+#ifdef SHARE_UTILITIES_DEBUG_HPP
+  #undef assert
+  #define assert(p, ...) vmassert(p, __VA_ARGS__)
+#endif // SHARE_UTILITIES_DEBUG_HPP
+#endif // JEANDLE
+#include <cassert>

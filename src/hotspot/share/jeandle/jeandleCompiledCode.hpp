@@ -33,8 +33,8 @@
 #include "llvm/Object/ELFObjectFile.h"
 #include "llvm/Object/StackMapParser.h"
 #include "llvm/Support/MemoryBuffer.h"
-
 #include "jeandle/llvm_end_macros.hpp"
+
 #include "asm/codeBuffer.hpp"
 #include "ci/ciEnv.hpp"
 #include "ci/ciMethod.hpp"

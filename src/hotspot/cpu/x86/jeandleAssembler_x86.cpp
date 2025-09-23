@@ -23,8 +23,8 @@
 
 #include "jeandle/llvm_begin_macros.hpp"
 #include "llvm/ExecutionEngine/JITLink/x86_64.h"
-
 #include "jeandle/llvm_end_macros.hpp"
+
 #include "code/nativeInst.hpp"
 #include "runtime/sharedRuntime.hpp"
 

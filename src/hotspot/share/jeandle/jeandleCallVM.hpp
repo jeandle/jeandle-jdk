@@ -27,8 +27,8 @@
 #include "llvm/IR/Module.h"
 #include "llvm/IR/Function.h"
 #include "llvm/IR/LLVMContext.h"
-
 #include "jeandle/llvm_end_macros.hpp"
+
 #include "utilities/globalDefinitions.hpp"
 
 class JeandleCallVM : public AllStatic {

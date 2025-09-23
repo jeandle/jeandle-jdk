@@ -29,8 +29,8 @@
 #include "llvm/IR/IRBuilder.h"
 #include "llvm/IR/LLVMContext.h"
 #include <vector>
-
 #include "jeandle/llvm_end_macros.hpp"
+
 #include "ci/compilerInterface.hpp"
 #include "memory/allocation.hpp"
 #include "utilities/bitMap.inline.hpp"

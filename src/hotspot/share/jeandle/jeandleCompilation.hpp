@@ -30,8 +30,8 @@
 #include "llvm/Target/TargetMachine.h"
 
 #include <memory>
-
 #include "jeandle/llvm_end_macros.hpp"
+
 #include "ci/ciEnv.hpp"
 #include "ci/ciMethod.hpp"
 #include "memory/arena.hpp"

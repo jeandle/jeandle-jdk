@@ -23,10 +23,10 @@
 
 #include "jeandle/jeandleCompilation.hpp"
 
-#include "jeandle/llvm_end_macros.hpp"
+#include "jeandle/llvm_begin_macros.hpp"
 #include "llvm/ExecutionEngine/JITLink/JITLink.h"
-
 #include "jeandle/llvm_end_macros.hpp"
+
 #include "asm/macroAssembler.hpp"
 
 using LinkKind  = llvm::jitlink::Edge::Kind;

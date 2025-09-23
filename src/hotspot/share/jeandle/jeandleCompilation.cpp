@@ -50,8 +50,8 @@
 #include <iomanip>
 #include <sstream>
 #include <string>
-
 #include "jeandle/llvm_end_macros.hpp"
+
 #include "ci/ciUtilities.inline.hpp"
 #include "logging/log.hpp"
 #include "runtime/sharedRuntime.hpp"

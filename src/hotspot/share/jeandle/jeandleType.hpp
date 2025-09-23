@@ -25,8 +25,8 @@
 #include "llvm/IR/IRBuilder.h"
 #include "llvm/IR/LLVMContext.h"
 #include "llvm/IR/Type.h"
-
 #include "jeandle/llvm_end_macros.hpp"
+
 #include "ci/compilerInterface.hpp"
 
 class JeandleType : public AllStatic {
