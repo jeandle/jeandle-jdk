@@ -18,17 +18,16 @@
  *
  */
 
-#include "jeandle/jeandleUtils.hpp"
 #include "jeandle/jeandleAssembler.hpp"
 #include "jeandle/jeandleCompilation.hpp"
 #include "jeandle/jeandleCompiledCode.hpp"
 #include "jeandle/jeandleRegister.hpp"
 #include "jeandle/jeandleRuntimeRoutine.hpp"
 
-LLVM_HEADER_BEGIN
+#include "jeandle/llvm_begin_macros.hpp"
 #include "llvm/Support/DataExtractor.h"
-LLVM_HEADER_END
 
+#include "jeandle/llvm_end_macros.hpp"
 #include "asm/macroAssembler.hpp"
 #include "ci/ciEnv.hpp"
 #include "code/vmreg.inline.hpp"

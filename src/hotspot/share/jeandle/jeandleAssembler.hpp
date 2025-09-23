@@ -21,13 +21,12 @@
 #ifndef SHARE_JEANDLE_ASSEMBLER_HPP
 #define SHARE_JEANDLE_ASSEMBLER_HPP
 
-#include "jeandle/jeandleUtils.hpp"
 #include "jeandle/jeandleCompilation.hpp"
 
-LLVM_HEADER_BEGIN
+#include "jeandle/llvm_end_macros.hpp"
 #include "llvm/ExecutionEngine/JITLink/JITLink.h"
-LLVM_HEADER_END
 
+#include "jeandle/llvm_end_macros.hpp"
 #include "asm/macroAssembler.hpp"
 
 using LinkKind  = llvm::jitlink::Edge::Kind;

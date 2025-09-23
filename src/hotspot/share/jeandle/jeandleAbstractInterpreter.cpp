@@ -18,24 +18,24 @@
  *
  */
 
-#include "jeandle/jeandleUtils.hpp"
 #include "jeandle/jeandleAbstractInterpreter.hpp"
 #include "jeandle/jeandleCompiledCall.hpp"
 #include "jeandle/jeandleRuntimeRoutine.hpp"
 #include "jeandle/jeandleType.hpp"
 #include "jeandle/jeandleUtils.hpp"
 
-LLVM_HEADER_BEGIN
+#include "jeandle/llvm_begin_macros.hpp"
 #include "llvm/IR/Attributes.h"
 #include "llvm/IR/Jeandle/Attributes.h"
 #include "llvm/IR/Jeandle/GCStrategy.h"
 #include "llvm/IR/Jeandle/Metadata.h"
-LLVM_HEADER_END
 
 #include "logging/log.hpp"
-#include "utilities/debug.hpp"
+
+#include "jeandle/llvm_end_macros.hpp"
 #include "ci/ciMethodBlocks.hpp"
 #include "runtime/sharedRuntime.hpp"
+#include "runtime/stubRoutines.hpp"
 #include "utilities/ostream.hpp"
 
 JeandleBasicBlock::JeandleBasicBlock(int block_id,

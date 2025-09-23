@@ -81,11 +81,10 @@
 #include "opto/c2compiler.hpp"
 #endif
 #ifdef JEANDLE
-#include "jeandle/jeandleUtils.hpp"
 #include "jeandle/jeandleCompiler.hpp"
-LLVM_HEADER_BEGIN
+#include "jeandle/llvm_begin_macros.hpp"
 #include "llvm/Support/TargetSelect.h"
-LLVM_HEADER_END
+#include "jeandle/llvm_end_macros.hpp"
 #endif // JEANDLE
 #if INCLUDE_JVMCI
 #include "jvmci/jvmciEnv.hpp"

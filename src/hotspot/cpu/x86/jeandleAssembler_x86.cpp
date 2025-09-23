@@ -18,14 +18,13 @@
  *
  */
 
-#include "jeandle/jeandleUtils.hpp"
 #include "jeandle/jeandleAssembler.hpp"
 #include "jeandle/jeandleCompilation.hpp"
 
-LLVM_HEADER_BEGIN
+#include "jeandle/llvm_begin_macros.hpp"
 #include "llvm/ExecutionEngine/JITLink/x86_64.h"
-LLVM_HEADER_END
 
+#include "jeandle/llvm_end_macros.hpp"
 #include "code/nativeInst.hpp"
 #include "runtime/sharedRuntime.hpp"
 

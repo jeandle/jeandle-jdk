@@ -21,14 +21,12 @@
 #ifndef SHARE_JEANDLE_RUNTIME_ROUTINE_HPP
 #define SHARE_JEANDLE_RUNTIME_ROUTINE_HPP
 
-#include "jeandle/jeandleUtils.hpp"
-
-LLVM_HEADER_BEGIN
+#include "jeandle/llvm_begin_macros.hpp"
 #include "llvm/IR/Jeandle/Metadata.h"
 #include "llvm/IR/Module.h"
 #include "llvm/Target/TargetMachine.h"
-LLVM_HEADER_END
 
+#include "llvm_end_macros.hpp"
 #include "memory/allStatic.hpp"
 #include "runtime/javaThread.hpp"
 #include "utilities/globalDefinitions.hpp"

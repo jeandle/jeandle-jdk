@@ -21,17 +21,16 @@
 #ifndef SHARE_JEANDLE_ABSTRACT_INTERPRETER_HPP
 #define SHARE_JEANDLE_ABSTRACT_INTERPRETER_HPP
 
-#include "jeandle/jeandleUtils.hpp"
 #include "jeandle/jeandleCompilation.hpp"
 
-LLVM_HEADER_BEGIN
+#include "jeandle/llvm_begin_macros.hpp"
 #include "llvm/IR/BasicBlock.h"
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/IR/IRBuilder.h"
 #include "llvm/IR/LLVMContext.h"
 #include <vector>
-LLVM_HEADER_END
 
+#include "jeandle/llvm_end_macros.hpp"
 #include "ci/compilerInterface.hpp"
 #include "memory/allocation.hpp"
 #include "utilities/bitMap.inline.hpp"

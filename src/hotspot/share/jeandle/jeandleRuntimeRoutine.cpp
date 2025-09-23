@@ -21,7 +21,7 @@
 #include "jeandle/jeandleCompilation.hpp"
 #include "jeandle/jeandleRuntimeRoutine.hpp"
 
-#include "utilities/debug.hpp"
+#include "jeandle/llvm_end_macros.hpp"
 #include "runtime/frame.hpp"
 #include "runtime/interfaceSupport.inline.hpp"
 #include "runtime/safepoint.hpp"

@@ -21,10 +21,10 @@
 #ifndef SHARE_JEANDLE_RUNTIME_DEFINED_JAVA_OPS_HPP
 #define SHARE_JEANDLE_RUNTIME_DEFINED_JAVA_OPS_HPP
 
-#include <cassert>
+#include "jeandle/llvm_begin_macros.hpp"
 #include "llvm/IR/Module.h"
 
-#include "utilities/debug.hpp"
+#include "jeandle/llvm_end_macros.hpp"
 #include "memory/allStatic.hpp"
 
 class RuntimeDefinedJavaOps : public AllStatic {

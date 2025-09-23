@@ -26,15 +26,15 @@
 #include "jeandle/jeandleResourceObj.hpp"
 #include "jeandle/jeandleUtils.hpp"
 
-LLVM_HEADER_BEGIN
+#include "jeandle/llvm_begin_macros.hpp"
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ExecutionEngine/JITLink/JITLink.h"
 #include "llvm/IR/Statepoint.h"
 #include "llvm/Object/ELFObjectFile.h"
 #include "llvm/Object/StackMapParser.h"
 #include "llvm/Support/MemoryBuffer.h"
-LLVM_HEADER_END
 
+#include "jeandle/llvm_end_macros.hpp"
 #include "asm/codeBuffer.hpp"
 #include "ci/ciEnv.hpp"
 #include "ci/ciMethod.hpp"

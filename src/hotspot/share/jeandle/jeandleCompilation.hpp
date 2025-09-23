@@ -21,19 +21,17 @@
 #ifndef SHARE_JEANDLE_COMPILATION_HPP
 #define SHARE_JEANDLE_COMPILATION_HPP
 
-#include "jeandle/jeandleUtils.hpp"
 #include "jeandle/jeandleCompiledCode.hpp"
 
-
-LLVM_HEADER_BEGIN
+#include "jeandle/llvm_begin_macros.hpp"
 #include "llvm/IR/Module.h"
 #include "llvm/IR/Function.h"
 #include "llvm/IR/LLVMContext.h"
 #include "llvm/Target/TargetMachine.h"
 
 #include <memory>
-LLVM_HEADER_END
 
+#include "jeandle/llvm_end_macros.hpp"
 #include "ci/ciEnv.hpp"
 #include "ci/ciMethod.hpp"
 #include "memory/arena.hpp"

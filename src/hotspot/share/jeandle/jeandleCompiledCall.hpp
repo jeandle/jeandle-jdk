@@ -21,13 +21,11 @@
 #ifndef SHARE_JEANDLE_COMPILED_CALL_HPP
 #define SHARE_JEANDLE_COMPILED_CALL_HPP
 
-#include "jeandle/jeandleUtils.hpp"
-
-LLVM_HEADER_BEGIN
+#include "jeandle/llvm_begin_macros.hpp"
 #include "llvm/IR/Function.h"
 #include "llvm/IR/Type.h"
-LLVM_HEADER_END
 
+#include "jeandle/llvm_end_macros.hpp"
 #include "ci/ciMethod.hpp"
 #include "memory/allStatic.hpp"
 

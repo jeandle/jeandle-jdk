@@ -18,23 +18,21 @@
  *
  */
 
-#include "jeandle/jeandleUtils.hpp"
 #include "jeandle/jeandleCompilation.hpp"
 #include "jeandle/jeandleCompiler.hpp"
 #include "jeandle/jeandleRuntimeRoutine.hpp"
 #include "jeandle/jeandleType.hpp"
 #include "jeandle/templatemodule/jeandleRuntimeDefinedJavaOps.hpp"
-#include "runtime/arguments.hpp"
 
-LLVM_HEADER_BEGIN
+#include "jeandle/llvm_begin_macros.hpp"
 #include "llvm/Bitcode/BitcodeWriter.h"
 #include "llvm/IRReader/IRReader.h"
 #include "llvm/MC/TargetRegistry.h"
 #include "llvm/Support/SmallVectorMemoryBuffer.h"
 #include "llvm/Support/SourceMgr.h"
 #include "llvm/TargetParser/Host.h"
-LLVM_HEADER_END
 
+#include "runtime/arguments.hpp"
 JeandleCompiler::JeandleCompiler(llvm::TargetMachine* target_machine) :
                                  AbstractCompiler(compiler_jeandle),
                                  _target_machine(target_machine),

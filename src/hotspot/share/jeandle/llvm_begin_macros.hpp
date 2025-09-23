@@ -18,23 +18,7 @@
  *
  */
 
-#ifndef SHARE_JEANDLE_UTILS_HPP
-#define SHARE_JEANDLE_UTILS_HPP
-
-#include "jeandle/llvm_begin_macros.hpp"
-#include "llvm/IR/Module.h"
-#include "llvm/IR/Function.h"
-
-#include "jeandle/llvm_end_macros.hpp"
-#include "ci/ciMethod.hpp"
-
-
-class JeandleFuncSig : public AllStatic {
- public:
-  // Create a llvm function according to the Java method.
-  static llvm::Function* create_llvm_func(ciMethod* method, llvm::Module& target_module);
-  static std::string method_name(ciMethod* method);
-  static void setup_description(llvm::Function* func, bool is_stub = false);
-};
-
-#endif // SHARE_JEANDLE_UTILS_HPP
+ #pragma push_macro("AARCH64")
+ #undef AARCH64
+ #undef assert
+ #include <cassert>
