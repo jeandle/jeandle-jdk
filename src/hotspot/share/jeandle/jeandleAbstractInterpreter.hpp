@@ -44,9 +44,8 @@ class JeandleVMState : public JeandleCompilationResourceObj {
 
   JeandleVMState(int max_stack, int max_locals, llvm::LLVMContext *context);
 
-  JeandleVMState(JeandleVMState* copy_from);
-
-  JeandleVMState* copy(MethodLivenessResult liveness);
+  JeandleVMState* copy(MethodLivenessResult liveness, bool clear_stack = false);
+  JeandleVMState* copy_for_handler(MethodLivenessResult liveness, llvm::Value* exception_oop);
 
   // Check with another JeandleVMState if all stack values are same types and locals sizes are the same.
   bool match(JeandleVMState* jvm);
@@ -116,6 +115,8 @@ class JeandleVMState : public JeandleCompilationResourceObj {
   llvm::SmallVector<llvm::Value*> _locals;
 
   llvm::LLVMContext* _context;
+
+  JeandleVMState(JeandleVMState* copy_from, bool clear_stack = false);
 };
 
 class JeandleBasicBlock : public JeandleCompilationResourceObj {
@@ -123,7 +124,7 @@ class JeandleBasicBlock : public JeandleCompilationResourceObj {
   JeandleBasicBlock(int block_id, int start_bci, int limit_bci, llvm::BasicBlock* llvm_block, ciBlock* ci_block);
 
   // Update the JeandleVMState according to the predecessor block's stack values and locals.
-  bool merge_VM_state_from(JeandleBasicBlock* from, ciMethod* method, llvm::IRBuilder<>* ir_builder);
+  bool merge_VM_state_from(JeandleBasicBlock* from, ciMethod* method);
 
   enum Flag {
     no_flag                       = 0,
@@ -157,11 +158,16 @@ class JeandleBasicBlock : public JeandleCompilationResourceObj {
   int block_id() const { return _block_id; }
   int start_bci() const { return _start_bci; }
   int limit_bci() const { return _limit_bci; }
+
   llvm::BasicBlock* header_llvm_block() { return _header_llvm_block; }
+
+  llvm::BasicBlock* tail_llvm_block() { return _tail_llvm_block; }
+  void set_tail_llvm_block(llvm::BasicBlock* block) { _tail_llvm_block = block; }
 
   bool is_handler() { return _ci_block->is_handler(); }
   int exeption_range_start_bci() { return _ci_block->ex_start_bci(); }
-  int exeption_range_limit_bci() { return _ci_block->ex_start_bci(); }
+  int exeption_range_limit_bci() { return _ci_block->ex_limit_bci(); }
+  bool merge_handler_VM_state(JeandleVMState* vm_state, llvm::BasicBlock* incoming, ciMethod* method);
 
  private:
   int _block_id;
@@ -176,6 +182,7 @@ class JeandleBasicBlock : public JeandleCompilationResourceObj {
   llvm::SmallPtrSet<JeandleBasicBlock*, 8> _successors;
 
   llvm::BasicBlock* _header_llvm_block;
+  llvm::BasicBlock* _tail_llvm_block;
   ciBlock* _ci_block;
 
   // The JeandleVMState recording the initial state of a loop header.
@@ -183,7 +190,7 @@ class JeandleBasicBlock : public JeandleCompilationResourceObj {
   // phi nodes. Use this variable to find the right phi nodes to update.
   JeandleVMState* _initial_jvm;
 
-  void initialize_VM_state_from(JeandleBasicBlock* from, MethodLivenessResult liveness, llvm::IRBuilder<>* ir_builder);
+  void initialize_VM_state_from(JeandleVMState* incoming_state, llvm::BasicBlock* incoming_block, MethodLivenessResult liveness);
 };
 
 class BasicBlockBuilder : public JeandleCompilationResourceObj {
@@ -196,6 +203,7 @@ class BasicBlockBuilder : public JeandleCompilationResourceObj {
 
   static void connect_block(JeandleBasicBlock* child_block, JeandleBasicBlock* parent_block) {
     assert(child_block != nullptr && parent_block != nullptr, "connecting nullptr");
+    tty->print("Connect %d as child of %d\n", child_block->start_bci(), parent_block->start_bci());
     child_block->add_predecessor(parent_block);
     parent_block->add_successor(child_block);
   }
@@ -305,8 +313,14 @@ class JeandleAbstractInterpreter : public StackObj {
   void do_get_xxx(ciField* field, bool is_static);
   void do_put_xxx(ciField* field, bool is_static);
 
-  void dispatch_exception_for(int bci);
-  void throw_exception();
+  typedef struct {
+    llvm::BasicBlock* _unwind_dest;
+    llvm::BasicBlock* _normal_dest;
+  } DispatchedDest;
+
+  DispatchedDest dispatch_exception_for_invoke(); // Dispatch exceptions raised by invoke.
+  void dispatch_exception_to_handler(llvm::Value* exception_oop); // Generate a series of IR to dispatch an exception to its handler.
+  void throw_exception(llvm::Value* exception_oop);
 };
 
 #endif // SHARE_JEANDLE_ABSTRACT_INTERPRETER_HPP

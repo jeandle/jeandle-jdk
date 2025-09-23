@@ -41,15 +41,17 @@ JeandleVMState::JeandleVMState(int max_stack, int max_locals, llvm::LLVMContext 
   _stack.reserve(max_stack);
 }
 
-JeandleVMState::JeandleVMState(JeandleVMState* copy_from) :
-                               _stack(copy_from->_stack),
+JeandleVMState::JeandleVMState(JeandleVMState* copy_from, bool clear_stack) :
                                _locals(copy_from->_locals),
                                _context(copy_from->_context) {
   _stack.reserve(copy_from->_stack.capacity());
+  if (!clear_stack) {
+    _stack.append(copy_from->_stack);
+  }
 }
 
-JeandleVMState* JeandleVMState::copy(MethodLivenessResult liveness) {
-  JeandleVMState* copied =  new JeandleVMState(this);
+JeandleVMState* JeandleVMState::copy(MethodLivenessResult liveness, bool clear_stack) {
+  JeandleVMState* copied =  new JeandleVMState(this, clear_stack);
 
   // Use method liveness to invalidate dead locals.
   if (liveness.is_valid()) {
@@ -60,6 +62,12 @@ JeandleVMState* JeandleVMState::copy(MethodLivenessResult liveness) {
     }
   }
 
+  return copied;
+}
+
+JeandleVMState* JeandleVMState::copy_for_handler(MethodLivenessResult liveness, llvm::Value* exception_oop) {
+  JeandleVMState* copied = copy(liveness, true);
+  copied->apush(exception_oop);
   return copied;
 }
 
@@ -193,10 +201,25 @@ JeandleBasicBlock::JeandleBasicBlock(int block_id,
                                      _predecessors(),
                                      _successors(),
                                      _header_llvm_block(header_llvm_block),
+                                     _tail_llvm_block(header_llvm_block),
                                      _ci_block(ci_block),
-                                     _initial_jvm(nullptr) { tty->print("Creating block for bci %d\n", start_bci); }
+                                     _initial_jvm(nullptr) {tty->print("Creating block %d to %d\n", start_bci, limit_bci);}
 
-bool JeandleBasicBlock::merge_VM_state_from(JeandleBasicBlock* from, ciMethod* method, llvm::IRBuilder<>* ir_builder) {
+bool JeandleBasicBlock::merge_handler_VM_state(JeandleVMState* vm_state, llvm::BasicBlock* incoming, ciMethod* method) {
+  assert(is_handler(), "adding an handler VM state to a non-handler block");
+  MethodLivenessResult liveness = method->liveness_at_bci(_start_bci);
+
+  if (_jvm == nullptr) {
+    initialize_VM_state_from(vm_state, incoming, liveness);
+    return true;
+  }
+
+  return _jvm->update_phi_nodes(vm_state, incoming);
+}
+
+bool JeandleBasicBlock::merge_VM_state_from(JeandleBasicBlock* from, ciMethod* method) {
+  assert(!is_handler(), "handlers' VM state should be initialized by JeandleBasicBlock::merge_handler_VM_state");
+
   JeandleVMState* from_jvm = from->VM_state();
 
   if (_jvm == nullptr) {
@@ -212,37 +235,37 @@ bool JeandleBasicBlock::merge_VM_state_from(JeandleBasicBlock* from, ciMethod* m
       _jvm = from_jvm->copy(liveness);
     } else {
       // More than one predecessors. Set up phi nodes.
-      initialize_VM_state_from(from, liveness, ir_builder);
+      initialize_VM_state_from(from->VM_state(), from->tail_llvm_block(), liveness);
     }
 
     if (is_set(is_loop_header)) {
       // Copy loop header's initial JeandleVMState.
-      _initial_jvm = new JeandleVMState(_jvm);
+      _initial_jvm = _jvm->copy(liveness);
     }
 
     return true;
 
   } else if (!is_set(is_compiled)) {
-    assert(_predecessors.size() > 1, "more than one predecessors are needed for phi nodes");
-    return _jvm->update_phi_nodes(from->VM_state(), from->header_llvm_block());
+    assert(_predecessors.size() > 1 || is_handler(), "more than one predecessors are needed for phi nodes");
+    return _jvm->update_phi_nodes(from->VM_state(), from->tail_llvm_block());
   } else if (is_set(is_loop_header)) {
     assert(_initial_jvm != nullptr, "loop header initial JeandleVMState is needed");
-    return _initial_jvm->update_phi_nodes(from->VM_state(), from->header_llvm_block());
+    return _initial_jvm->update_phi_nodes(from->VM_state(), from->tail_llvm_block());
   }
 
   // Bad bytecodes.
   return false;
 }
 
-void JeandleBasicBlock::initialize_VM_state_from(JeandleBasicBlock* from, MethodLivenessResult liveness, llvm::IRBuilder<>* ir_builder) {
+void JeandleBasicBlock::initialize_VM_state_from(JeandleVMState* incoming_state, llvm::BasicBlock* incoming_block, MethodLivenessResult liveness) {
   assert(_jvm == nullptr, "cannot initialize twice");
-  JeandleVMState* from_jvm = from->VM_state();
-  _jvm = new JeandleVMState(from_jvm->max_stack(), from_jvm->max_locals(), &ir_builder->getContext());
 
-  ir_builder->SetInsertPoint(_header_llvm_block);
+  llvm::IRBuilder<> ir_builder(_header_llvm_block);
 
-  for (size_t i = 0; i < from_jvm->locals_size(); i++) {
-    if (from_jvm->locals_at(i) == nullptr) {
+  _jvm = new JeandleVMState(incoming_state->max_stack(), incoming_state->max_locals(), &ir_builder.getContext());
+
+  for (size_t i = 0; i < incoming_state->locals_size(); i++) {
+    if (incoming_state->locals_at(i) == nullptr) {
       continue;
     }
 
@@ -251,19 +274,19 @@ void JeandleBasicBlock::initialize_VM_state_from(JeandleBasicBlock* from, Method
       continue;
     }
 
-    llvm::PHINode* phi_node = ir_builder->CreatePHI(from_jvm->locals_at(i)->getType(), 2);
-    phi_node->addIncoming(from_jvm->locals_at(i), from->header_llvm_block());
+    llvm::PHINode* phi_node = ir_builder.CreatePHI(incoming_state->locals_at(i)->getType(), 2);
+    phi_node->addIncoming(incoming_state->locals_at(i), incoming_block);
     _jvm->set_locals_at(i, phi_node);
   }
 
-  for (size_t i = 0; i < from_jvm->stack_size(); i++) {
-    if (from_jvm->stack_at(i) == nullptr) {
+  for (size_t i = 0; i < incoming_state->stack_size(); i++) {
+    if (incoming_state->stack_at(i) == nullptr) {
       _jvm->raw_push(nullptr);
       continue;
     }
 
-    llvm::PHINode* phi_node = ir_builder->CreatePHI(from_jvm->stack_at(i)->getType(), 2);
-    phi_node->addIncoming(from_jvm->stack_at(i), from->header_llvm_block());
+    llvm::PHINode* phi_node = ir_builder.CreatePHI(incoming_state->stack_at(i)->getType(), 2);
+    phi_node->addIncoming(incoming_state->stack_at(i), incoming_block);
     _jvm->raw_push(phi_node);
   }
 }
@@ -313,7 +336,6 @@ void BasicBlockBuilder::generate_blocks() {
   codes.reset_to_bci(0);
   while (codes.next() != ciBytecodeStream::EOBC()) {
     int bci = codes.cur_bci();
-    tty->print("finding bci %d\n", bci);
     assert(_bci2block[bci] != nullptr, "invalid basic block");
   }
 #endif // ASSERT
@@ -326,9 +348,10 @@ void BasicBlockBuilder::setup_exception_handlers() {
     int bci = codes.cur_bci();
     JeandleBasicBlock* block = _bci2block[bci];
     if (block->is_handler()) {
+      tty->print("Found handler %d, start at %d, limit at %d\n", block->start_bci(), block->exeption_range_start_bci(), block->exeption_range_limit_bci());
       int covered_bci = block->exeption_range_start_bci();
       while (covered_bci < block->exeption_range_limit_bci()) {
-        connect_block(block, _bci2block[bci]);
+        connect_block(block, _bci2block[covered_bci]);
         covered_bci = block->limit_bci(); // Jump to the next block.
       }
     }
@@ -512,7 +535,9 @@ void JeandleAbstractInterpreter::interpret() {
 
   initialize_VM_state();
 
-  current->merge_VM_state_from(_block_builder->entry_block(), _method, &_ir_builder);
+  if (!current->merge_VM_state_from(_block_builder->entry_block(), _method)) {
+    JeandleCompilation::report_jeandle_error("failed to create initial VM state");
+  }
 
   // Iterate all blocks
   while (_work_list.size() > 0) {
@@ -527,6 +552,8 @@ void JeandleAbstractInterpreter::interpret() {
 void JeandleAbstractInterpreter::interpret_block(JeandleBasicBlock* block) {
   assert(block != nullptr, "compile a null block");
 
+  tty->print("Interpreting block %d\n", block->start_bci());
+
   _ir_builder.SetInsertPoint(block->header_llvm_block());
 
   _block = block;
@@ -538,8 +565,10 @@ void JeandleAbstractInterpreter::interpret_block(JeandleBasicBlock* block) {
   Bytecodes::Code code = Bytecodes::_illegal;
 
   // Iterate all bytecodes.
-  while ((code = _codes.next()) != ciBytecodeStream::EOBC() && !JeandleCompilation::jeandle_error_occurred() &&
-          (bci2block()[_codes.cur_bci()] == nullptr || bci2block()[_codes.cur_bci()] == block)) {
+  while ((code = _codes.next()) != ciBytecodeStream::EOBC() &&
+          !JeandleCompilation::jeandle_error_occurred() &&
+          bci2block()[_codes.cur_bci()] == _block) {
+    tty->print("Interpreting bci %d\n", _codes.cur_bci());
     // Handle by opcode, see: https://docs.oracle.com/javase/specs/jvms/se21/html/jvms-7.html
     switch (code) {
       case Bytecodes::_nop: break;
@@ -793,7 +822,7 @@ void JeandleAbstractInterpreter::interpret_block(JeandleBasicBlock* block) {
       case Bytecodes::_anewarray: Unimplemented(); break;
 
       case Bytecodes::_arraylength: Unimplemented(); break;
-      case Bytecodes::_athrow: throw_exception(); break;
+      case Bytecodes::_athrow: dispatch_exception_to_handler(_jvm->apop()); break;
       case Bytecodes::_checkcast: Unimplemented(); break;
       case Bytecodes::_instanceof: instanceof(_codes.get_index_u2()); break;
 
@@ -824,7 +853,7 @@ void JeandleAbstractInterpreter::interpret_block(JeandleBasicBlock* block) {
   }
 
   // All blocks should has their terminator.
-  if (block->header_llvm_block()->getTerminator() == nullptr) {
+  if (block->tail_llvm_block()->getTerminator() == nullptr) {
     _ir_builder.CreateBr(bci2block()[_codes.cur_bci()]->header_llvm_block());
   }
 
@@ -832,8 +861,9 @@ void JeandleAbstractInterpreter::interpret_block(JeandleBasicBlock* block) {
 
   // Add all successors to work list and set up their JeandleVMStates.
   for (JeandleBasicBlock* suc : block->successors()) {
-    if (!suc->merge_VM_state_from(block, _method, &_ir_builder)) {
-      JeandleCompilation::report_jeandle_error("failed to create phi nodes");
+    // Don't update handlers' VM state here, they are updated by 'JeandleAbstractInterpreter::dispatch_exception_to_handler'.
+    if (!suc->is_handler() && !suc->merge_VM_state_from(block, _method)) {
+      JeandleCompilation::report_jeandle_error("failed to update VM state");
       return;
     }
 
@@ -845,6 +875,7 @@ void JeandleAbstractInterpreter::interpret_block(JeandleBasicBlock* block) {
 
 void JeandleAbstractInterpreter::add_to_work_list(JeandleBasicBlock* block) {
   if (!block->is_set(JeandleBasicBlock::is_on_work_list)) {
+    tty->print("Adding %d to worklist\n", block->start_bci());
     block->set(JeandleBasicBlock::is_on_work_list);
     _work_list.push_back(block);
 
@@ -1052,22 +1083,31 @@ void JeandleAbstractInterpreter::invoke() {
   uint32_t id = _compiled_code.next_statepoint_id();
   _compiled_code.push_non_routine_call_site(new CallSiteInfo(call_type, dest, _codes.cur_bci(), id));
 
-  // Create the call instruction.
-  llvm::CallInst* call = _ir_builder.CreateCall(callee, args);
+  // Every invoke instruction may throw exceptions, handle them here.
+  DispatchedDest dispatched = dispatch_exception_for_invoke();
+
+  // Create the invoke instruction.
+  llvm::InvokeInst* invoke = _ir_builder.CreateInvoke(callee, dispatched._normal_dest, dispatched._unwind_dest, args);
+
+  // Continue to interpret the remaining bytecodes in the current JeandleBasicBlock at dispatched._normal_dest.
+  _ir_builder.SetInsertPoint(dispatched._normal_dest);
+
+  // The dispatched._normal_dest is now the new tail block for the current JeandleBasicBlock.
+  _block->set_tail_llvm_block(dispatched._normal_dest);
 
   // Apply attributes and calling convention.
-  call->setCallingConv(llvm::CallingConv::Hotspot_JIT);
+  invoke->setCallingConv(llvm::CallingConv::Hotspot_JIT);
   llvm::Attribute id_attr = llvm::Attribute::get(*_context,
                                                  llvm::jeandle::Attribute::StatepointID,
                                                  std::to_string(id));
   llvm::Attribute patch_bytes_attr = llvm::Attribute::get(*_context,
                                                  llvm::jeandle::Attribute::StatepointNumPatchBytes,
                                                  std::to_string(JeandleCompiledCall::call_site_patch_size(call_type)));
-  call->addFnAttr(id_attr);
-  call->addFnAttr(patch_bytes_attr);
+  invoke->addFnAttr(id_attr);
+  invoke->addFnAttr(patch_bytes_attr);
 
   if (return_type != BasicType::T_VOID) {
-    _jvm->push(return_type, call);
+    _jvm->push(return_type, invoke);
   }
 }
 
@@ -1414,9 +1454,87 @@ void JeandleAbstractInterpreter::add_safepoint_poll() {
   call_java_op("jeandle.safepoint_poll", {});
 }
 
-void JeandleAbstractInterpreter::throw_exception() {
+JeandleAbstractInterpreter::DispatchedDest JeandleAbstractInterpreter::dispatch_exception_for_invoke() {
+  int cur_bci = _codes.cur_bci();
+
+  DispatchedDest dispatched;
+
+  // Create the unwind dest block.
+  llvm::BasicBlock* unwind_dest = llvm::BasicBlock::Create(*_context,
+                                                           "bci_" + std::to_string(cur_bci) + "_unwind_dest",
+                                                           _llvm_func);
+  dispatched._unwind_dest = unwind_dest;
+
+  auto saved_insert_block = _ir_builder.GetInsertBlock();
+  auto saved_insert_point = _ir_builder.GetInsertPoint();
+  _ir_builder.SetInsertPoint(unwind_dest);
+
+  // Create a landingpad instruction to indicate this is an unwind entry. But we never use the result from it.
+  // Create our landingpad result type
+  llvm::Type* landingpad_result_type = llvm::Type::getTokenTy(*_context); // We can only use result of token type to support statepoint.
+  llvm::LandingPadInst* landingpad = _ir_builder.CreateLandingPad(landingpad_result_type,
+                                                                  0 /* NumClauses */);
+  // This landingpad should always be entered during exception handling.
+  landingpad->setCleanup(true);
+
+  // Read the exception oop from thread local storage.
+  llvm::Value* exception_oop_addr = _ir_builder.CreateIntToPtr(_ir_builder.getInt64((uint64_t)JavaThread::exception_oop_offset()),
+                                                               llvm::PointerType::get(*_context, llvm::jeandle::AddrSpace::TLSAddrSpace));
+  llvm::Value* exception_oop = _ir_builder.CreateLoad(JeandleType::java2llvm(BasicType::T_OBJECT, *_context), exception_oop_addr, true /* is_volatile */);
+
+  dispatch_exception_to_handler(exception_oop);
+
+  // Recover insert point.
+  _ir_builder.SetInsertPoint(saved_insert_block, saved_insert_point);
+
+  // Get the normal dest block.
+  llvm::BasicBlock* normal_dest = llvm::BasicBlock::Create(*_context,
+                                                           "bci_" + std::to_string(cur_bci) + "_normal_dest",
+                                                           _llvm_func);
+  dispatched._normal_dest = normal_dest;
+
+  return dispatched;
+}
+
+// TODO: Add real dispatching process using 'instanceof'.
+// As a workaround now, we always choose the first exception handler.
+void JeandleAbstractInterpreter::dispatch_exception_to_handler(llvm::Value* exception_oop) {
+  // Setup all handlers' VM state.
+  for (ciExceptionHandlerStream handlers(_method, _codes.cur_bci()); !handlers.is_done(); handlers.next()) {
+    ciExceptionHandler* handler = handlers.handler();
+    if (!handler->is_rethrow()) {
+      int handler_bci = handler->handler_bci();
+      JeandleBasicBlock* handler_block = bci2block()[handler_bci];
+      assert(handler_block != nullptr, "invalid handler block");
+      MethodLivenessResult liveness = _method->liveness_at_bci(handler_bci);
+      if (!handler_block->merge_handler_VM_state(_jvm->copy_for_handler(liveness, exception_oop), _ir_builder.GetInsertBlock(), _method)) {
+        JeandleCompilation::report_jeandle_error("failed to update handler's VM state");
+      }
+    }
+  }
+
+  // Choose the first handler. (workaround)
+  ciExceptionHandlerStream handlers(_method, _codes.cur_bci());
+  if (!handlers.is_done()) {
+    ciExceptionHandler* handler = handlers.handler();
+    if (handler->is_rethrow()) {
+      // Rethrow it.
+      throw_exception(exception_oop);
+    } else {
+      int handler_bci = handler->handler_bci();
+      JeandleBasicBlock* handler_block = bci2block()[handler_bci];
+      assert(handler_block != nullptr, "invalid handler block");
+      _ir_builder.CreateBr(handler_block->header_llvm_block());
+    }
+    return;
+  }
+
+  // At least one handler is found.
+  ShouldNotReachHere();
+}
+
+void JeandleAbstractInterpreter::throw_exception(llvm::Value* exception_oop) {
   // Call install_exceptional_return.
-  llvm::Value* exception_oop = _jvm->apop();
   llvm::CallInst* current_thread = call_java_op("jeandle.current_thread", {});
   llvm::CallInst* call_inst = _ir_builder.CreateCall(JeandleRuntimeRoutine::install_exceptional_return_callee(_module),
                                                     {exception_oop, current_thread});

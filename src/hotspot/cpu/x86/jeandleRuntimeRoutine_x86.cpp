@@ -31,7 +31,7 @@
 
 #define __ masm->
 
-// When a Jeandle compiled method throwing an exception, patch its return address to exceptional_exit blob.
+// When a Jeandle compiled method throwing an exception, patch its return address to exceptional_return blob.
 JRT_ENTRY(void, JeandleRuntimeRoutine::install_exceptional_return(oopDesc* exception, JavaThread* current))
   assert(oopDesc::is_oop(exception), "must be a valid oop");
   RegisterMap r_map(current,

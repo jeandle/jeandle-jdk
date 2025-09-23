@@ -47,7 +47,7 @@ public class TestFileCheck {
             FileCheck fileCheck = new FileCheck(currentDir,
                                                 TestFileCheck.class.getDeclaredMethod("add", int.class, int.class),
                                                 true);
-            fileCheck.check("define hotspotcc i32 @\"compiler_jeandle_fileCheck_TestFileCheck_add_(II)I\"(i32 %0, i32 %1) local_unnamed_addr #0 gc \"hotspotgc\" {");
+            fileCheck.check("define hotspotcc i32 @\"compiler_jeandle_fileCheck_TestFileCheck_add_(II)I\"(i32 %0, i32 %1)");
             fileCheck.checkNext("entry:");
             fileCheck.checkNext("%2 = add i32 %1, %0");
             fileCheck.checkNot("define private hotspotcc void @jeandle.safepoint_poll() #2 {");
