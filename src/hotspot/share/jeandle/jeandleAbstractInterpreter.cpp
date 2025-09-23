@@ -862,12 +862,18 @@ void JeandleAbstractInterpreter::increment() {
 }
 
 void JeandleAbstractInterpreter::if_zero(llvm::CmpInst::Predicate p) {
+  if (_codes.get_dest() < _codes.cur_bci()) {
+    add_safepoint_poll();
+  }
   llvm::Value* v = _jvm->ipop();
   llvm::Value* cond = _ir_builder.CreateICmp(p, v, JeandleType::int_const(_ir_builder, 0));
   _ir_builder.CreateCondBr(cond, bci2block()[_codes.get_dest()]->llvm_block(), bci2block()[_codes.next_bci()]->llvm_block());
 }
 
 void JeandleAbstractInterpreter::if_icmp(llvm::CmpInst::Predicate p) {
+  if (_codes.get_dest() < _codes.cur_bci()) {
+    add_safepoint_poll();
+  }
   llvm::Value* r = _jvm->ipop();
   llvm::Value* l = _jvm->ipop();
   llvm::Value* cond = _ir_builder.CreateICmp(p, l, r);
@@ -885,6 +891,9 @@ void JeandleAbstractInterpreter::lcmp() {
 }
 
 void JeandleAbstractInterpreter::if_acmp(llvm::CmpInst::Predicate p) {
+  if (_codes.get_dest() < _codes.cur_bci()) {
+    add_safepoint_poll();
+  }
   llvm::Value* r = _jvm->apop();
   llvm::Value* l = _jvm->apop();
   llvm::Value* cond = _ir_builder.CreateICmp(p, l, r);
@@ -892,6 +901,9 @@ void JeandleAbstractInterpreter::if_acmp(llvm::CmpInst::Predicate p) {
 }
 
 void JeandleAbstractInterpreter::if_null(llvm::CmpInst::Predicate p) {
+  if (_codes.get_dest() < _codes.cur_bci()) {
+    add_safepoint_poll();
+  }
   llvm::Value* v = _jvm->apop();
   llvm::Value* cond = _ir_builder.CreateICmp(p, v, llvm::ConstantPointerNull::get(llvm::cast<llvm::PointerType>(v->getType())));
   _ir_builder.CreateCondBr(cond, bci2block()[_codes.get_dest()]->llvm_block(), bci2block()[_codes.next_bci()]->llvm_block());
