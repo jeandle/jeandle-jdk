@@ -210,7 +210,7 @@ class JeandleAbstractInterpreter : public StackObj {
   llvm::Function* _llvm_func;
   int _entry_bci;
   llvm::LLVMContext* _context;
-  ciBytecodeStream _codes;
+  ciBytecodeStream _bytecodes;
   llvm::Module& _module;
   JeandleCompiledCode& _compiled_code;
   BasicBlockBuilder* _block_builder;
