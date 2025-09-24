@@ -21,16 +21,13 @@
 #ifndef SHARE_JEANDLE_COMPILER_HPP
 #define SHARE_JEANDLE_COMPILER_HPP
 
-#include <cassert>
-#pragma push_macro("AARCH64")
-#undef AARCH64
+#include "jeandle/__llvmHeadersBegin__.hpp"
 #include "llvm/Support/MemoryBuffer.h"
 #include "llvm/Target/TargetMachine.h"
-#pragma pop_macro("AARCH64")
 
 #include <memory>
 
-#include "utilities/debug.hpp"
+#include "jeandle/__hotspotHeadersBegin__.hpp"
 #include "compiler/abstractCompiler.hpp"
 #include "compiler/compilerDirectives.hpp"
 

@@ -21,7 +21,7 @@
 #ifndef SHARE_JEANDLE_COMPILED_CODE_HPP
 #define SHARE_JEANDLE_COMPILED_CODE_HPP
 
-#include <cassert>
+#include "jeandle/__llvmHeadersBegin__.hpp"
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ExecutionEngine/JITLink/JITLink.h"
 #include "llvm/IR/Statepoint.h"
@@ -34,7 +34,7 @@
 #include "jeandle/jeandleResourceObj.hpp"
 #include  "jeandle/jeandleUtils.hpp"
 
-#include "utilities/debug.hpp"
+#include "jeandle/__hotspotHeadersBegin__.hpp"
 #include "asm/codeBuffer.hpp"
 #include "ci/ciEnv.hpp"
 #include "ci/ciMethod.hpp"

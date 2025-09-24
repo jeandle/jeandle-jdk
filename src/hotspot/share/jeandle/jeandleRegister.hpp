@@ -21,6 +21,7 @@
 #ifndef SHARE_JEANDLE_REGISTER_HPP
 #define SHARE_JEANDLE_REGISTER_HPP
 
+#include "jeandle/__hotspotHeadersBegin__.hpp"
 #include "utilities/macros.hpp"
 #include CPU_HEADER(jeandleRegister)
 

@@ -18,22 +18,8 @@
  *
  */
 
-#include "jeandle/__llvmHeadersBegin__.hpp"
-#include "llvm/IR/Jeandle/Attributes.h"
-#include "llvm/IR/Jeandle/GCStrategy.h"
-
-#include "jeandle/jeandleUtils.hpp"
-
-void JeandleFuncSig::setup_description(llvm::Function* func, bool is_stub) {
-  func->setCallingConv(llvm::CallingConv::Hotspot_JIT);
-
-  func->setGC(llvm::jeandle::JeandleGC);
-
-  if (!is_stub) {
-    func->addFnAttr("patchable-function-entry", "1");
-  }
-
-  if (UseCompressedOops) {
-    func->addFnAttr(llvm::Attribute::get(func->getContext(), llvm::jeandle::Attribute::UseCompressedOops));
-  }
-}
+#include <cassert>
+#ifdef AARCH64
+  #define SAVED_HOTSPOT_AARCH64 AARCH64
+  #undef AARCH64
+#endif // AARCH64

@@ -18,22 +18,14 @@
  *
  */
 
-#include "jeandle/__llvmHeadersBegin__.hpp"
-#include "llvm/IR/Jeandle/Attributes.h"
-#include "llvm/IR/Jeandle/GCStrategy.h"
+// Need to undef assert from stdlib. Then redefine our assert.
+#undef assert
+#ifdef SHARE_UTILITIES_DEBUG_HPP
+  #define assert(p, ...) vmassert(p, __VA_ARGS__)
+#endif // SHARE_UTILITIES_DEBUG_HPP
 
-#include "jeandle/jeandleUtils.hpp"
-
-void JeandleFuncSig::setup_description(llvm::Function* func, bool is_stub) {
-  func->setCallingConv(llvm::CallingConv::Hotspot_JIT);
-
-  func->setGC(llvm::jeandle::JeandleGC);
-
-  if (!is_stub) {
-    func->addFnAttr("patchable-function-entry", "1");
-  }
-
-  if (UseCompressedOops) {
-    func->addFnAttr(llvm::Attribute::get(func->getContext(), llvm::jeandle::Attribute::UseCompressedOops));
-  }
-}
+// Resolve conflict with AARCH64 macro in LLVM headers.
+#ifdef SAVED_HOTSPOT_AARCH64
+  #define AARCH64 SAVED_HOTSPOT_AARCH64
+  #undef SAVED_HOTSPOT_AARCH64
+#endif // SAVED_HOTSPOT_AARCH64

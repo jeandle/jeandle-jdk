@@ -21,12 +21,12 @@
 #ifndef SHARE_JEANDLE_TYPE_HPP
 #define SHARE_JEANDLE_TYPE_HPP
 
-#include <cassert>
+#include "jeandle/__llvmHeadersBegin__.hpp"
 #include "llvm/IR/IRBuilder.h"
 #include "llvm/IR/LLVMContext.h"
 #include "llvm/IR/Type.h"
 
-#include "utilities/debug.hpp"
+#include "jeandle/__hotspotHeadersBegin__.hpp"
 #include "ci/compilerInterface.hpp"
 
 class JeandleType : public AllStatic {

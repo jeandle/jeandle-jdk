@@ -21,7 +21,7 @@
 #ifndef CPU_X86_JEANDLEREGISTER_X86_HPP
 #define CPU_X86_JEANDLEREGISTER_X86_HPP
 
-#include "utilities/debug.hpp"
+#include "jeandle/__hotspotHeadersBegin__.hpp"
 #include "register_x86.hpp"
 
 #ifdef _LP64

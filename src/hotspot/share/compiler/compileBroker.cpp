@@ -24,9 +24,9 @@
  */
 
 #ifdef JEANDLE
-#include <cassert>
+#include "jeandle/__llvmHeadersBegin__.hpp"
 #include "llvm/Support/TargetSelect.h"
-#include "utilities/debug.hpp"
+#include "jeandle/__hotspotHeadersBegin__.hpp"
 #endif // JEANDLE
 
 #include "precompiled.hpp"
@@ -87,10 +87,7 @@
 #include "opto/c2compiler.hpp"
 #endif
 #ifdef JEANDLE
-#pragma push_macro("AARCH64")
-#undef AARCH64
 #include "jeandle/jeandleCompiler.hpp"
-#pragma pop_macro("AARCH64")
 #endif // JEANDLE
 #if INCLUDE_JVMCI
 #include "jvmci/jvmciEnv.hpp"

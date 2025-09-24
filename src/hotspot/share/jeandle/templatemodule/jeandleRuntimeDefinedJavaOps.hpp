@@ -21,9 +21,10 @@
 #ifndef SHARE_JEANDLE_RUNTIME_DEFINED_JAVA_OPS_HPP
 #define SHARE_JEANDLE_RUNTIME_DEFINED_JAVA_OPS_HPP
 
-#include <cassert>
+#include "jeandle/__llvmHeadersBegin__.hpp"
 #include "llvm/IR/Module.h"
 
+#include "jeandle/__hotspotHeadersBegin__.hpp"
 #include "utilities/debug.hpp"
 #include "memory/allStatic.hpp"
 

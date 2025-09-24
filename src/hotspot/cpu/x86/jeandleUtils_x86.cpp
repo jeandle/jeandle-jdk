@@ -18,6 +18,7 @@
  *
  */
 
+#include "jeandle/__llvmHeadersBegin__.hpp"
 #include "llvm/IR/Jeandle/Attributes.h"
 #include "llvm/IR/Jeandle/GCStrategy.h"
 
