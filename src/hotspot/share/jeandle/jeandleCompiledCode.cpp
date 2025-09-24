@@ -18,15 +18,15 @@
  *
  */
 
+#include "jeandle/llvm_begin_macros.hpp"
+#include "llvm/Support/DataExtractor.h"
+#include "jeandle/llvm_end_macros.hpp"
+
 #include "jeandle/jeandleAssembler.hpp"
 #include "jeandle/jeandleCompilation.hpp"
 #include "jeandle/jeandleCompiledCode.hpp"
 #include "jeandle/jeandleRegister.hpp"
 #include "jeandle/jeandleRuntimeRoutine.hpp"
-
-#include "jeandle/llvm_begin_macros.hpp"
-#include "llvm/Support/DataExtractor.h"
-#include "jeandle/llvm_end_macros.hpp"
 
 #include "asm/macroAssembler.hpp"
 #include "ci/ciEnv.hpp"

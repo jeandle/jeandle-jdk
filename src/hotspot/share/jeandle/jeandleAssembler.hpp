@@ -21,11 +21,11 @@
 #ifndef SHARE_JEANDLE_ASSEMBLER_HPP
 #define SHARE_JEANDLE_ASSEMBLER_HPP
 
-#include "jeandle/jeandleCompilation.hpp"
-
 #include "jeandle/llvm_begin_macros.hpp"
 #include "llvm/ExecutionEngine/JITLink/JITLink.h"
 #include "jeandle/llvm_end_macros.hpp"
+
+#include "jeandle/jeandleCompilation.hpp"
 
 #include "asm/macroAssembler.hpp"
 

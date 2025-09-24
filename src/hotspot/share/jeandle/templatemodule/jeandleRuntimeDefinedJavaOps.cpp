@@ -18,15 +18,15 @@
  *
  */
 
+#include "jeandle/llvm_begin_macros.hpp"
+#include "llvm/IR/BasicBlock.h"
+#include "llvm/IR/IRBuilder.h"
+#include "jeandle/llvm_end_macros.hpp"
+
 #include "jeandle/templatemodule/jeandleRuntimeDefinedJavaOps.hpp"
 #include "jeandle/jeandleRuntimeRoutine.hpp"
 #include "jeandle/jeandleRegister.hpp"
 
-#include "jeandle/llvm_begin_macros.hpp"
-#include "llvm/IR/BasicBlock.h"
-#include "llvm/IR/IRBuilder.h"
-
-#include "jeandle/llvm_end_macros.hpp"
 #include "runtime/javaThread.hpp"
 #include "runtime/safepointMechanism.hpp"
 //                  name, lower_phase, return_type, arg_types

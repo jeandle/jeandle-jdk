@@ -18,18 +18,18 @@
  *
  */
 
-#include "jeandle/jeandleAbstractInterpreter.hpp"
-#include "jeandle/jeandleCompiledCall.hpp"
-#include "jeandle/jeandleRuntimeRoutine.hpp"
-#include "jeandle/jeandleType.hpp"
-#include "jeandle/jeandleUtils.hpp"
-
 #include "jeandle/llvm_begin_macros.hpp"
 #include "llvm/IR/Attributes.h"
 #include "llvm/IR/Jeandle/Attributes.h"
 #include "llvm/IR/Jeandle/GCStrategy.h"
 #include "llvm/IR/Jeandle/Metadata.h"
 #include "jeandle/llvm_end_macros.hpp"
+
+#include "jeandle/jeandleAbstractInterpreter.hpp"
+#include "jeandle/jeandleCompiledCall.hpp"
+#include "jeandle/jeandleRuntimeRoutine.hpp"
+#include "jeandle/jeandleType.hpp"
+#include "jeandle/jeandleUtils.hpp"
 
 #include "logging/log.hpp"
 #include "ci/ciMethodBlocks.hpp"

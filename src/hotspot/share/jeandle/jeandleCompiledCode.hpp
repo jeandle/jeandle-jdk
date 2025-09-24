@@ -21,11 +21,6 @@
 #ifndef SHARE_JEANDLE_COMPILED_CODE_HPP
 #define SHARE_JEANDLE_COMPILED_CODE_HPP
 
-#include "jeandle/jeandleCompiledCall.hpp"
-#include "jeandle/jeandleReadELF.hpp"
-#include "jeandle/jeandleResourceObj.hpp"
-#include "jeandle/jeandleUtils.hpp"
-
 #include "jeandle/llvm_begin_macros.hpp"
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ExecutionEngine/JITLink/JITLink.h"
@@ -34,6 +29,11 @@
 #include "llvm/Object/StackMapParser.h"
 #include "llvm/Support/MemoryBuffer.h"
 #include "jeandle/llvm_end_macros.hpp"
+
+#include "jeandle/jeandleCompiledCall.hpp"
+#include "jeandle/jeandleReadELF.hpp"
+#include "jeandle/jeandleResourceObj.hpp"
+#include "jeandle/jeandleUtils.hpp"
 
 #include "asm/codeBuffer.hpp"
 #include "ci/ciEnv.hpp"

@@ -19,11 +19,11 @@
  */
 
 
-#include "jeandle/jeandleType.hpp"
-
 #include "jeandle/llvm_begin_macros.hpp"
 #include "llvm/IR/Jeandle/Metadata.h"
 #include "jeandle/llvm_end_macros.hpp"
+
+#include "jeandle/jeandleType.hpp"
 
 llvm::Type* JeandleType::java2llvm(BasicType java_type, llvm::LLVMContext& context) {
   switch (java_type) {

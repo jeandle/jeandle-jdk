@@ -18,11 +18,6 @@
  *
  */
 
-#include "jeandle/jeandleCompiledCall.hpp"
-#include "jeandle/jeandleUtils.hpp"
-#include "jeandle/jeandleCallVM.hpp"
-#include "jeandle/jeandleRegister.hpp"
-
 #include "jeandle/llvm_begin_macros.hpp"
 #include "llvm/IR/Attributes.h"
 #include "llvm/IR/IRBuilder.h"
@@ -31,6 +26,10 @@
 #include "llvm/IR/Jeandle/GCStrategy.h"
 #include "jeandle/llvm_end_macros.hpp"
 
+#include "jeandle/jeandleCompiledCall.hpp"
+#include "jeandle/jeandleUtils.hpp"
+#include "jeandle/jeandleCallVM.hpp"
+#include "jeandle/jeandleRegister.hpp"
 void JeandleCallVM::generate_call_VM(const char* name, address c_func, llvm::FunctionType* func_type, llvm::Module& target_module, JeandleCompiledCode& code) {
   llvm::Function* llvm_func = llvm::Function::Create(func_type,
                                                      llvm::Function::ExternalLinkage,

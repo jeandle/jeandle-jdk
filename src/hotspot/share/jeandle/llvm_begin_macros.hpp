@@ -22,9 +22,9 @@
 #undef AARCH64
 // Need to undef assert from stdlib. Then redefine our assert.
 #ifdef JEANDLE
-#ifdef SHARE_UTILITIES_DEBUG_HPP
-  #undef assert
-  #define assert(p, ...) vmassert(p, __VA_ARGS__)
-#endif // SHARE_UTILITIES_DEBUG_HPP
+  #ifdef SHARE_UTILITIES_DEBUG_HPP
+    #undef assert
+    #define assert(p, ...) vmassert(p, __VA_ARGS__)
+  #endif // SHARE_UTILITIES_DEBUG_HPP
 #endif // JEANDLE
 #include <cassert>

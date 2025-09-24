@@ -20,10 +20,10 @@
 
 #pragma pop_macro("AARCH64")
 #ifdef JEANDLE
-    #ifdef assert
-        #Undef assert
-    #endif
+  #ifdef assert
+    #undef assert
+  #endif
 #endif
 #ifndef assert
-    #define assert(p, ...)
+  #define assert(p, ...)
 #endif

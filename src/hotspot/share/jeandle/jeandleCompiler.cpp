@@ -18,12 +18,6 @@
  *
  */
 
-#include "jeandle/jeandleCompilation.hpp"
-#include "jeandle/jeandleCompiler.hpp"
-#include "jeandle/jeandleRuntimeRoutine.hpp"
-#include "jeandle/jeandleType.hpp"
-#include "jeandle/templatemodule/jeandleRuntimeDefinedJavaOps.hpp"
-
 #include "jeandle/llvm_begin_macros.hpp"
 #include "llvm/Bitcode/BitcodeWriter.h"
 #include "llvm/IRReader/IRReader.h"
@@ -32,6 +26,12 @@
 #include "llvm/Support/SourceMgr.h"
 #include "llvm/TargetParser/Host.h"
 #include "jeandle/llvm_end_macros.hpp"
+
+#include "jeandle/jeandleCompilation.hpp"
+#include "jeandle/jeandleCompiler.hpp"
+#include "jeandle/jeandleRuntimeRoutine.hpp"
+#include "jeandle/jeandleType.hpp"
+#include "jeandle/templatemodule/jeandleRuntimeDefinedJavaOps.hpp"
 
 #include "runtime/arguments.hpp"
 JeandleCompiler::JeandleCompiler(llvm::TargetMachine* target_machine) :

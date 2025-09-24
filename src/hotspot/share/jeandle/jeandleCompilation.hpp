@@ -21,8 +21,6 @@
 #ifndef SHARE_JEANDLE_COMPILATION_HPP
 #define SHARE_JEANDLE_COMPILATION_HPP
 
-#include "jeandle/jeandleCompiledCode.hpp"
-
 #include "jeandle/llvm_begin_macros.hpp"
 #include "llvm/IR/Module.h"
 #include "llvm/IR/Function.h"
@@ -31,6 +29,8 @@
 
 #include <memory>
 #include "jeandle/llvm_end_macros.hpp"
+
+#include "jeandle/jeandleCompiledCode.hpp"
 
 #include "ci/ciEnv.hpp"
 #include "ci/ciMethod.hpp"

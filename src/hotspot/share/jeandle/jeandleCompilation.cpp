@@ -18,13 +18,6 @@
  *
  */
 
-#include "jeandle/jeandleAbstractInterpreter.hpp"
-#include "jeandle/jeandleCallVM.hpp"
-#include "jeandle/jeandleCompilation.hpp"
-#include "jeandle/jeandleCompiler.hpp"
-#include "jeandle/jeandleType.hpp"
-#include "jeandle/jeandleUtils.hpp"
-
 #include "jeandle/llvm_begin_macros.hpp"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/Bitcode/BitcodeReader.h"
@@ -51,6 +44,13 @@
 #include <sstream>
 #include <string>
 #include "jeandle/llvm_end_macros.hpp"
+
+#include "jeandle/jeandleAbstractInterpreter.hpp"
+#include "jeandle/jeandleCallVM.hpp"
+#include "jeandle/jeandleCompilation.hpp"
+#include "jeandle/jeandleCompiler.hpp"
+#include "jeandle/jeandleType.hpp"
+#include "jeandle/jeandleUtils.hpp"
 
 #include "ci/ciUtilities.inline.hpp"
 #include "logging/log.hpp"

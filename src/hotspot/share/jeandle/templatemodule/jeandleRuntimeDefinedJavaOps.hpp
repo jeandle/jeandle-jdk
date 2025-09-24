@@ -23,8 +23,8 @@
 
 #include "jeandle/llvm_begin_macros.hpp"
 #include "llvm/IR/Module.h"
-
 #include "jeandle/llvm_end_macros.hpp"
+
 #include "memory/allStatic.hpp"
 
 class RuntimeDefinedJavaOps : public AllStatic {
