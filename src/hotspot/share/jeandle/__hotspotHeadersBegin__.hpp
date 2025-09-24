@@ -26,6 +26,6 @@
 
 // Resolve conflict with AARCH64 macro in LLVM headers.
 #ifdef SAVED_HOTSPOT_AARCH64
-  #define AARCH64 SAVED_HOTSPOT_AARCH64
+  #define AARCH64
   #undef SAVED_HOTSPOT_AARCH64
 #endif // SAVED_HOTSPOT_AARCH64

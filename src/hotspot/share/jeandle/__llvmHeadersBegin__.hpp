@@ -20,6 +20,6 @@
 
 #include <cassert>
 #ifdef AARCH64
-  #define SAVED_HOTSPOT_AARCH64 AARCH64
+  #define SAVED_HOTSPOT_AARCH64
   #undef AARCH64
 #endif // AARCH64
