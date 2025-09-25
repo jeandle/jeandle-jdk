@@ -863,7 +863,7 @@ void JeandleAbstractInterpreter::increment() {
 }
 
 void JeandleAbstractInterpreter::if_zero(llvm::CmpInst::Predicate p) {
-  if (_codes.get_dest() < _codes.cur_bci()) {
+  if (_bytecodes.get_dest() < _bytecodes.cur_bci()) {
     add_safepoint_poll();
   }
   llvm::Value* v = _jvm->ipop();
@@ -872,7 +872,7 @@ void JeandleAbstractInterpreter::if_zero(llvm::CmpInst::Predicate p) {
 }
 
 void JeandleAbstractInterpreter::if_icmp(llvm::CmpInst::Predicate p) {
-  if (_codes.get_dest() < _codes.cur_bci()) {
+  if (_bytecodes.get_dest() < _bytecodes.cur_bci()) {
     add_safepoint_poll();
   }
   llvm::Value* r = _jvm->ipop();
@@ -892,7 +892,7 @@ void JeandleAbstractInterpreter::lcmp() {
 }
 
 void JeandleAbstractInterpreter::if_acmp(llvm::CmpInst::Predicate p) {
-  if (_codes.get_dest() < _codes.cur_bci()) {
+  if (_bytecodes.get_dest() < _bytecodes.cur_bci()) {
     add_safepoint_poll();
   }
   llvm::Value* r = _jvm->apop();
@@ -902,7 +902,7 @@ void JeandleAbstractInterpreter::if_acmp(llvm::CmpInst::Predicate p) {
 }
 
 void JeandleAbstractInterpreter::if_null(llvm::CmpInst::Predicate p) {
-  if (_codes.get_dest() < _codes.cur_bci()) {
+  if (_bytecodes.get_dest() < _bytecodes.cur_bci()) {
     add_safepoint_poll();
   }
   llvm::Value* v = _jvm->apop();

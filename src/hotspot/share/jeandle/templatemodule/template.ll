@@ -7,11 +7,6 @@
 ; Jeandle compiler initialization time.
 ;
 
-
-; Declare these runtime-related constants as global variables.  The VM will define them as constants during
-; initializing the jeandle compiler.
-;
-
 ; Byte offsets of Array<Klass*> structure fields.
 @ArrayKlass.base_offset_in_bytes = external global i32
 @ArrayKlass.length_offset_in_bytes = external global i32
