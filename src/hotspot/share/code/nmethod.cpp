@@ -86,6 +86,9 @@
 #if INCLUDE_JVMCI
 #include "jvmci/jvmciRuntime.hpp"
 #endif
+#ifdef JEANDLE
+#include "jeandle/jeandleExceptionHandlerTable.hpp"
+#endif
 
 #ifdef DTRACE_ENABLED
 
@@ -554,7 +557,7 @@ nmethod* nmethod::new_nmethod(const methodHandle& method,
   Dependencies* dependencies,
   CodeBuffer* code_buffer, int frame_size,
   OopMapSet* oop_maps,
-  ExceptionHandlerTable* handler_table,
+  ExceptionHandlerTableInterface* handler_table,
   ImplicitExceptionTable* nul_chk_table,
   AbstractCompiler* compiler,
   CompLevel comp_level
@@ -783,7 +786,7 @@ nmethod::nmethod(
   CodeBuffer *code_buffer,
   int frame_size,
   OopMapSet* oop_maps,
-  ExceptionHandlerTable* handler_table,
+  ExceptionHandlerTableInterface* handler_table,
   ImplicitExceptionTable* nul_chk_table,
   AbstractCompiler* compiler,
   CompLevel comp_level
@@ -905,7 +908,7 @@ nmethod::nmethod(
 
     finalize_relocations();
 
-    // Copy contents of ExceptionHandlerTable to nmethod
+    // Copy contents of ExceptionHandlerTableInterface to nmethod
     handler_table->copy_to(this);
     nul_chk_table->copy_to(this);
 
@@ -2621,7 +2624,12 @@ void nmethod::print_pcs_on(outputStream* st) {
 }
 
 void nmethod::print_handler_table() {
-  ExceptionHandlerTable(this).print(code_begin());
+  if (is_compiled_by_jeandle()) {
+    JeandleExceptionHandlerTable(this).print(code_begin());
+  } else {
+    ExceptionHandlerTable(this).print(code_begin());
+  }
+
 }
 
 void nmethod::print_nul_chk_table() {

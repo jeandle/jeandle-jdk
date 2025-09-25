@@ -289,7 +289,7 @@ class nmethod : public CompiledMethod {
           CodeBuffer *code_buffer,
           int frame_size,
           OopMapSet* oop_maps,
-          ExceptionHandlerTable* handler_table,
+          ExceptionHandlerTableInterface* handler_table,
           ImplicitExceptionTable* nul_chk_table,
           AbstractCompiler* compiler,
           CompLevel comp_level
@@ -340,7 +340,7 @@ class nmethod : public CompiledMethod {
                               CodeBuffer *code_buffer,
                               int frame_size,
                               OopMapSet* oop_maps,
-                              ExceptionHandlerTable* handler_table,
+                              ExceptionHandlerTableInterface* handler_table,
                               ImplicitExceptionTable* nul_chk_table,
                               AbstractCompiler* compiler,
                               CompLevel comp_level

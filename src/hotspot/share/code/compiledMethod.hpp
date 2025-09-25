@@ -32,6 +32,7 @@
 
 class Dependencies;
 class ExceptionHandlerTable;
+class ExceptionHandlerTableInterface;
 class ImplicitExceptionTable;
 class AbstractCompiler;
 class xmlStream;

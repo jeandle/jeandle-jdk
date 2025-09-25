@@ -29,6 +29,15 @@
 #include "oops/method.hpp"
 #include "utilities/align.hpp"
 
+// Here is a class to make JeandleExceptionHandlerTable compatible with ExceptionHandlerTable.
+class ExceptionHandlerTableInterface {
+ public:
+  virtual ~ExceptionHandlerTableInterface() = default;
+  virtual int size_in_bytes() const = 0;
+  virtual void copy_to(CompiledMethod* nm) = 0;
+  virtual void print(address base) const = 0;
+};
+
 // A HandlerTableEntry describes an individual entry of a subtable
 // of ExceptionHandlerTable. An entry consists of a pair(bci, pco),
 // where bci is the exception handler bci, and pco is the pc offset
@@ -83,7 +92,7 @@ class HandlerTableEntry {
 // modified.
 
 class nmethod;
-class ExceptionHandlerTable {
+class ExceptionHandlerTable : public ExceptionHandlerTableInterface {
  private:
   HandlerTableEntry* _table;    // the table
   int                _length;   // the current length of the table
@@ -115,8 +124,8 @@ class ExceptionHandlerTable {
   );
 
   // nmethod support
-  int  size_in_bytes() const { return align_up(_length * (int)sizeof(HandlerTableEntry), oopSize); }
-  void copy_to(CompiledMethod* nm);
+  int  size_in_bytes() const override { return align_up(_length * (int)sizeof(HandlerTableEntry), oopSize); }
+  void copy_to(CompiledMethod* nm) override;
   void copy_bytes_to(address addr);
 
   // lookup
@@ -124,7 +133,7 @@ class ExceptionHandlerTable {
 
   // debugging
   void print_subtable(HandlerTableEntry* t, address base = nullptr) const;
-  void print(address base = nullptr) const;
+  void print(address base = nullptr) const override;
   void print_subtable_for(int catch_pco) const;
 };
 
