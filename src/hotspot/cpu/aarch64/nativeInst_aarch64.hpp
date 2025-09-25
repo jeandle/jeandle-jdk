@@ -115,6 +115,8 @@ public:
 
   static bool is_ldr_literal_at(address instr);
 
+  static bool is_add_imm_at(address instr);
+
   bool is_ldr_literal() {
     return is_ldr_literal_at(addr_at(0));
   }

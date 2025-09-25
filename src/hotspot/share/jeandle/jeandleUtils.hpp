@@ -21,11 +21,11 @@
 #ifndef SHARE_JEANDLE_UTILS_HPP
 #define SHARE_JEANDLE_UTILS_HPP
 
-#include <cassert>
+#include "jeandle/__llvmHeadersBegin__.hpp"
 #include "llvm/IR/Module.h"
 #include "llvm/IR/Function.h"
 
-#include "utilities/debug.hpp"
+#include "jeandle/__hotspotHeadersBegin__.hpp"
 #include "ci/ciMethod.hpp"
 
 

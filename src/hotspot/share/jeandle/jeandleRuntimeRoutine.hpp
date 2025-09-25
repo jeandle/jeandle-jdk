@@ -21,15 +21,12 @@
 #ifndef SHARE_JEANDLE_RUNTIME_ROUTINE_HPP
 #define SHARE_JEANDLE_RUNTIME_ROUTINE_HPP
 
-#include <cassert>
-#pragma push_macro("AARCH64")
-#undef AARCH64
+#include "jeandle/__llvmHeadersBegin__.hpp"
 #include "llvm/IR/Jeandle/Metadata.h"
 #include "llvm/IR/Module.h"
 #include "llvm/Target/TargetMachine.h"
-#pragma pop_macro("AARCH64")
 
-#include "utilities/debug.hpp"
+#include "jeandle/__hotspotHeadersBegin__.hpp"
 #include "memory/allStatic.hpp"
 #include "runtime/javaThread.hpp"
 #include "utilities/globalDefinitions.hpp"
@@ -44,6 +41,18 @@
 
 #define ALL_JEANDLE_ASSEMBLY_ROUTINES(def) \
   def(exceptional_return)
+
+//-----------------------------------------------------------------------------------------------------------------------------------
+//  name                     | func_entry            | return_type                        | arg_types
+//-----------------------------------------------------------------------------------------------------------------------------------
+#define ALL_HOTSPOT_ROUTINES(def)                                                                                                    \
+  def(SharedRuntime_dsin,    SharedRuntime::dsin,     llvm::Type::getDoubleTy(context),    llvm::Type::getDoubleTy(context))         \
+  def(StubRoutines_dsin,     StubRoutines::dsin(),    llvm::Type::getDoubleTy(context),    llvm::Type::getDoubleTy(context))         \
+  def(SharedRuntime_drem,    SharedRuntime::drem,     llvm::Type::getDoubleTy(context),    llvm::Type::getDoubleTy(context),         \
+                                                                                           llvm::Type::getDoubleTy(context))         \
+  def(SharedRuntime_frem,    SharedRuntime::frem,     llvm::Type::getFloatTy(context),     llvm::Type::getFloatTy(context),          \
+                                                                                           llvm::Type::getFloatTy(context))
+
 
 // JeandleRuntimeRoutine contains C/C++/Assembly routines that can be called from Jeandle compiled code.
 // There are two ways to call a JeandleRuntimeRoutine: directly calling an assembly routine or calling
@@ -75,6 +84,17 @@ class JeandleRuntimeRoutine : public AllStatic {
     assert(_routine_entry.contains(name), "invalid runtime routine");
     return _routine_entry.lookup(name);
   }
+
+#define DEF_HOTSPOT_ROUTINE_CALLEE(name, func_entry, return_type, ...)                          \
+  static llvm::FunctionCallee hotspot_##name##_callee(llvm::Module& target_module) {            \
+    llvm::LLVMContext& context = target_module.getContext();                                    \
+    llvm::FunctionType* func_type = llvm::FunctionType::get(return_type, {__VA_ARGS__}, false); \
+    llvm::FunctionCallee callee = target_module.getOrInsertFunction(#name, func_type);          \
+    llvm::cast<llvm::Function>(callee.getCallee())->setCallingConv(llvm::CallingConv::C);       \
+    return callee;                                                                              \
+  }
+
+  ALL_HOTSPOT_ROUTINES(DEF_HOTSPOT_ROUTINE_CALLEE);
 
  private:
   static llvm::StringMap<address> _routine_entry; // All the routines.

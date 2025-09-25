@@ -21,7 +21,7 @@
 #ifndef CPU_AARCH64_JEANDLEREGISTER_AARCH64_HPP
 #define CPU_AARCH64_JEANDLEREGISTER_AARCH64_HPP
 
-#include "utilities/debug.hpp"
+#include "jeandle/__hotspotHeadersBegin__.hpp"
 #include "register_aarch64.hpp"
 
 class JeandleRegister : public AllStatic {

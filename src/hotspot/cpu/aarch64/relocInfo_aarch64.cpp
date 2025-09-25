@@ -97,7 +97,11 @@ void Relocation::pd_set_jeandle_data_value(address x, bool verify_only) {
     return;
   }
 
-  // should be adrp or ldr
+  // We handle 2 types of PC relative addressing
+  //   1 - adrp Rx, target_page
+  //       ldr  Ry, [Rx, #offset_in_page]
+  //   2 - adrp Rx, target_page
+  //       add  Ry, Rx, #offset_in_page
   address insn_addr = addr();
   if (NativeInstruction::is_adrp_at(insn_addr)) {
     ptrdiff_t offset = x - insn_addr;
@@ -114,6 +118,10 @@ void Relocation::pd_set_jeandle_data_value(address x, bool verify_only) {
     uint32_t size = Instruction_aarch64::extract(*(uint32_t*)insn_addr, 31, 30);
     Instruction_aarch64::patch(insn_addr, 21, 10, offset_lo >> size);
     guarantee(((dest >> size) << size) == dest, "misaligned target");
+  } else if (NativeInstruction::is_add_imm_at(insn_addr)) {
+    uintptr_t dest = (uintptr_t)x;
+    int offset_lo = dest & 0xfff;
+    Instruction_aarch64::patch(insn_addr, 21, 10, offset_lo);
   } else {
     ShouldNotReachHere();
   }

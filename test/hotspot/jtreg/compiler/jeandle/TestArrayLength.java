@@ -18,27 +18,22 @@
  *
  */
 
-#include "jeandle/__llvmHeadersBegin__.hpp"
-#include "llvm/IR/Jeandle/Attributes.h"
-#include "llvm/IR/Jeandle/GCStrategy.h"
+import jdk.test.lib.Asserts;
 
-#include "jeandle/jeandleUtils.hpp"
+/**
+ * @test
+ * @summary Support arraylength
+ * issue: https://github.com/jeandle/jeandle-jdk/issues/29
+ * @library /test/lib
+ * @run main/othervm -Xcomp -XX:-TieredCompilation -XX:CompileCommand=compileonly,TestArrayLength::getArrayLength
+ * -XX:+UseJeandleCompiler TestArrayLength
+ */
+public class TestArrayLength {
+    public static void main(String[] args) {
+        Asserts.assertEquals(getArrayLength(new int[10]), 10);
+    }
 
-void JeandleFuncSig::setup_description(llvm::Function* func, bool is_stub) {
-  func->setCallingConv(llvm::CallingConv::Hotspot_JIT);
-
-  func->setGC(llvm::jeandle::JeandleGC);
-
-  if (!is_stub) {
-    func->addFnAttr("patchable-function-entry", "5");
-
-    llvm::GlobalVariable* personality_func = func->getParent()->getGlobalVariable("jeandle.personality");
-    assert(personality_func != nullptr, "no personality function");
-    func->setPersonalityFn(personality_func);
-  }
-  func->addFnAttr(llvm::Attribute::NoCfCheck);
-
-  if (UseCompressedOops) {
-    func->addFnAttr(llvm::Attribute::get(func->getContext(), llvm::jeandle::Attribute::UseCompressedOops));
-  }
+    public static int getArrayLength(int[] a) {
+        return a.length;
+    }
 }

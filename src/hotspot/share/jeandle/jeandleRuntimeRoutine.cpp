@@ -21,7 +21,9 @@
 #include "jeandle/jeandleCompilation.hpp"
 #include "jeandle/jeandleRuntimeRoutine.hpp"
 
-#include "utilities/debug.hpp"
+#include "jeandle/__hotspotHeadersBegin__.hpp"
+#include "runtime/sharedRuntime.hpp"
+#include "runtime/stubRoutines.hpp"
 #include "runtime/frame.hpp"
 #include "runtime/interfaceSupport.inline.hpp"
 #include "runtime/safepoint.hpp"
@@ -46,6 +48,9 @@
 #define GEN_ASSEMBLY_ROUTINE_BLOB(name) \
   generate_##name();
 
+#define REGISTER_HOTSPOT_ROUTINE(name, func_entry, ...) \
+  _routine_entry.insert({llvm::StringRef(#name), (address)func_entry});
+
 llvm::StringMap<address> JeandleRuntimeRoutine::_routine_entry;
 
 bool JeandleRuntimeRoutine::generate(llvm::TargetMachine* target_machine, llvm::DataLayout* data_layout) {
@@ -54,6 +59,9 @@ bool JeandleRuntimeRoutine::generate(llvm::TargetMachine* target_machine, llvm::
 
   // Generate assembly routines.
   ALL_JEANDLE_ASSEMBLY_ROUTINES(GEN_ASSEMBLY_ROUTINE_BLOB);
+
+  // Register hotspot routines
+  ALL_HOTSPOT_ROUTINES(REGISTER_HOTSPOT_ROUTINE);
 
   return true;
 }

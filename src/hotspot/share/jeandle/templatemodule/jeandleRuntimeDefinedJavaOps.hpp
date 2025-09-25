@@ -21,9 +21,10 @@
 #ifndef SHARE_JEANDLE_RUNTIME_DEFINED_JAVA_OPS_HPP
 #define SHARE_JEANDLE_RUNTIME_DEFINED_JAVA_OPS_HPP
 
-#include <cassert>
+#include "jeandle/__llvmHeadersBegin__.hpp"
 #include "llvm/IR/Module.h"
 
+#include "jeandle/__hotspotHeadersBegin__.hpp"
 #include "utilities/debug.hpp"
 #include "memory/allStatic.hpp"
 
@@ -40,6 +41,7 @@ class RuntimeDefinedJavaOps : public AllStatic {
   static const char* _error_msg;
 
   static void define_metadata(llvm::Module& template_module);
+  static void define_global_variables(llvm::Module& template_module);
 };
 
 #endif // SHARE_JEANDLE_RUNTIME_DEFINED_JAVA_OPS_HPP

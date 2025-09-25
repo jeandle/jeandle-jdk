@@ -18,7 +18,7 @@
  *
  */
 
-#include <cassert>
+#include "jeandle/__llvmHeadersBegin__.hpp"
 #include "llvm/BinaryFormat/Dwarf.h"
 #include "llvm/Support/DataExtractor.h"
 
@@ -28,7 +28,7 @@
 #include "jeandle/jeandleRegister.hpp"
 #include "jeandle/jeandleRuntimeRoutine.hpp"
 
-#include "utilities/debug.hpp"
+#include "jeandle/__hotspotHeadersBegin__.hpp"
 #include "asm/macroAssembler.hpp"
 #include "ci/ciEnv.hpp"
 #include "code/vmreg.inline.hpp"

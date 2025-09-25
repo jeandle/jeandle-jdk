@@ -21,11 +21,11 @@
 #ifndef SHARE_JEANDLE_READ_ELF_HPP
 #define SHARE_JEANDLE_READ_ELF_HPP
 
-#include <cassert>
+#include "jeandle/__llvmHeadersBegin__.hpp"
 #include "llvm/Object/ELFObjectFile.h"
 #include "llvm/Support/MemoryBuffer.h"
 
-#include "utilities/debug.hpp"
+#include "jeandle/__hotspotHeadersBegin__.hpp"
 #include "memory/allStatic.hpp"
 
 using ELFT = llvm::object::ELF64LE;

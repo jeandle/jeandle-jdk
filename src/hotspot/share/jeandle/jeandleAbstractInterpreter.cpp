@@ -18,6 +18,7 @@
  *
  */
 
+#include "jeandle/__llvmHeadersBegin__.hpp"
 #include "llvm/IR/Attributes.h"
 #include "llvm/IR/Jeandle/Attributes.h"
 #include "llvm/IR/Jeandle/GCStrategy.h"
@@ -30,10 +31,11 @@
 #include "jeandle/jeandleType.hpp"
 #include "jeandle/jeandleUtils.hpp"
 
-#include "logging/log.hpp"
-#include "utilities/debug.hpp"
+#include "jeandle/__hotspotHeadersBegin__.hpp"
 #include "ci/ciMethodBlocks.hpp"
+#include "logging/log.hpp"
 #include "runtime/sharedRuntime.hpp"
+#include "runtime/stubRoutines.hpp"
 #include "utilities/ostream.hpp"
 
 JeandleVMState::JeandleVMState(int max_stack, int max_locals, llvm::LLVMContext *context) :
@@ -729,15 +731,15 @@ void JeandleAbstractInterpreter::interpret_block(JeandleBasicBlock* block) {
       case Bytecodes::_fsub: // fall through
       case Bytecodes::_fmul: // fall through
       case Bytecodes::_fdiv: // fall through
-      case Bytecodes::_fneg: arith_op(BasicType::T_FLOAT, code); break;
-      case Bytecodes::_frem: rem_op(BasicType::T_FLOAT, code); break;
+      case Bytecodes::_fneg: // fall through
+      case Bytecodes::_frem: arith_op(BasicType::T_FLOAT, code); break;
 
       case Bytecodes::_dadd: // fall through
       case Bytecodes::_dsub: // fall through
       case Bytecodes::_dmul: // fall through
       case Bytecodes::_ddiv: // fall through
-      case Bytecodes::_dneg: arith_op(BasicType::T_DOUBLE, code); break;
-      case Bytecodes::_drem: rem_op(BasicType::T_DOUBLE, code); break;
+      case Bytecodes::_dneg: // fall through
+      case Bytecodes::_drem: arith_op(BasicType::T_DOUBLE, code); break;
 
       // Conversions:
 
@@ -793,7 +795,7 @@ void JeandleAbstractInterpreter::interpret_block(JeandleBasicBlock* block) {
       case Bytecodes::_jsr: Unimplemented(); break;
       case Bytecodes::_ret: Unimplemented(); break;
 
-      case Bytecodes::_tableswitch: Unimplemented(); break;
+      case Bytecodes::_tableswitch: table_switch(); break;
       case Bytecodes::_lookupswitch: lookup_switch(); break;
 
       case Bytecodes::_ireturn: _ir_builder.CreateRet(_jvm->ipop()); break;
@@ -821,8 +823,9 @@ void JeandleAbstractInterpreter::interpret_block(JeandleBasicBlock* block) {
       case Bytecodes::_newarray: Unimplemented(); break;
       case Bytecodes::_anewarray: Unimplemented(); break;
 
-      case Bytecodes::_arraylength: Unimplemented(); break;
+      case Bytecodes::_arraylength: arraylength(); break;
       case Bytecodes::_athrow: dispatch_exception_to_handler(_jvm->apop()); break;
+
       case Bytecodes::_checkcast: Unimplemented(); break;
       case Bytecodes::_instanceof: instanceof(_codes.get_index_u2()); break;
 
@@ -917,6 +920,9 @@ void JeandleAbstractInterpreter::increment() {
 }
 
 void JeandleAbstractInterpreter::if_zero(llvm::CmpInst::Predicate p) {
+  if (_codes.get_dest() < _codes.cur_bci()) {
+    add_safepoint_poll();
+  }
   llvm::Value* v = _jvm->ipop();
   llvm::Value* cond = _ir_builder.CreateICmp(p, v, JeandleType::int_const(_ir_builder, 0));
   _ir_builder.CreateCondBr(cond,
@@ -925,6 +931,9 @@ void JeandleAbstractInterpreter::if_zero(llvm::CmpInst::Predicate p) {
 }
 
 void JeandleAbstractInterpreter::if_icmp(llvm::CmpInst::Predicate p) {
+  if (_codes.get_dest() < _codes.cur_bci()) {
+    add_safepoint_poll();
+  }
   llvm::Value* r = _jvm->ipop();
   llvm::Value* l = _jvm->ipop();
   llvm::Value* cond = _ir_builder.CreateICmp(p, l, r);
@@ -944,6 +953,9 @@ void JeandleAbstractInterpreter::lcmp() {
 }
 
 void JeandleAbstractInterpreter::if_acmp(llvm::CmpInst::Predicate p) {
+  if (_codes.get_dest() < _codes.cur_bci()) {
+    add_safepoint_poll();
+  }
   llvm::Value* r = _jvm->apop();
   llvm::Value* l = _jvm->apop();
   llvm::Value* cond = _ir_builder.CreateICmp(p, l, r);
@@ -953,6 +965,9 @@ void JeandleAbstractInterpreter::if_acmp(llvm::CmpInst::Predicate p) {
 }
 
 void JeandleAbstractInterpreter::if_null(llvm::CmpInst::Predicate p) {
+  if (_codes.get_dest() < _codes.cur_bci()) {
+    add_safepoint_poll();
+  }
   llvm::Value* v = _jvm->apop();
   llvm::Value* cond = _ir_builder.CreateICmp(p, v, llvm::ConstantPointerNull::get(llvm::cast<llvm::PointerType>(v->getType())));
   _ir_builder.CreateCondBr(cond,
@@ -1008,6 +1023,23 @@ void JeandleAbstractInterpreter::lookup_switch() {
   }
 }
 
+void JeandleAbstractInterpreter::table_switch() {
+  Bytecode_tableswitch sw(&_codes);
+
+  int length = sw.length();
+  int cur_bci = _codes.cur_bci();
+  int low = sw.low_key();
+
+  llvm::Value* idx = _jvm->ipop();
+  llvm::BasicBlock* default_block = bci2block()[cur_bci + sw.default_offset()]->llvm_block();
+  llvm::SwitchInst* switch_inst = _ir_builder.CreateSwitch(idx, default_block, length);
+
+  for (int i = 0; i < length; i++) {
+    llvm::BasicBlock* case_block = bci2block()[cur_bci + sw.dest_offset_at(i)]->llvm_block();
+    switch_inst->addCase(JeandleType::int_const(_ir_builder, i + low), case_block);
+  }
+}
+
 // Generate call instructions.
 // TODO: Reciever's null check.
 void JeandleAbstractInterpreter::invoke() {
@@ -1017,17 +1049,19 @@ void JeandleAbstractInterpreter::invoke() {
   assert(declared_signature != nullptr, "cannot be null");
   assert(will_link == target->is_loaded(), "");
 
-  if (target->is_loaded() && target->check_intrinsic_candidate()) {
-    if (inline_intrinsic(target)) {
-      if (log_is_enabled(Debug, jeandle)) {
-        ResourceMark rm;
-        stringStream ss;
-        target->print_name(&ss);
-        log_debug(jeandle)("Method `%s` is parsed as intrinsic", ss.as_string());
-      }
-      return;
-    };
+  // try inline callee as intrinsic
+  if (target->is_loaded()
+    && target->check_intrinsic_candidate()
+    && inline_intrinsic(target)) {
+    if (log_is_enabled(Debug, jeandle)) {
+      ResourceMark rm;
+      stringStream ss;
+      target->print_name(&ss);
+      log_debug(jeandle)("Method `%s` is parsed as intrinsic", ss.as_string());
+    }
+    return;
   }
+
   const Bytecodes::Code bc = _codes.cur_bc();
 
   // Construct arguments.
@@ -1121,10 +1155,23 @@ bool JeandleAbstractInterpreter::inline_intrinsic(const ciMethod* target) {
       _jvm->fpush(_ir_builder.CreateIntrinsic(JeandleType::java2llvm(BasicType::T_FLOAT, *_context), llvm::Intrinsic::fabs, {_jvm->fpop()}));
       break;
     }
+    case vmIntrinsicID::_dsin: {
+      llvm::FunctionCallee callee = StubRoutines::dsin() != nullptr ? JeandleRuntimeRoutine::hotspot_StubRoutines_dsin_callee(_module) :
+                                                                      JeandleRuntimeRoutine::hotspot_SharedRuntime_dsin_callee(_module);
+      _jvm->dpush(call_runtime_routine(callee, {_jvm->dpop()}, /* is_leaf */ true));
+      break;
+    }
     default:
       return false;
   }
   return true;
+}
+
+// Generate IR for calling into JeandleRuntimeRoutine
+llvm::CallInst* JeandleAbstractInterpreter::call_runtime_routine(llvm::FunctionCallee callee, llvm::ArrayRef<llvm::Value *> args, bool is_leaf) {
+  llvm::CallInst *call = _ir_builder.CreateCall(callee, args);
+  call->setCallingConv(llvm::CallingConv::C);
+  return call;
 }
 
 void JeandleAbstractInterpreter::stack_op(Bytecodes::Code code) {
@@ -1292,6 +1339,14 @@ void JeandleAbstractInterpreter::arith_op(BasicType type, Bytecodes::Code code) 
     case Bytecodes::_dmul: _jvm->push(type, _ir_builder.CreateFMul(l, r)); break;
     case Bytecodes::_fdiv: // fall through
     case Bytecodes::_ddiv: _jvm->push(type, _ir_builder.CreateFDiv(l, r)); break;
+    case Bytecodes::_frem: {
+      _jvm->fpush( call_runtime_routine(JeandleRuntimeRoutine::hotspot_SharedRuntime_frem_callee(_module), {l, r}, /* is_leaf */ true));
+      break;
+    }
+    case Bytecodes::_drem: {
+      _jvm->dpush(call_runtime_routine(JeandleRuntimeRoutine::hotspot_SharedRuntime_drem_callee(_module), {l, r}, /* is_leaf */ true));
+      break;
+    }
     case Bytecodes::_fneg: // fall through
     case Bytecodes::_dneg: {
       assert(l == nullptr, "only one operand for negation");
@@ -1300,37 +1355,6 @@ void JeandleAbstractInterpreter::arith_op(BasicType type, Bytecodes::Code code) 
     }
     default: ShouldNotReachHere();
   }
-}
-
-void JeandleAbstractInterpreter::rem_op(BasicType type, Bytecodes::Code code) {
-  assert(type == BasicType::T_FLOAT || type == BasicType::T_DOUBLE, "unexpected type");
-  assert(code == Bytecodes::_frem || code == Bytecodes::_drem, "unexpected byte code");
-  llvm::Type* return_type = nullptr;
-  llvm::SmallVector<llvm::Type*> args_type;
-  address call_addr;
-
-  if (code == Bytecodes::_frem) {
-    llvm::Type* float_type = llvm::Type::getFloatTy(*_context);
-    return_type = float_type;
-    args_type = {float_type, float_type};
-    call_addr = CAST_FROM_FN_PTR(address, SharedRuntime::frem);
-  } else {
-    llvm::Type* double_type = llvm::Type::getDoubleTy(*_context);
-    return_type = double_type;
-    args_type = {double_type, double_type};
-    call_addr = CAST_FROM_FN_PTR(address, SharedRuntime::drem);
-  }
-
-  llvm::FunctionType* func_type = llvm::FunctionType::get(return_type, args_type, false);
-  llvm::PointerType* func_ptr_type = llvm::PointerType::get(func_type, llvm::jeandle::AddrSpace::CHeapAddrSpace);
-  llvm::Value* func_addr = _ir_builder.getInt64((intptr_t)call_addr);
-  llvm::Value* func_ptr = _ir_builder.CreateIntToPtr(func_addr, func_ptr_type);
-  // call the runtime routine directly
-  llvm::Value* r = _jvm->pop(type);
-  llvm::Value* l = _jvm->pop(type);
-  llvm::CallInst* call = _ir_builder.CreateCall(func_type, func_ptr, {l, r});
-  call->setCallingConv(llvm::CallingConv::C);
-  _jvm->push(type, call);
 }
 
 llvm::CallInst* JeandleAbstractInterpreter::call_java_op(llvm::StringRef java_op, llvm::ArrayRef<llvm::Value*> args) {
@@ -1553,4 +1577,11 @@ void JeandleAbstractInterpreter::throw_exception(llvm::Value* exception_oop) {
   } else {
     ShouldNotReachHere();
   }
+}
+
+void JeandleAbstractInterpreter::arraylength() {
+    // TODO: need null pointer check in the future
+    llvm::Value* array_oop = _jvm->apop();
+    llvm::CallInst* call = call_java_op("jeandle.arraylength", {array_oop});
+    _jvm->ipush(call);
 }

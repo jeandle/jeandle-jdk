@@ -21,14 +21,14 @@
 #ifndef SHARE_JEANDLE_CALL_VM_HPP
 #define SHARE_JEANDLE_CALL_VM_HPP
 
-#include <cassert>
+#include "jeandle/__llvmHeadersBegin__.hpp"
 #include "llvm/IR/Module.h"
 #include "llvm/IR/Function.h"
 #include "llvm/IR/LLVMContext.h"
 
 #include "jeandle/jeandleCompiledCode.hpp"
 
-#include "utilities/debug.hpp"
+#include "jeandle/__hotspotHeadersBegin__.hpp"
 #include "utilities/globalDefinitions.hpp"
 
 class JeandleCallVM : public AllStatic {

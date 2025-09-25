@@ -21,7 +21,8 @@
 #ifndef SHARE_JEANDLE_ABSTRACT_INTERPRETER_HPP
 #define SHARE_JEANDLE_ABSTRACT_INTERPRETER_HPP
 
-#include <cassert>
+#include "jeandle/__llvmHeadersBegin__.hpp"
+#include "llvm/IR/BasicBlock.h"
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/SmallPtrSet.h"
 #include "llvm/ADT/SmallVector.h"
@@ -29,9 +30,9 @@
 #include "llvm/IR/IRBuilder.h"
 #include "llvm/IR/LLVMContext.h"
 
-#include "jeandle/jeandleCompilation.hpp"
+#include "jeandle/jeandleCompilation.
 
-#include "utilities/debug.hpp"
+#include "jeandle/__hotspotHeadersBegin__.hpp"
 #include "ci/ciMethodBlocks.hpp"
 #include "ci/compilerInterface.hpp"
 #include "memory/allocation.hpp"
@@ -276,15 +277,16 @@ class JeandleAbstractInterpreter : public StackObj {
   void lcmp();
   void goto_bci(int bci);
   void lookup_switch();
+  void table_switch();
   void invoke();
   bool inline_intrinsic(const ciMethod* target);
   void stack_op(Bytecodes::Code code);
   void shift_op(BasicType type, Bytecodes::Code code);
   void instanceof(int klass_index);
   void arith_op(BasicType type, Bytecodes::Code code);
-  void rem_op(BasicType type, Bytecodes::Code code);
 
   llvm::CallInst* call_java_op(llvm::StringRef java_op, llvm::ArrayRef<llvm::Value*> args);
+  llvm::CallInst* call_runtime_routine(llvm::FunctionCallee callee, llvm::ArrayRef<llvm::Value*> arg, bool is_leaf = false);
 
   void add_safepoint_poll();
 
@@ -312,6 +314,8 @@ class JeandleAbstractInterpreter : public StackObj {
 
   void do_get_xxx(ciField* field, bool is_static);
   void do_put_xxx(ciField* field, bool is_static);
+
+  void arraylength();
 
   typedef struct {
     llvm::BasicBlock* _unwind_dest;
