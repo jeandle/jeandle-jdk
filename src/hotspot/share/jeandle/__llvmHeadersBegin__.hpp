@@ -18,6 +18,28 @@
  *
  */
 
+// Jeandle includes many LLVM header files, and produces some macro conflicts with Hotspot header files.
+// The current conflicts are:
+//   1. AARCH64
+//   2. assert
+// We use __llvmHeadersBegin__.hpp and __HotspotHeadersBegin__.hpp to solve them.
+
+// All Jeandle source files should include __llvmHeadersBegin__.hpp and __hotspotHeadersBegin__.hpp
+// like this:
+//   #include "jeandle/__llvmHeadersBegin__.hpp"
+//   #include "llvm/..."
+//   #include "llvm/..."
+//
+//   #include "jeandle/..."
+//   #include "jeandle/..."
+//
+//   #include "jeandle/__hostpotHeadersBegin__.hpp"
+//   // Here we can include header files from Hotspot.
+
+// __llvmHeadersBegin__.hpp is used to define 'assert' from stdlib for LLVM, because Hotspot uses a self defined 'assert'
+// and it's not compatible with stdlib's 'assert'. This header file also undefines 'AARCH64' which is defined by Hotspot
+// and conflicts with LLVM's 'AArch64'.
+
 #include <cassert>
 #ifdef AARCH64
   #define SAVED_HOTSPOT_AARCH64

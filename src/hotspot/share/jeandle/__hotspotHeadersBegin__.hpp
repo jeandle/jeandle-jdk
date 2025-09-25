@@ -18,13 +18,17 @@
  *
  */
 
-// Need to undef assert from stdlib. Then redefine our assert.
+// This file is used to resolve macro conflicts between LLVM and HotSpot.
+// For more information on macro conflicts, see __llvmHeadersBegin__.hpp
+
+// __hotspotHeadersBegin__.hpp undefines 'assert' from stdlib, and redefines
+// 'AArch64' becuase it may be undefined by __llvmHeadersBegin__.hpp.
+
 #undef assert
 #ifdef SHARE_UTILITIES_DEBUG_HPP
   #define assert(p, ...) vmassert(p, __VA_ARGS__)
 #endif // SHARE_UTILITIES_DEBUG_HPP
 
-// Resolve conflict with AARCH64 macro in LLVM headers.
 #ifdef SAVED_HOTSPOT_AARCH64
   #define AARCH64
   #undef SAVED_HOTSPOT_AARCH64
