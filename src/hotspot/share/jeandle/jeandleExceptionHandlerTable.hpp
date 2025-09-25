@@ -21,7 +21,7 @@
 #ifndef SHARE_JEANDLE_EXCEPTION_HANDLER_TABLE_HPP
 #define SHARE_JEANDLE_EXCEPTION_HANDLER_TABLE_HPP
 
-#include "utilities/debug.hpp"
+#include "jeandle/__hotspotHeadersBegin__.hpp"
 #include "code/exceptionHandlerTable.hpp"
 #include "code/compiledMethod.hpp"
 #include "utilities/ostream.hpp"

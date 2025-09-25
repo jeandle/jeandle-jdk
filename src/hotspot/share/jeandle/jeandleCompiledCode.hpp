@@ -33,7 +33,7 @@
 #include "jeandle/jeandleCompiledCall.hpp"
 #include "jeandle/jeandleReadELF.hpp"
 #include "jeandle/jeandleResourceObj.hpp"
-#include  "jeandle/jeandleUtils.hpp"
+#include "jeandle/jeandleUtils.hpp"
 
 #include "jeandle/__hotspotHeadersBegin__.hpp"
 #include "asm/codeBuffer.hpp"
