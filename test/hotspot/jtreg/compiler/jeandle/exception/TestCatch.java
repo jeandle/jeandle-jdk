@@ -21,7 +21,7 @@
 /**
  * @test
  * @requires os.arch=="amd64" | os.arch=="x86_64"
-* @library /test/lib /
+ * @library /test/lib /
  * @run main/othervm -XX:CompileCommand=compileonly,compiler.jeandle.exception.TestCatch::testCatch
  *      -Xcomp -XX:-TieredCompilation -XX:+JeandleDumpIR -XX:+UseJeandleCompiler compiler.jeandle.exception.TestCatch
  */
