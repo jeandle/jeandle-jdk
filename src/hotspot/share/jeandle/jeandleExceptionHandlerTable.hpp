@@ -52,6 +52,8 @@ class JeandleExceptionHandlerTable : public ExceptionHandlerTableInterface {
 
   void add_handler(uint64_t start_pc_offset, uint64_t end_pc_offset, uint64_t handler_pc_offset);
 
+  uint64_t find_handler(uint64_t pc_offset);
+
   void copy_to(CompiledMethod* nm) override;
   void print(address base = nullptr) const override;
   int size_in_bytes() const override { return align_up(_length * (int)sizeof(JeandleHandlerTableEntry), oopSize); }

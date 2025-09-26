@@ -246,7 +246,12 @@ void JeandleCompiledCode::finalize() {
 
   resolve_reloc_info(assembler);
 
-  build_exception_handler_table();
+  if (_method) {
+    // For Java method compilation.
+    build_exception_handler_table();
+    _offsets.set_value(CodeOffsets::Exceptions, assembler.emit_exception_handler());
+  }
+
 
   // generate shared trampoline stubs
   if (!_code_buffer.finalize_stubs()) {
@@ -256,9 +261,6 @@ void JeandleCompiledCode::finalize() {
 
   // No deopt support now.
   _offsets.set_value(CodeOffsets::Deopt, 0);
-
-  // No exception support now.
-  _offsets.set_value(CodeOffsets::Exceptions, 0);
 }
 
 void JeandleCompiledCode::resolve_reloc_info(JeandleAssembler& assembler) {

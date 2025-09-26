@@ -204,7 +204,6 @@ class BasicBlockBuilder : public JeandleCompilationResourceObj {
 
   static void connect_block(JeandleBasicBlock* child_block, JeandleBasicBlock* parent_block) {
     assert(child_block != nullptr && parent_block != nullptr, "connecting nullptr");
-    tty->print("Connect %d as child of %d\n", child_block->start_bci(), parent_block->start_bci());
     child_block->add_predecessor(parent_block);
     parent_block->add_successor(child_block);
   }

@@ -23,6 +23,7 @@
 
 #include "jeandle/jeandleAssembler.hpp"
 #include "jeandle/jeandleCompilation.hpp"
+#include "jeandle/jeandleRuntimeRoutine.hpp"
 
 #include "jeandle/__hotspotHeadersBegin__.hpp"
 #include "code/nativeInst.hpp"
@@ -125,6 +126,19 @@ void JeandleAssembler::emit_ic_check() {
   int nops_cnt = 8 - ((__ code()->insts_size() - insts_size) & 0x7);
   if (nops_cnt > 0)
     __ nop(nops_cnt);
+}
+
+int JeandleAssembler::emit_exception_handler() {
+  address base = __ start_a_stub(NativeJump::instruction_size);
+  if (base == NULL) {
+    JeandleCompilation::report_jeandle_error("CodeCache is full");
+    return 0;
+  }
+  int offset = __ offset();
+  __ jump(RuntimeAddress(JeandleRuntimeRoutine::get_routine_entry(JeandleRuntimeRoutine::_exception_handler)));
+  assert(__ offset() - offset <= (int)NativeJump::instruction_size, "overflow");
+  __ end_a_stub();
+  return offset;
 }
 
 using LinkKind_x86_64 = llvm::jitlink::x86_64::EdgeKind_x86_64;

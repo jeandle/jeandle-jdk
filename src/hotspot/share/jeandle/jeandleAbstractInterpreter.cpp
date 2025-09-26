@@ -205,7 +205,7 @@ JeandleBasicBlock::JeandleBasicBlock(int block_id,
                                      _header_llvm_block(header_llvm_block),
                                      _tail_llvm_block(header_llvm_block),
                                      _ci_block(ci_block),
-                                     _initial_jvm(nullptr) {tty->print("Creating block %d to %d\n", start_bci, limit_bci);}
+                                     _initial_jvm(nullptr) {}
 
 bool JeandleBasicBlock::merge_handler_VM_state(JeandleVMState* vm_state, llvm::BasicBlock* incoming, ciMethod* method) {
   assert(is_handler(), "adding an handler VM state to a non-handler block");
@@ -350,7 +350,6 @@ void BasicBlockBuilder::setup_exception_handlers() {
     int bci = codes.cur_bci();
     JeandleBasicBlock* block = _bci2block[bci];
     if (block->is_handler()) {
-      tty->print("Found handler %d, start at %d, limit at %d\n", block->start_bci(), block->exeption_range_start_bci(), block->exeption_range_limit_bci());
       int covered_bci = block->exeption_range_start_bci();
       while (covered_bci < block->exeption_range_limit_bci()) {
         connect_block(block, _bci2block[covered_bci]);
@@ -566,8 +565,6 @@ void JeandleAbstractInterpreter::interpret() {
 void JeandleAbstractInterpreter::interpret_block(JeandleBasicBlock* block) {
   assert(block != nullptr, "compile a null block");
 
-  tty->print("Interpreting block %d\n", block->start_bci());
-
   _ir_builder.SetInsertPoint(block->header_llvm_block());
 
   _block = block;
@@ -582,7 +579,6 @@ void JeandleAbstractInterpreter::interpret_block(JeandleBasicBlock* block) {
   while ((code = _codes.next()) != ciBytecodeStream::EOBC() &&
           !JeandleCompilation::jeandle_error_occurred() &&
           bci2block()[_codes.cur_bci()] == _block) {
-    tty->print("Interpreting bci %d\n", _codes.cur_bci());
     // Handle by opcode, see: https://docs.oracle.com/javase/specs/jvms/se21/html/jvms-7.html
     switch (code) {
       case Bytecodes::_nop: break;
@@ -890,7 +886,6 @@ void JeandleAbstractInterpreter::interpret_block(JeandleBasicBlock* block) {
 
 void JeandleAbstractInterpreter::add_to_work_list(JeandleBasicBlock* block) {
   if (!block->is_set(JeandleBasicBlock::is_on_work_list)) {
-    tty->print("Adding %d to worklist\n", block->start_bci());
     block->set(JeandleBasicBlock::is_on_work_list);
     _work_list.push_back(block);
 
@@ -1352,7 +1347,7 @@ void JeandleAbstractInterpreter::arith_op(BasicType type, Bytecodes::Code code) 
     case Bytecodes::_fdiv: // fall through
     case Bytecodes::_ddiv: _jvm->push(type, _ir_builder.CreateFDiv(l, r)); break;
     case Bytecodes::_frem: {
-      _jvm->fpush( call_runtime_routine(JeandleRuntimeRoutine::hotspot_SharedRuntime_frem_callee(_module), {l, r}, /* is_leaf */ true));
+      _jvm->fpush(call_runtime_routine(JeandleRuntimeRoutine::hotspot_SharedRuntime_frem_callee(_module), {l, r}, /* is_leaf */ true));
       break;
     }
     case Bytecodes::_drem: {
@@ -1490,6 +1485,13 @@ void JeandleAbstractInterpreter::add_safepoint_poll() {
   call_java_op("jeandle.safepoint_poll", {});
 }
 
+void JeandleAbstractInterpreter::arraylength() {
+    // TODO: need null pointer check in the future
+    llvm::Value* array_oop = _jvm->apop();
+    llvm::CallInst* call = call_java_op("jeandle.arraylength", {array_oop});
+    _jvm->ipush(call);
+}
+
 JeandleAbstractInterpreter::DispatchedDest JeandleAbstractInterpreter::dispatch_exception_for_invoke() {
   int cur_bci = _codes.cur_bci();
 
@@ -1517,6 +1519,11 @@ JeandleAbstractInterpreter::DispatchedDest JeandleAbstractInterpreter::dispatch_
   llvm::Value* exception_oop_addr = _ir_builder.CreateIntToPtr(_ir_builder.getInt64((uint64_t)JavaThread::exception_oop_offset()),
                                                                llvm::PointerType::get(*_context, llvm::jeandle::AddrSpace::TLSAddrSpace));
   llvm::Value* exception_oop = _ir_builder.CreateLoad(JeandleType::java2llvm(BasicType::T_OBJECT, *_context), exception_oop_addr, true /* is_volatile */);
+
+  // Clear the exception oop field in thread local storage.
+  _ir_builder.CreateStore(llvm::ConstantPointerNull::get(llvm::cast<llvm::PointerType>(JeandleType::java2llvm(BasicType::T_OBJECT, *_context))),
+                          exception_oop_addr,
+                          true /* is_volatile */);
 
   dispatch_exception_to_handler(exception_oop);
 
@@ -1589,11 +1596,4 @@ void JeandleAbstractInterpreter::throw_exception(llvm::Value* exception_oop) {
   } else {
     ShouldNotReachHere();
   }
-}
-
-void JeandleAbstractInterpreter::arraylength() {
-    // TODO: need null pointer check in the future
-    llvm::Value* array_oop = _jvm->apop();
-    llvm::CallInst* call = call_java_op("jeandle.arraylength", {array_oop});
-    _jvm->ipush(call);
 }

@@ -91,3 +91,18 @@ JRT_END
 JRT_LEAF(address, JeandleRuntimeRoutine::get_exception_handler(JavaThread* current))
   return SharedRuntime::raw_exception_handler_for_return_address(current, current->exception_pc());
 JRT_END
+
+JRT_ENTRY(address, JeandleRuntimeRoutine::search_landingpad(JavaThread* current))
+  assert(current->exception_oop() != nullptr, "exception oop is found");
+
+  address pc = current->exception_pc();
+
+  nmethod* nm = CodeCache::find_nmethod(pc);
+  assert(nm != nullptr, "No nmethod found in Jeandle exception handler");
+  assert(pc > nm->code_begin(), "sanity check");
+
+  JeandleExceptionHandlerTable exception_table(nm);
+  uint64_t handler_pc_offset = exception_table.find_handler(static_cast<uint64_t>(pc - nm->code_begin()));
+
+  return nm->code_begin() + handler_pc_offset;
+JRT_END
