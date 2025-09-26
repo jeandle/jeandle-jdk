@@ -248,7 +248,7 @@ bool JeandleBasicBlock::merge_VM_state_from(JeandleBasicBlock* from, ciMethod* m
     return true;
 
   } else if (!is_set(is_compiled)) {
-    assert(_predecessors.size() > 1 || is_handler(), "more than one predecessors are needed for phi nodes");
+    assert(_predecessors.size() > 1, "more than one predecessors are needed for phi nodes");
     return _jvm->update_phi_nodes(from->VM_state(), from->tail_llvm_block());
   } else if (is_set(is_loop_header)) {
     assert(_initial_jvm != nullptr, "loop header initial JeandleVMState is needed");
@@ -318,7 +318,7 @@ void BasicBlockBuilder::generate_blocks() {
   while (codes.next() != ciBytecodeStream::EOBC()) {
     int bci = codes.cur_bci();
     if (_ci_blocks->is_block_start(bci)) {
-      // Current position start a new basic block.
+      // Current position starts a new basic block.
       ciBlock* block = _ci_blocks->block_containing(bci);
       assert(block != nullptr, "must be valid basic block");
       current = new JeandleBasicBlock(block->index(),
@@ -367,7 +367,7 @@ void BasicBlockBuilder::setup_control_flow() {
   int limit_bci = _method->code_size();
 
   while (codes.next() != ciBytecodeStream::EOBC()) {
-      int cur_bci = codes.cur_bci();
+    int cur_bci = codes.cur_bci();
 
     if (_ci_blocks->is_block_start(cur_bci)) {
       if (current != nullptr) {
