@@ -504,7 +504,7 @@ JeandleAbstractInterpreter::JeandleAbstractInterpreter(ciMethod* method,
                                                        _llvm_func(JeandleFuncSig::create_llvm_func(method, target_module)),
                                                        _entry_bci(entry_bci),
                                                        _context(&target_module.getContext()),
-                                                       _codes(_method),
+                                                       _bytecodes(_method),
                                                        _module(target_module),
                                                        _compiled_code(code),
                                                        _block_builder(new BasicBlockBuilder(method, _context, _llvm_func)),
@@ -571,14 +571,14 @@ void JeandleAbstractInterpreter::interpret_block(JeandleBasicBlock* block) {
   _jvm = block->VM_state();
   assert(_jvm != nullptr, "JeandleVMState should not be null");
 
-  _codes.reset_to_bci(block->start_bci());
+  _bytecodes.reset_to_bci(block->start_bci());
 
   Bytecodes::Code code = Bytecodes::_illegal;
 
   // Iterate all bytecodes.
-  while ((code = _codes.next()) != ciBytecodeStream::EOBC() &&
+  while ((code = _bytecodes.next()) != ciBytecodeStream::EOBC() &&
           !JeandleCompilation::jeandle_error_occurred() &&
-          bci2block()[_codes.cur_bci()] == _block) {
+          bci2block()[_bytecodes.cur_bci()] == _block) {
     // Handle by opcode, see: https://docs.oracle.com/javase/specs/jvms/se21/html/jvms-7.html
     switch (code) {
       case Bytecodes::_nop: break;
@@ -605,8 +605,8 @@ void JeandleAbstractInterpreter::interpret_block(JeandleBasicBlock* block) {
 
       case Bytecodes::_aconst_null: Unimplemented(); break;
 
-      case Bytecodes::_bipush: _jvm->ipush(JeandleType::int_const(_ir_builder, (((signed char*)_codes.cur_bcp())[1]))); break;
-      case Bytecodes::_sipush: _jvm->ipush(JeandleType::int_const(_ir_builder, (short)Bytes::get_Java_u2(_codes.cur_bcp()+1))); break;
+      case Bytecodes::_bipush: _jvm->ipush(JeandleType::int_const(_ir_builder, (((signed char*)_bytecodes.cur_bcp())[1]))); break;
+      case Bytecodes::_sipush: _jvm->ipush(JeandleType::int_const(_ir_builder, (short)Bytes::get_Java_u2(_bytecodes.cur_bcp()+1))); break;
 
       case Bytecodes::_ldc:    // fall through
       case Bytecodes::_ldc_w:  // fall through
@@ -618,31 +618,31 @@ void JeandleAbstractInterpreter::interpret_block(JeandleBasicBlock* block) {
       case Bytecodes::_iload_1: _jvm->ipush(_jvm->iload(1)); break;
       case Bytecodes::_iload_2: _jvm->ipush(_jvm->iload(2)); break;
       case Bytecodes::_iload_3: _jvm->ipush(_jvm->iload(3)); break;
-      case Bytecodes::_iload: _jvm->ipush(_jvm->iload(_codes.get_index())); break;
+      case Bytecodes::_iload: _jvm->ipush(_jvm->iload(_bytecodes.get_index())); break;
 
       case Bytecodes::_lload_0: _jvm->lpush(_jvm->lload(0)); break;
       case Bytecodes::_lload_1: _jvm->lpush(_jvm->lload(1)); break;
       case Bytecodes::_lload_2: _jvm->lpush(_jvm->lload(2)); break;
       case Bytecodes::_lload_3: _jvm->lpush(_jvm->lload(3)); break;
-      case Bytecodes::_lload: _jvm->lpush(_jvm->lload(_codes.get_index())); break;
+      case Bytecodes::_lload: _jvm->lpush(_jvm->lload(_bytecodes.get_index())); break;
 
       case Bytecodes::_fload_0: _jvm->fpush(_jvm->fload(0)); break;
       case Bytecodes::_fload_1: _jvm->fpush(_jvm->fload(1)); break;
       case Bytecodes::_fload_2: _jvm->fpush(_jvm->fload(2)); break;
       case Bytecodes::_fload_3: _jvm->fpush(_jvm->fload(3)); break;
-      case Bytecodes::_fload: _jvm->fpush(_jvm->fload(_codes.get_index())); break;
+      case Bytecodes::_fload: _jvm->fpush(_jvm->fload(_bytecodes.get_index())); break;
 
       case Bytecodes::_dload_0: _jvm->dpush(_jvm->dload(0)); break;
       case Bytecodes::_dload_1: _jvm->dpush(_jvm->dload(1)); break;
       case Bytecodes::_dload_2: _jvm->dpush(_jvm->dload(2)); break;
       case Bytecodes::_dload_3: _jvm->dpush(_jvm->dload(3)); break;
-      case Bytecodes::_dload: _jvm->dpush(_jvm->dload(_codes.get_index())); break;
+      case Bytecodes::_dload: _jvm->dpush(_jvm->dload(_bytecodes.get_index())); break;
 
       case Bytecodes::_aload_0: _jvm->apush(_jvm->aload(0)); break;
       case Bytecodes::_aload_1: _jvm->apush(_jvm->aload(1)); break;
       case Bytecodes::_aload_2: _jvm->apush(_jvm->aload(2)); break;
       case Bytecodes::_aload_3: _jvm->apush(_jvm->aload(3)); break;
-      case Bytecodes::_aload: _jvm->apush(_jvm->aload(_codes.get_index())); break;
+      case Bytecodes::_aload: _jvm->apush(_jvm->aload(_bytecodes.get_index())); break;
 
       case Bytecodes::_iaload: Unimplemented(); break;
       case Bytecodes::_laload: Unimplemented(); break;
@@ -659,31 +659,31 @@ void JeandleAbstractInterpreter::interpret_block(JeandleBasicBlock* block) {
       case Bytecodes::_istore_1: _jvm->istore(1, _jvm->ipop()); break;
       case Bytecodes::_istore_2: _jvm->istore(2, _jvm->ipop()); break;
       case Bytecodes::_istore_3: _jvm->istore(3, _jvm->ipop()); break;
-      case Bytecodes::_istore: _jvm->istore(_codes.get_index(), _jvm->ipop()); break;
+      case Bytecodes::_istore: _jvm->istore(_bytecodes.get_index(), _jvm->ipop()); break;
 
       case Bytecodes::_lstore_0: _jvm->lstore(0, _jvm->lpop()); break;
       case Bytecodes::_lstore_1: _jvm->lstore(1, _jvm->lpop()); break;
       case Bytecodes::_lstore_2: _jvm->lstore(2, _jvm->lpop()); break;
       case Bytecodes::_lstore_3: _jvm->lstore(3, _jvm->lpop()); break;
-      case Bytecodes::_lstore: _jvm->lstore(_codes.get_index(), _jvm->lpop()); break;
+      case Bytecodes::_lstore: _jvm->lstore(_bytecodes.get_index(), _jvm->lpop()); break;
 
       case Bytecodes::_fstore_0: _jvm->fstore(0, _jvm->fpop()); break;
       case Bytecodes::_fstore_1: _jvm->fstore(1, _jvm->fpop()); break;
       case Bytecodes::_fstore_2: _jvm->fstore(2, _jvm->fpop()); break;
       case Bytecodes::_fstore_3: _jvm->fstore(3, _jvm->fpop()); break;
-      case Bytecodes::_fstore: _jvm->fstore(_codes.get_index(), _jvm->fpop()); break;
+      case Bytecodes::_fstore: _jvm->fstore(_bytecodes.get_index(), _jvm->fpop()); break;
 
       case Bytecodes::_dstore_0: _jvm->dstore(0, _jvm->dpop()); break;
       case Bytecodes::_dstore_1: _jvm->dstore(1, _jvm->dpop()); break;
       case Bytecodes::_dstore_2: _jvm->dstore(2, _jvm->dpop()); break;
       case Bytecodes::_dstore_3: _jvm->dstore(3, _jvm->dpop()); break;
-      case Bytecodes::_dstore: _jvm->dstore(_codes.get_index(), _jvm->dpop()); break;
+      case Bytecodes::_dstore: _jvm->dstore(_bytecodes.get_index(), _jvm->dpop()); break;
 
       case Bytecodes::_astore_0: _jvm->astore(0, _jvm->apop()); break;
       case Bytecodes::_astore_1: _jvm->astore(1, _jvm->apop()); break;
       case Bytecodes::_astore_2: _jvm->astore(2, _jvm->apop()); break;
       case Bytecodes::_astore_3: _jvm->astore(3, _jvm->apop()); break;
-      case Bytecodes::_astore: _jvm->astore(_codes.get_index(), _jvm->apop()); break;
+      case Bytecodes::_astore: _jvm->astore(_bytecodes.get_index(), _jvm->apop()); break;
 
       case Bytecodes::_iastore: Unimplemented(); break;
       case Bytecodes::_lastore: Unimplemented(); break;
@@ -799,7 +799,7 @@ void JeandleAbstractInterpreter::interpret_block(JeandleBasicBlock* block) {
 
       // Control:
 
-      case Bytecodes::_goto: goto_bci(_codes.get_dest()); break;
+      case Bytecodes::_goto: goto_bci(_bytecodes.get_dest()); break;
       case Bytecodes::_jsr: Unimplemented(); break;
       case Bytecodes::_ret: Unimplemented(); break;
 
@@ -835,7 +835,7 @@ void JeandleAbstractInterpreter::interpret_block(JeandleBasicBlock* block) {
       case Bytecodes::_athrow: dispatch_exception_to_handler(_jvm->apop()); break;
 
       case Bytecodes::_checkcast: Unimplemented(); break;
-      case Bytecodes::_instanceof: instanceof(_codes.get_index_u2()); break;
+      case Bytecodes::_instanceof: instanceof(_bytecodes.get_index_u2()); break;
 
       case Bytecodes::_monitorenter: Unimplemented(); break;
       case Bytecodes::_monitorexit: Unimplemented(); break;
@@ -865,7 +865,7 @@ void JeandleAbstractInterpreter::interpret_block(JeandleBasicBlock* block) {
 
   // All blocks should has their terminator.
   if (block->tail_llvm_block()->getTerminator() == nullptr) {
-    _ir_builder.CreateBr(bci2block()[_codes.cur_bci()]->header_llvm_block());
+    _ir_builder.CreateBr(bci2block()[_bytecodes.cur_bci()]->header_llvm_block());
   }
 
   block->set(JeandleBasicBlock::is_compiled);
@@ -906,7 +906,7 @@ void JeandleAbstractInterpreter::add_to_work_list(JeandleBasicBlock* block) {
 }
 
 void JeandleAbstractInterpreter::load_constant() {
-  ciConstant con = _codes.get_constant();
+  ciConstant con = _bytecodes.get_constant();
   llvm::Value* value = nullptr;
 
   switch (con.basic_type()) {
@@ -921,32 +921,32 @@ void JeandleAbstractInterpreter::load_constant() {
 }
 
 void JeandleAbstractInterpreter::increment() {
-  llvm::Value* con = JeandleType::int_const(_ir_builder, _codes.get_iinc_con());
-  llvm::Value* result = _ir_builder.CreateAdd(_jvm->iload(_codes.get_index()), con);
-  _jvm->istore(_codes.get_index(), result);
+  llvm::Value* con = JeandleType::int_const(_ir_builder, _bytecodes.get_iinc_con());
+  llvm::Value* result = _ir_builder.CreateAdd(_jvm->iload(_bytecodes.get_index()), con);
+  _jvm->istore(_bytecodes.get_index(), result);
 }
 
 void JeandleAbstractInterpreter::if_zero(llvm::CmpInst::Predicate p) {
-  if (_codes.get_dest() < _codes.cur_bci()) {
+  if (_bytecodes.get_dest() < _bytecodes.cur_bci()) {
     add_safepoint_poll();
   }
   llvm::Value* v = _jvm->ipop();
   llvm::Value* cond = _ir_builder.CreateICmp(p, v, JeandleType::int_const(_ir_builder, 0));
   _ir_builder.CreateCondBr(cond,
-                           bci2block()[_codes.get_dest()]->header_llvm_block(),
-                           bci2block()[_codes.next_bci()]->header_llvm_block());
+                           bci2block()[_bytecodes.get_dest()]->header_llvm_block(),
+                           bci2block()[_bytecodes.next_bci()]->header_llvm_block());
 }
 
 void JeandleAbstractInterpreter::if_icmp(llvm::CmpInst::Predicate p) {
-  if (_codes.get_dest() < _codes.cur_bci()) {
+  if (_bytecodes.get_dest() < _bytecodes.cur_bci()) {
     add_safepoint_poll();
   }
   llvm::Value* r = _jvm->ipop();
   llvm::Value* l = _jvm->ipop();
   llvm::Value* cond = _ir_builder.CreateICmp(p, l, r);
   _ir_builder.CreateCondBr(cond,
-                           bci2block()[_codes.get_dest()]->header_llvm_block(),
-                           bci2block()[_codes.next_bci()]->header_llvm_block());
+                           bci2block()[_bytecodes.get_dest()]->header_llvm_block(),
+                           bci2block()[_bytecodes.next_bci()]->header_llvm_block());
 }
 
 void JeandleAbstractInterpreter::lcmp() {
@@ -960,26 +960,26 @@ void JeandleAbstractInterpreter::lcmp() {
 }
 
 void JeandleAbstractInterpreter::if_acmp(llvm::CmpInst::Predicate p) {
-  if (_codes.get_dest() < _codes.cur_bci()) {
+  if (_bytecodes.get_dest() < _bytecodes.cur_bci()) {
     add_safepoint_poll();
   }
   llvm::Value* r = _jvm->apop();
   llvm::Value* l = _jvm->apop();
   llvm::Value* cond = _ir_builder.CreateICmp(p, l, r);
   _ir_builder.CreateCondBr(cond,
-                           bci2block()[_codes.get_dest()]->header_llvm_block(),
-                           bci2block()[_codes.next_bci()]->header_llvm_block());
+                           bci2block()[_bytecodes.get_dest()]->header_llvm_block(),
+                           bci2block()[_bytecodes.next_bci()]->header_llvm_block());
 }
 
 void JeandleAbstractInterpreter::if_null(llvm::CmpInst::Predicate p) {
-  if (_codes.get_dest() < _codes.cur_bci()) {
+  if (_bytecodes.get_dest() < _bytecodes.cur_bci()) {
     add_safepoint_poll();
   }
   llvm::Value* v = _jvm->apop();
   llvm::Value* cond = _ir_builder.CreateICmp(p, v, llvm::ConstantPointerNull::get(llvm::cast<llvm::PointerType>(v->getType())));
   _ir_builder.CreateCondBr(cond,
-                           bci2block()[_codes.get_dest()]->header_llvm_block(),
-                           bci2block()[_codes.next_bci()]->header_llvm_block());
+                           bci2block()[_bytecodes.get_dest()]->header_llvm_block(),
+                           bci2block()[_bytecodes.next_bci()]->header_llvm_block());
 }
 
 /*
@@ -1008,17 +1008,17 @@ void JeandleAbstractInterpreter::fcmp(BasicType type, bool true_if_unordered) {
 }
 
 void JeandleAbstractInterpreter::goto_bci(int bci) {
-  if (bci < _codes.cur_bci()) {
+  if (bci < _bytecodes.cur_bci()) {
     add_safepoint_poll();
   }
   _ir_builder.CreateBr(bci2block()[bci]->header_llvm_block());
 }
 
 void JeandleAbstractInterpreter::lookup_switch() {
-  Bytecode_lookupswitch sw(&_codes);
+  Bytecode_lookupswitch sw(&_bytecodes);
 
   int length = sw.number_of_pairs();
-  int cur_bci = _codes.cur_bci();
+  int cur_bci = _bytecodes.cur_bci();
 
   llvm::Value* key = _jvm->ipop();
   llvm::BasicBlock* default_block = bci2block()[cur_bci + sw.default_offset()]->header_llvm_block();
@@ -1031,10 +1031,10 @@ void JeandleAbstractInterpreter::lookup_switch() {
 }
 
 void JeandleAbstractInterpreter::table_switch() {
-  Bytecode_tableswitch sw(&_codes);
+  Bytecode_tableswitch sw(&_bytecodes);
 
   int length = sw.length();
-  int cur_bci = _codes.cur_bci();
+  int cur_bci = _bytecodes.cur_bci();
   int low = sw.low_key();
 
   llvm::Value* idx = _jvm->ipop();
@@ -1052,7 +1052,7 @@ void JeandleAbstractInterpreter::table_switch() {
 void JeandleAbstractInterpreter::invoke() {
   bool will_link;
   ciSignature* declared_signature = nullptr;
-  ciMethod* target = _codes.get_method(will_link, &declared_signature);
+  ciMethod* target = _bytecodes.get_method(will_link, &declared_signature);
   assert(declared_signature != nullptr, "cannot be null");
   assert(will_link == target->is_loaded(), "");
 
@@ -1068,8 +1068,7 @@ void JeandleAbstractInterpreter::invoke() {
     }
     return;
   }
-
-  const Bytecodes::Code bc = _codes.cur_bc();
+  const Bytecodes::Code bc = _bytecodes.cur_bc();
 
   // Construct arguments.
   const int reciever =
@@ -1122,7 +1121,7 @@ void JeandleAbstractInterpreter::invoke() {
 
   // Record this call.
   uint32_t id = _compiled_code.next_statepoint_id();
-  _compiled_code.push_non_routine_call_site(new CallSiteInfo(call_type, dest, _codes.cur_bci(), id));
+  _compiled_code.push_non_routine_call_site(new CallSiteInfo(call_type, dest, _bytecodes.cur_bci(), id));
 
   // Every invoke instruction may throw exceptions, handle them here.
   DispatchedDest dispatched = dispatch_exception_for_invoke();
@@ -1294,9 +1293,16 @@ void JeandleAbstractInterpreter::instanceof(int klass_index) {
   llvm::Value* obj = _jvm->apop();
 
   // TODO: check klass's loading state.
+  ciKlass* ci_super_klass = _bytecodes.get_klass();
+  assert(ci_super_klass->is_loaded(), "klass must be loaded");
 
-  llvm::Value* index_value = _ir_builder.getInt32(klass_index);
-  llvm::CallInst* call = call_java_op("jeandle.instanceof", {index_value, obj});
+  Klass* super_klass = (Klass*)(ci_super_klass->constant_encoding());
+
+  llvm::PointerType* klass_type = llvm::PointerType::get(*_context, llvm::jeandle::AddrSpace::CHeapAddrSpace);
+  llvm::Value* super_klass_addr = _ir_builder.getInt64((intptr_t)super_klass);
+  llvm::Value* super_klass_ptr = _ir_builder.CreateIntToPtr(super_klass_addr, klass_type);
+
+  llvm::CallInst* call = call_java_op("jeandle.instanceof", {super_klass_ptr, obj});
 
   _jvm->ipush(call);
 }
@@ -1390,7 +1396,7 @@ llvm::Value* JeandleAbstractInterpreter::find_or_insert_oop(ciObject* oop) {
 // TODO: Handle field attributions like final, stable.
 void JeandleAbstractInterpreter::do_field_access(bool is_get, bool is_static) {
   bool will_link;
-  ciField* field = _codes.get_field(will_link);
+  ciField* field = _bytecodes.get_field(will_link);
   // TODO: Handle invalid fields.
   if (!will_link)
     Unimplemented();
@@ -1493,7 +1499,7 @@ void JeandleAbstractInterpreter::arraylength() {
 }
 
 JeandleAbstractInterpreter::DispatchedDest JeandleAbstractInterpreter::dispatch_exception_for_invoke() {
-  int cur_bci = _codes.cur_bci();
+  int cur_bci = _bytecodes.cur_bci();
 
   DispatchedDest dispatched;
 
@@ -1543,7 +1549,7 @@ JeandleAbstractInterpreter::DispatchedDest JeandleAbstractInterpreter::dispatch_
 // As a workaround now, we always choose the first exception handler.
 void JeandleAbstractInterpreter::dispatch_exception_to_handler(llvm::Value* exception_oop) {
   // Setup all handlers' VM state.
-  for (ciExceptionHandlerStream handlers(_method, _codes.cur_bci()); !handlers.is_done(); handlers.next()) {
+  for (ciExceptionHandlerStream handlers(_method, _bytecodes.cur_bci()); !handlers.is_done(); handlers.next()) {
     ciExceptionHandler* handler = handlers.handler();
     if (!handler->is_rethrow()) {
       int handler_bci = handler->handler_bci();
@@ -1557,7 +1563,7 @@ void JeandleAbstractInterpreter::dispatch_exception_to_handler(llvm::Value* exce
   }
 
   // Choose the first handler. (workaround)
-  ciExceptionHandlerStream handlers(_method, _codes.cur_bci());
+  ciExceptionHandlerStream handlers(_method, _bytecodes.cur_bci());
   if (!handlers.is_done()) {
     ciExceptionHandler* handler = handlers.handler();
     if (handler->is_rethrow()) {

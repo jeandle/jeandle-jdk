@@ -650,6 +650,11 @@ void CompilerConfig::ergo_initialize() {
       warning("UseCompressedOops is disabled until jeandle supports compressed oops.");
     }
     UseCompressedOops = false;
+
+    if (FLAG_IS_CMDLINE(UseCompressedClassPointers) && UseCompressedClassPointers) {
+      warning("UseCompressedClassPointers is disabled until jeandle supports compressed class pointers.");
+    }
+    UseCompressedClassPointers = false;
   }
 #endif // JEANDLE
 }
