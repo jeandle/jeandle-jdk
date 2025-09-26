@@ -1212,16 +1212,16 @@ void JeandleAbstractInterpreter::instanceof(int klass_index) {
   llvm::Value* obj = _jvm->apop();
 
   // TODO: check klass's loading state.
-  ciKlass* ci_klass = _bytecodes.get_klass();
-  assert(ci_klass->is_loaded(), "klass must be loaded");
+  ciKlass* ci_super_klass = _bytecodes.get_klass();
+  assert(ci_super_klass->is_loaded(), "klass must be loaded");
 
-  Klass* klass = (Klass*)(ci_klass->constant_encoding());
+  Klass* super_klass = (Klass*)(ci_super_klass->constant_encoding());
 
   llvm::PointerType* klass_type = llvm::PointerType::get(*_context, llvm::jeandle::AddrSpace::CHeapAddrSpace);
-  llvm::Value* klass_addr = _ir_builder.getInt64((intptr_t)klass);
-  llvm::Value* klass_ptr = _ir_builder.CreateIntToPtr(klass_addr, klass_type);
+  llvm::Value* super_klass_addr = _ir_builder.getInt64((intptr_t)super_klass);
+  llvm::Value* super_klass_ptr = _ir_builder.CreateIntToPtr(super_klass_addr, klass_type);
 
-  llvm::CallInst* call = call_java_op("jeandle.instanceof", {klass_ptr, obj});
+  llvm::CallInst* call = call_java_op("jeandle.instanceof", {super_klass_ptr, obj});
 
   _jvm->ipush(call);
 }
