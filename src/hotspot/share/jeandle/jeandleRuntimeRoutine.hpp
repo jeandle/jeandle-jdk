@@ -43,10 +43,10 @@
   def(new_instance,               llvm::PointerType::get(context, llvm::jeandle::AddrSpace::JavaHeapAddrSpace),                                 \
                                                                   llvm::PointerType::get(context, llvm::jeandle::AddrSpace::CHeapAddrSpace),    \
                                                                   llvm::PointerType::get(context, llvm::jeandle::AddrSpace::CHeapAddrSpace))    \
-                                                                                                                                                \
-  def(new_typeArray,              llvm::PointerType::get(context, llvm::jeandle::AddrSpace::JavaHeapAddrSpace),                                 \
-                                                                  llvm::Type::getInt32Ty(context),                                              \
-                                                                  llvm::Type::getInt32Ty(context),                                              \
+                                                                                                                                               \
+  def(new_array,                  llvm::PointerType::get(context, llvm::jeandle::AddrSpace::JavaHeapAddrSpace),                               \
+                                                                  llvm::PointerType::get(context, llvm::jeandle::AddrSpace::CHeapAddrSpace),  \
+                                                                  llvm::Type::getInt32Ty(context),                                            \
                                                                   llvm::PointerType::get(context, llvm::jeandle::AddrSpace::CHeapAddrSpace))
 
 #define ALL_JEANDLE_ASSEMBLY_ROUTINES(def) \
@@ -150,8 +150,8 @@ class JeandleRuntimeRoutine : public AllStatic {
   static address search_landingpad(JavaThread* current);
 
   // Array allocation routine
-  static void new_typeArray(int type, int length, JavaThread* current);
   static void new_instance(InstanceKlass* klass, JavaThread* current);
+  static void new_array(Klass* array_type, int length, JavaThread* current);
 
   // Assembly routine implementations:
 

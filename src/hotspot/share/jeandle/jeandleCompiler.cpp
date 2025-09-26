@@ -92,7 +92,17 @@ bool JeandleCompiler::initialize_template_buffer() {
   llvm::SMDiagnostic error;
 
   std::unique_ptr<llvm::Module> template_module = llvm::parseIRFile(Arguments::get_jeandle_template_path(), error, tmp_context);
-  assert(template_module != nullptr, "cannot create template module");
+#ifdef assert
+  if (template_module == nullptr) {
+    tty->print_cr("Error parsing template module from file '%s':", Arguments::get_jeandle_template_path());
+    tty->print_cr("  Line: %d, Column: %d", error.getLineNo(), error.getColumnNo());
+    tty->print_cr("  Filename: %s", error.getFilename().str().c_str());
+    tty->print_cr("  Message: %s", error.getMessage().str().c_str());
+    tty->print_cr("  Line contents: %s", error.getLineContents().str().c_str());
+    fatal("cannot create template module from file '%s'", Arguments::get_jeandle_template_path());
+  }
+#endif
+
   if (template_module == nullptr) {
     return false;
   }

@@ -28,6 +28,7 @@
 #include "runtime/frame.hpp"
 #include "runtime/interfaceSupport.inline.hpp"
 #include "runtime/safepoint.hpp"
+#include "runtime/vframeArray.hpp"
 
 // This should be called in an assertion at the start of JeandleRuntime routines
 // which are entered from compiled code (all of them)
@@ -123,10 +124,41 @@ JRT_ENTRY(address, JeandleRuntimeRoutine::search_landingpad(JavaThread* current)
   return nm->code_begin() + handler_pc_offset;
 JRT_END
 
-// Array allocation
-JRT_ENTRY(void, JeandleRuntimeRoutine::new_typeArray(int type, int length, JavaThread* current))
-  oop obj = oopFactory::new_typeArray(static_cast<BasicType>(type), length, current);
-  current->set_vm_result(obj);
+// Array allocation. It's a copy of OptoRuntime::new_array_C
+JRT_BLOCK_ENTRY(void, JeandleRuntimeRoutine::new_array(Klass* array_type, int len, JavaThread* current))
+  JRT_BLOCK;
+#ifndef PRODUCT
+  SharedRuntime::_new_array_ctr++;            // new array requires GC
+#endif
+  assert(check_jeandle_compiled_frame(current), "incorrect caller");
+
+  // Scavenge and allocate an instance.
+  oop result;
+
+  if (array_type->is_typeArray_klass()) {
+    // The oopFactory likes to work with the element type.
+    // (We could bypass the oopFactory, since it doesn't add much value.)
+    BasicType elem_type = TypeArrayKlass::cast(array_type)->element_type();
+    result = oopFactory::new_typeArray(elem_type, len, THREAD);
+  } else {
+    // Although the oopFactory likes to work with the elem_type,
+    // the compiler prefers the array_type, since it must already have
+    // that latter value in hand for the fast path.
+    Handle holder(current, array_type->klass_holder()); // keep the array klass alive
+    Klass* elem_type = ObjArrayKlass::cast(array_type)->element_klass();
+    result = oopFactory::new_objArray(elem_type, len, THREAD);
+  }
+
+  // Pass oops back through thread local storage.  Our apparent type to Java
+  // is that we return an oop, but we can block on exit from this routine and
+  // a GC can trash the oop in C's return register.  The generated stub will
+  // fetch the oop from TLS after any possible GC.
+  // TODO : deoptimize_caller_frame(current, HAS_PENDING_EXCEPTION);
+  current->set_vm_result(result);
+  JRT_BLOCK_END;
+
+  // inform GC that we won't do card marks for initializing writes.
+  SharedRuntime::on_slowpath_allocation_exit(current);
 JRT_END
 
 // It's a copy of OptoRuntime::new_instance_C

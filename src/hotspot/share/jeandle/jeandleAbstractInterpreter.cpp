@@ -817,7 +817,7 @@ void JeandleAbstractInterpreter::interpret_block(JeandleBasicBlock* block) {
 
       case Bytecodes::_new: do_new(); break;
       case Bytecodes::_newarray: newarray(_bytecodes.get_index_u1()); break;
-      case Bytecodes::_anewarray: Unimplemented(); break;
+      case Bytecodes::_anewarray: anewarray(_bytecodes.get_index_u2()); break;
 
       case Bytecodes::_arraylength: arraylength(); break;
       case Bytecodes::_athrow: dispatch_exception_to_handler(_jvm->apop()); break;
@@ -1820,7 +1820,7 @@ void JeandleAbstractInterpreter::dispatch_exception_to_handler(llvm::Value* exce
 
       // if match, the right handler is found, else try the next
       llvm::BasicBlock* match_dest = handler_block->header_llvm_block();
-      llvm::BasicBlock* next_dest = llvm::BasicBlock::Create(*_context, 
+      llvm::BasicBlock* next_dest = llvm::BasicBlock::Create(*_context,
                                                              "bci_" + std::to_string(_bytecodes.cur_bci()) + "_exception_dispatch_to_bci_" + std::to_string(handler_block->start_bci()),
                                                              _llvm_func);
 
@@ -1860,10 +1860,35 @@ void JeandleAbstractInterpreter::throw_exception(llvm::Value* exception_oop) {
 }
 
 void JeandleAbstractInterpreter::newarray(int element_type){
-  llvm::Value* length = _jvm->ipop();
   // Get array type from bytecode
-  llvm::Value* type_value = _ir_builder.getInt32(static_cast<BasicType>(element_type));
-  llvm::CallInst* result = call_java_op("jeandle.newarray", {type_value, length});
+  ciTypeArrayKlass* ci_array_klass = ciTypeArrayKlass::make(static_cast<BasicType>(element_type));
+  Klass* array_klass = (Klass*)(ci_array_klass->constant_encoding());
+  do_unified_newarray(array_klass);
+}
+
+void JeandleAbstractInterpreter::anewarray(int klass_index)
+{
+  // Get the element class from the constant pool index
+  bool will_link;
+  ciKlass* element_klass = _bytecodes.get_klass(will_link);
+  assert(will_link, "anewarray: not link");
+  ciObjArrayKlass* array_klass = ciObjArrayKlass::make(element_klass);
+  if (array_klass->is_loaded()) {
+    // Convert ciKlass to runtime Klass pointer
+    Klass* klass = (Klass*)(array_klass->constant_encoding());
+    do_unified_newarray(klass);
+  } else {
+    // TODO: Uncommon trap.
+    Unimplemented();
+  }
+}
+
+void JeandleAbstractInterpreter::do_unified_newarray(Klass* array_klass) {
+  llvm::Value* length = _jvm->ipop();
+  llvm::PointerType* klass_type = llvm::PointerType::get(*_context, llvm::jeandle::AddrSpace::CHeapAddrSpace);
+  llvm::Value* array_klass_addr = _ir_builder.getInt64((intptr_t)array_klass);
+  llvm::Value* array_klass_ptr =  _ir_builder.CreateIntToPtr(array_klass_addr, klass_type);
+  llvm::CallInst* result = call_java_op("jeandle.newarray", {array_klass_ptr, length});
   _jvm->apush(result);
 }
 
