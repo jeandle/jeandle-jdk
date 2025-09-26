@@ -53,9 +53,9 @@ define hotspotcc ptr addrspace(0) @jeandle.load_klass(ptr addrspace(1) nocapture
 define hotspotcc i1 @jeandle.check_klass_subtype_slow_path(ptr addrspace(0) nocapture %sub_klass, ptr addrspace(0) nocapture %super_klass) "lower-phase"="0" {
 entry:
   ; Load secondary_supers array and secondary_super_cache.
-  %ss_offset = load i32, ptr @Klass.secondary_supers_offset
-  %ss_addr = getelementptr inbounds i8, ptr addrspace(0) %sub_klass, i32 %ss_offset
-  %secondary_supers = load atomic ptr addrspace(0), ptr addrspace(0) %ss_addr unordered, align 8
+  %secondary_supers_offset = load i32, ptr @Klass.secondary_supers_offset
+  %secondary_supers_addr = getelementptr inbounds i8, ptr addrspace(0) %sub_klass, i32 %secondary_supers_offset
+  %secondary_supers = load atomic ptr addrspace(0), ptr addrspace(0) %secondary_supers_addr unordered, align 8
 
   ; Load length and base address of secondary_supers array.
   %length_offset = load i32, ptr @ArrayKlass.length_offset_in_bytes
@@ -87,9 +87,9 @@ continue_loop:
 
 return_true:
   ; Success, cache the super klass we found.
-  %sc_offset = load i32, ptr @Klass.secondary_super_cache_offset
-  %sc_addr = getelementptr inbounds i8, ptr addrspace(0) %sub_klass, i32 %sc_offset
-  store atomic ptr addrspace(0) %super_klass, ptr addrspace(0) %sc_addr unordered, align 8
+  %secondary_super_cache_offset = load i32, ptr @Klass.secondary_super_cache_offset
+  %secondary_super_cache_addr = getelementptr inbounds i8, ptr addrspace(0) %sub_klass, i32 %secondary_super_cache_offset
+  store atomic ptr addrspace(0) %super_klass, ptr addrspace(0) %secondary_super_cache_addr unordered, align 8
 
   ret i1 true
 
@@ -107,12 +107,12 @@ entry:
 
 check_primary_supers:
   ; Load super_check_offset_offset
-  %sco_offset_offset = load i32, ptr @Klass.super_check_offset_offset
-  %sco_offset_addr = getelementptr inbounds i8, ptr addrspace(0) %super_klass, i32 %sco_offset_offset
-  %sco_offset = load atomic i32, ptr addrspace(0) %sco_offset_addr unordered, align 4
+  %super_check_offset_offset = load i32, ptr @Klass.super_check_offset_offset
+  %super_check_offset_addr = getelementptr inbounds i8, ptr addrspace(0) %super_klass, i32 %super_check_offset_offset
+  %super_check_offset = load atomic i32, ptr addrspace(0) %super_check_offset_addr unordered, align 4
 
   ; Load super_check klass from _primary_supers of the sub_klass.
-  %super_check_addr = getelementptr inbounds i8, ptr addrspace(0) %sub_klass, i32 %sco_offset
+  %super_check_addr = getelementptr inbounds i8, ptr addrspace(0) %sub_klass, i32 %super_check_offset
   %super_check = load atomic ptr addrspace(0), ptr addrspace(0) %super_check_addr unordered, align 8
 
   %is_super_match = icmp eq ptr %super_klass, %super_check
@@ -120,8 +120,8 @@ check_primary_supers:
 
 check_secondary_supers:
   ; Check if there are secondary supers.
-  %sc_offset = load i32, ptr @Klass.secondary_super_cache_offset
-  %has_secondary = icmp eq i32 %sco_offset, %sc_offset
+  %secondary_super_cache_offset = load i32, ptr @Klass.secondary_super_cache_offset
+  %has_secondary = icmp eq i32 %super_check_offset, %secondary_super_cache_offset
   br i1 %has_secondary, label %slow_path, label %return_false
 
 slow_path:
