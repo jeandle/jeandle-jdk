@@ -132,6 +132,11 @@ void JeandleAssembler::emit_ic_check() {
   __ bind(dont);
 }
 
+int JeandleAssembler::emit_exception_handler() {
+  // TODO
+  return 0;
+}
+
 using LinkKind_aarch64 = llvm::jitlink::aarch64::EdgeKind_aarch64;
 
 void JeandleAssembler::emit_const_reloc(int operand_offset, LinkKind kind, int64_t addend, address target) {
