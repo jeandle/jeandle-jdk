@@ -37,6 +37,7 @@ import jdk.test.lib.process.ProcessTools;
 
 public class TestHsErrFile {
     public static int n = 0;
+    public static final String notExpectedString = "error occurred during error reporting";
 
     public static void main(String[] args) throws Exception {
         if (args.length == 1) {
@@ -61,6 +62,9 @@ public class TestHsErrFile {
             j  java.lang.Thread.run()V
             """;
         checkHsErrFile("hs_err_pid" + pid + ".log", anchor, expected);
+
+        // just check the output of test
+        crashWhenJeandleCompilation();
 
         pid = crashInNativeCode();
         expected = 
@@ -89,7 +93,28 @@ public class TestHsErrFile {
         cmdLine.add("crashInJeandleCompiledCode");
         ProcessBuilder pb = ProcessTools.createLimitedTestJavaProcessBuilder(cmdLine);
         OutputAnalyzer output = new OutputAnalyzer(pb.start());
-        output.waitFor();
+        output.shouldNotHaveExitValue(0);
+        output.shouldNotContain(notExpectedString);
+        return output.pid();
+    }
+
+    public static long crashWhenJeandleCompilation() throws Exception {
+        List<String> cmdLine = new ArrayList<>();
+        cmdLine.add("-Xcomp");
+        cmdLine.add("-XX:-TieredCompilation");
+        cmdLine.add("-Xbatch");
+        cmdLine.add("-noverify");
+        cmdLine.add("-XX:-Inline");
+        cmdLine.add("-XX:CompileCommand=compileonly,Crash::doCrash");
+        cmdLine.add("-XX:+UnlockDiagnosticVMOptions");
+        cmdLine.add("-XX:+AbortVMOnCompilationFailure");
+        cmdLine.add("-XX:+UseJeandleCompiler");
+        cmdLine.add("TestHsErrFile");
+        cmdLine.add("crashWhenJeandleCompilation");
+        ProcessBuilder pb = ProcessTools.createLimitedTestJavaProcessBuilder(cmdLine);
+        OutputAnalyzer output = new OutputAnalyzer(pb.start());
+        output.shouldNotHaveExitValue(0);
+        output.shouldNotContain(notExpectedString);
         return output.pid();
     }
 
@@ -105,7 +130,8 @@ public class TestHsErrFile {
         cmdLine.add("crashInNativeCode");
         ProcessBuilder pb = ProcessTools.createLimitedTestJavaProcessBuilder(cmdLine);
         OutputAnalyzer output = new OutputAnalyzer(pb.start());
-        output.waitFor();
+        output.shouldNotHaveExitValue(0);
+        output.shouldNotContain(notExpectedString);
         return output.pid();
     }
 
@@ -124,6 +150,11 @@ public class TestHsErrFile {
                 Thread.sleep(500);
             }
             NativeThreadHolder.signal(nth.pThreadId(), NativeThreadHolder.Signal.SIGSEGV.getNumber());
+        } else if ("crashWhenJeandleCompilation".equals(type)) {
+            Thread t = new Thread(() -> {
+                crash();
+            });
+            t.start();
         } else if ("crashInNativeCode".equals(type)) {
             System.loadLibrary("TestHsErrFile");
             Thread t = new Thread(() -> {
@@ -207,6 +238,10 @@ public class TestHsErrFile {
         while (true) {
             n = 1;
         }
+    }
+
+    public static void crash() {
+        Crash.doCrash(1f);
     }
 
     public static void nativeMethodWarpper() {
