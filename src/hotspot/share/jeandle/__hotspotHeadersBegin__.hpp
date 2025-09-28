@@ -18,22 +18,18 @@
  *
  */
 
-#include "jeandle/__llvmHeadersBegin__.hpp"
-#include "llvm/IR/Jeandle/Attributes.h"
-#include "llvm/IR/Jeandle/GCStrategy.h"
+// This file is used to resolve macro conflicts between LLVM and HotSpot.
+// For more information on macro conflicts, see __llvmHeadersBegin__.hpp
 
-#include "jeandle/jeandleUtils.hpp"
+// __hotspotHeadersBegin__.hpp undefines 'assert' from stdlib, and redefines
+// 'AArch64' becuase it may be undefined by __llvmHeadersBegin__.hpp.
 
-void JeandleFuncSig::setup_description(llvm::Function* func, bool is_stub) {
-  func->setCallingConv(llvm::CallingConv::Hotspot_JIT);
+#undef assert
+#ifdef SHARE_UTILITIES_DEBUG_HPP
+  #define assert(p, ...) vmassert(p, __VA_ARGS__)
+#endif // SHARE_UTILITIES_DEBUG_HPP
 
-  func->setGC(llvm::jeandle::JeandleGC);
-
-  if (!is_stub) {
-    func->addFnAttr("patchable-function-entry", "1");
-  }
-
-  if (UseCompressedOops) {
-    func->addFnAttr(llvm::Attribute::get(func->getContext(), llvm::jeandle::Attribute::UseCompressedOops));
-  }
-}
+#ifdef SAVED_HOTSPOT_AARCH64
+  #define AARCH64
+  #undef SAVED_HOTSPOT_AARCH64
+#endif // SAVED_HOTSPOT_AARCH64

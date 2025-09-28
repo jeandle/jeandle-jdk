@@ -1,6 +1,5 @@
 /*
  * Copyright (c) 1997, 2023, Oracle and/or its affiliates. All rights reserved.
- * Copyright (c) 2025, the Jeandle-JDK Authors. All Rights Reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -22,14 +21,6 @@
  * questions.
  *
  */
-
-// Need to undef assert from stdlib. Then redefine our assert.
-#ifdef JEANDLE
-#ifdef SHARE_UTILITIES_DEBUG_HPP
-  #undef assert
-  #define assert(p, ...) vmassert(p, __VA_ARGS__)
-#endif // SHARE_UTILITIES_DEBUG_HPP
-#endif // JEANDLE
 
 #ifndef SHARE_UTILITIES_DEBUG_HPP
 #define SHARE_UTILITIES_DEBUG_HPP
@@ -164,14 +155,6 @@ do {                                                                           \
   }                                                                            \
 } while (0)
 #endif
-
-
-// Undef assert from stdlib.
-#ifdef JEANDLE
-#ifdef assert
-  #undef assert
-#endif
-#endif // JEANDLE
 
 // For backward compatibility.
 #define assert(p, ...) vmassert(p, __VA_ARGS__)

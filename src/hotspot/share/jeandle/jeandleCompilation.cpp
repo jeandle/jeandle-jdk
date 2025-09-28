@@ -18,7 +18,7 @@
  *
  */
 
-#include <cassert>
+#include "jeandle/__llvmHeadersBegin__.hpp"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/Bitcode/BitcodeReader.h"
 #include "llvm/Jeandle/Jeandle.h"
@@ -51,7 +51,7 @@
 #include "jeandle/jeandleType.hpp"
 #include "jeandle/jeandleUtils.hpp"
 
-#include "utilities/debug.hpp"
+#include "jeandle/__hotspotHeadersBegin__.hpp"
 #include "ci/ciUtilities.inline.hpp"
 #include "logging/log.hpp"
 #include "runtime/sharedRuntime.hpp"

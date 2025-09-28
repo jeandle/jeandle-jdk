@@ -21,6 +21,7 @@
 #ifndef SHARE_JEANDLE_RESOURCE_OBJ_HPP
 #define SHARE_JEANDLE_RESOURCE_OBJ_HPP
 
+#include "jeandle/__hotspotHeadersBegin__.hpp"
 #include "memory/arena.hpp"
 
 // Base class for objects allocated by the compiler in the compilation arena

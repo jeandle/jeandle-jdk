@@ -21,6 +21,7 @@
 #ifndef SHARE_JEANDLE_GLOBALS_HPP
 #define SHARE_JEANDLE_GLOBALS_HPP
 
+#include "jeandle/__hotspotHeadersBegin__.hpp"
 #include "runtime/globals_shared.hpp"
 #include "utilities/macros.hpp"
 //

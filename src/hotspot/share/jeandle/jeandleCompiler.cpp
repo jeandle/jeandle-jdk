@@ -18,8 +18,7 @@
  *
  */
 
-#include <cassert>
-
+#include "jeandle/__llvmHeadersBegin__.hpp"
 #include "llvm/Bitcode/BitcodeWriter.h"
 #include "llvm/IRReader/IRReader.h"
 #include "llvm/MC/TargetRegistry.h"
@@ -32,6 +31,8 @@
 #include "jeandle/jeandleRuntimeRoutine.hpp"
 #include "jeandle/jeandleType.hpp"
 #include "jeandle/templatemodule/jeandleRuntimeDefinedJavaOps.hpp"
+
+#include "jeandle/__hotspotHeadersBegin__.hpp"
 #include "runtime/arguments.hpp"
 
 JeandleCompiler::JeandleCompiler(llvm::TargetMachine* target_machine) :

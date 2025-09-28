@@ -20,7 +20,7 @@
 
 #include "jeandle/jeandleRuntimeRoutine.hpp"
 
-#include "utilities/debug.hpp"
+#include "jeandle/__hotspotHeadersBegin__.hpp"
 #include "asm/macroAssembler.hpp"
 #include "asm/macroAssembler.inline.hpp"
 #include "code/codeBlob.hpp"

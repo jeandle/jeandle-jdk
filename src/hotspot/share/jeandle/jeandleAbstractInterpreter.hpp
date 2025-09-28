@@ -21,7 +21,7 @@
 #ifndef SHARE_JEANDLE_ABSTRACT_INTERPRETER_HPP
 #define SHARE_JEANDLE_ABSTRACT_INTERPRETER_HPP
 
-#include <cassert>
+#include "jeandle/__llvmHeadersBegin__.hpp"
 #include "llvm/IR/BasicBlock.h"
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/IR/IRBuilder.h"
@@ -31,7 +31,7 @@
 
 #include "jeandle/jeandleCompilation.hpp"
 
-#include "utilities/debug.hpp"
+#include "jeandle/__hotspotHeadersBegin__.hpp"
 #include "ci/compilerInterface.hpp"
 #include "memory/allocation.hpp"
 #include "utilities/bitMap.inline.hpp"
@@ -210,7 +210,7 @@ class JeandleAbstractInterpreter : public StackObj {
   llvm::Function* _llvm_func;
   int _entry_bci;
   llvm::LLVMContext* _context;
-  ciBytecodeStream _codes;
+  ciBytecodeStream _bytecodes;
   llvm::Module& _module;
   JeandleCompiledCode& _compiled_code;
   BasicBlockBuilder* _block_builder;
@@ -282,6 +282,8 @@ class JeandleAbstractInterpreter : public StackObj {
   void do_put_xxx(ciField* field, bool is_static);
 
   void throw_exception();
+
+  void arraylength();
 };
 
 #endif // SHARE_JEANDLE_ABSTRACT_INTERPRETER_HPP

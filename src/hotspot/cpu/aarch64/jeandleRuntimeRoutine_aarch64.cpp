@@ -20,7 +20,7 @@
 
 #include "jeandle/jeandleRuntimeRoutine.hpp"
 
-#include "utilities/debug.hpp"
+#include "jeandle/__hotspotHeadersBegin__.hpp"
 #include "runtime/interfaceSupport.inline.hpp"
 
 #define __ masm->

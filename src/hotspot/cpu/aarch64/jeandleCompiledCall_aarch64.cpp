@@ -19,6 +19,8 @@
  */
 
 #include "jeandle/jeandleCompiledCall.hpp"
+
+#include "jeandle/__hotspotHeadersBegin__.hpp"
 #include "nativeInst_aarch64.hpp"
 
 int JeandleCompiledCall::call_site_size(JeandleCompiledCall::Type call_type) {

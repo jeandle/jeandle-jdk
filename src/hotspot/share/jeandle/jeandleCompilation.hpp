@@ -21,9 +21,7 @@
 #ifndef SHARE_JEANDLE_COMPILATION_HPP
 #define SHARE_JEANDLE_COMPILATION_HPP
 
-#include <cassert>
-#pragma push_macro("AARCH64")
-#undef AARCH64
+#include "jeandle/__llvmHeadersBegin__.hpp"
 #include "llvm/IR/Module.h"
 #include "llvm/IR/Function.h"
 #include "llvm/IR/LLVMContext.h"
@@ -32,9 +30,8 @@
 #include <memory>
 
 #include "jeandle/jeandleCompiledCode.hpp"
-#pragma pop_macro("AARCH64")
 
-#include "utilities/debug.hpp"
+#include "jeandle/__hotspotHeadersBegin__.hpp"
 #include "ci/ciEnv.hpp"
 #include "ci/ciMethod.hpp"
 #include "memory/arena.hpp"

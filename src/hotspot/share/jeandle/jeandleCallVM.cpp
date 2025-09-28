@@ -18,7 +18,7 @@
  *
  */
 
-#include <cassert>
+#include "jeandle/__llvmHeadersBegin__.hpp"
 #include "llvm/IR/Attributes.h"
 #include "llvm/IR/IRBuilder.h"
 #include "llvm/IR/Jeandle/Attributes.h"

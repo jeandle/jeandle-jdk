@@ -18,7 +18,7 @@
  *
  */
 
-#include <cassert>
+#include "jeandle/__llvmHeadersBegin__.hpp"
 #include "llvm/IR/Jeandle/Metadata.h"
 
 #include "jeandle/jeandleType.hpp"
