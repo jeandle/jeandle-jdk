@@ -30,7 +30,7 @@
  * Method:    getID
  * Signature: ()J
  */
-JNIEXPORT jlong JNICALL Java_NativeThreadHolder_getID(JNIEnv *env, jclass class)
+JNIEXPORT jlong JNICALL Java_compiler_jeandle_vmCrash_NativeThreadHolder_getID(JNIEnv *env, jclass class)
 {
 #ifdef __linux__
     return (jlong)pthread_self();
@@ -44,7 +44,7 @@ JNIEXPORT jlong JNICALL Java_NativeThreadHolder_getID(JNIEnv *env, jclass class)
  * Method:    signal
  * Signature: (JI)I
  */
-JNIEXPORT jint JNICALL Java_NativeThreadHolder_signal(JNIEnv *env, jclass class, jlong thread, jint sig)
+JNIEXPORT jint JNICALL Java_compiler_jeandle_vmCrash_NativeThreadHolder_signal(JNIEnv *env, jclass class, jlong thread, jint sig)
 {
 #ifdef __linux__
     return pthread_kill((pthread_t)thread, sig);

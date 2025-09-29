@@ -18,6 +18,8 @@
  *
  */
 
+package compiler.jeandle.vmCrash;
+
 public class NativeThreadHolder {
 
     public enum Signal {

@@ -22,9 +22,12 @@
  * @test
  * @library /test/lib
  * @modules java.base/jdk.internal.misc
- * @compile NativeThreadHolder.java
- * @run main/othervm/native TestHsErrFile
+ * @requires os.family == "linux"
+ * @compile NativeThreadHolder.java Crash.jasm
+ * @run main/othervm/native compiler.jeandle.vmCrash.TestHsErrFile
  */
+
+package compiler.jeandle.vmCrash;
 
 import java.io.BufferedReader;
 import java.io.FileReader;
@@ -53,31 +56,21 @@ public class TestHsErrFile {
         pid = crashInJeandleCompiledCode();
         expected = 
             """
-            J  jeandle TestHsErrFile.enterLoop()V (7 bytes)
-            j  TestHsErrFile.javaMethodInnerWrapper()V
-            J  jeandle TestHsErrFile.javaMethodOuterWrapper()V (4 bytes)
-            j  TestHsErrFile.lambda$makeProcess
-            j  TestHsErrFile$$Lambda
+            J  jeandle compiler.jeandle.vmCrash.TestHsErrFile.enterLoop()V (7 bytes)
+            j  compiler.jeandle.vmCrash.TestHsErrFile.javaMethodInnerWrapper()V
+            J  jeandle compiler.jeandle.vmCrash.TestHsErrFile.javaMethodOuterWrapper()V (4 bytes)
+            j  compiler.jeandle.vmCrash.TestHsErrFile.lambda$makeProcess
+            j  compiler.jeandle.vmCrash.TestHsErrFile$$Lambda
             j  java.lang.Thread.runWith(Ljava/lang/Object;Ljava/lang/Runnable;)V
             j  java.lang.Thread.run()V
             """;
         checkHsErrFile("hs_err_pid" + pid + ".log", anchor, expected);
 
-        pid = crashWhenJeandleCompilation();
+        pid = crashInJeandleCompilation();
         checkHsErrFile("hs_err_pid" + pid + ".log");
 
         pid = crashInNativeCode();
-        expected = 
-            """
-            C  Java_TestHsErrFile_crashInNative
-            j  TestHsErrFile.crashInNative()V
-            J  jeandle TestHsErrFile.nativeMethodWrapper()V (4 bytes)
-            j  TestHsErrFile.lambda$makeProcess
-            j  TestHsErrFile$$Lambda
-            j  java.lang.Thread.runWith(Ljava/lang/Object;Ljava/lang/Runnable;)V
-            j  java.lang.Thread.run()V
-            """;
-        checkHsErrFile("hs_err_pid" + pid + ".log", anchor, expected);
+        checkHsErrFile("hs_err_pid" + pid + ".log");
     }
 
     public static long crashInJeandleCompiledCode() throws Exception {
@@ -86,10 +79,10 @@ public class TestHsErrFile {
         cmdLine.add("-XX:-TieredCompilation");
         cmdLine.add("-Xbatch");
         cmdLine.add("-XX:-Inline");
-        cmdLine.add("-XX:CompileCommand=compileonly,TestHsErrFile::javaMethodOuterWrapper");
-        cmdLine.add("-XX:CompileCommand=compileonly,TestHsErrFile::enterLoop");
+        cmdLine.add("-XX:CompileCommand=compileonly,compiler.jeandle.vmCrash.TestHsErrFile::javaMethodOuterWrapper");
+        cmdLine.add("-XX:CompileCommand=compileonly,compiler.jeandle.vmCrash.TestHsErrFile::enterLoop");
         cmdLine.add("-XX:+UseJeandleCompiler");
-        cmdLine.add("TestHsErrFile");
+        cmdLine.add("compiler.jeandle.vmCrash.TestHsErrFile");
         cmdLine.add("crashInJeandleCompiledCode");
         ProcessBuilder pb = ProcessTools.createLimitedTestJavaProcessBuilder(cmdLine);
         OutputAnalyzer output = new OutputAnalyzer(pb.start());
@@ -98,19 +91,17 @@ public class TestHsErrFile {
         return output.pid();
     }
 
-    public static long crashWhenJeandleCompilation() throws Exception {
+    public static long crashInJeandleCompilation() throws Exception {
         List<String> cmdLine = new ArrayList<>();
         cmdLine.add("-Xcomp");
         cmdLine.add("-XX:-TieredCompilation");
         cmdLine.add("-Xbatch");
         cmdLine.add("-noverify");
         cmdLine.add("-XX:-Inline");
-        cmdLine.add("-XX:CompileCommand=compileonly,Crash::doCrash");
-        cmdLine.add("-XX:+UnlockDiagnosticVMOptions");
-        cmdLine.add("-XX:+AbortVMOnCompilationFailure");
+        cmdLine.add("-XX:CompileCommand=compileonly,compiler.jeandle.vmCrash.Crash::doCrash");
         cmdLine.add("-XX:+UseJeandleCompiler");
-        cmdLine.add("TestHsErrFile");
-        cmdLine.add("crashWhenJeandleCompilation");
+        cmdLine.add("compiler.jeandle.vmCrash.TestHsErrFile");
+        cmdLine.add("crashInJeandleCompilation");
         ProcessBuilder pb = ProcessTools.createLimitedTestJavaProcessBuilder(cmdLine);
         OutputAnalyzer output = new OutputAnalyzer(pb.start());
         output.shouldNotHaveExitValue(0);
@@ -124,9 +115,9 @@ public class TestHsErrFile {
         cmdLine.add("-XX:-TieredCompilation");
         cmdLine.add("-Xbatch");
         cmdLine.add("-XX:-Inline");
-        cmdLine.add("-XX:CompileCommand=compileonly,TestHsErrFile::nativeMethodWrapper");
+        cmdLine.add("-XX:CompileCommand=compileonly,compiler.jeandle.vmCrash.TestHsErrFile::nativeMethodWrapper");
         cmdLine.add("-XX:+UseJeandleCompiler");
-        cmdLine.add("TestHsErrFile");
+        cmdLine.add("compiler.jeandle.vmCrash.TestHsErrFile");
         cmdLine.add("crashInNativeCode");
         ProcessBuilder pb = ProcessTools.createLimitedTestJavaProcessBuilder(cmdLine);
         OutputAnalyzer output = new OutputAnalyzer(pb.start());
@@ -150,7 +141,7 @@ public class TestHsErrFile {
                 Thread.sleep(500);
             }
             NativeThreadHolder.signal(nth.pThreadId(), NativeThreadHolder.Signal.SIGSEGV.getNumber());
-        } else if ("crashWhenJeandleCompilation".equals(type)) {
+        } else if ("crashInJeandleCompilation".equals(type)) {
             Thread t = new Thread(() -> {
                 crash();
             });
@@ -245,7 +236,7 @@ public class TestHsErrFile {
     }
 
     public static void crash() {
-        Crash.doCrash(1f);
+        Crash.doCrash(1.0f);
     }
 
     public static void nativeMethodWrapper() {

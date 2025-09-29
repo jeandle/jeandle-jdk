@@ -18,15 +18,12 @@
  *
  */
 
-#include<jni.h>
+package compiler/jeandle/vmCrash;
 
-/*
- * Class:     TestHsErrFile
- * Method:    crashInNative
- * Signature: ()V
- */
-__attribute((optimize("O0")))
-JNIEXPORT void JNICALL Java_compiler_jeandle_vmCrash_TestHsErrFile_crashInNative(JNIEnv *env, jclass class)
-{
-    *(jint *)0 = 0;
+super public class Crash {
+    public static Method doCrash:"(F)I" stack 2 locals 1 {
+        fconst_1;
+        ishl;
+        ireturn;
+    }
 }

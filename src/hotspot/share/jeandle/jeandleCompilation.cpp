@@ -81,8 +81,7 @@ JeandleCompilation::JeandleCompilation(llvm::TargetMachine* target_machine,
   if (error_occurred()) {
 #ifdef ASSERT
     if (JeandleCrashOnError) {
-      TOUCH_ASSERT_POISON
-      report_vm_error(__FILE__, __LINE__, _error_msg);
+      fatal("%s", _error_msg);
     }
 #endif
     _env->record_method_not_compilable(_error_msg);
@@ -121,8 +120,7 @@ JeandleCompilation::JeandleCompilation(llvm::TargetMachine* target_machine,
   // Verify.
   if (llvm::verifyModule(*_llvm_module, &llvm::errs())) {
     if (JeandleCrashOnError) {
-      TOUCH_ASSERT_POISON
-      report_vm_error(__FILE__, __LINE__, "module verify failed in Jeandle stub compilation");
+      fatal("module verify failed in Jeandle stub compilation");
     }
     return;
   }
