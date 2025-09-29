@@ -54,8 +54,8 @@ public class TestHsErrFile {
         expected = 
             """
             J  jeandle TestHsErrFile.enterLoop()V (7 bytes)
-            j  TestHsErrFile.javaMethodInnerWarpper()V
-            J  jeandle TestHsErrFile.javaMethodOuterWarpper()V (4 bytes)
+            j  TestHsErrFile.javaMethodInnerWrapper()V
+            J  jeandle TestHsErrFile.javaMethodOuterWrapper()V (4 bytes)
             j  TestHsErrFile.lambda$makeProcess
             j  TestHsErrFile$$Lambda
             j  java.lang.Thread.runWith(Ljava/lang/Object;Ljava/lang/Runnable;)V
@@ -63,15 +63,15 @@ public class TestHsErrFile {
             """;
         checkHsErrFile("hs_err_pid" + pid + ".log", anchor, expected);
 
-        // just check the output of test
-        crashWhenJeandleCompilation();
+        pid = crashWhenJeandleCompilation();
+        checkHsErrFile("hs_err_pid" + pid + ".log");
 
         pid = crashInNativeCode();
         expected = 
             """
             C  Java_TestHsErrFile_crashInNative
             j  TestHsErrFile.crashInNative()V
-            J  jeandle TestHsErrFile.nativeMethodWarpper()V (4 bytes)
+            J  jeandle TestHsErrFile.nativeMethodWrapper()V (4 bytes)
             j  TestHsErrFile.lambda$makeProcess
             j  TestHsErrFile$$Lambda
             j  java.lang.Thread.runWith(Ljava/lang/Object;Ljava/lang/Runnable;)V
@@ -86,7 +86,7 @@ public class TestHsErrFile {
         cmdLine.add("-XX:-TieredCompilation");
         cmdLine.add("-Xbatch");
         cmdLine.add("-XX:-Inline");
-        cmdLine.add("-XX:CompileCommand=compileonly,TestHsErrFile::javaMethodOuterWarpper");
+        cmdLine.add("-XX:CompileCommand=compileonly,TestHsErrFile::javaMethodOuterWrapper");
         cmdLine.add("-XX:CompileCommand=compileonly,TestHsErrFile::enterLoop");
         cmdLine.add("-XX:+UseJeandleCompiler");
         cmdLine.add("TestHsErrFile");
@@ -124,7 +124,7 @@ public class TestHsErrFile {
         cmdLine.add("-XX:-TieredCompilation");
         cmdLine.add("-Xbatch");
         cmdLine.add("-XX:-Inline");
-        cmdLine.add("-XX:CompileCommand=compileonly,TestHsErrFile::nativeMethodWarpper");
+        cmdLine.add("-XX:CompileCommand=compileonly,TestHsErrFile::nativeMethodWrapper");
         cmdLine.add("-XX:+UseJeandleCompiler");
         cmdLine.add("TestHsErrFile");
         cmdLine.add("crashInNativeCode");
@@ -142,7 +142,7 @@ public class TestHsErrFile {
             NativeThreadHolder nth = new NativeThreadHolder();
             Thread t = new Thread(() -> {
                 nth.setpThreadId(NativeThreadHolder.getID());
-                javaMethodOuterWarpper();
+                javaMethodOuterWrapper();
             });
             nth.setThread(t);
             nth.start();
@@ -158,7 +158,7 @@ public class TestHsErrFile {
         } else if ("crashInNativeCode".equals(type)) {
             System.loadLibrary("TestHsErrFile");
             Thread t = new Thread(() -> {
-                nativeMethodWarpper();
+                nativeMethodWrapper();
             });
             t.start();
         } else {
@@ -166,10 +166,14 @@ public class TestHsErrFile {
         }
     }
 
-    public static void checkHsErrFile(String filePath, String anchor, String expected) throws Exception {
+    public static void checkHsErrFile(String filePath) throws Exception {
         if (!new File(filePath).exists()) {
             throw new RuntimeException("File " + filePath + " not found");
         }
+    }
+
+    public static void checkHsErrFile(String filePath, String anchor, String expected) throws Exception {
+        checkHsErrFile(filePath);
 
         String registersInfoTitle = "Registers:";
         String stackInfoTitle = "Top of Stack:";
@@ -226,11 +230,11 @@ public class TestHsErrFile {
         }
     }
 
-    public static void javaMethodOuterWarpper() {
-        javaMethodInnerWarpper();
+    public static void javaMethodOuterWrapper() {
+        javaMethodInnerWrapper();
     }
 
-    public static void javaMethodInnerWarpper() {
+    public static void javaMethodInnerWrapper() {
         enterLoop();
     }
 
@@ -244,7 +248,7 @@ public class TestHsErrFile {
         Crash.doCrash(1f);
     }
 
-    public static void nativeMethodWarpper() {
+    public static void nativeMethodWrapper() {
         crashInNative();
     }
 
