@@ -284,6 +284,12 @@ class JeandleAbstractInterpreter : public StackObj {
   void throw_exception();
 
   void arraylength();
+
+  // Implementation of array *aload and *astore bytecodes.
+  void do_array_load(Bytecodes::Code code);
+  void do_array_store(Bytecodes::Code code);
+  llvm::Value* do_array_load_inner(BasicType type, uint8_t shift_num, llvm::Type* load_type);
+  void do_array_store_inner(BasicType type, uint8_t shift_num, llvm::Value* value);
 };
 
 #endif // SHARE_JEANDLE_ABSTRACT_INTERPRETER_HPP
