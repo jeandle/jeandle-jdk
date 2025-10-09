@@ -40,8 +40,9 @@ import jdk.test.whitebox.WhiteBox;
 
 public class TestObjectFieldAccess {
     private final static WhiteBox wb = WhiteBox.getWhiteBox();
-    static Object sa = new Object();
-    static Object sb = new Object();
+    static Object oldObj = new Object();
+    static Object sa = oldObj;
+    static Object sb = oldObj;
     static Object newObj = new Object();
 
     // Static field operations
@@ -60,11 +61,13 @@ public class TestObjectFieldAccess {
         // Test static field operations.
         Object staticField = testStaticFieldOps();
         Asserts.assertEquals(staticField, newObj);
+        Asserts.assertEquals(sb, oldObj);
 
         // Test instance field operations.
-        MyClass obj = new MyClass();
-        Object instanceField = testInstanceFieldOps(obj);
+        MyClass myObj = new MyClass(oldObj);
+        Object instanceField = testInstanceFieldOps(myObj);
         Asserts.assertEquals(instanceField, newObj);
+        Asserts.assertEquals(myObj.ib, oldObj);
 
         var staticFieldMethod = TestObjectFieldAccess.class.getDeclaredMethod("testStaticFieldOps");
         if (!wb.isMethodCompiled(staticFieldMethod)) {
@@ -78,6 +81,10 @@ public class TestObjectFieldAccess {
 }
 
 class MyClass {
-    public Object ia = new Object();
-    public Object ib = new Object();
+    public MyClass(Object oldObj) {
+        ia = oldObj;
+        ib = oldObj;
+    }
+    public Object ia;
+    public Object ib;
 }

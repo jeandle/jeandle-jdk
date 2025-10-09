@@ -61,11 +61,15 @@ public class TestBoolFieldAccess {
         // Test static field operations.
         boolean staticField = testStaticFieldOps();
         Asserts.assertEquals(staticField, true);
+        Asserts.assertEquals(sa, false);
+        Asserts.assertEquals(sb, true);
 
         // Test instance field operations.
         MyClass obj = new MyClass();
         boolean instanceField = testInstanceFieldOps(obj);
         Asserts.assertEquals(instanceField, true);
+        Asserts.assertEquals(obj.ia, false);
+        Asserts.assertEquals(obj.ib, true);
 
         var staticFieldMethod = TestBoolFieldAccess.class.getDeclaredMethod("testStaticFieldOps");
         if (!wb.isMethodCompiled(staticFieldMethod)) {
