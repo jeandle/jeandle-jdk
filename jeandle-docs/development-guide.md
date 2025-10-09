@@ -25,7 +25,17 @@ git clang-format HEAD~1
 Note that ```clang-format``` modifies the files, but does not commit them. So you will likely want to add the changes to a commit.
 
 ## Header Files in Hotspot Code
-The standard library macro ```assert``` used by LLVM conflicts with the macro ```assert``` used by Hotspot. In our Hotspot codebase, we consistently use the Hotspot's ```assert```. To resolve this conflict, it is necessary to include the header file ```"utilities/debug.hpp"``` after including any LLVM or stantard library headers and before using the Hotspot's ```assert```. This header file redefines the ```assert``` for Hotspot code.
+Jeandle includes many LLVM header files in the Hotspot source code, and produces some macro conflicts with Hotspot header files. We use `__llvmHeadersBegin__.hpp` and `__hotspotHeadersBegin__.hpp` to solve these conflicts. All Jeandle source files in the Hotspot source code should include `__llvmHeadersBegin__.hpp` and `__hotspotHeadersBegin__.hpp` like this:
+```
+#include "jeandle/__llvmHeadersBegin__.hpp"
+// Here we can include header files from LLVM.
+
+#include "jeandle/..."
+#include "jeandle/..."
+
+#include "jeandle/__hostpotHeadersBegin__.hpp"
+// Here we can include header files from Hotspot.
+```
 
 ## Continuous Integration
 The Jeandle project consists of two code repositories: jeandle-jdk and jeandle-llvm. During development, a single feature may require changes to both repositories.

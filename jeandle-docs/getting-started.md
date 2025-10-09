@@ -52,7 +52,8 @@ Jeandle currently supports X86 architecture only. Support for Aarch64 architectu
 | OS | Arch | Status |
 | :---: | :---: | :---: |
 | Linux | X86 | Supported |
-| Linux | Aarch64 | Planned |
+| Linux | Aarch64 | Supported |
+| Linux | RISC-V | Planned |
 
 
 ## Using Jeandle
