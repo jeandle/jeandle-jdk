@@ -1444,7 +1444,6 @@ llvm::Value* JeandleAbstractInterpreter::compute_array_element_address(BasicType
   llvm::Value* index = _jvm->ipop();
   llvm::Value* array_oop = _jvm->apop();
   llvm::Value* array_base_offset = _ir_builder.getInt32(arrayOopDesc::base_offset_in_bytes(basic_type));
-  array_base_offset->setName("arrayOopDesc.base_offset_in_bytes"); // May not take effect sometimes.
   llvm::Value* array_base = _ir_builder.CreateInBoundsPtrAdd(array_oop, array_base_offset, "array_element_base");
   llvm::Value* element_address = _ir_builder.CreateInBoundsGEP(type, array_base, index, "array_element_address");
   return element_address;
