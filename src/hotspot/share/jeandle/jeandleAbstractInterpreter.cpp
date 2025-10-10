@@ -1384,7 +1384,11 @@ llvm::Value* JeandleAbstractInterpreter::load_from_address(llvm::Value* addr, Ba
   llvm::LoadInst* load_inst = nullptr;
   llvm::Value* res_inst = nullptr;
   switch (type) {
-    case T_BOOLEAN: // fall through
+    case T_BOOLEAN: {
+      load_inst = _ir_builder.CreateLoad(llvm::Type::getInt8Ty(*_context), addr);
+      res_inst = _ir_builder.CreateZExt(load_inst, expected_ty);
+      break;
+    }
     case T_BYTE: {
       load_inst = _ir_builder.CreateLoad(llvm::Type::getInt8Ty(*_context), addr);
       res_inst = _ir_builder.CreateSExt(load_inst, expected_ty);
