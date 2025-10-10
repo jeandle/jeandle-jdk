@@ -18,15 +18,17 @@
  *
  */
 
+package compiler.jeandle.bytecodeTranslate;
+
 import jdk.test.lib.Asserts;
 
 /**
  * @test
- * @summary Support arraylength
- * issue: https://github.com/jeandle/jeandle-jdk/issues/29
+ * @summary Test arraylength
  * @library /test/lib
- * @run main/othervm -Xcomp -XX:-TieredCompilation -XX:CompileCommand=compileonly,TestArrayLength::getArrayLength
- * -XX:+UseJeandleCompiler TestArrayLength
+ * @run main/othervm -Xcomp -XX:-TieredCompilation
+ *      -XX:CompileCommand=compileonly,compiler.jeandle.bytecodeTranslate.TestArrayLength::getArrayLength
+ *      -XX:+UseJeandleCompiler compiler.jeandle.bytecodeTranslate.TestArrayLength
  */
 public class TestArrayLength {
     public static void main(String[] args) {
