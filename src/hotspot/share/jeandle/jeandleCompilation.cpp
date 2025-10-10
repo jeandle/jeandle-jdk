@@ -80,8 +80,9 @@ JeandleCompilation::JeandleCompilation(llvm::TargetMachine* target_machine,
 
   if (error_occurred()) {
 #ifdef ASSERT
-    if (JeandleCrashOnError)
-      report_vm_error(__FILE__, __LINE__, _error_msg);
+    if (JeandleCrashOnError) {
+      fatal("%s", _error_msg);
+    }
 #endif
     _env->record_method_not_compilable(_error_msg);
     return;
@@ -118,8 +119,9 @@ JeandleCompilation::JeandleCompilation(llvm::TargetMachine* target_machine,
 #ifdef ASSERT
   // Verify.
   if (llvm::verifyModule(*_llvm_module, &llvm::errs())) {
-    if (JeandleCrashOnError)
-      report_vm_error(__FILE__, __LINE__, "module verify failed in Jeandle stub compilation");
+    if (JeandleCrashOnError) {
+      fatal("module verify failed in Jeandle stub compilation");
+    }
     return;
   }
 #endif

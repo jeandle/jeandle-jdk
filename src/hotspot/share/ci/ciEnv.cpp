@@ -1620,7 +1620,7 @@ void ciEnv::dump_compile_data(outputStream* out) {
   CompileTask* task = this->task();
   if (task) {
 #ifdef COMPILER2
-    if (ReplayReduce && compiler_data() != nullptr) {
+    if (!task->compiler()->is_jeandle() && ReplayReduce && compiler_data() != nullptr) {
       // Dump C2 "reduced" inlining data.
       ((Compile*)compiler_data())->dump_inline_data_reduced(out);
     }
@@ -1632,7 +1632,11 @@ void ciEnv::dump_compile_data(outputStream* out) {
     get_method(method)->dump_name_as_ascii(out);
     out->print(" %d %d", entry_bci, comp_level);
     if (compiler_data() != nullptr) {
-      if (is_c2_compile(comp_level)) {
+      if (task->compiler()->is_jeandle()) {
+#ifdef JEANDLE
+        // TODO: handle dump_inline_data in jeandle compiler
+#endif
+      } else if (is_c2_compile(comp_level)) {
 #ifdef COMPILER2
         // Dump C2 inlining data.
         ((Compile*)compiler_data())->dump_inline_data(out);
