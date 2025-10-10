@@ -66,10 +66,6 @@ public class TestSimpleFGC {
         }
     }
 
-    static MyClass createObj() {
-        return new MyClass();
-    }
-
     static void test0(MyClass a) {
         wb.fullGC();
         Asserts.assertEquals(a.getA(), 1);
