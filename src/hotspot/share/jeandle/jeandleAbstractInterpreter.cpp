@@ -582,14 +582,14 @@ void JeandleAbstractInterpreter::interpret_block(JeandleBasicBlock* block) {
       case Bytecodes::_aload_3: _jvm->apush(_jvm->aload(3)); break;
       case Bytecodes::_aload: _jvm->apush(_jvm->aload(_bytecodes.get_index())); break;
 
-      case Bytecodes::_iaload: Unimplemented(); break;
-      case Bytecodes::_laload: Unimplemented(); break;
-      case Bytecodes::_faload: Unimplemented(); break;
-      case Bytecodes::_daload: Unimplemented(); break;
-      case Bytecodes::_aaload: Unimplemented(); break;
-      case Bytecodes::_baload: Unimplemented(); break;
-      case Bytecodes::_caload: Unimplemented(); break;
-      case Bytecodes::_saload: Unimplemented(); break;
+      case Bytecodes::_iaload: // fall through
+      case Bytecodes::_laload: // fall through
+      case Bytecodes::_faload: // fall through
+      case Bytecodes::_daload: // fall through
+      case Bytecodes::_aaload: // fall through
+      case Bytecodes::_baload: // fall through
+      case Bytecodes::_caload: // fall through
+      case Bytecodes::_saload: do_array_load(code); break;
 
       // Stores:
 
@@ -623,14 +623,14 @@ void JeandleAbstractInterpreter::interpret_block(JeandleBasicBlock* block) {
       case Bytecodes::_astore_3: _jvm->astore(3, _jvm->apop()); break;
       case Bytecodes::_astore: _jvm->astore(_bytecodes.get_index(), _jvm->apop()); break;
 
-      case Bytecodes::_iastore: Unimplemented(); break;
-      case Bytecodes::_lastore: Unimplemented(); break;
-      case Bytecodes::_fastore: Unimplemented(); break;
-      case Bytecodes::_dastore: Unimplemented(); break;
-      case Bytecodes::_aastore: Unimplemented(); break;
-      case Bytecodes::_bastore: Unimplemented(); break;
-      case Bytecodes::_castore: Unimplemented(); break;
-      case Bytecodes::_sastore: Unimplemented(); break;
+      case Bytecodes::_iastore: // fall through
+      case Bytecodes::_lastore: // fall through
+      case Bytecodes::_fastore: // fall through
+      case Bytecodes::_dastore: // fall through
+      case Bytecodes::_aastore: // fall through
+      case Bytecodes::_bastore: // fall through
+      case Bytecodes::_castore: // fall through
+      case Bytecodes::_sastore: do_array_store(code); break;
 
       // Stack:
 
@@ -1438,4 +1438,120 @@ void JeandleAbstractInterpreter::arraylength() {
     llvm::Value* array_oop = _jvm->apop();
     llvm::CallInst* call = call_java_op("jeandle.arraylength", {array_oop});
     _jvm->ipush(call);
+}
+
+llvm::Value* JeandleAbstractInterpreter::compute_array_element_address(BasicType basic_type, llvm::Type* type) {
+  llvm::Value* index = _jvm->ipop();
+  llvm::Value* array_oop = _jvm->apop();
+  llvm::Value* array_base_offset = _ir_builder.getInt32(arrayOopDesc::base_offset_in_bytes(basic_type));
+  llvm::Value* array_base = _ir_builder.CreateInBoundsPtrAdd(array_oop, array_base_offset, "array_element_base");
+  llvm::Value* element_address = _ir_builder.CreateInBoundsGEP(type, array_base, index, "array_element_address");
+  return element_address;
+}
+
+llvm::Value* JeandleAbstractInterpreter::do_array_load_inner(BasicType basic_type, llvm::Type* load_type) {
+  llvm::Value* element_address = compute_array_element_address(basic_type, load_type);
+  llvm::LoadInst* load_inst = _ir_builder.CreateLoad(load_type, element_address);
+  load_inst->setAtomic(llvm::AtomicOrdering::Unordered);
+  return load_inst;
+}
+
+void JeandleAbstractInterpreter::do_array_load(Bytecodes::Code code) {
+  switch (code) {
+    case Bytecodes::_iaload: {
+      llvm::Value* load_value = do_array_load_inner(T_INT, llvm::Type::getInt32Ty(*_context));
+      _jvm->ipush(load_value);
+      break;
+    }
+    case Bytecodes::_laload: {
+      llvm::Value* load_value = do_array_load_inner(T_LONG, llvm::Type::getInt64Ty(*_context));
+      _jvm->lpush(load_value);
+      break;
+    }
+    case Bytecodes::_faload: {
+      llvm::Value* load_value = do_array_load_inner(T_FLOAT, llvm::Type::getFloatTy(*_context));
+      _jvm->fpush(load_value);
+      break;
+    }
+    case Bytecodes::_daload: {
+      llvm::Value* load_value = do_array_load_inner(T_DOUBLE, llvm::Type::getDoubleTy(*_context));
+      _jvm->dpush(load_value);
+      break;
+    }
+    case Bytecodes::_aaload: {
+      llvm::Value* load_value = do_array_load_inner(
+              T_OBJECT, llvm::PointerType::get(*_context, llvm::jeandle::AddrSpace::JavaHeapAddrSpace));
+      _jvm->apush(load_value);
+      break;
+    }
+    case Bytecodes::_baload: {
+      llvm::Value* load_value = do_array_load_inner(T_BYTE, llvm::Type::getInt8Ty(*_context));
+      _jvm->ipush(_ir_builder.CreateSExt(load_value, JeandleType::java2llvm(BasicType::T_BYTE, *_context)));
+      break;
+    }
+    case Bytecodes::_caload: {
+      llvm::Value* load_value = do_array_load_inner(T_CHAR, llvm::Type::getInt16Ty(*_context));
+      _jvm->ipush(_ir_builder.CreateZExt(load_value, JeandleType::java2llvm(BasicType::T_CHAR, *_context)));
+      break;
+    }
+    case Bytecodes::_saload: {
+      llvm::Value* load_value = do_array_load_inner(T_SHORT, llvm::Type::getInt16Ty(*_context));
+      _jvm->ipush(_ir_builder.CreateSExt(load_value, JeandleType::java2llvm(BasicType::T_SHORT, *_context)));
+      break;
+    }
+    default: ShouldNotReachHere();
+  }
+}
+
+void JeandleAbstractInterpreter::do_array_store_inner(BasicType basic_type, llvm::Type* store_type, llvm::Value* value) {
+  llvm::Value* element_address = compute_array_element_address(basic_type, store_type);
+  llvm::StoreInst* store_inst = _ir_builder.CreateStore(value, element_address);
+  store_inst->setAtomic(llvm::AtomicOrdering::Unordered);
+}
+
+void JeandleAbstractInterpreter::do_array_store(Bytecodes::Code code) {
+  llvm::Value* value = nullptr;
+  switch (code) {
+    case Bytecodes::_iastore: {
+      value = _jvm->ipop();
+      do_array_store_inner(T_INT, llvm::Type::getInt32Ty(*_context), value);
+      break;
+    }
+    case Bytecodes::_lastore: {
+      value = _jvm->lpop();
+      do_array_store_inner(T_LONG, llvm::Type::getInt64Ty(*_context), value);
+      break;
+    }
+    case Bytecodes::_fastore: {
+      value = _jvm->fpop();
+      do_array_store_inner(T_FLOAT, llvm::Type::getFloatTy(*_context), value);
+      break;
+    }
+    case Bytecodes::_dastore: {
+      value = _jvm->dpop();
+      do_array_store_inner(T_DOUBLE, llvm::Type::getDoubleTy(*_context), value);
+      break;
+    }
+    case Bytecodes::_aastore: {
+      value = _jvm->apop();
+      do_array_store_inner(T_OBJECT, llvm::PointerType::get(*_context, llvm::jeandle::AddrSpace::JavaHeapAddrSpace), value);
+      break;
+    }
+    case Bytecodes::_bastore: {
+      value = _ir_builder.CreateTrunc(_jvm->ipop(), llvm::Type::getInt8Ty(*_context));
+      do_array_store_inner(T_BYTE, llvm::Type::getInt8Ty(*_context), value);
+      break;
+    }
+    case Bytecodes::_castore: {
+      value = _ir_builder.CreateTrunc(_jvm->ipop(), llvm::Type::getInt16Ty(*_context));
+      do_array_store_inner(T_CHAR, llvm::Type::getInt16Ty(*_context), value);
+      break;
+    }
+    case Bytecodes::_sastore: {
+      value = _ir_builder.CreateTrunc(_jvm->ipop(), llvm::Type::getInt16Ty(*_context));
+      do_array_store_inner(T_SHORT, llvm::Type::getInt16Ty(*_context), value);
+      break;
+    }
+    default: ShouldNotReachHere();
+  }
 }
