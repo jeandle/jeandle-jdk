@@ -1039,12 +1039,11 @@ void JeandleAbstractInterpreter::invoke() {
       dest = SharedRuntime::get_resolve_static_call_stub();
       break;
     }
-    case Bytecodes::_invokedynamic: {
+    case Bytecodes::_invokedynamic: Unimplemented(); break;
+    case Bytecodes::_invokespecial: {
       call_type = JeandleCompiledCall::STATIC_CALL;
       dest = SharedRuntime::get_resolve_opt_virtual_call_stub();
-      break;
     }
-    case Bytecodes::_invokespecial: Unimplemented(); break;
     default: ShouldNotReachHere();
   }
 
