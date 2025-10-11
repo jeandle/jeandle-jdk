@@ -61,7 +61,13 @@ void JeandleAssembler::patch_static_call_site(int inst_offset, CallSiteInfo* cal
   address insts_end = __ code()->insts_end();
   __ code()->set_insts_end(call_address);
 
-  Address call_addr = Address(call->target(), relocInfo::static_call_type);
+  relocInfo::relocType rtype;
+  if (call->target() == SharedRuntime::get_resolve_opt_virtual_call_stub()) {
+    rtype = relocInfo::opt_virtual_call_type;
+  } else {
+    rtype = relocInfo::static_call_type;
+  }
+  Address call_addr = Address(call->target(), rtype);
   // emit trampoline call for patch
   __ trampoline_call(call_addr);
   __ code()->set_insts_end(insts_end);
