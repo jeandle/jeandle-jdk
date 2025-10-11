@@ -58,9 +58,9 @@ public class TestVolatile {
                                                 TestVolatile.class.getDeclaredMethod("test"),
                                                 false);
             fileCheck.check("define hotspotcc void @\"TestVolatile_test");
-            fileCheck.check("%3 = load atomic i32, ptr getelementptr inbounds (i8, ptr @oop_handle_0, i64 196) seq_cst, align 4");
-            fileCheck.check("store atomic i32 %6, ptr getelementptr inbounds (i8, ptr @oop_handle_0, i64 192) unordered, align 4");
-            fileCheck.check("store atomic i32 0, ptr getelementptr inbounds (i8, ptr @oop_handle_0, i64 196) seq_cst, align 4");
+            fileCheck.check("%3 = load atomic i8, ptr getelementptr inbounds (i8, ptr @oop_handle_0, i64 196) seq_cst, align 1");
+            fileCheck.check("store atomic i32 %7, ptr getelementptr inbounds (i8, ptr @oop_handle_0, i64 192) unordered, align 4");
+            fileCheck.check("store atomic i8 0, ptr getelementptr inbounds (i8, ptr @oop_handle_0, i64 196) seq_cst, align 1");
         }
     }
 

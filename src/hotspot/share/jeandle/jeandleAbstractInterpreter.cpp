@@ -1381,8 +1381,35 @@ llvm::Value* JeandleAbstractInterpreter::compute_static_field_address(ciInstance
 
 llvm::Value* JeandleAbstractInterpreter::load_from_address(llvm::Value* addr, BasicType type, bool is_volatile) {
   llvm::Type* expected_ty = JeandleType::java2llvm(type, *_context);
-
-  llvm::LoadInst* load_inst = _ir_builder.CreateLoad(expected_ty, addr);
+  llvm::LoadInst* load_inst = nullptr;
+  llvm::Value* res_inst = nullptr;
+  switch (type) {
+    case T_BOOLEAN: {
+      load_inst = _ir_builder.CreateLoad(llvm::Type::getInt8Ty(*_context), addr);
+      res_inst = _ir_builder.CreateZExt(load_inst, expected_ty);
+      break;
+    }
+    case T_BYTE: {
+      load_inst = _ir_builder.CreateLoad(llvm::Type::getInt8Ty(*_context), addr);
+      res_inst = _ir_builder.CreateSExt(load_inst, expected_ty);
+      break;
+    }
+    case T_CHAR: {
+      load_inst = _ir_builder.CreateLoad(llvm::Type::getInt16Ty(*_context), addr);
+      res_inst = _ir_builder.CreateZExt(load_inst, expected_ty);
+      break;
+    }
+    case T_SHORT: {
+      load_inst = _ir_builder.CreateLoad(llvm::Type::getInt16Ty(*_context), addr);
+      res_inst = _ir_builder.CreateSExt(load_inst, expected_ty);
+      break;
+    }
+    default: {
+      load_inst = _ir_builder.CreateLoad(expected_ty, addr);
+      res_inst = load_inst;
+      break;
+    }
+  }
 
   if (is_volatile) {
     load_inst->setAtomic(llvm::AtomicOrdering::SequentiallyConsistent);
@@ -1390,12 +1417,27 @@ llvm::Value* JeandleAbstractInterpreter::load_from_address(llvm::Value* addr, Ba
     load_inst->setAtomic(llvm::AtomicOrdering::Unordered);
   }
 
-  return load_inst;
+  return res_inst;
 }
 
 void JeandleAbstractInterpreter::store_to_address(llvm::Value* addr, llvm::Value* value, BasicType type, bool is_volatile) {
   llvm::Type* expected_ty = JeandleType::java2llvm(type, *_context);
   assert(value->getType() == expected_ty, "Value type must match field type");
+
+  switch (type) {
+    case T_BOOLEAN: // fall through
+    case T_BYTE: {
+      value = _ir_builder.CreateTrunc(value, llvm::Type::getInt8Ty(*_context));
+      break;
+    }
+    case T_CHAR: // fall through
+    case T_SHORT: {
+      value = _ir_builder.CreateTrunc(value, llvm::Type::getInt16Ty(*_context));
+      break;
+    }
+    default:
+      break;
+  }
 
   llvm::StoreInst* store_inst = _ir_builder.CreateStore(value, addr);
 
