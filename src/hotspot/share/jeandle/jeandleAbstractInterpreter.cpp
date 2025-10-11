@@ -1086,6 +1086,18 @@ bool JeandleAbstractInterpreter::inline_intrinsic(const ciMethod* target) {
       _jvm->dpush(call_runtime_routine(callee, {_jvm->dpop()}, /* is_leaf */ true));
       break;
     }
+    case vmIntrinsicID::_dcos: {
+      llvm::FunctionCallee callee = StubRoutines::dcos() != nullptr ? JeandleRuntimeRoutine::hotspot_StubRoutines_dcos_callee(_module) :
+                                                                      JeandleRuntimeRoutine::hotspot_SharedRuntime_dcos_callee(_module);
+      _jvm->dpush(call_runtime_routine(callee, {_jvm->dpop()}, /* is_leaf */ true));
+      break;
+    }
+    case vmIntrinsicID::_dtan: {
+      llvm::FunctionCallee callee = StubRoutines::dtan() != nullptr ? JeandleRuntimeRoutine::hotspot_StubRoutines_dtan_callee(_module) :
+                                                                      JeandleRuntimeRoutine::hotspot_SharedRuntime_dtan_callee(_module);
+      _jvm->dpush(call_runtime_routine(callee, {_jvm->dpop()}, /* is_leaf */ true));
+      break;
+    }
     default:
       return false;
   }
