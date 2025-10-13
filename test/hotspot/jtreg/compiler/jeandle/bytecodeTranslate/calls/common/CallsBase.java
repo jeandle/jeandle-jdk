@@ -182,7 +182,7 @@ public abstract class CallsBase {
                 // do calling work
                 if (nativeCaller) {
                     callerNative();
-                } else if (nativeCaller) {
+                } else if (nativeCallee) {
                     callerCallNative();
                 } else {
                     callerCallNormal();

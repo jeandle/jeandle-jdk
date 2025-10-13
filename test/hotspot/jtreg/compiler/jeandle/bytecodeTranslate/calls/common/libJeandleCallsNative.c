@@ -56,6 +56,11 @@ JNIEXPORT jboolean JNICALL Java_compiler_jeandle_bytecodeTranslate_calls_common_
   return doCalleeWork(env, obj, param1, param2, param3, param4, param5);
 }
 
+JNIEXPORT jboolean JNICALL Java_compiler_jeandle_bytecodeTranslate_calls_common_InvokeSpecial_calleeNative(JNIEnv *env, jobject obj,
+    jint param1, jlong param2, jint param3, jint param4, jint param5) {
+  return doCalleeWork(env, obj, param1, param2, param3, param4, param5);
+}
+
 JNIEXPORT jboolean JNICALL Java_compiler_jeandle_bytecodeTranslate_calls_common_InvokeVirtual_calleeNative(JNIEnv *env, jobject obj,
     jint param1, jlong param2, jint param3, jint param4, jint param5) {
   return doCalleeWork(env, obj, param1, param2, param3, param4, param5);
@@ -112,6 +117,10 @@ void doCallerWork(JNIEnv *env, jobject obj, int isStatic) {
       "assertTrue", "(ZLjava/lang/String;)V");
   (*env)->CallStaticVoidMethod(env, assertsClass, assertTrue, result,
       errorMessage);
+}
+
+JNIEXPORT void JNICALL Java_compiler_jeandle_bytecodeTranslate_calls_common_InvokeSpecial_callerNative(JNIEnv *env, jobject obj) {
+  doCallerWork(env, obj, NOT_STATIC);
 }
 
 JNIEXPORT void JNICALL Java_compiler_jeandle_bytecodeTranslate_calls_common_InvokeVirtual_callerNative(JNIEnv *env, jobject obj) {
