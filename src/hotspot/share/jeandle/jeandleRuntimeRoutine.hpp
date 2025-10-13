@@ -48,6 +48,10 @@
 #define ALL_HOTSPOT_ROUTINES(def)                                                                                                    \
   def(SharedRuntime_dsin,    SharedRuntime::dsin,     llvm::Type::getDoubleTy(context),    llvm::Type::getDoubleTy(context))         \
   def(StubRoutines_dsin,     StubRoutines::dsin(),    llvm::Type::getDoubleTy(context),    llvm::Type::getDoubleTy(context))         \
+  def(SharedRuntime_dcos,    SharedRuntime::dcos,     llvm::Type::getDoubleTy(context),    llvm::Type::getDoubleTy(context))         \
+  def(StubRoutines_dcos,     StubRoutines::dcos(),    llvm::Type::getDoubleTy(context),    llvm::Type::getDoubleTy(context))         \
+  def(SharedRuntime_dtan,    SharedRuntime::dtan,     llvm::Type::getDoubleTy(context),    llvm::Type::getDoubleTy(context))         \
+  def(StubRoutines_dtan,     StubRoutines::dtan(),    llvm::Type::getDoubleTy(context),    llvm::Type::getDoubleTy(context))         \
   def(SharedRuntime_drem,    SharedRuntime::drem,     llvm::Type::getDoubleTy(context),    llvm::Type::getDoubleTy(context),         \
                                                                                            llvm::Type::getDoubleTy(context))         \
   def(SharedRuntime_frem,    SharedRuntime::frem,     llvm::Type::getFloatTy(context),     llvm::Type::getFloatTy(context),          \
