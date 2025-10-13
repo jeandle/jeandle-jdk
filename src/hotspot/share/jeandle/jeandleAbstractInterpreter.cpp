@@ -1043,6 +1043,7 @@ void JeandleAbstractInterpreter::invoke() {
     case Bytecodes::_invokespecial: {
       call_type = JeandleCompiledCall::STATIC_CALL;
       dest = SharedRuntime::get_resolve_opt_virtual_call_stub();
+      break;
     }
     default: ShouldNotReachHere();
   }
