@@ -10,6 +10,11 @@ merge_protections:
     success_conditions:
       - "title ~=
         ^(fix|feat|docs|style|refactor|enhance|test|build|ci|chore|revert):"
+  - name: Actions status check
+    if:
+      - base = main
+    success_conditions:
+      - check-failure = 0
 queue_rules:
   - queue_branch_prefix: jeandle-jdk/merge-queue/
     merge_method: squash
