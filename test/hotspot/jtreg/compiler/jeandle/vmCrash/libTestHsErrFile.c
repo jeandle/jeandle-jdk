@@ -18,22 +18,15 @@
  *
  */
 
-import jdk.test.lib.Asserts;
+#include<jni.h>
 
-/**
- * @test
- * @summary Support arraylength
- * issue: https://github.com/jeandle/jeandle-jdk/issues/29
- * @library /test/lib
- * @run main/othervm -Xcomp -XX:-TieredCompilation -XX:CompileCommand=compileonly,TestArrayLength::getArrayLength
- * -XX:+UseJeandleCompiler TestArrayLength
+/*
+ * Class:     TestHsErrFile
+ * Method:    crashInNative
+ * Signature: ()V
  */
-public class TestArrayLength {
-    public static void main(String[] args) {
-        Asserts.assertEquals(getArrayLength(new int[10]), 10);
-    }
-
-    public static int getArrayLength(int[] a) {
-        return a.length;
-    }
+__attribute((optimize("O0")))
+JNIEXPORT void JNICALL Java_compiler_jeandle_vmCrash_TestHsErrFile_crashInNative(JNIEnv *env, jclass class)
+{
+    *(jint *)0 = 0;
 }

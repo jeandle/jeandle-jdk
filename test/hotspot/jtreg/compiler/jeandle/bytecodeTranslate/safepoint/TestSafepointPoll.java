@@ -20,21 +20,23 @@
 
 /**
  * @test
- * @summary Support the safepoint poll and related to a issue about incorrect alignment of patch address
+ * @summary Support the safepoint poll and related to a issue about incorrect alignment of patch address.
  *  issue: https://github.com/jeandle/jeandle-jdk/issues/63
  * @library /test/lib /
  * @build jdk.test.whitebox.WhiteBox compiler.jeandle.fileCheck.FileCheck jdk.test.lib.Asserts
  * @run driver jdk.test.lib.helpers.ClassFileInstaller jdk.test.whitebox.WhiteBox
  * @run main/othervm -Xbootclasspath/a:. -XX:+UnlockDiagnosticVMOptions -XX:+WhiteBoxAPI
- *      -XX:CompileCommand=compileonly,TestSafepointPoll::test -Xcomp -XX:-TieredCompilation
- *      -XX:+UseJeandleCompiler -Xlog:thread*=trace::time,tags -XX:+JeandleDumpIR -XX:+JeandleDumpObjects -XX:+JeandleDumpRuntimeStubs TestSafepointPoll
+ *      -XX:CompileCommand=compileonly,compiler.jeandle.bytecodeTranslate.safepoint.TestSafepointPoll::test
+ *      -Xcomp -XX:-TieredCompilation
+ *      -XX:+UseJeandleCompiler  -XX:+JeandleDumpIR compiler.jeandle.bytecodeTranslate.safepoint.TestSafepointPoll
  */
+
+package compiler.jeandle.bytecodeTranslate.safepoint;
 
 import java.lang.reflect.Method;
 
-import jdk.test.whitebox.WhiteBox;
-
 import compiler.jeandle.fileCheck.FileCheck;
+import jdk.test.whitebox.WhiteBox;
 
 public class TestSafepointPoll {
     private final static WhiteBox wb = WhiteBox.getWhiteBox();
