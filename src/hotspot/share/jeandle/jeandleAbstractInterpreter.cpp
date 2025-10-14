@@ -67,7 +67,7 @@ JeandleVMState* JeandleVMState::copy(MethodLivenessResult liveness, bool clear_s
   return copied;
 }
 
-JeandleVMState* JeandleVMState::copy_for_handler(MethodLivenessResult liveness, llvm::Value* exception_oop) {
+JeandleVMState* JeandleVMState::copy_for_exception_handler(MethodLivenessResult liveness, llvm::Value* exception_oop) {
   JeandleVMState* copied = copy(liveness, true);
   copied->apush(exception_oop);
   return copied;
@@ -207,8 +207,8 @@ JeandleBasicBlock::JeandleBasicBlock(int block_id,
                                      _ci_block(ci_block),
                                      _initial_jvm(nullptr) {}
 
-bool JeandleBasicBlock::merge_handler_VM_state(JeandleVMState* vm_state, llvm::BasicBlock* incoming, ciMethod* method) {
-  assert(is_handler(), "adding an handler VM state to a non-handler block");
+bool JeandleBasicBlock::merge_exception_handler_VM_state(JeandleVMState* vm_state, llvm::BasicBlock* incoming, ciMethod* method) {
+  assert(is_exception_handler(), "adding an handler VM state to a non-handler block");
   MethodLivenessResult liveness = method->liveness_at_bci(_start_bci);
 
   if (_jvm == nullptr) {
@@ -220,7 +220,7 @@ bool JeandleBasicBlock::merge_handler_VM_state(JeandleVMState* vm_state, llvm::B
 }
 
 bool JeandleBasicBlock::merge_VM_state_from(JeandleBasicBlock* from, ciMethod* method) {
-  assert(!is_handler(), "handlers' VM state should be initialized by JeandleBasicBlock::merge_handler_VM_state");
+  assert(!is_exception_handler(), "handlers' VM state should be initialized by JeandleBasicBlock::merge_exception_handler_VM_state");
 
   JeandleVMState* from_jvm = from->VM_state();
 
@@ -349,7 +349,7 @@ void BasicBlockBuilder::setup_exception_handlers() {
   while (codes.next() != ciBytecodeStream::EOBC()) {
     int bci = codes.cur_bci();
     JeandleBasicBlock* block = _bci2block[bci];
-    if (block->is_handler()) {
+    if (block->is_exception_handler()) {
       int covered_bci = block->exeption_range_start_bci();
       while (covered_bci < block->exeption_range_limit_bci()) {
         connect_block(block, _bci2block[covered_bci]);
@@ -873,7 +873,7 @@ void JeandleAbstractInterpreter::interpret_block(JeandleBasicBlock* block) {
   // Add all successors to work list and set up their JeandleVMStates.
   for (JeandleBasicBlock* suc : block->successors()) {
     // Don't update handlers' VM state here, they are updated by 'JeandleAbstractInterpreter::dispatch_exception_to_handler'.
-    if (!suc->is_handler() && !suc->merge_VM_state_from(block, _method)) {
+    if (!suc->is_exception_handler() && !suc->merge_VM_state_from(block, _method)) {
       JeandleCompilation::report_jeandle_error("failed to update VM state");
       return;
     }
@@ -1552,119 +1552,6 @@ void JeandleAbstractInterpreter::arraylength() {
     _jvm->ipush(call);
 }
 
-JeandleAbstractInterpreter::DispatchedDest JeandleAbstractInterpreter::dispatch_exception_for_invoke() {
-  int cur_bci = _bytecodes.cur_bci();
-
-  DispatchedDest dispatched;
-
-  // Create the unwind dest block.
-  llvm::BasicBlock* unwind_dest = llvm::BasicBlock::Create(*_context,
-                                                           "bci_" + std::to_string(cur_bci) + "_unwind_dest",
-                                                           _llvm_func);
-  dispatched._unwind_dest = unwind_dest;
-
-  auto saved_insert_block = _ir_builder.GetInsertBlock();
-  auto saved_insert_point = _ir_builder.GetInsertPoint();
-  _ir_builder.SetInsertPoint(unwind_dest);
-
-  // Create a landingpad instruction to indicate this is an unwind entry. But we never use the result from it.
-  // Create our landingpad result type
-  llvm::Type* landingpad_result_type = llvm::Type::getTokenTy(*_context); // We can only use result of token type to support statepoint.
-  llvm::LandingPadInst* landingpad = _ir_builder.CreateLandingPad(landingpad_result_type,
-                                                                  0 /* NumClauses */);
-  // This landingpad should always be entered during exception handling.
-  landingpad->setCleanup(true);
-
-  // Read the exception oop from thread local storage.
-  llvm::Value* exception_oop_addr = _ir_builder.CreateIntToPtr(_ir_builder.getInt64((uint64_t)JavaThread::exception_oop_offset()),
-                                                               llvm::PointerType::get(*_context, llvm::jeandle::AddrSpace::TLSAddrSpace));
-  llvm::Value* exception_oop = _ir_builder.CreateLoad(JeandleType::java2llvm(BasicType::T_OBJECT, *_context), exception_oop_addr, true /* is_volatile */);
-
-  // Clear the exception oop field in thread local storage.
-  _ir_builder.CreateStore(llvm::ConstantPointerNull::get(llvm::cast<llvm::PointerType>(JeandleType::java2llvm(BasicType::T_OBJECT, *_context))),
-                          exception_oop_addr,
-                          true /* is_volatile */);
-
-  dispatch_exception_to_handler(exception_oop);
-
-  // Recover insert point.
-  _ir_builder.SetInsertPoint(saved_insert_block, saved_insert_point);
-
-  // Get the normal dest block.
-  llvm::BasicBlock* normal_dest = llvm::BasicBlock::Create(*_context,
-                                                           "bci_" + std::to_string(cur_bci) + "_normal_dest",
-                                                           _llvm_func);
-  dispatched._normal_dest = normal_dest;
-
-  return dispatched;
-}
-
-// TODO: Add real dispatching process using 'instanceof'.
-// As a workaround now, we always choose the first exception handler.
-void JeandleAbstractInterpreter::dispatch_exception_to_handler(llvm::Value* exception_oop) {
-  // Setup all handlers' VM state.
-  for (ciExceptionHandlerStream handlers(_method, _bytecodes.cur_bci()); !handlers.is_done(); handlers.next()) {
-    ciExceptionHandler* handler = handlers.handler();
-    if (!handler->is_rethrow()) {
-      int handler_bci = handler->handler_bci();
-      JeandleBasicBlock* handler_block = bci2block()[handler_bci];
-      assert(handler_block != nullptr, "invalid handler block");
-      MethodLivenessResult liveness = _method->liveness_at_bci(handler_bci);
-      if (!handler_block->merge_handler_VM_state(_jvm->copy_for_handler(liveness, exception_oop), _ir_builder.GetInsertBlock(), _method)) {
-        JeandleCompilation::report_jeandle_error("failed to update handler's VM state");
-      }
-    }
-  }
-
-  // Choose the first handler. (workaround)
-  ciExceptionHandlerStream handlers(_method, _bytecodes.cur_bci());
-  if (!handlers.is_done()) {
-    ciExceptionHandler* handler = handlers.handler();
-    if (handler->is_rethrow()) {
-      // Rethrow it.
-      throw_exception(exception_oop);
-    } else {
-      int handler_bci = handler->handler_bci();
-      JeandleBasicBlock* handler_block = bci2block()[handler_bci];
-      assert(handler_block != nullptr, "invalid handler block");
-      _ir_builder.CreateBr(handler_block->header_llvm_block());
-    }
-    return;
-  }
-
-  // At least one handler is found.
-  ShouldNotReachHere();
-}
-
-void JeandleAbstractInterpreter::throw_exception(llvm::Value* exception_oop) {
-  // Call install_exceptional_return.
-  llvm::CallInst* current_thread = call_java_op("jeandle.current_thread", {});
-  llvm::CallInst* call_inst = _ir_builder.CreateCall(JeandleRuntimeRoutine::install_exceptional_return_callee(_module),
-                                                    {exception_oop, current_thread});
-  call_inst->setCallingConv(llvm::CallingConv::Hotspot_JIT);
-
-  // Return
-  llvm::Type* ret_type = _llvm_func->getReturnType();
-  if (ret_type->isVoidTy()) {
-    _ir_builder.CreateRetVoid();;
-  } else if (ret_type->isIntegerTy()) {
-    _ir_builder.CreateRet(llvm::ConstantInt::get(ret_type, 0));
-  } else if (ret_type->isFloatTy() || ret_type->isDoubleTy()) {
-    _ir_builder.CreateRet(llvm::ConstantFP::get(ret_type, 0.0));
-  } else if (ret_type->isPointerTy()) {
-    _ir_builder.CreateRet(llvm::ConstantPointerNull::get(llvm::cast<llvm::PointerType>(ret_type)));
-  } else {
-    ShouldNotReachHere();
-  }
-}
-
-void JeandleAbstractInterpreter::arraylength() {
-    // TODO: need null pointer check in the future
-    llvm::Value* array_oop = _jvm->apop();
-    llvm::CallInst* call = call_java_op("jeandle.arraylength", {array_oop});
-    _jvm->ipush(call);
-}
-
 llvm::Value* JeandleAbstractInterpreter::compute_array_element_address(BasicType basic_type, llvm::Type* type) {
   llvm::Value* index = _jvm->ipop();
   llvm::Value* array_oop = _jvm->apop();
@@ -1778,5 +1665,111 @@ void JeandleAbstractInterpreter::do_array_store(Bytecodes::Code code) {
       break;
     }
     default: ShouldNotReachHere();
+  }
+}
+
+JeandleAbstractInterpreter::DispatchedDest JeandleAbstractInterpreter::dispatch_exception_for_invoke() {
+  int cur_bci = _bytecodes.cur_bci();
+
+  DispatchedDest dispatched;
+
+  // Create the unwind dest block.
+  llvm::BasicBlock* unwind_dest = llvm::BasicBlock::Create(*_context,
+                                                           "bci_" + std::to_string(cur_bci) + "_unwind_dest",
+                                                           _llvm_func);
+  dispatched._unwind_dest = unwind_dest;
+
+  auto saved_insert_block = _ir_builder.GetInsertBlock();
+  auto saved_insert_point = _ir_builder.GetInsertPoint();
+  _ir_builder.SetInsertPoint(unwind_dest);
+
+  // Create a landingpad instruction to indicate this is an unwind entry. But we never use the result from it.
+  // Create our landingpad result type
+  llvm::Type* landingpad_result_type = llvm::Type::getTokenTy(*_context); // We can only use result of token type to support statepoint.
+  llvm::LandingPadInst* landingpad = _ir_builder.CreateLandingPad(landingpad_result_type,
+                                                                  0 /* NumClauses */);
+  // This landingpad should always be entered during exception handling.
+  landingpad->setCleanup(true);
+
+  // Read the exception oop from thread local storage.
+  llvm::Value* exception_oop_addr = _ir_builder.CreateIntToPtr(_ir_builder.getInt64((uint64_t)JavaThread::exception_oop_offset()),
+                                                               llvm::PointerType::get(*_context, llvm::jeandle::AddrSpace::TLSAddrSpace));
+  llvm::Value* exception_oop = _ir_builder.CreateLoad(JeandleType::java2llvm(BasicType::T_OBJECT, *_context), exception_oop_addr, true /* is_volatile */);
+
+  // Clear the exception oop field in thread local storage.
+  _ir_builder.CreateStore(llvm::ConstantPointerNull::get(llvm::cast<llvm::PointerType>(JeandleType::java2llvm(BasicType::T_OBJECT, *_context))),
+                          exception_oop_addr,
+                          true /* is_volatile */);
+
+  dispatch_exception_to_handler(exception_oop);
+
+  // Recover insert point.
+  _ir_builder.SetInsertPoint(saved_insert_block, saved_insert_point);
+
+  // Get the normal dest block.
+  llvm::BasicBlock* normal_dest = llvm::BasicBlock::Create(*_context,
+                                                           "bci_" + std::to_string(cur_bci) + "_normal_dest",
+                                                           _llvm_func);
+  dispatched._normal_dest = normal_dest;
+
+  return dispatched;
+}
+
+// TODO: Add real dispatching process using 'instanceof'.
+// As a workaround now, we always choose the first exception handler.
+void JeandleAbstractInterpreter::dispatch_exception_to_handler(llvm::Value* exception_oop) {
+  // Setup all handlers' VM state.
+  for (ciExceptionHandlerStream handlers(_method, _bytecodes.cur_bci()); !handlers.is_done(); handlers.next()) {
+    ciExceptionHandler* handler = handlers.handler();
+    if (!handler->is_rethrow()) {
+      int handler_bci = handler->handler_bci();
+      JeandleBasicBlock* handler_block = bci2block()[handler_bci];
+      assert(handler_block != nullptr, "invalid handler block");
+      MethodLivenessResult liveness = _method->liveness_at_bci(handler_bci);
+      if (!handler_block->merge_exception_handler_VM_state(_jvm->copy_for_exception_handler(liveness, exception_oop), _ir_builder.GetInsertBlock(), _method)) {
+        JeandleCompilation::report_jeandle_error("failed to update handler's VM state");
+      }
+    }
+  }
+
+  // Choose the first handler. (workaround)
+  ciExceptionHandlerStream handlers(_method, _bytecodes.cur_bci());
+  if (!handlers.is_done()) {
+    ciExceptionHandler* handler = handlers.handler();
+    if (handler->is_rethrow()) {
+      // Rethrow it.
+      throw_exception(exception_oop);
+    } else {
+      int handler_bci = handler->handler_bci();
+      JeandleBasicBlock* handler_block = bci2block()[handler_bci];
+      assert(handler_block != nullptr, "invalid handler block");
+      _ir_builder.CreateBr(handler_block->header_llvm_block());
+    }
+    return;
+  }
+
+  // At least one handler is found.
+  ShouldNotReachHere();
+}
+
+void JeandleAbstractInterpreter::throw_exception(llvm::Value* exception_oop) {
+  // Call install_exceptional_return.
+  llvm::CallInst* current_thread = call_java_op("jeandle.current_thread", {});
+  llvm::CallInst* call_inst = _ir_builder.CreateCall(JeandleRuntimeRoutine::install_exceptional_return_callee(_module),
+                                                    {exception_oop, current_thread});
+  call_inst->setCallingConv(llvm::CallingConv::Hotspot_JIT);
+
+  // Return
+  llvm::Type* ret_type = _llvm_func->getReturnType();
+  if (ret_type->isVoidTy()) {
+    _ir_builder.CreateRetVoid();;
+  } else if (ret_type->isIntegerTy()) {
+    _ir_builder.CreateRet(llvm::ConstantInt::get(ret_type, 0));
+  } else if (ret_type->isFloatTy() || ret_type->isDoubleTy()) {
+    _ir_builder.CreateRet(llvm::ConstantFP::get(ret_type, 0.0));
+  } else if (ret_type->isPointerTy()) {
+    _ir_builder.CreateRet(llvm::ConstantPointerNull::get(llvm::cast<llvm::PointerType>(ret_type)));
+  } else {
+    ShouldNotReachHere();
   }
 }

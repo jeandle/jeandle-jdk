@@ -486,8 +486,6 @@ void JeandleCompiledCode::build_exception_handler_table() {
       data_extractor.getULEB128(data_cursor);
       assert(data_cursor, "invalid exception handler action table entry");
     }
-
-    _exception_handler_table.print();
   }
 }
 

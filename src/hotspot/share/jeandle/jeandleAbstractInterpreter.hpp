@@ -46,7 +46,7 @@ class JeandleVMState : public JeandleCompilationResourceObj {
   JeandleVMState(int max_stack, int max_locals, llvm::LLVMContext *context);
 
   JeandleVMState* copy(MethodLivenessResult liveness, bool clear_stack = false);
-  JeandleVMState* copy_for_handler(MethodLivenessResult liveness, llvm::Value* exception_oop);
+  JeandleVMState* copy_for_exception_handler(MethodLivenessResult liveness, llvm::Value* exception_oop);
 
   // Check with another JeandleVMState if all stack values are same types and locals sizes are the same.
   bool match(JeandleVMState* jvm);
@@ -165,10 +165,10 @@ class JeandleBasicBlock : public JeandleCompilationResourceObj {
   llvm::BasicBlock* tail_llvm_block() { return _tail_llvm_block; }
   void set_tail_llvm_block(llvm::BasicBlock* block) { _tail_llvm_block = block; }
 
-  bool is_handler() { return _ci_block->is_handler(); }
+  bool is_exception_handler() { return _ci_block->is_handler(); }
   int exeption_range_start_bci() { return _ci_block->ex_start_bci(); }
   int exeption_range_limit_bci() { return _ci_block->ex_limit_bci(); }
-  bool merge_handler_VM_state(JeandleVMState* vm_state, llvm::BasicBlock* incoming, ciMethod* method);
+  bool merge_exception_handler_VM_state(JeandleVMState* vm_state, llvm::BasicBlock* incoming, ciMethod* method);
 
  private:
   int _block_id;
