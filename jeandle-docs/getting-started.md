@@ -1,6 +1,6 @@
 # Getting Started
 ## Getting the Source Code and Building
-Jeandle is composed of two separate code repositories: [jeandle-llvm](https://github.com/jeandle/jeandle-jdk) and [jeandle-jdk](https://github.com/jeandle/jeandle-llvm). Both repositories need to be built individually, following the same process as their upstream repositories. Note that when building jeandle-jdk, you must specify the installation directory of jeandle-llvm using the option ```--with-jeandle-llvm=<directory>```.
+Jeandle is composed of two separate code repositories: [jeandle-llvm](https://github.com/jeandle/jeandle-jdk) and [jeandle-jdk](https://github.com/jeandle/jeandle-llvm). Both repositories need to be built individually, following the same process as their upstream repositories. Note that when building jeandle-jdk, you must specify the installation directory of jeandle-llvm using the option ```--with-jeandle-llvm=<directory>```. When cross-compiling, you must specify the installation directory of jeandle-llvm of the host environment using the option ```--with-host-jeandle-llvm=<directory>```.
 
 For detailed guidance on getting started with upstream LLVM and OpenJDK, refer to their official documentation. The links are as follows:
 + LLVM: [https://llvm.org/docs/GettingStarted.html](https://llvm.org/docs/GettingStarted.html)
