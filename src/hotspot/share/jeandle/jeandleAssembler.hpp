@@ -47,6 +47,8 @@ class JeandleAssembler : public StackObj {
 
   void emit_ic_check();
 
+  int emit_exception_handler();
+
   void emit_insts(address code_start, uint64_t code_size);
 
   void emit_consts(address consts_start, uint64_t consts_size);

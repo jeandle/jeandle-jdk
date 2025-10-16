@@ -32,3 +32,7 @@ JRT_END
 void JeandleRuntimeRoutine::generate_exceptional_return() {
   // TODO
 }
+
+void JeandleRuntimeRoutine::generate_exception_handler() {
+  // TODO
+}

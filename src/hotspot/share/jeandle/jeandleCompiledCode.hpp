@@ -29,10 +29,11 @@
 #include "llvm/Object/StackMapParser.h"
 #include "llvm/Support/MemoryBuffer.h"
 
+#include "jeandle/jeandleExceptionHandlerTable.hpp"
 #include "jeandle/jeandleCompiledCall.hpp"
 #include "jeandle/jeandleReadELF.hpp"
 #include "jeandle/jeandleResourceObj.hpp"
-#include  "jeandle/jeandleUtils.hpp"
+#include "jeandle/jeandleUtils.hpp"
 
 #include "jeandle/__hotspotHeadersBegin__.hpp"
 #include "asm/codeBuffer.hpp"
@@ -119,7 +120,7 @@ class JeandleCompiledCode : public StackObj {
 
   CodeOffsets* offsets() { return &_offsets; }
 
-  ExceptionHandlerTable* exception_handler_table() { return &_exception_handler_table; }
+  JeandleExceptionHandlerTable* exception_handler_table() { return &_exception_handler_table; }
 
   ImplicitExceptionTable* implicit_exception_table() { return &_implicit_exception_table; }
 
@@ -148,7 +149,7 @@ class JeandleCompiledCode : public StackObj {
   llvm::StringMap<address> _const_sections;
   llvm::StringMap<jobject> _oop_handles;
   CodeOffsets _offsets;
-  ExceptionHandlerTable _exception_handler_table;
+  JeandleExceptionHandlerTable _exception_handler_table;
   ImplicitExceptionTable _implicit_exception_table;
   int _frame_size;
   int _prolog_length;
@@ -166,6 +167,8 @@ class JeandleCompiledCode : public StackObj {
   address resolve_const_edge(LinkBlock& block, LinkEdge& edge, JeandleAssembler& assmebler);
 
   OopMap* build_oop_map(StackMapParser::record_iterator& record);
+
+  void build_exception_handler_table();
 
   int frame_size_in_slots();
 };

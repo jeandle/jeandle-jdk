@@ -19,6 +19,7 @@
  */
 
 #include "jeandle/__llvmHeadersBegin__.hpp"
+#include "llvm/BinaryFormat/Dwarf.h"
 #include "llvm/Support/DataExtractor.h"
 
 #include "jeandle/jeandleAssembler.hpp"
@@ -225,22 +226,32 @@ void JeandleCompiledCode::finalize() {
                           _env->oop_recorder());
   _code_buffer.initialize_consts_size(consts_size);
 
+  // Initialize assembler.
   MacroAssembler* masm = new MacroAssembler(&_code_buffer);
   masm->set_oop_recorder(_env->oop_recorder());
   JeandleAssembler assembler(masm);
 
   if (_method && !_method->is_static()) {
-    // For Java method finalization.
+    // For non-static Java method finalization.
     assembler.emit_ic_check();
   }
 
   _offsets.set_value(CodeOffsets::Verified_Entry, masm->offset());
+
   _prolog_length = masm->offset();
+
   assembler.emit_insts(((address) _obj->getBufferStart()) + offset, code_size);
 
   setup_frame_size();
 
   resolve_reloc_info(assembler);
+
+  if (_method) {
+    // For Java method compilation.
+    build_exception_handler_table();
+    _offsets.set_value(CodeOffsets::Exceptions, assembler.emit_exception_handler());
+  }
+
 
   // generate shared trampoline stubs
   if (!_code_buffer.finalize_stubs()) {
@@ -250,9 +261,6 @@ void JeandleCompiledCode::finalize() {
 
   // No deopt support now.
   _offsets.set_value(CodeOffsets::Deopt, 0);
-
-  // No exception support now.
-  _offsets.set_value(CodeOffsets::Exceptions, 0);
 }
 
 void JeandleCompiledCode::resolve_reloc_info(JeandleAssembler& assembler) {
@@ -430,6 +438,55 @@ OopMap* JeandleCompiledCode::build_oop_map(StackMapParser::record_iterator& reco
     }
   }
   return oop_map;
+}
+
+void JeandleCompiledCode::build_exception_handler_table() {
+  SectionInfo excpet_table_section(".gcc_except_table");
+  if (ReadELF::findSection(*_elf, excpet_table_section)) {
+    // Start of the exception handler table.
+    const char* except_table_pointer = object_start() + excpet_table_section._offset;
+
+    // Utilize DataExtractor to decode exception handler table.
+    llvm::DataExtractor data_extractor(llvm::StringRef(except_table_pointer, excpet_table_section._size),
+                                       ELFT::Endianness == llvm::endianness::little, /* IsLittleEndian */
+                                       BytesPerWord/* AddressSize */);
+    llvm::DataExtractor::Cursor data_cursor(0 /* Offset */);
+
+    // Now decode exception handler table.
+    // See EHStreamer::emitExceptionTable in Jeandle-LLVM for corresponding encoding.
+
+    uint8_t header_encoding = data_extractor.getU8(data_cursor);
+    assert(data_cursor && header_encoding == llvm::dwarf::DW_EH_PE_omit, "invalid exception handler table header");
+
+    uint8_t type_encoding = data_extractor.getU8(data_cursor);;
+    assert(data_cursor && type_encoding == llvm::dwarf::DW_EH_PE_omit, "invalid exception handler table type encoding");
+
+    // We use ELF object files, and only x86 and AArch64 is supported now, so only ULEB128 encoding can be used for call site encoding.
+    uint8_t call_site_encoding = data_extractor.getU8(data_cursor);
+    assert(data_cursor && call_site_encoding == llvm::dwarf::DW_EH_PE_uleb128, "invalid exception handler table call site encoding");
+
+    uint64_t call_site_table_length = data_extractor.getULEB128(data_cursor);
+    assert(data_cursor, "invalid exception handler table call site table length");
+
+    uint64_t call_site_table_start = data_cursor.tell();
+
+    while (data_cursor.tell() < call_site_table_start + call_site_table_length) {
+      uint64_t start = data_extractor.getULEB128(data_cursor) + _prolog_length;
+      assert(data_cursor, "invalid exception handler start pc");
+
+      uint64_t length = data_extractor.getULEB128(data_cursor);
+      assert(data_cursor, "invalid exception handler length");
+
+      uint64_t langding_pad = data_extractor.getULEB128(data_cursor) + _prolog_length;
+      assert(data_cursor, "invalid exception handler landing pad");
+
+      _exception_handler_table.add_handler(start, start + length, langding_pad);
+
+      // Read an action table entry, but we don't use it.
+      data_extractor.getULEB128(data_cursor);
+      assert(data_cursor, "invalid exception handler action table entry");
+    }
+  }
 }
 
 int JeandleCompiledCode::frame_size_in_slots() {

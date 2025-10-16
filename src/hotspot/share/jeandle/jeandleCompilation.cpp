@@ -222,6 +222,10 @@ void JeandleCompilation::compile_java_method() {
     JeandleAbstractInterpreter interpret(_method, _entry_bci, *_llvm_module, _code);
   }
 
+  if (JeandleDumpIR) {
+    dump_ir(false);
+  }
+
   if (error_occurred()) {
     return;
   }
@@ -233,10 +237,6 @@ void JeandleCompilation::compile_java_method() {
     return;
   }
 #endif
-
-  if (JeandleDumpIR) {
-    dump_ir(false);
-  }
 
   // Optimize.
   llvm::jeandle::optimize(_llvm_module.get(), llvm::OptimizationLevel::O3);

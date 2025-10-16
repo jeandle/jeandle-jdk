@@ -40,7 +40,8 @@
                                                                   llvm::PointerType::get(context, llvm::jeandle::AddrSpace::CHeapAddrSpace))
 
 #define ALL_JEANDLE_ASSEMBLY_ROUTINES(def) \
-  def(exceptional_return)
+  def(exceptional_return)                  \
+  def(exception_handler)
 
 //-----------------------------------------------------------------------------------------------------------------------------------
 //  name                     | func_entry            | return_type                        | arg_types
@@ -72,6 +73,11 @@ class JeandleRuntimeRoutine : public AllStatic {
   // Generate all routines.
   static bool generate(llvm::TargetMachine* target_machine, llvm::DataLayout* data_layout);
 
+  static address get_routine_entry(llvm::StringRef name) {
+    assert(_routine_entry.contains(name), "invalid runtime routine");
+    return _routine_entry.lookup(name);
+  }
+
 // Define all routines' llvm::FunctionCallee.
 #define DEF_LLVM_CALLEE(c_func, return_type, ...)                                                   \
   static llvm::FunctionCallee c_func##_callee(llvm::Module& target_module) {                        \
@@ -84,10 +90,11 @@ class JeandleRuntimeRoutine : public AllStatic {
 
   ALL_JEANDLE_C_ROUTINES(DEF_LLVM_CALLEE);
 
-  static address get_routine_entry(llvm::StringRef name) {
-    assert(_routine_entry.contains(name), "invalid runtime routine");
-    return _routine_entry.lookup(name);
-  }
+// Define all assembly routine names.
+#define DEF_ASSEMBLY_ROUTINE_NAME(name) \
+  static constexpr const char* _##name = #name;
+
+  ALL_JEANDLE_ASSEMBLY_ROUTINES(DEF_ASSEMBLY_ROUTINE_NAME);
 
 #define DEF_HOTSPOT_ROUTINE_CALLEE(name, func_entry, return_type, ...)                          \
   static llvm::FunctionCallee hotspot_##name##_callee(llvm::Module& target_module) {            \
@@ -111,13 +118,14 @@ class JeandleRuntimeRoutine : public AllStatic {
 
   static address get_exception_handler(JavaThread* current);
 
+  static address search_landingpad(JavaThread* current);
+
   // Assembly routine implementations:
 
-#define DEF_ASSEMBLY_ROUTINE(name)               \
-  static void generate_##name();                 \
-  static constexpr const char* _##name = #name;
+#define DEF_GENERETE_ASSEMBLY_ROUTINE(name) \
+  static void generate_##name();
 
-  ALL_JEANDLE_ASSEMBLY_ROUTINES(DEF_ASSEMBLY_ROUTINE);
+  ALL_JEANDLE_ASSEMBLY_ROUTINES(DEF_GENERETE_ASSEMBLY_ROUTINE);
 };
 
 #endif // SHARE_JEANDLE_RUNTIME_ROUTINE_HPP

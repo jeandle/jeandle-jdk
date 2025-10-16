@@ -26,6 +26,9 @@
 ; Jeandle compiler initialization time.
 ;
 
+; We use a null personality function for exception handlers.
+@jeandle.personality = global ptr null
+
 ; Byte offsets of Array<Klass*> structure fields.
 @ArrayKlass.base_offset_in_bytes = external global i32
 @ArrayKlass.length_offset_in_bytes = external global i32

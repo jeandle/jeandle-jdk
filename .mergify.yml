@@ -10,6 +10,29 @@ merge_protections:
     success_conditions:
       - "title ~=
         ^(fix|feat|docs|style|refactor|enhance|test|build|ci|chore|revert):"
+  - name: Actions status check for AArch64
+    if:
+      - and:
+          - label = AArch64
+          - base = main
+    success_conditions:
+      - and:
+          - check-success = linux-aarch64 / test (lib-test/tier1)
+          - check-success = linux-aarch64 / test (hs/tier1 serviceability)
+          - check-success = linux-aarch64 / test (hs/tier1 runtime)
+          - check-success = linux-aarch64 / test (hs/tier1 gc)
+          - check-success = linux-aarch64 / test (hs/tier1 compiler not-xcomp)
+          - check-success = linux-aarch64 / test (hs/tier1 compiler jeandle)
+          - check-success = linux-aarch64 / test (hs/tier1 compiler part 3)
+          - check-success = linux-aarch64 / test (hs/tier1 compiler part 2)
+          - check-success = linux-aarch64 / test (hs/tier1 compiler part 1)
+          - check-success = linux-aarch64 / test (hs/tier1 common)
+          - check-success = linux-aarch64 / test (langtools/tier1)
+          - check-success = linux-aarch64 / test (jdk/tier1 part 3)
+          - check-success = linux-aarch64 / test (jdk/tier1 part 2)
+          - check-success = linux-aarch64 / test (jdk/tier1 part 1)
+          - check-success = linux-aarch64 / build (release)
+          - check-success = linux-aarch64 / build (debug)
 queue_rules:
   - queue_branch_prefix: jeandle-jdk/merge-queue/
     merge_method: squash

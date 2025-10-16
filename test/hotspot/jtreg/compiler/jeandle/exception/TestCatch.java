@@ -21,25 +21,38 @@
 /**
  * @test
  * @requires os.arch=="amd64" | os.arch=="x86_64"
- * @run main/othervm -XX:CompileCommand=compileonly,compiler.jeandle.exception.TestThrow::testThrow
- *      -Xcomp -XX:-TieredCompilation -XX:+UseJeandleCompiler compiler.jeandle.exception.TestThrow
+ * @library /test/lib /
+ * @run main/othervm -XX:CompileCommand=compileonly,compiler.jeandle.exception.TestCatch::testCatch
+ *      -Xcomp -XX:-TieredCompilation -XX:+JeandleDumpIR -XX:+UseJeandleCompiler compiler.jeandle.exception.TestCatch
  */
 
 package compiler.jeandle.exception;
 
-public class TestThrow {
-    public static void main(String[] args) throws RuntimeException {
-        try {
-            testThrow(true, new RuntimeException("Expected"));
-        } catch (RuntimeException e) {
-            System.out.println("Expected Error Occorred");
-        }
+import compiler.jeandle.fileCheck.FileCheck;
+import jdk.test.lib.Asserts;
 
-        testThrow(false, new RuntimeException("Not Expected"));
+public class TestCatch {
+    public static void main(String[] args) throws Exception {
+        Asserts.assertTrue(testCatch());
+
+        String currentDir = System.getProperty("user.dir");
+        FileCheck fileCheck = new FileCheck(currentDir, TestCatch.class.getDeclaredMethod("testCatch"), false);
+        fileCheck.check("bci_2_unwind_dest:");
+        fileCheck.checkNext("landingpad token");
+        fileCheck.checkNext("cleanup");
     }
 
-    static void testThrow(boolean to_throw, RuntimeException e) throws RuntimeException {
-        if (to_throw)
-            throw e;
+    static boolean testCatch() {
+        boolean catched = false;
+        try {
+            justThrow();
+        } catch (RuntimeException e) {
+            catched = true;
+        }
+        return true;
+    }
+
+    static void justThrow() throws RuntimeException {
+        throw new RuntimeException("Expected Exception");
     }
 }

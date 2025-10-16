@@ -370,21 +370,21 @@ public:
   int compile_id();  // task()->compile_id()
 
   // Register the result of a compilation.
-  void register_method(ciMethod*                 target,
-                       int                       entry_bci,
-                       CodeOffsets*              offsets,
-                       int                       orig_pc_offset,
-                       CodeBuffer*               code_buffer,
-                       int                       frame_words,
-                       OopMapSet*                oop_map_set,
-                       ExceptionHandlerTable*    handler_table,
-                       ImplicitExceptionTable*   inc_table,
-                       AbstractCompiler*         compiler,
-                       bool                      has_unsafe_access,
-                       bool                      has_wide_vectors,
-                       bool                      has_monitors,
-                       int                       immediate_oops_patched,
-                       RTMState                  rtm_state = NoRTM);
+  void register_method(ciMethod*                          target,
+                       int                                entry_bci,
+                       CodeOffsets*                       offsets,
+                       int                                orig_pc_offset,
+                       CodeBuffer*                        code_buffer,
+                       int                                frame_words,
+                       OopMapSet*                         oop_map_set,
+                       ExceptionHandlerTableInterface*    handler_table,
+                       ImplicitExceptionTable*            inc_table,
+                       AbstractCompiler*                  compiler,
+                       bool                               has_unsafe_access,
+                       bool                               has_wide_vectors,
+                       bool                               has_monitors,
+                       int                                immediate_oops_patched,
+                       RTMState                           rtm_state = NoRTM);
 
   // Access to certain well known ciObjects.
 #define VM_CLASS_FUNC(name, ignore_s) \

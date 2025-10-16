@@ -38,6 +38,10 @@ Jeandle includes many LLVM header files in the Hotspot source code, and produces
 ```
 
 ## Continuous Integration
+### Architecture-Specific Actions
+Some PRs contain changes targeting specific architectures. Our GitHub CI pipeline runs x86 tests by default. To ensure proper testing coverage, please add the relevant architecture labels to your PR (e.g., `AArch64`, `RISC-V`) to trigger the corresponding platform-specific test suites.
+
+### Co-dependent Changes
 The Jeandle project consists of two code repositories: jeandle-jdk and jeandle-llvm. During development, a single feature may require changes to both repositories.
 
 To ensure the Jeandle-JDK GitHub Continuous Integration (CI) pipeline can pull the appropriate branch of jeandle-llvm for compilation and testing when such co-dependent changes exist, include the dependency information in the commit message.
