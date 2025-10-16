@@ -1042,6 +1042,7 @@ void JeandleAbstractInterpreter::invoke() {
     case Bytecodes::_invokedynamic: Unimplemented(); break;
     case Bytecodes::_invokespecial: {
       call_type = JeandleCompiledCall::STATIC_CALL;
+      // TODO: Additional receiver subtype checks for interface calls via invokespecial.
       dest = SharedRuntime::get_resolve_opt_virtual_call_stub();
       break;
     }
