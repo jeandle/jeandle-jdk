@@ -124,7 +124,7 @@ class JeandleRuntimeRoutine : public AllStatic {
 
   static address search_landingpad(JavaThread* current);
 
-  // Array allocation routines:
+  // Array allocation routine
   static void new_typeArray(int type, int length, JavaThread* current);
 
   // Assembly routine implementations:
