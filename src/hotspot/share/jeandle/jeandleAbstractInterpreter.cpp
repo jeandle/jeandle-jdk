@@ -915,6 +915,11 @@ void JeandleAbstractInterpreter::load_constant() {
     case BasicType::T_LONG: value = JeandleType::long_const(_ir_builder, con.as_long()); break;
     case BasicType::T_FLOAT: value = JeandleType::float_const(_ir_builder, con.as_float()); break;
     case BasicType::T_DOUBLE: value = JeandleType::double_const(_ir_builder, con.as_double()); break;
+    case BasicType::T_OBJECT: {
+      llvm::Value* oop_handle = find_or_insert_oop(con.as_object());
+      value = _ir_builder.CreateAddrSpaceCast(oop_handle, JeandleType::java2llvm(T_OBJECT, *_context));
+      break;
+    }
     default: Unimplemented(); break;
   }
 
@@ -1071,6 +1076,19 @@ void JeandleAbstractInterpreter::invoke() {
   }
   const Bytecodes::Code bc = _bytecodes.cur_bc();
 
+  if (bc == Bytecodes::_invokedynamic) {
+    // if (!will_link) {
+    //   // TODO: Trap here
+    //   Unimplemented();
+    // }
+    if (_bytecodes.has_appendix()) {
+      llvm::Value* appendix_oop_handle = find_or_insert_oop(_bytecodes.get_appendix());
+      llvm::Value* appendix_oop = _ir_builder.CreateAddrSpaceCast(appendix_oop_handle, JeandleType::java2llvm(T_OBJECT, *_context));
+      _jvm->push(T_OBJECT, appendix_oop);
+    }
+    declared_signature = target->signature();
+  }
+
   // Construct arguments.
   const int reciever =
     bc == Bytecodes::_invokespecial   ||
@@ -1087,6 +1105,16 @@ void JeandleAbstractInterpreter::invoke() {
   if (reciever) {
     args[0] = _jvm->pop(BasicType::T_OBJECT);
     args_type[0] = JeandleType::java2llvm(BasicType::T_OBJECT, *_context);
+  }
+
+  if (bc == Bytecodes::_invokedynamic && !will_link) {
+    BasicType return_type = declared_signature->return_type()->basic_type();
+    switch (return_type) {
+      case T_BOOLEAN: _jvm->push(return_type, JeandleType::int_const(_ir_builder, 0)); break;
+      case T_OBJECT: _jvm->push(return_type, llvm::ConstantPointerNull::get(llvm::cast<llvm::PointerType>(JeandleType::java2llvm(T_OBJECT, *_context)))); break;
+      default: ShouldNotReachHere();
+    }
+    return;
   }
 
   // Declare callee function type.
@@ -1107,12 +1135,12 @@ void JeandleAbstractInterpreter::invoke() {
       dest = SharedRuntime::get_resolve_virtual_call_stub();
       break;
     }
+    case Bytecodes::_invokedynamic:
     case Bytecodes::_invokestatic: {
       call_type = JeandleCompiledCall::STATIC_CALL;
       dest = SharedRuntime::get_resolve_static_call_stub();
       break;
     }
-    case Bytecodes::_invokedynamic: Unimplemented(); break;
     case Bytecodes::_invokespecial: {
       call_type = JeandleCompiledCall::STATIC_CALL;
       // TODO: Additional receiver subtype checks for interface calls via invokespecial.

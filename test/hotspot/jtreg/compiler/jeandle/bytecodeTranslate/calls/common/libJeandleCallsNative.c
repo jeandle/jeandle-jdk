@@ -51,6 +51,11 @@ jboolean doCalleeWork(JNIEnv *env, jobject self, jint param1, jlong param2,
   return JNI_TRUE;
 }
 
+JNIEXPORT jboolean JNICALL Java_compiler_jeandle_bytecodeTranslate_calls_common_InvokeDynamic_calleeNative(JNIEnv *env, jobject obj,
+    jint param1, jlong param2, jint param3, jint param4, jint param5) {
+  return doCalleeWork(env, obj, param1, param2, param3, param4, param5);
+}
+
 JNIEXPORT jboolean JNICALL Java_compiler_jeandle_bytecodeTranslate_calls_common_InvokeInterface_calleeNative(JNIEnv *env, jobject obj,
     jint param1, jlong param2, jint param3, jint param4, jint param5) {
   return doCalleeWork(env, obj, param1, param2, param3, param4, param5);
