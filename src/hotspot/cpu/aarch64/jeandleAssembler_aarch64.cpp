@@ -65,6 +65,7 @@ void JeandleAssembler::patch_static_call_site(int inst_offset, CallSiteInfo* cal
   if (call->target() == SharedRuntime::get_resolve_opt_virtual_call_stub()) {
     rtype = relocInfo::opt_virtual_call_type;
   } else {
+    assert(call->target() == SharedRuntime::get_resolve_static_call_stub(), "illegal call target");
     rtype = relocInfo::static_call_type;
   }
   Address call_addr = Address(call->target(), rtype);
