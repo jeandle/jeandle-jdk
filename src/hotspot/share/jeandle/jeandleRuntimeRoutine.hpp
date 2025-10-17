@@ -37,6 +37,10 @@
 #define ALL_JEANDLE_C_ROUTINES(def)                                                                                                             \
   def(safepoint_handler,          llvm::Type::getVoidTy(context), llvm::PointerType::get(context, llvm::jeandle::AddrSpace::CHeapAddrSpace))    \
   def(install_exceptional_return, llvm::Type::getVoidTy(context), llvm::PointerType::get(context, llvm::jeandle::AddrSpace::JavaHeapAddrSpace), \
+                                                                  llvm::PointerType::get(context, llvm::jeandle::AddrSpace::CHeapAddrSpace))    \
+  def(new_typeArray,              llvm::PointerType::get(context, llvm::jeandle::AddrSpace::JavaHeapAddrSpace),                                 \
+                                                                  llvm::Type::getInt32Ty(context),                                              \
+                                                                  llvm::Type::getInt32Ty(context),                                              \
                                                                   llvm::PointerType::get(context, llvm::jeandle::AddrSpace::CHeapAddrSpace))
 
 #define ALL_JEANDLE_ASSEMBLY_ROUTINES(def) \
@@ -74,7 +78,7 @@ class JeandleRuntimeRoutine : public AllStatic {
   static bool generate(llvm::TargetMachine* target_machine, llvm::DataLayout* data_layout);
 
   static address get_routine_entry(llvm::StringRef name) {
-    assert(_routine_entry.contains(name), "invalid runtime routine");
+    assert(_routine_entry.contains(name), "invalid runtime routine: %s", name.str().c_str());
     return _routine_entry.lookup(name);
   }
 
@@ -119,6 +123,9 @@ class JeandleRuntimeRoutine : public AllStatic {
   static address get_exception_handler(JavaThread* current);
 
   static address search_landingpad(JavaThread* current);
+
+  // Array allocation routine
+  static void new_typeArray(int type, int length, JavaThread* current);
 
   // Assembly routine implementations:
 

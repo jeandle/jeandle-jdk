@@ -39,10 +39,10 @@
     if (RuntimeDefinedJavaOps::failed()) { return; }                                            \
     llvm::LLVMContext& context = template_module.getContext();                                  \
     llvm::FunctionType* func_type = llvm::FunctionType::get(return_type, {__VA_ARGS__}, false); \
-    llvm::Function* func = llvm::Function::Create(func_type,                                    \
-                                                  llvm::Function::PrivateLinkage,               \
-                                                  "jeandle."#name,                              \
-                                                  template_module);                             \
+    llvm::StringRef func_name = "jeandle."#name;                                                \
+    llvm::Function* func = llvm::cast<llvm::Function>(                                          \
+        template_module.getOrInsertFunction(func_name, func_type).getCallee());                 \
+    func->setLinkage(llvm::Function::PrivateLinkage);                                           \
     func->addFnAttr("lower-phase", #lower_phase);                                               \
     func->addFnAttr(llvm::Attribute::NoInline);                                                 \
     func->setCallingConv(llvm::CallingConv::Hotspot_JIT);                                       \

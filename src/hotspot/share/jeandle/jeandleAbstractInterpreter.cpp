@@ -828,7 +828,7 @@ void JeandleAbstractInterpreter::interpret_block(JeandleBasicBlock* block) {
       case Bytecodes::_invokedynamic: invoke(); break;
 
       case Bytecodes::_new: Unimplemented(); break;
-      case Bytecodes::_newarray: Unimplemented(); break;
+      case Bytecodes::_newarray: newarray(_bytecodes.get_index_u1()); break;
       case Bytecodes::_anewarray: Unimplemented(); break;
 
       case Bytecodes::_arraylength: arraylength(); break;
@@ -1778,4 +1778,11 @@ void JeandleAbstractInterpreter::throw_exception(llvm::Value* exception_oop) {
   } else {
     ShouldNotReachHere();
   }
+}
+void JeandleAbstractInterpreter::newarray(int element_type){
+  llvm::Value* length = _jvm->ipop();
+  // Get array type from bytecode
+  llvm::Value* type_value = _ir_builder.getInt32(static_cast<BasicType>(element_type));
+  llvm::CallInst* result = call_java_op("jeandle.newarray", {type_value, length});
+  _jvm->apush(result);
 }
