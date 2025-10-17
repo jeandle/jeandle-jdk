@@ -152,6 +152,7 @@ void RuntimeDefinedJavaOps::define_global_variables(llvm::Module& template_modul
 
     global_var->setInitializer(llvm::ConstantInt::get(type, value));
     global_var->setConstant(true);
+    global_var->setLinkage(llvm::GlobalValue::PrivateLinkage);
   };
 
   llvm::Type* int32_type = llvm::Type::getInt32Ty(context);
