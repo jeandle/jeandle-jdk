@@ -1856,19 +1856,19 @@ JeandleBasicBlock* JeandleAbstractInterpreter::create_clinit_barrier_blocks(ciIn
   llvm::Function* current_func = _ir_builder.GetInsertBlock()->getParent();
 
   JeandleBasicBlock* original_jb = bci2block()[0];
-  llvm::BasicBlock* original_llvm = original_jb->llvm_block();
+  llvm::BasicBlock* original_llvm = original_jb->header_llvm_block();
 
   llvm::BasicBlock* barrier_entry_llvm = llvm::BasicBlock::Create(ctx, "clinit_barrier_entry", current_func);
-  JeandleBasicBlock* barrier_entry_jb = new JeandleBasicBlock(_block_builder->get_next_block_id(), -1, barrier_entry_llvm);
+  JeandleBasicBlock* barrier_entry_jb = new JeandleBasicBlock(_block_builder->get_next_block_id(), -1, -1,  barrier_entry_llvm, nullptr);
 
   llvm::BasicBlock* fast_path_llvm = llvm::BasicBlock::Create(ctx, "clinit_fast_path", current_func);
-  JeandleBasicBlock* fast_path_jb = new JeandleBasicBlock(_block_builder->get_next_block_id(), -1, fast_path_llvm);
+  JeandleBasicBlock* fast_path_jb = new JeandleBasicBlock(_block_builder->get_next_block_id(), -1, -1, fast_path_llvm, nullptr);
 
   llvm::BasicBlock* check_thread_llvm = llvm::BasicBlock::Create(ctx, "clinit_check_thread", current_func);
-  JeandleBasicBlock* check_thread_jb = new JeandleBasicBlock(_block_builder->get_next_block_id(), -1, check_thread_llvm);
+  JeandleBasicBlock* check_thread_jb = new JeandleBasicBlock(_block_builder->get_next_block_id(), -1, -1, check_thread_llvm, nullptr);
 
   llvm::BasicBlock* slow_path_llvm = llvm::BasicBlock::Create(ctx, "clinit_slow_path", current_func);
-  JeandleBasicBlock* slow_path_jb = new JeandleBasicBlock(_block_builder->get_next_block_id(), -1, slow_path_llvm);
+  JeandleBasicBlock* slow_path_jb = new JeandleBasicBlock(_block_builder->get_next_block_id(), -1, -1, slow_path_llvm, nullptr);
 
   JeandleBasicBlock* entry_jb = _block_builder->entry_block();
 
@@ -1956,40 +1956,40 @@ JeandleBasicBlock* JeandleAbstractInterpreter::create_clinit_barrier_blocks(ciIn
   _ir_builder.SetInsertPoint(fast_path_llvm);
   _ir_builder.CreateBr(original_llvm);
 
-  entry_jb->add_successors(barrier_entry_jb);
-  barrier_entry_jb->add_predecessors(entry_jb);
-  barrier_entry_jb->income_block(entry_jb, _method, &_ir_builder);
+  entry_jb->add_successor(barrier_entry_jb);
+  barrier_entry_jb->add_predecessor(entry_jb);
+  barrier_entry_jb->merge_VM_state_from(entry_jb, _method);
   barrier_entry_jb->set(JeandleBasicBlock::is_compiled);
   
-  barrier_entry_jb->add_successors(fast_path_jb);
-  fast_path_jb->add_predecessors(barrier_entry_jb);
-  fast_path_jb->income_block(barrier_entry_jb, _method, &_ir_builder);
+  barrier_entry_jb->add_successor(fast_path_jb);
+  fast_path_jb->add_predecessor(barrier_entry_jb);
+  fast_path_jb->merge_VM_state_from(barrier_entry_jb, _method);
   fast_path_jb->set(JeandleBasicBlock::is_compiled);
 
-  barrier_entry_jb->add_successors(check_thread_jb);
-  check_thread_jb->add_predecessors(barrier_entry_jb);
-  check_thread_jb->income_block(barrier_entry_jb, _method, &_ir_builder);
+  barrier_entry_jb->add_successor(check_thread_jb);
+  check_thread_jb->add_predecessor(barrier_entry_jb);
+  check_thread_jb->merge_VM_state_from(barrier_entry_jb, _method);
   check_thread_jb->set(JeandleBasicBlock::is_compiled);
 
-  check_thread_jb->add_successors(slow_path_jb);
-  slow_path_jb->add_predecessors(check_thread_jb);
-  slow_path_jb->income_block(check_thread_jb, _method, &_ir_builder);
+  check_thread_jb->add_successor(slow_path_jb);
+  slow_path_jb->add_predecessor(check_thread_jb);
+  slow_path_jb->merge_VM_state_from(check_thread_jb, _method);
   slow_path_jb->set(JeandleBasicBlock::is_compiled);
 
-  fast_path_jb->add_successors(original_jb);
-  original_jb->add_predecessors(fast_path_jb);
-  original_jb->income_block(fast_path_jb, _method, &_ir_builder);
+  fast_path_jb->add_successor(original_jb);
+  original_jb->add_predecessor(fast_path_jb);
+  original_jb->merge_VM_state_from(fast_path_jb, _method);
 
-  slow_path_jb->add_successors(original_jb);
-  original_jb->add_predecessors(slow_path_jb);
-  original_jb->income_block(slow_path_jb, _method, &_ir_builder);
+  slow_path_jb->add_successor(original_jb);
+  original_jb->add_predecessor(slow_path_jb);
+  original_jb->merge_VM_state_from(slow_path_jb, _method);
   
   return barrier_entry_jb;
 }
 
 void JeandleAbstractInterpreter::insert_clinit_barrier(ciInstanceKlass* holder, ciMethod* context) {
   JeandleBasicBlock* entry_jb = _block_builder->entry_block();
-  llvm::BasicBlock* entry_llvm = entry_jb->llvm_block();
+  llvm::BasicBlock* entry_llvm = entry_jb->header_llvm_block();
 
   llvm::Instruction* original_terminator = entry_llvm->getTerminator();
   JeandleBasicBlock* barrier_entry_jb = create_clinit_barrier_blocks(holder, context);
@@ -1998,7 +1998,7 @@ void JeandleAbstractInterpreter::insert_clinit_barrier(ciInstanceKlass* holder, 
   if (original_terminator) {
     original_terminator->eraseFromParent();
   }
-  _ir_builder.CreateBr(barrier_entry_jb->llvm_block());
+  _ir_builder.CreateBr(barrier_entry_jb->header_llvm_block());
 }
 
 void JeandleAbstractInterpreter::clinit_barrier(ciInstanceKlass* holder, ciMethod* context) {
@@ -2033,17 +2033,17 @@ void JeandleAbstractInterpreter::clinit_barrier(ciInstanceKlass* holder, ciMetho
   }
 
   // create clinit_barrier
-  JeandleBasicBlock* original_jb = bci2block()[_codes.cur_bci()];
+  JeandleBasicBlock* original_jb = bci2block()[_bytecodes.cur_bci()];
   if (original_jb) {
     JeandleBasicBlock* barrier_entry_jb = create_clinit_barrier_blocks(holder, context);
 
     _ir_builder.SetInsertPoint(current_block);
-    _ir_builder.CreateBr(barrier_entry_jb->llvm_block());
+    _ir_builder.CreateBr(barrier_entry_jb->header_llvm_block());
 
     for (JeandleBasicBlock* succ : barrier_entry_jb->successors()) {
-      if (succ->llvm_block()->getName() == "clinit_fast_path") {
-        _ir_builder.SetInsertPoint(succ->llvm_block());
-        if (llvm::Instruction* term = succ->llvm_block()->getTerminator()) {
+      if (succ->header_llvm_block()->getName() == "clinit_fast_path") {
+        _ir_builder.SetInsertPoint(succ->header_llvm_block());
+        if (llvm::Instruction* term = succ->header_llvm_block()->getTerminator()) {
           term->eraseFromParent();
         }
         _ir_builder.CreateBr(continuation_block);
