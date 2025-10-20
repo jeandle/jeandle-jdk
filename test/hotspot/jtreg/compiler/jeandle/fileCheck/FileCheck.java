@@ -27,6 +27,8 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.util.List;
+import java.util.regex.Pattern;
+import java.util.regex.Matcher;
 import java.util.Scanner;
 import java.util.stream.Collectors;
 import java.io.File;
@@ -130,6 +132,48 @@ public class FileCheck {
         content = content.replaceAll("\\s+", " ").trim();
         for (String str : this.lines) {
             if (str.contains(content)) {
+                found = true;
+                break;
+            }
+        }
+        Asserts.assertFalse(found, "File check not: " + content);
+    }
+
+    // Check whether the pattern is in the file.
+    public void checkPattern(String content) {
+        boolean found = false;
+        content = content.trim();
+        Pattern pattern = Pattern.compile(content);
+        while (this.lineIndex < lines.size()) {
+            if (pattern.matcher(lines.get(this.lineIndex)).find()) {
+                found = true;
+                this.lineIndex++;
+                break;
+            }
+            this.lineIndex++;
+        }
+        Asserts.assertTrue(found, "File check: " + content);
+    }
+
+    // Check whether the pattern is in the next line.
+    public void checkNextPattern(String content) {
+        boolean found = false;
+        content = content.trim();
+        Pattern pattern = Pattern.compile(content);
+        if (this.lineIndex < lines.size()) {
+            found = pattern.matcher(lines.get(this.lineIndex)).find();
+            this.lineIndex++;
+        }
+        Asserts.assertTrue(found, "File check next: " + content);
+    }
+
+    // Check whether the pattern isn't in the file.
+    public void checkNotPattern(String content) {
+        boolean found = false;
+        content = content.trim();
+        Pattern pattern = Pattern.compile(content);
+        for (String str : this.lines) {
+            if (pattern.matcher(str).find()) {
                 found = true;
                 break;
             }
