@@ -43,7 +43,7 @@ public class FileCheck {
         this.lineIndex = 0;
 
         Class declaringClass = method.getDeclaringClass();
-        String filePrefix = declaringClass.getName().replace('.', '_') + "_" + method.getName() + "_" + getMethodSignature(method);
+        String filePrefix = declaringClass.getName().replace('.', '_') + "_" + method.getName() + "_" + getMethodSignature(method).replace('/', '_');
         String fileSuffix = ".ll";
         String optimizedFileSuffix = "-optimized.ll";
 
