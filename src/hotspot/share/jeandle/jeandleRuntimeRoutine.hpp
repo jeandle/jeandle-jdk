@@ -36,8 +36,10 @@
 //------------------------------------------------------------------------------------------------------------
 #define ALL_JEANDLE_C_ROUTINES(def)                                                                                                             \
   def(safepoint_handler,          llvm::Type::getVoidTy(context), llvm::PointerType::get(context, llvm::jeandle::AddrSpace::CHeapAddrSpace))    \
+                                                                                                                                                \
   def(install_exceptional_return, llvm::Type::getVoidTy(context), llvm::PointerType::get(context, llvm::jeandle::AddrSpace::JavaHeapAddrSpace), \
                                                                   llvm::PointerType::get(context, llvm::jeandle::AddrSpace::CHeapAddrSpace))    \
+                                                                                                                                                \
   def(new_typeArray,              llvm::PointerType::get(context, llvm::jeandle::AddrSpace::JavaHeapAddrSpace),                                 \
                                                                   llvm::Type::getInt32Ty(context),                                              \
                                                                   llvm::Type::getInt32Ty(context),                                              \
@@ -52,26 +54,35 @@
 //-----------------------------------------------------------------------------------------------------------------------------------
 #define ALL_HOTSPOT_ROUTINES(def)                                                                                                    \
   def(SharedRuntime_dsin,    SharedRuntime::dsin,     llvm::Type::getDoubleTy(context),    llvm::Type::getDoubleTy(context))         \
+                                                                                                                                     \
   def(StubRoutines_dsin,     StubRoutines::dsin(),    llvm::Type::getDoubleTy(context),    llvm::Type::getDoubleTy(context))         \
+                                                                                                                                     \
   def(SharedRuntime_dcos,    SharedRuntime::dcos,     llvm::Type::getDoubleTy(context),    llvm::Type::getDoubleTy(context))         \
+                                                                                                                                     \
   def(StubRoutines_dcos,     StubRoutines::dcos(),    llvm::Type::getDoubleTy(context),    llvm::Type::getDoubleTy(context))         \
+                                                                                                                                     \
   def(SharedRuntime_dtan,    SharedRuntime::dtan,     llvm::Type::getDoubleTy(context),    llvm::Type::getDoubleTy(context))         \
+                                                                                                                                     \
   def(StubRoutines_dtan,     StubRoutines::dtan(),    llvm::Type::getDoubleTy(context),    llvm::Type::getDoubleTy(context))         \
+                                                                                                                                     \
   def(SharedRuntime_drem,    SharedRuntime::drem,     llvm::Type::getDoubleTy(context),    llvm::Type::getDoubleTy(context),         \
                                                                                            llvm::Type::getDoubleTy(context))         \
+                                                                                                                                     \
   def(SharedRuntime_frem,    SharedRuntime::frem,     llvm::Type::getFloatTy(context),     llvm::Type::getFloatTy(context),          \
                                                                                            llvm::Type::getFloatTy(context))
 
 
-// JeandleRuntimeRoutine contains C/C++/Assembly routines that can be called from Jeandle compiled code.
-// There are two ways to call a JeandleRuntimeRoutine: directly calling an assembly routine or calling
-// a C/C++ routine through a runtime stub.
+// JeandleRuntimeRoutine contains C/C++/Assembly routines and Hotspot routines that can be called from Jeandle compiled code.
+// (Hotspot routines are some runtime functions provided by Hotspot. We can call them in Jeandle compiled code.)
 //
-// For assembly routines, we directly use their addresses to generate function calls in LLVM IR.
+// There are two ways to call a JeandleRuntimeRoutine: directly calling an assembly/Hotspot routine or calling a C/C++ routine
+// through a runtime stub.
 //
-// For C/C++ routines, before jumping into the C/C++ function, we use a runtime stub to help adjust the VM
-// state similar to what call_VM does, then the runtime stub uses the C/C++ function address to generate
-// a function call into it. The runtime stubs are compiled by LLVM for every C/C++ routine.
+// For assembly/Hotspot routines, we can directly use their addresses to generate function calls in LLVM IR.
+//
+// For C/C++ routines, before jumping into the C/C++ function, we use a runtime stub to help adjust the VM state similar to
+// what C2's GraphKit::gen_stub does, then the runtime stub uses the C/C++ function address to generate a function calling
+// into it. The runtime stubs are compiled by LLVM for every C/C++ routine by JeandleCallVM.
 class JeandleRuntimeRoutine : public AllStatic {
  public:
   // Generate all routines.
