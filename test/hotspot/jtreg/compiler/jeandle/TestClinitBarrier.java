@@ -30,8 +30,8 @@
  */
 
 public class TestClinitBarrier {
-    public static void main(Stringp[] args) {
-        
+    public static void main(String[] args) {
+        new ExternalAccessor().accessTarget();
     }
 }
 class ExternalAccessor {

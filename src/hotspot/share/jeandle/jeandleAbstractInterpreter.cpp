@@ -1805,14 +1805,13 @@ void JeandleAbstractInterpreter::throw_exception(llvm::Value* exception_oop) {
     ShouldNotReachHere();
   }
 }
-<<<<<<< HEAD
 void JeandleAbstractInterpreter::newarray(int element_type){
   llvm::Value* length = _jvm->ipop();
   // Get array type from bytecode
   llvm::Value* type_value = _ir_builder.getInt32(static_cast<BasicType>(element_type));
   llvm::CallInst* result = call_java_op("jeandle.newarray", {type_value, length});
   _jvm->apush(result);
-=======
+}
 
 bool JeandleAbstractInterpreter::needs_clinit_barrier(ciMethod* method, ciMethod* accessing_method) {
   return method->is_static() && needs_clinit_barrier(method->holder(), accessing_method);
@@ -2054,5 +2053,4 @@ void JeandleAbstractInterpreter::clinit_barrier(ciInstanceKlass* holder, ciMetho
   }
 
   _ir_builder.SetInsertPoint(continuation_block);
->>>>>>> 6b23d6cfe38 (feats: Support Class initialization barrier)
 }
