@@ -891,8 +891,14 @@ void RelocIterator::print_current() {
       break;
     }
   case relocInfo::metadata_type:
+  case relocInfo::jeandle_metadata_type:
     {
-      metadata_Relocation* r = metadata_reloc();
+      metadata_Relocation* r = nullptr;
+      if (type() == relocInfo::jeandle_metadata_type) {
+        r = (metadata_Relocation*)jeandle_metadata_reloc();
+      } else {
+        r = metadata_reloc();
+      }
       Metadata** metadata_addr  = nullptr;
       Metadata*    raw_metadata   = nullptr;
       Metadata*    metadata_value = nullptr;

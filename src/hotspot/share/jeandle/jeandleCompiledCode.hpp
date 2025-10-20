@@ -112,6 +112,7 @@ class JeandleCompiledCode : public StackObj {
   uint64_t next_statepoint_id() { return _non_routine_call_sites.size(); }
 
   llvm::StringMap<jobject>& oop_handles() { return _oop_handles; }
+  llvm::StringMap<Metadata*>& metadata_handles() { return _metadata_handles; }
 
   const char* object_start() const { return _obj->getBufferStart(); }
   size_t object_size() const { return _obj->getBufferSize(); }
@@ -148,6 +149,7 @@ class JeandleCompiledCode : public StackObj {
 
   llvm::StringMap<address> _const_sections;
   llvm::StringMap<jobject> _oop_handles;
+  llvm::StringMap<Metadata*> _metadata_handles;
   CodeOffsets _offsets;
   JeandleExceptionHandlerTable _exception_handler_table;
   ImplicitExceptionTable _implicit_exception_table;

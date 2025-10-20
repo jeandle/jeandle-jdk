@@ -279,6 +279,7 @@ class relocInfo {
     barrier_type               = 18, // GC barrier data
     jeandle_section_word_type  = 19, // internal, but a cross-section reference specific for jeandle
     jeandle_oop_type           = 20, // embedded oop for jeandle
+    jeandle_metadata_type      = 21, // embedded metadata for jeandle
     type_mask                  = 31  // A mask which selects only the above values
   };
 
@@ -323,6 +324,7 @@ class relocInfo {
     visitor(barrier) \
     visitor(jeandle_section_word) \
     visitor(jeandle_oop) \
+    visitor(jeandle_metadata) \
 
 
  public:
@@ -876,7 +878,7 @@ class Relocation {
   virtual void fix_relocation_after_move(const CodeBuffer* src, CodeBuffer* dest) { }
 
   bool is_jeandle_reloc() {
-    return _rtype == relocInfo::jeandle_oop_type || _rtype == relocInfo::jeandle_section_word_type;
+    return _rtype == relocInfo::jeandle_oop_type || _rtype == relocInfo::jeandle_section_word_type || _rtype == relocInfo::jeandle_metadata_type;
   }
 };
 
@@ -1089,15 +1091,15 @@ class metadata_Relocation : public DataRelocation {
 
   void copy_into(RelocationHolder& holder) const override;
 
- private:
+ protected:
   jint _metadata_index;            // if > 0, index into nmethod::metadata_at
   jint _offset;                     // byte offset to apply to the metadata itself
 
-  metadata_Relocation(int metadata_index, int offset)
-    : DataRelocation(relocInfo::metadata_type), _metadata_index(metadata_index), _offset(offset) { }
+  metadata_Relocation(int metadata_index, int offset, relocInfo::relocType type = relocInfo::metadata_type)
+    : DataRelocation(type), _metadata_index(metadata_index), _offset(offset) { }
 
   friend class RelocationHolder;
-  metadata_Relocation() : DataRelocation(relocInfo::metadata_type) { }
+  metadata_Relocation(relocInfo::relocType type = relocInfo::metadata_type) : DataRelocation(type) { }
 
   // Fixes a Metadata pointer in the code. Most platforms embeds the
   // Metadata pointer in the code at compile time so this is empty
@@ -1123,6 +1125,31 @@ class metadata_Relocation : public DataRelocation {
   // Note:  metadata_value transparently converts Universe::non_metadata_word to nullptr.
 };
 
+class jeandle_metadata_Relocation : public metadata_Relocation {
+ public:
+  static RelocationHolder spec(int metadata_index) {
+    assert(metadata_index > 0, "must be a pool-resident metadata");
+    return RelocationHolder::construct<jeandle_metadata_Relocation>(metadata_index);
+  }
+
+  void copy_into(RelocationHolder& holder) const override;
+
+  virtual void fix_metadata_relocation() {
+    set_value(reinterpret_cast<address>(metadata_addr()));
+  }
+
+  virtual void verify_metadata_relocation() {
+    verify_value(reinterpret_cast<address>(metadata_addr()));
+  }
+
+ private:
+
+  friend class RelocationHolder;
+  jeandle_metadata_Relocation(int metadata_index)
+    : metadata_Relocation(metadata_index, 0, relocInfo::jeandle_metadata_type) {}
+
+  jeandle_metadata_Relocation() : metadata_Relocation(relocInfo::jeandle_metadata_type) { }
+};
 
 class barrier_Relocation : public Relocation {
 

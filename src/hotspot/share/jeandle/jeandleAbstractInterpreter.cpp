@@ -509,7 +509,8 @@ JeandleAbstractInterpreter::JeandleAbstractInterpreter(ciMethod* method,
                                                        _compiled_code(code),
                                                        _block_builder(new BasicBlockBuilder(method, _context, _llvm_func)),
                                                        _ir_builder(_block_builder->entry_block()->header_llvm_block()),
-                                                       _oop_idx(0) {
+                                                       _oop_idx(0),
+                                                       _metadata_idx(0) {
   // Fill basic blocks with LLVM IR.
   interpret();
 }
@@ -550,6 +551,12 @@ void JeandleAbstractInterpreter::interpret() {
 
   if (!current->merge_VM_state_from(_block_builder->entry_block(), _method)) {
     JeandleCompilation::report_jeandle_error("failed to create initial VM state");
+  }
+
+  // Create clinit_barrier.
+  ciInstanceKlass* holder = _method->holder();
+  if (VM_Version::supports_fast_class_init_checks() && holder->is_being_initialized() && _method->is_static()) {
+    insert_clinit_barrier(holder, _method);
   }
 
   // Iterate all blocks
@@ -1410,6 +1417,21 @@ llvm::Value* JeandleAbstractInterpreter::find_or_insert_oop(ciObject* oop) {
   return oop_value;
 }
 
+llvm::Value* JeandleAbstractInterpreter::find_or_insert_metadata(ciMetadata* metadata) {
+  Metadata* metadata_handle = metadata->constant_encoding();
+  if (llvm::Value* metadata_value = _metadatas.lookup(metadata_handle)) {
+    return metadata_value;
+  }
+  std::string metadata_str = next_metadata_name();
+  llvm::StringRef metadata_name = metadata_str;
+  _compiled_code.metadata_handles()[metadata_name] = metadata_handle;
+  llvm::Value* metadata_value = _module.getOrInsertGlobal(
+                               metadata_name,
+                               JeandleType::java2llvm(BasicType::T_METADATA, *_context));
+  _metadatas[metadata_handle] = metadata_value;
+  return metadata_value;
+}
+
 // TODO: clinit_barrier check.
 // TODO: Handle field attributions like final, stable.
 void JeandleAbstractInterpreter::do_field_access(bool is_get, bool is_static) {
@@ -1426,6 +1448,10 @@ void JeandleAbstractInterpreter::do_field_access(bool is_get, bool is_static) {
         Unimplemented();
         return;
       }
+
+  if (needs_clinit_barrier(field, _method)) {
+    clinit_barrier(field_holder, _method);
+  }
 
   if (is_get) {
     do_get_xxx(field, is_static);
@@ -1779,10 +1805,254 @@ void JeandleAbstractInterpreter::throw_exception(llvm::Value* exception_oop) {
     ShouldNotReachHere();
   }
 }
+<<<<<<< HEAD
 void JeandleAbstractInterpreter::newarray(int element_type){
   llvm::Value* length = _jvm->ipop();
   // Get array type from bytecode
   llvm::Value* type_value = _ir_builder.getInt32(static_cast<BasicType>(element_type));
   llvm::CallInst* result = call_java_op("jeandle.newarray", {type_value, length});
   _jvm->apush(result);
+=======
+
+bool JeandleAbstractInterpreter::needs_clinit_barrier(ciMethod* method, ciMethod* accessing_method) {
+  return method->is_static() && needs_clinit_barrier(method->holder(), accessing_method);
+}
+
+bool JeandleAbstractInterpreter::needs_clinit_barrier(ciField* field, ciMethod* accessing_method) {
+  return field->is_static() && needs_clinit_barrier(field->holder(), accessing_method);
+}
+
+bool JeandleAbstractInterpreter::needs_clinit_barrier(ciInstanceKlass* holder, ciMethod* accessing_method) {
+  if (holder->is_initialized()) {
+    return false;
+  }
+  if (holder->is_being_initialized()) {
+    if (accessing_method->holder() == holder) {
+      // Access inside a class. The barrier can be elided when access happens in <clinit>,
+      // <init>, or a static method. In all those cases, there was an initialization
+      // barrier on the holder klass passed.
+      if (accessing_method->is_static_initializer() ||
+          accessing_method->is_object_initializer() ||
+          accessing_method->is_static()) {
+            return false;
+          }
+    } else if (accessing_method->holder()->is_subclass_of(holder)) {
+      // Access from a subclass. The barrier can be elided only when access happens in <clinit>,
+      // In case of <init> or a static method, the barrier is on the subclass is not enough:
+      // child class can become fully initialized while its parent class is still being initialized.
+      if (accessing_method->is_static_initializer()) {
+        return false;
+      }
+    }
+    ciMethod* root = _method; // the root method of compilation
+    if (root != accessing_method) {
+      return needs_clinit_barrier(holder, root); // check access in the context of compilation root
+    }
+  }
+  return true;
+}
+
+JeandleBasicBlock* JeandleAbstractInterpreter::create_clinit_barrier_blocks(ciInstanceKlass* holder, ciMethod* context) {
+  llvm::LLVMContext& ctx = _ir_builder.getContext();
+  llvm::Function* current_func = _ir_builder.GetInsertBlock()->getParent();
+
+  JeandleBasicBlock* original_jb = bci2block()[0];
+  llvm::BasicBlock* original_llvm = original_jb->llvm_block();
+
+  llvm::BasicBlock* barrier_entry_llvm = llvm::BasicBlock::Create(ctx, "clinit_barrier_entry", current_func);
+  JeandleBasicBlock* barrier_entry_jb = new JeandleBasicBlock(_block_builder->get_next_block_id(), -1, barrier_entry_llvm);
+
+  llvm::BasicBlock* fast_path_llvm = llvm::BasicBlock::Create(ctx, "clinit_fast_path", current_func);
+  JeandleBasicBlock* fast_path_jb = new JeandleBasicBlock(_block_builder->get_next_block_id(), -1, fast_path_llvm);
+
+  llvm::BasicBlock* check_thread_llvm = llvm::BasicBlock::Create(ctx, "clinit_check_thread", current_func);
+  JeandleBasicBlock* check_thread_jb = new JeandleBasicBlock(_block_builder->get_next_block_id(), -1, check_thread_llvm);
+
+  llvm::BasicBlock* slow_path_llvm = llvm::BasicBlock::Create(ctx, "clinit_slow_path", current_func);
+  JeandleBasicBlock* slow_path_jb = new JeandleBasicBlock(_block_builder->get_next_block_id(), -1, slow_path_llvm);
+
+  JeandleBasicBlock* entry_jb = _block_builder->entry_block();
+
+  _ir_builder.SetInsertPoint(barrier_entry_llvm);
+
+  llvm::Value* klass = find_or_insert_metadata(holder);
+
+  llvm::Type* uint8_ty = llvm::Type::getInt8Ty(ctx);
+  llvm::Type* uint64_ty = llvm::Type::getInt64Ty(ctx);
+  llvm::Type* uint64_ptr_ty = llvm::PointerType::get(uint64_ty, 0);
+
+  llvm::Value* init_state_addr = _ir_builder.CreateConstGEP1_64(
+    uint8_ty,
+    klass,
+    static_cast<uint64_t>(InstanceKlass::init_state_offset()),
+    "init_state_addr"
+  );
+  llvm::Value* init_state = _ir_builder.CreateLoad(
+    uint8_ty,
+    init_state_addr,
+    "init_state"
+  );
+  llvm::Value* fully_init_const = llvm::ConstantInt::get(
+    uint8_ty,
+    InstanceKlass::fully_initialized
+  );
+  llvm::Value* is_fully_init = _ir_builder.CreateICmpEQ(
+    init_state,
+    fully_init_const,
+    "is_fully_init"
+  );
+  _ir_builder.CreateCondBr(is_fully_init,fast_path_llvm,check_thread_llvm);
+
+  _ir_builder.SetInsertPoint(check_thread_llvm);
+
+  llvm::Value* init_thread_addr = _ir_builder.CreateConstGEP1_64(
+    uint8_ty,
+    klass,
+    static_cast<uint64_t>(InstanceKlass::init_thread_offset()),
+    "init_thread_addr"
+  );
+  llvm::Value* init_thread_addr_uint64 = _ir_builder.CreateBitCast(
+    init_thread_addr,
+    uint64_ptr_ty
+  );
+  llvm::Value* init_thread = _ir_builder.CreateLoad(
+    uint64_ty,
+    init_thread_addr_uint64,
+    "init_thread"
+  );
+
+  llvm::Value* current_thread = call_java_op("jeandle.current_thread", {});
+  llvm::Value* current_thread_id = _ir_builder.CreatePtrToInt(
+    current_thread,
+    uint64_ty,
+    "current_thread_id"
+  );
+
+  llvm::Value* is_same_thread = _ir_builder.CreateICmpEQ(
+    current_thread_id,
+    init_thread,
+    "is_same_thread"
+  );
+  _ir_builder.CreateCondBr(is_same_thread, fast_path_llvm, slow_path_llvm);
+
+  _ir_builder.SetInsertPoint(slow_path_llvm);
+
+  uintptr_t stub_addr = reinterpret_cast<uintptr_t>(SharedRuntime::get_handle_wrong_method_stub());
+  llvm::Value* stub_addr_int = llvm::ConstantInt::get(llvm::Type::getInt64Ty(ctx),stub_addr);
+
+  llvm::Type* void_ty = llvm::Type::getVoidTy(ctx);
+  llvm::FunctionType* stub_func_ty = llvm::FunctionType::get(
+    void_ty,
+    false
+  );
+  llvm::Value* stub_func_ptr = _ir_builder.CreateIntToPtr(
+    stub_addr_int,
+    llvm::PointerType::get(stub_func_ty, 0),
+    "stub_func_ptr"
+  );
+
+  _ir_builder.CreateCall(stub_func_ty, stub_func_ptr, {});
+  _ir_builder.CreateBr(original_llvm);
+
+  _ir_builder.SetInsertPoint(fast_path_llvm);
+  _ir_builder.CreateBr(original_llvm);
+
+  entry_jb->add_successors(barrier_entry_jb);
+  barrier_entry_jb->add_predecessors(entry_jb);
+  barrier_entry_jb->income_block(entry_jb, _method, &_ir_builder);
+  barrier_entry_jb->set(JeandleBasicBlock::is_compiled);
+  
+  barrier_entry_jb->add_successors(fast_path_jb);
+  fast_path_jb->add_predecessors(barrier_entry_jb);
+  fast_path_jb->income_block(barrier_entry_jb, _method, &_ir_builder);
+  fast_path_jb->set(JeandleBasicBlock::is_compiled);
+
+  barrier_entry_jb->add_successors(check_thread_jb);
+  check_thread_jb->add_predecessors(barrier_entry_jb);
+  check_thread_jb->income_block(barrier_entry_jb, _method, &_ir_builder);
+  check_thread_jb->set(JeandleBasicBlock::is_compiled);
+
+  check_thread_jb->add_successors(slow_path_jb);
+  slow_path_jb->add_predecessors(check_thread_jb);
+  slow_path_jb->income_block(check_thread_jb, _method, &_ir_builder);
+  slow_path_jb->set(JeandleBasicBlock::is_compiled);
+
+  fast_path_jb->add_successors(original_jb);
+  original_jb->add_predecessors(fast_path_jb);
+  original_jb->income_block(fast_path_jb, _method, &_ir_builder);
+
+  slow_path_jb->add_successors(original_jb);
+  original_jb->add_predecessors(slow_path_jb);
+  original_jb->income_block(slow_path_jb, _method, &_ir_builder);
+  
+  return barrier_entry_jb;
+}
+
+void JeandleAbstractInterpreter::insert_clinit_barrier(ciInstanceKlass* holder, ciMethod* context) {
+  JeandleBasicBlock* entry_jb = _block_builder->entry_block();
+  llvm::BasicBlock* entry_llvm = entry_jb->llvm_block();
+
+  llvm::Instruction* original_terminator = entry_llvm->getTerminator();
+  JeandleBasicBlock* barrier_entry_jb = create_clinit_barrier_blocks(holder, context);
+
+  _ir_builder.SetInsertPoint(entry_llvm);
+  if (original_terminator) {
+    original_terminator->eraseFromParent();
+  }
+  _ir_builder.CreateBr(barrier_entry_jb->llvm_block());
+}
+
+void JeandleAbstractInterpreter::clinit_barrier(ciInstanceKlass* holder, ciMethod* context) {
+  if (!holder->is_being_initialized()) {
+    return;
+  }
+  if (!needs_clinit_barrier(holder, context)) {
+    return;
+  }
+
+  llvm::BasicBlock* current_block = _ir_builder.GetInsertBlock();
+  if (!current_block) {
+    return;
+  } 
+
+  llvm::LLVMContext& ctx = *_context;
+  llvm::Function* current_func = current_block->getParent();
+  llvm::BasicBlock* continuation_block = llvm::BasicBlock::Create(ctx, "clinit_barrier_continue", current_func);
+
+  llvm::Instruction* terminator = current_block->getTerminator();
+  if (terminator) {
+    terminator->removeFromParent();
+  }
+
+  while (!current_block->empty()) {
+    llvm::Instruction* inst = &current_block->front();
+    inst->removeFromParent();
+    inst->insertInto(continuation_block, continuation_block->end());
+  }
+  if (terminator) {
+    terminator->insertInto(continuation_block, continuation_block->end());
+  }
+
+  // create clinit_barrier
+  JeandleBasicBlock* original_jb = bci2block()[_codes.cur_bci()];
+  if (original_jb) {
+    JeandleBasicBlock* barrier_entry_jb = create_clinit_barrier_blocks(holder, context);
+
+    _ir_builder.SetInsertPoint(current_block);
+    _ir_builder.CreateBr(barrier_entry_jb->llvm_block());
+
+    for (JeandleBasicBlock* succ : barrier_entry_jb->successors()) {
+      if (succ->llvm_block()->getName() == "clinit_fast_path") {
+        _ir_builder.SetInsertPoint(succ->llvm_block());
+        if (llvm::Instruction* term = succ->llvm_block()->getTerminator()) {
+          term->eraseFromParent();
+        }
+        _ir_builder.CreateBr(continuation_block);
+        break;
+      }
+    }
+  }
+
+  _ir_builder.SetInsertPoint(continuation_block);
+>>>>>>> 6b23d6cfe38 (feats: Support Class initialization barrier)
 }

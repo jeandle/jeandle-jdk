@@ -57,6 +57,8 @@ class JeandleAssembler : public StackObj {
 
   void emit_oop_reloc(int offset, jobject oop_handle);
 
+  void emit_metadata_reloc(int offset, Metadata* metadata_handle);
+
   // Redirect an offset from the displacement to the end of the call instruction
   static int fixup_routine_call_inst_offset(int offset);
 

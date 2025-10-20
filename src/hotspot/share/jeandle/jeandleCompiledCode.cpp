@@ -189,6 +189,20 @@ class JeandleOopReloc : public JeandleReloc {
   jobject _oop_handle;
 };
 
+class JeandleMetadataReloc : public JeandleReloc {
+ public:
+  JeandleMetadataReloc(int offset, Metadata* metadata_handle) :
+    JeandleReloc(offset),
+    _metadata_handle(metadata_handle) {}
+
+  void emit_reloc(JeandleAssembler& assembler) override {
+    assembler.emit_metadata_reloc(offset(), _metadata_handle);
+  }
+
+ private:
+  Metadata* _metadata_handle;
+};
+
 } // anonymous namespace
 
 void JeandleCompiledCode::install_obj(std::unique_ptr<ObjectBuffer> obj) {
@@ -305,8 +319,12 @@ void JeandleCompiledCode::resolve_reloc_info(JeandleAssembler& assembler) {
         relocs.push_back(new JeandleConstReloc(*block, edge, target_addr));
       } else if (!target.isDefined() && JeandleAssembler::is_oop_reloc_kind(edge.getKind())) {
         // Oop relocations.
-        assert((*(target.getName())).starts_with("oop_handle"), "invalid oop relocation name");
-        relocs.push_back(new JeandleOopReloc(static_cast<int>(block->getAddress().getValue() + edge.getOffset()), _oop_handles[(*(target.getName()))]));
+        if ((*(target.getName())).starts_with("oop_handle")) {
+          relocs.push_back(new JeandleOopReloc(static_cast<int>(block->getAddress().getValue() + edge.getOffset()), _oop_handles[(*(target.getName()))]));
+        } else if ((*(target.getName())).starts_with("metadata_handle")) {
+          relocs.push_back(new JeandleMetadataReloc(static_cast<int>(block->getAddress().getValue() + edge.getOffset()), _metadata_handles[(*(target.getName()))]));
+        }
+        assert((*(target.getName())).starts_with("oop_handle") || (*(target.getName())).starts_with("metadata_handle"), "invalid oop or metadata relocation name");
       } else {
         // Unhandled relocations
         ShouldNotReachHere();

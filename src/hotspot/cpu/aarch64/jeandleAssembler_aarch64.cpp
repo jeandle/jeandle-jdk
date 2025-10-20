@@ -166,6 +166,13 @@ void JeandleAssembler::emit_oop_reloc(int offset, jobject oop_handle) {
   __ code_section()->relocate(at_addr, rspec);
 }
 
+void JeandleAssembler::emit_metadata_reloc(int offset, Metadata* metadata_handle) {
+  address at_addr = __ code()->insts_begin() + offset;
+  int index = __ oop_recorder()->find_index(metadata_handle);
+  RelocationHolder rspec = jeandle_metadata_Relocation::spec(index);
+  __ code_section()->relocate(at_addr, rspec);
+}
+
 int JeandleAssembler::fixup_routine_call_inst_offset(int offset) {
   assert(offset >= 0, "invalid offset");
   // point to the end of call instruction

@@ -50,7 +50,7 @@ llvm::Type* JeandleType::java2llvm(BasicType java_type, llvm::LLVMContext& conte
       Unimplemented();
       return nullptr;
     case BasicType::T_METADATA:
-      Unimplemented();
+      return llvm::PointerType::get(context, llvm::jeandle::AddrSpace::CHeapAddrSpace);
       return nullptr;
     case BasicType::T_NARROWKLASS:
       Unimplemented();

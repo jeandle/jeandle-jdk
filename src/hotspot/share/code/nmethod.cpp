@@ -1146,6 +1146,9 @@ void nmethod::fix_oop_relocations(address begin, address end, bool initialize_im
     } else if (iter.type() == relocInfo::jeandle_oop_type) {
       jeandle_oop_Relocation* reloc = iter.jeandle_oop_reloc();
       reloc->fix_oop_relocation();
+    } else if (iter.type() == relocInfo::jeandle_metadata_type) {
+      jeandle_metadata_Relocation* reloc = iter.jeandle_metadata_reloc();
+      reloc->fix_metadata_relocation();
     }
   }
 }
@@ -2956,9 +2959,15 @@ const char* nmethod::reloc_string_for(u_char* begin, u_char* end) {
           st.print(")");
           return st.as_string();
         }
-        case relocInfo::metadata_type: {
+        case relocInfo::metadata_type:
+        case relocInfo::jeandle_metadata_type: {
           stringStream st;
-          metadata_Relocation* r = iter.metadata_reloc();
+          metadata_Relocation* r = nullptr;
+          if (iter.type() == relocInfo::jeandle_metadata_type) {
+            r = iter.jeandle_metadata_reloc();
+          } else {
+            r = iter.metadata_reloc();
+          }
           Metadata* obj = r->metadata_value();
           st.print("metadata(");
           if (obj == nullptr) st.print("nullptr");

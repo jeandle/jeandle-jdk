@@ -208,6 +208,8 @@ class BasicBlockBuilder : public JeandleCompilationResourceObj {
     parent_block->add_successor(child_block);
   }
 
+  int get_next_block_id() { return _next_block_id++; }
+
  private:
   llvm::SmallVector<JeandleBasicBlock*> _bci2block;
   ciMethod* _method;
@@ -215,7 +217,8 @@ class BasicBlockBuilder : public JeandleCompilationResourceObj {
   llvm::LLVMContext* _context;
   llvm::Function* _llvm_func;
   JeandleBasicBlock* _entry_block; // a dummy block holding initial stack/locals state.
-
+  int _next_block_id;
+  
   // For loop marking and ordering.
   ResourceBitMap _active;
   ResourceBitMap _visited;
@@ -251,6 +254,9 @@ class JeandleAbstractInterpreter : public StackObj {
 
   // Record oop values.
   llvm::DenseMap<jobject, llvm::Value*> _oops;
+
+  // Record metadata values.
+  llvm::DenseMap<Metadata*, llvm::Value*> _metadatas;
 
   // The JeandleBasicBlock and its JeandleVMState currently being interpreted.
   JeandleBasicBlock* _block;
@@ -292,9 +298,14 @@ class JeandleAbstractInterpreter : public StackObj {
   llvm::SmallVector<JeandleBasicBlock*>& bci2block() { return _block_builder->bci2block(); }
 
   llvm::Value* find_or_insert_oop(ciObject* oop);
+  llvm::Value* find_or_insert_metadata(ciMetadata* h);
+
 
   int _oop_idx;
   std::string next_oop_name() { return std::string("oop_handle_") + std::to_string(_oop_idx++); }
+
+  int _metadata_idx = 1;
+  std::string next_metadata_name() { return std::string("metadata_handle_") + std::to_string(_metadata_idx++); }
 
   // Implementation of _get* and _put* bytecodes.
   void do_getstatic() { do_field_access(true, true); }
@@ -332,6 +343,14 @@ class JeandleAbstractInterpreter : public StackObj {
   void dispatch_exception_to_handler(llvm::Value* exception_oop); // Generate a series of IR to dispatch an exception to its handler.
   void throw_exception(llvm::Value* exception_oop);
   void newarray(int element_type);
+
+  bool needs_clinit_barrier(ciMethod* method, ciMethod* accessing_method);
+  bool needs_clinit_barrier(ciField* field, ciMethod* accessing_method);
+  bool needs_clinit_barrier(ciInstanceKlass* holder, ciMethod* accessing_method);
+  JeandleBasicBlock* create_clinit_barrier_blocks(ciInstanceKlass* holder, ciMethod* context);
+  void insert_clinit_barrier(ciInstanceKlass* holder, ciMethod* context);
+  void clinit_barrier(ciInstanceKlass* holder, ciMethod* context);
+
 };
 
 #endif // SHARE_JEANDLE_ABSTRACT_INTERPRETER_HPP
