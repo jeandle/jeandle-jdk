@@ -1761,9 +1761,8 @@ void JeandleAbstractInterpreter::dispatch_exception_to_handler(llvm::Value* exce
 void JeandleAbstractInterpreter::throw_exception(llvm::Value* exception_oop) {
   // Call install_exceptional_return.
   llvm::CallInst* current_thread = call_java_op("jeandle.current_thread", {});
-  llvm::CallInst* call_inst = _ir_builder.CreateCall(JeandleRuntimeRoutine::install_exceptional_return_callee(_module),
-                                                    {exception_oop, current_thread});
-  call_inst->setCallingConv(llvm::CallingConv::Hotspot_JIT);
+  llvm::CallInst* call_inst = call_jeandle_routine(JeandleRuntimeRoutine::install_exceptional_return_callee(_module),
+                                                   {exception_oop, current_thread}, llvm::CallingConv::Hotspot_JIT);
 
   // Return
   llvm::Type* ret_type = _llvm_func->getReturnType();
