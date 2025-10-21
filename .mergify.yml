@@ -40,4 +40,4 @@ queue_rules:
     update_method: rebase
     name: jeandle-jdk
 merge_queue:
-  max_parallel_checks: 5
+  max_parallel_checks: 1
