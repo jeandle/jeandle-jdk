@@ -22,13 +22,12 @@
 // The current conflicts are:
 //   1. AARCH64
 //   2. assert
-// We use __llvmHeadersBegin__.hpp and __HotspotHeadersBegin__.hpp to solve them.
+// We use __llvmHeadersBegin__.hpp and __hotspotHeadersBegin__.hpp to solve them.
 
 // All Jeandle source files should include __llvmHeadersBegin__.hpp and __hotspotHeadersBegin__.hpp
 // like this:
 //   #include "jeandle/__llvmHeadersBegin__.hpp"
-//   #include "llvm/..."
-//   #include "llvm/..."
+//   // Here we can include header files from LLVM.
 //
 //   #include "jeandle/..."
 //   #include "jeandle/..."
