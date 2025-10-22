@@ -165,3 +165,6 @@ entry:
   %array_oop = call hotspotcc ptr addrspace(1) @new_typeArray(i32 %type, i32 %length, ptr %current_thread)
   ret ptr addrspace(1) %array_oop
 }
+
+; Declaration of Java card teble barrier.
+declare hotspotcc void @jeandle.card_table_barrier(ptr addrspace(1) %addr) noinline "lower-phase"="1";

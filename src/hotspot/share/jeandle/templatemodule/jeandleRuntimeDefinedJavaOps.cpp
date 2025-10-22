@@ -27,6 +27,8 @@
 #include "jeandle/jeandleRegister.hpp"
 
 #include "jeandle/__hotspotHeadersBegin__.hpp"
+#include "ci/ciUtilities.hpp"
+#include "gc/shared/cardTable.hpp"
 #include "oops/arrayOop.hpp"
 #include "oops/array.hpp"
 #include "oops/klass.hpp"
@@ -103,6 +105,27 @@ DEF_JAVA_OP(safepoint_poll, 1, llvm::Type::getVoidTy(context))
   ir_builder.CreateRetVoid();
 JAVA_OP_END
 
+DEF_JAVA_OP(card_table_barrier, 1, llvm::Type::getVoidTy(context), llvm::PointerType::get(context, llvm::jeandle::AddrSpace::JavaHeapAddrSpace))
+  // TODO: is array,
+
+  // TODO: Support the optimization that checks for already marked card before updating, which is enabled by UseCondCardMark.
+
+  llvm::Value* obj_addr = func->getArg(0);
+  llvm::Type* intptr_type = ir_builder.getIntPtrTy(template_module.getDataLayout());
+  llvm::Value* obj_ptr = ir_builder.CreatePtrToInt(obj_addr, intptr_type);
+
+  llvm::Value* card_table_offset = ir_builder.CreateLShr(obj_ptr, llvm::ConstantInt::get(intptr_type, (uint64_t)CardTable::card_shift()));
+
+  llvm::Value* card_table_base_addr = ir_builder.CreateIntToPtr(llvm::ConstantInt::get(intptr_type, (uint64_t)ci_card_table_address()),
+                                                                llvm::PointerType::get(context, llvm::jeandle::AddrSpace::CHeapAddrSpace));
+
+  llvm::Value* card_table_addr = ir_builder.CreateInBoundsGEP(llvm::Type::getInt8Ty(context), card_table_base_addr, card_table_offset);
+
+  ir_builder.CreateStore(llvm::ConstantInt::get(ir_builder.getInt32Ty(), CardTable::dirty_card_val()), card_table_addr);
+
+  ir_builder.CreateRetVoid();
+JAVA_OP_END
+
 } // anonymous namespace
 
 const char* RuntimeDefinedJavaOps::_error_msg = nullptr;
@@ -119,6 +142,7 @@ bool RuntimeDefinedJavaOps::define_all(llvm::Module& template_module) {
   // Define all runtime defined JavaOps:
   define_current_thread(template_module);
   define_safepoint_poll(template_module);
+  define_card_table_barrier(template_module);
 
   return failed();
 }
