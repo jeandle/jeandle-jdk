@@ -40,23 +40,23 @@ public class TestAbsInt {
     public static void main(String[] args) throws Exception {
         String dump_path = System.getProperty("java.io.tmpdir");
         ArrayList<String> command_args = new ArrayList<String>(List.of(
-            "-Xbatch", "-XX:-TieredCompilation", "-XX:+UseJeandleCompiler", "-Xcomp",
-            "-Xlog:jeandle=debug", "-XX:+JeandleDumpIR",
-            "-XX:JeandleDumpDirectory="+dump_path,
-            "-XX:CompileCommand=compileonly,"+TestWrapper.class.getName()+"::abs_int",
-            TestWrapper.class.getName()
-        ));
-    
+                "-Xbatch", "-XX:-TieredCompilation", "-XX:+UseJeandleCompiler", "-Xcomp",
+                "-Xlog:jeandle=debug", "-XX:+JeandleDumpIR",
+                "-XX:JeandleDumpDirectory=" + dump_path,
+                "-XX:CompileCommand=compileonly," + TestWrapper.class.getName() + "::abs_int",
+                TestWrapper.class.getName()));
+
         ProcessBuilder pb = ProcessTools.createLimitedTestJavaProcessBuilder(command_args);
         OutputAnalyzer output = ProcessTools.executeCommand(pb);
 
         output.shouldHaveExitValue(0)
-                      .shouldContain("Method `static jint java.lang.Math.abs(jint)` is parsed as intrinsic");
+                .shouldContain("Method `static jint java.lang.Math.abs(jint)` is parsed as intrinsic");
 
         // Verify llvm IR
         FileCheck checker = new FileCheck(dump_path, TestWrapper.class.getMethod("abs_int", int.class), false);
         // find compiled method
-        checker.check("define hotspotcc i32 @\"compiler_jeandle_intrinsic_TestAbsInt$TestWrapper_abs_int_(I)I\"(i32 %0)");
+        checker.check(
+                "define hotspotcc i32 @\"compiler_jeandle_intrinsic_TestAbsInt$TestWrapper_abs_int_(I)I\"(i32 %0)");
         // check IR
         checker.checkNext("entry:");
         checker.checkNext("br label %bci_0");
@@ -66,17 +66,18 @@ public class TestAbsInt {
     }
 
     static public class TestWrapper {
-        static int v = Math.abs(1);   // Force load java.lang.Math class
+        static int v = Math.abs(1); // Force load java.lang.Math class
+
         public static void main(String[] args) {
             Random random = new Random();
             Asserts.assertEquals(1, abs_int(1));
             Asserts.assertEquals(1, abs_int(-1));
             Asserts.assertEquals(Integer.MAX_VALUE, abs_int(Integer.MAX_VALUE));
             Asserts.assertEquals(Integer.MIN_VALUE, abs_int(Integer.MIN_VALUE));
-            for (int k=0; k< 1000; k++) {
+            for (int k = 0; k < 1000; k++) {
                 int i = random.nextInt();
-                int r = i > 0 ? i : -1*i;
-                Asserts.assertEquals(r , abs_int(i));
+                int r = i > 0 ? i : -1 * i;
+                Asserts.assertEquals(r, abs_int(i));
             }
         }
 

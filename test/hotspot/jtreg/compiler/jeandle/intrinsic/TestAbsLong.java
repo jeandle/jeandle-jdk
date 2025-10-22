@@ -40,23 +40,23 @@ public class TestAbsLong {
     public static void main(String[] args) throws Exception {
         String dump_path = System.getProperty("java.io.tmpdir");
         ArrayList<String> command_args = new ArrayList<String>(List.of(
-            "-Xbatch", "-XX:-TieredCompilation", "-XX:+UseJeandleCompiler", "-Xcomp",
-            "-Xlog:jeandle=debug", "-XX:+JeandleDumpIR",
-            "-XX:JeandleDumpDirectory="+dump_path,
-            "-XX:CompileCommand=compileonly,"+TestWrapper.class.getName()+"::abs_long",
-            TestWrapper.class.getName()
-        ));
-    
+                "-Xbatch", "-XX:-TieredCompilation", "-XX:+UseJeandleCompiler", "-Xcomp",
+                "-Xlog:jeandle=debug", "-XX:+JeandleDumpIR",
+                "-XX:JeandleDumpDirectory=" + dump_path,
+                "-XX:CompileCommand=compileonly," + TestWrapper.class.getName() + "::abs_long",
+                TestWrapper.class.getName()));
+
         ProcessBuilder pb = ProcessTools.createLimitedTestJavaProcessBuilder(command_args);
         OutputAnalyzer output = ProcessTools.executeCommand(pb);
 
         output.shouldHaveExitValue(0)
-              .shouldContain("Method `static jlong java.lang.Math.abs(jlong)` is parsed as intrinsic");
+                .shouldContain("Method `static jlong java.lang.Math.abs(jlong)` is parsed as intrinsic");
 
         // Verify llvm IR
         FileCheck checker = new FileCheck(dump_path, TestWrapper.class.getMethod("abs_long", long.class), false);
         // find compiled method
-        checker.check("define hotspotcc i64 @\"compiler_jeandle_intrinsic_TestAbsLong$TestWrapper_abs_long_(J)J\"(i64 %0)");
+        checker.check(
+                "define hotspotcc i64 @\"compiler_jeandle_intrinsic_TestAbsLong$TestWrapper_abs_long_(J)J\"(i64 %0)");
         // check IR
         checker.checkNext("entry:");
         checker.checkNext("br label %bci_0");
@@ -64,19 +64,20 @@ public class TestAbsLong {
         // the llvm intrinsic is used
         checker.checkNext("call i64 @llvm.abs.i64(i64 %0, i1 false)");
     }
-    
+
     static public class TestWrapper {
-        static long v = Math.abs(1);   // Force load java.lang.Math class
+        static long v = Math.abs(1); // Force load java.lang.Math class
+
         public static void main(String[] args) {
             Random random = new Random();
             Asserts.assertEquals(1L, abs_long(1L));
             Asserts.assertEquals(1L, abs_long(-1L));
             Asserts.assertEquals(Long.MAX_VALUE, abs_long(Long.MAX_VALUE));
             Asserts.assertEquals(Long.MIN_VALUE, abs_long(Long.MIN_VALUE));
-            for (int i=0; i< 1000; i++) {
+            for (int i = 0; i < 1000; i++) {
                 long l = random.nextLong();
-                long r = l > 0 ? l : -1*l;
-                Asserts.assertEquals(r , abs_long(l));
+                long r = l > 0 ? l : -1 * l;
+                Asserts.assertEquals(r, abs_long(l));
             }
         }
 

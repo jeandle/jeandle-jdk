@@ -18,10 +18,8 @@
  *
  */
 
-#include "classfile/vmIntrinsics.hpp"
 #include "jeandle/__llvmHeadersBegin__.hpp"
 #include "llvm/IR/Attributes.h"
-#include "llvm/IR/Intrinsics.h"
 #include "llvm/IR/Jeandle/Attributes.h"
 #include "llvm/IR/Jeandle/GCStrategy.h"
 #include "llvm/IR/Jeandle/Metadata.h"
@@ -38,7 +36,6 @@
 #include "logging/log.hpp"
 #include "runtime/sharedRuntime.hpp"
 #include "runtime/stubRoutines.hpp"
-#include "utilities/globalDefinitions.hpp"
 #include "utilities/ostream.hpp"
 
 JeandleVMState::JeandleVMState(int max_stack, int max_locals, llvm::LLVMContext *context) :
