@@ -30,8 +30,8 @@
 #include "jeandle/jeandleRuntimeRoutine.hpp"
 #include "jeandle/jeandleType.hpp"
 #include "jeandle/jeandleUtils.hpp"
-
 #include "jeandle/__hotspotHeadersBegin__.hpp"
+
 #include "ci/ciMethodBlocks.hpp"
 #include "logging/log.hpp"
 #include "runtime/sharedRuntime.hpp"
