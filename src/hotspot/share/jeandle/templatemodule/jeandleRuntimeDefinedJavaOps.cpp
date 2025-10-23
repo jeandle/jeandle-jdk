@@ -32,6 +32,7 @@
 #include "oops/klass.hpp"
 #include "runtime/javaThread.hpp"
 #include "runtime/safepointMechanism.hpp"
+#include "runtime/sharedRuntime.hpp"
 
 //                  name, lower_phase, return_type, arg_types
 #define DEF_JAVA_OP(name, lower_phase, return_type, ...)                                        \
@@ -150,12 +151,20 @@ void RuntimeDefinedJavaOps::define_global_variables(llvm::Module& template_modul
     llvm::GlobalVariable* global_var = template_module.getGlobalVariable(name);
     assert(global_var && global_var->isDeclaration(), "unexpected declaration");
 
-    global_var->setInitializer(llvm::ConstantInt::get(type, value));
+    if (type->isPointerTy()) {
+      global_var->setInitializer(llvm::ConstantExpr::getIntToPtr(
+        llvm::ConstantInt::get(llvm::Type::getInt64Ty(context), value),
+        type
+      ));
+    }else {
+      global_var->setInitializer(llvm::ConstantInt::get(type, value));
+    }
     global_var->setConstant(true);
     global_var->setLinkage(llvm::GlobalValue::PrivateLinkage);
   };
 
   llvm::Type* int32_type = llvm::Type::getInt32Ty(context);
+  llvm::PointerType* cptr_type = llvm::PointerType::get(context, llvm::jeandle::AddrSpace::CHeapAddrSpace);
 
   define_global("ArrayKlass.base_offset_in_bytes",     int32_type, static_cast<uint64_t>(Array<Klass*>::base_offset_in_bytes()));
   define_global("ArrayKlass.length_offset_in_bytes",   int32_type, static_cast<uint64_t>(Array<Klass*>::length_offset_in_bytes()));
@@ -164,4 +173,5 @@ void RuntimeDefinedJavaOps::define_global_variables(llvm::Module& template_modul
   define_global("Klass.secondary_supers_offset",       int32_type, static_cast<uint64_t>(Klass::secondary_supers_offset()));
   define_global("Klass.super_check_offset_offset",     int32_type, static_cast<uint64_t>(Klass::super_check_offset_offset()));
   define_global("oopDesc.klass_offset_in_bytes",       int32_type, static_cast<uint64_t>(oopDesc::klass_offset_in_bytes()));
+  define_global("jeandle.handle_wrong_method_stub_addr", cptr_type, reinterpret_cast<uint64_t>(SharedRuntime::get_handle_wrong_method_stub()));
 }

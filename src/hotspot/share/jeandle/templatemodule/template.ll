@@ -44,6 +44,8 @@
 ; Byte offsets for oopDesc structure fields.
 @oopDesc.klass_offset_in_bytes = external global i32
 
+@jeandle.handle_wrong_method_stub_addr = external global ptr addrspace(0)
+
 ; Load klass pointer from oop
 define hotspotcc ptr addrspace(0) @jeandle.load_klass(ptr addrspace(1) nocapture %oop) noinline "lower-phase"="0" {
   %klass_offset = load i32, ptr @oopDesc.klass_offset_in_bytes
@@ -196,14 +198,10 @@ entry:
   ret i1 %is_equal
 }
 
-declare hotspotcc ptr @SharedRuntime_get_handle_wrong_method_stub() noreturn
-
 ; Implementation of slow path redirection operation
 define hotspotcc void @jeandle.jmp_handle_wrong_method_stub() noinline "lower-phase"="0" {
 entry:
-  %stub_addr = call hotspotcc ptr @SharedRuntime_get_handle_wrong_method_stub() noreturn
-  indirectbr ptr %stub_addr, [label %unreachable]
-
-unreachable:
+  %stub_addr = load atomic ptr addrspace(0), ptr @jeandle.handle_wrong_method_stub_addr unordered, align 8
+  tail call fastcc void %stub_addr()
   unreachable
 }

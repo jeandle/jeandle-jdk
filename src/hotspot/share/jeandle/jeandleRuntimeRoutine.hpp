@@ -60,11 +60,7 @@
   def(SharedRuntime_drem,    SharedRuntime::drem,     llvm::Type::getDoubleTy(context),    llvm::Type::getDoubleTy(context),         \
                                                                                            llvm::Type::getDoubleTy(context))         \
   def(SharedRuntime_frem,    SharedRuntime::frem,     llvm::Type::getFloatTy(context),     llvm::Type::getFloatTy(context),          \
-                                                                                           llvm::Type::getFloatTy(context))          \
-  def(SharedRuntime_get_handle_wrong_method_stub, \
-        SharedRuntime::get_handle_wrong_method_stub,  \
-        llvm::PointerType::get(context, llvm::jeandle::AddrSpace::CHeapAddrSpace),)
-
+                                                                                           llvm::Type::getFloatTy(context))
 
 // JeandleRuntimeRoutine contains C/C++/Assembly routines that can be called from Jeandle compiled code.
 // There are two ways to call a JeandleRuntimeRoutine: directly calling an assembly routine or calling

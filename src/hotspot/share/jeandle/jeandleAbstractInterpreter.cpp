@@ -1850,6 +1850,7 @@ bool JeandleAbstractInterpreter::needs_clinit_barrier(ciInstanceKlass* holder, c
   }
   return true;
 }
+
 JeandleBasicBlock* JeandleAbstractInterpreter::create_clinit_barrier_blocks(ciInstanceKlass* holder, ciMethod* context) {
   llvm::LLVMContext& ctx = _ir_builder.getContext();
   llvm::Function* current_func = _ir_builder.GetInsertBlock()->getParent();
@@ -1882,10 +1883,7 @@ JeandleBasicBlock* JeandleAbstractInterpreter::create_clinit_barrier_blocks(ciIn
   llvm::Value* init_state_offset = llvm::ConstantInt::get(uint32_ty, (int)InstanceKlass::init_state_offset());
   llvm::Value* init_state = call_java_op("jeandle.get_init_state", {klass,init_state_offset});
 
-  llvm::Value* fully_init_const = llvm::ConstantInt::get(
-    uint8_ty,
-    InstanceKlass::fully_initialized
-  );
+  llvm::Value* fully_init_const = llvm::ConstantInt::get(uint8_ty, InstanceKlass::fully_initialized);
   llvm::Value* is_fully_init = call_java_op("jeandle.is_fully_init", {init_state, fully_init_const});
   _ir_builder.CreateCondBr(is_fully_init,fast_path_llvm,check_thread_llvm);
 
@@ -1895,11 +1893,7 @@ JeandleBasicBlock* JeandleAbstractInterpreter::create_clinit_barrier_blocks(ciIn
   llvm::Value* init_thread = call_java_op("jeandle.get_init_thread", {klass, init_thread_offset});
 
   llvm::Value* current_thread = call_java_op("jeandle.current_thread", {});
-  llvm::Value* current_thread_id = _ir_builder.CreatePtrToInt(
-    current_thread,
-    uint64_ty,
-    "current_thread_id"
-  );
+  llvm::Value* current_thread_id = _ir_builder.CreatePtrToInt(current_thread, uint64_ty, "current_thread_id");
 
   llvm::Value* is_same_thread = call_java_op("jeandle.is_same_thread", {current_thread_id, init_thread});
   _ir_builder.CreateCondBr(is_same_thread, fast_path_llvm, slow_path_llvm);
@@ -1942,7 +1936,6 @@ JeandleBasicBlock* JeandleAbstractInterpreter::create_clinit_barrier_blocks(ciIn
   
   return barrier_entry_jb;
 }
-
 
 void JeandleAbstractInterpreter::insert_clinit_barrier(ciInstanceKlass* holder, ciMethod* context) {
   JeandleBasicBlock* entry_jb = _block_builder->entry_block();
