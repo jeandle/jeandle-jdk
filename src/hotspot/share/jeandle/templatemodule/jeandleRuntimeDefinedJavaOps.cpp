@@ -106,8 +106,6 @@ DEF_JAVA_OP(safepoint_poll, 1, llvm::Type::getVoidTy(context))
 JAVA_OP_END
 
 DEF_JAVA_OP(card_table_barrier, 1, llvm::Type::getVoidTy(context), llvm::PointerType::get(context, llvm::jeandle::AddrSpace::JavaHeapAddrSpace))
-  // TODO: is array,
-
   // TODO: Support the optimization that checks for already marked card before updating, which is enabled by UseCondCardMark.
 
   llvm::Value* obj_addr = func->getArg(0);
