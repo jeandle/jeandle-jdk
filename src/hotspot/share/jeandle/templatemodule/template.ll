@@ -44,6 +44,7 @@
 ; Byte offsets for oopDesc structure fields.
 @oopDesc.klass_offset_in_bytes = external global i32
 
+; Keep use to lately-used java operations, until it is lowered.
 @llvm.used = appending addrspace(1) global [1 x ptr] [ptr @jeandle.card_table_barrier], section "llvm.metadata"
 
 ; Load klass pointer from oop
