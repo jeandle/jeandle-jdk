@@ -165,3 +165,45 @@ entry:
   %array_oop = call hotspotcc ptr addrspace(1) @new_typeArray(i32 %type, i32 %length, ptr %current_thread)
   ret ptr addrspace(1) %array_oop
 }
+
+; Implementation of get init_state
+define hotspotcc i8 @jeandle.get_init_state(ptr addrspace(0) nocapture %klass, i32 %init_state_offset) noinline "lower-phase"="0" {
+entry:
+  %init_state_addr = getelementptr inbounds i8, ptr addrspace(0) %klass, i32 %init_state_offset
+  %init_state = load atomic i8, ptr addrspace(0) %init_state_addr unordered, align 1
+  ret i8 %init_state
+}
+
+; Implementation of get init_thread
+define hotspotcc i64 @jeandle.get_init_thread(ptr addrspace(0) nocapture %klass, i32 %init_thread_offset) noinline "lower-phase"="0" {
+entry:
+  %init_thread_addr = getelementptr inbounds i8, ptr addrspace(0) %klass, i32 %init_thread_offset
+  %init_thread = load atomic i64, ptr addrspace(0) %init_thread_addr unordered, align 8
+  ret i64 %init_thread
+}
+
+; Implementation of thread compare operation
+define hotspotcc i1 @jeandle.is_fully_init(i8 nocapture %init_state, i8 nocapture %fully_init_const) noinline "lower-phase"="0" {
+entry:
+  %is_equal = icmp eq i8 %init_state, %fully_init_const
+  ret i1 %is_equal
+}
+
+; Implementation of thread compare operation
+define hotspotcc i1 @jeandle.is_same_thread(i64 nocapture %current_thread_id, i64 nocapture %init_thread_id) noinline "lower-phase"="0" {
+entry:
+  %is_equal = icmp eq i64 %current_thread_id, %init_thread_id
+  ret i1 %is_equal
+}
+
+declare hotspotcc ptr @SharedRuntime_get_handle_wrong_method_stub() noreturn
+
+; Implementation of slow path redirection operation
+define hotspotcc void @jeandle.jmp_handle_wrong_method_stub() noinline "lower-phase"="0" {
+entry:
+  %stub_addr = call hotspotcc ptr @SharedRuntime_get_handle_wrong_method_stub() noreturn
+  indirectbr ptr %stub_addr, [label %unreachable]
+
+unreachable:
+  unreachable
+}
