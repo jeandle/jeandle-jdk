@@ -32,7 +32,7 @@
 //   #include "jeandle/..."
 //   #include "jeandle/..."
 //
-//   #include "jeandle/__hostpotHeadersBegin__.hpp"
+//   #include "jeandle/__hotspotHeadersBegin__.hpp"
 //   // Here we can include header files from Hotspot.
 
 // __llvmHeadersBegin__.hpp is used to define 'assert' from stdlib for LLVM, because Hotspot uses a self defined 'assert'

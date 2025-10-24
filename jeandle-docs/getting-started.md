@@ -1,6 +1,6 @@
 # Getting Started
 ## Getting the Source Code and Building
-Jeandle is composed of two separate code repositories: [jeandle-llvm](https://github.com/jeandle/jeandle-jdk) and [jeandle-jdk](https://github.com/jeandle/jeandle-llvm). Both repositories need to be built individually, following the same process as their upstream repositories. Note that when building jeandle-jdk, you must specify the installation directory of jeandle-llvm using the option ```--with-jeandle-llvm=<directory>```.
+Jeandle is composed of two separate code repositories: [jeandle-llvm](https://github.com/jeandle/jeandle-llvm) and [jeandle-jdk](https://github.com/jeandle/jeandle-jdk). Both repositories need to be built individually, following the same process as their upstream repositories. Note that when building jeandle-jdk, you must specify the installation directory of jeandle-llvm using the option ```--with-jeandle-llvm=<directory>```.
 
 For detailed guidance on getting started with upstream LLVM and OpenJDK, refer to their official documentation. The links are as follows:
 + LLVM: [https://llvm.org/docs/GettingStarted.html](https://llvm.org/docs/GettingStarted.html)
@@ -48,16 +48,16 @@ The same debug level should be configured for both jeandle-llvm and jeandle-jdk.
 ```
 
 ## Supported Platforms
-Jeandle currently supports X86 architecture only. Support for Aarch64 architecture is planned for the future. Moreover, by leveraging the powerful ecosystem and well-developed backends of LLVM, other backends may also be supported on demand.
+Jeandle currently supports X86 and AArch64 architectures. Support for RISC-V architecture is planned for the future. Moreover, by leveraging the powerful ecosystem and well-developed backends of LLVM, other backends may also be supported on demand.
 | OS | Arch | Status |
 | :---: | :---: | :---: |
 | Linux | X86 | Supported |
-| Linux | Aarch64 | Supported |
+| Linux | AArch64 | Supported |
 | Linux | RISC-V | Planned |
 
 ## Cross-compiling
 
-The following steps show how to cross-compile jeandle-jdk for Aarch64 architecture. Other platforms also has similar steps. Please refer to the cross-compilation documentation of [LLVM](https://llvm.org/docs/HowToCrossCompileLLVM.html) and [OpenJDK](../doc/building.md#cross-compiling) for detailed guidance.
+The following steps show how to cross-compile jeandle-jdk for AArch64 architecture. Other platforms also has similar steps. Please refer to the cross-compilation documentation of [LLVM](https://llvm.org/docs/HowToCrossCompileLLVM.html) and [OpenJDK](../doc/building.md#cross-compiling) for detailed guidance.
 
 1. Prepare the cross-compilation toolchain:
 ```
