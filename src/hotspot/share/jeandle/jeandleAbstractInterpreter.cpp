@@ -1407,14 +1407,16 @@ llvm::CallInst* JeandleAbstractInterpreter::call_java_op(llvm::StringRef java_op
 
 llvm::Value* JeandleAbstractInterpreter::find_or_insert_oop(ciObject* oop) {
   jobject oop_handle = oop->constant_encoding();
-  if (llvm::Value* oop_value = _oops.lookup(oop_handle)) {
-    return oop_value;
+  if (llvm::Value* global_oop_handle = _oops.lookup(oop_handle)) {
+    return global_oop_handle;
   }
   llvm::StringRef oop_name = next_oop_name();
   _compiled_code.oop_handles()[oop_name] = oop_handle;
-  llvm::Value* oop_value = _module.getOrInsertGlobal(
+  llvm::Value* global = _module.getOrInsertGlobal(
                                oop_name,
                                JeandleType::java2llvm(BasicType::T_OBJECT, *_context));
+  llvm::GlobalVariable* global_oop_handle = llvm::cast<llvm::GlobalVariable>(global);
+  global_oop_handle->setDSOLocal(true);
   _oops[oop_handle] = oop_value;
   return oop_value;
 }
@@ -1481,7 +1483,8 @@ llvm::Value* JeandleAbstractInterpreter::compute_instance_field_address(llvm::Va
 
 llvm::Value* JeandleAbstractInterpreter::compute_static_field_address(ciInstanceKlass* holder, int offset) {
   ciInstance* holder_instance = holder->java_mirror();
-  llvm::Value* holder_oop = find_or_insert_oop(holder_instance);
+  llvm::Value* holder_oop_handle = find_or_insert_oop(holder_instance);
+  llvm::Value* holder_oop = _ir_builder.CreateLoad(JeandleType::java2llvm(BasicType::T_OBJECT, *_context), holder_oop_handle);
   return _ir_builder.CreateInBoundsGEP(llvm::Type::getInt8Ty(*_context),
                                        holder_oop,
                                        _ir_builder.getInt64(offset));
