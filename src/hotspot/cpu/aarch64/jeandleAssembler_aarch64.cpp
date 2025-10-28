@@ -173,8 +173,8 @@ int JeandleAssembler::fixup_routine_call_inst_offset(int offset) {
 }
 
 bool JeandleAssembler::is_oop_reloc_kind(LinkKind kind) {
-  return kind == LinkKind_aarch64::RequestGOTAndTransformToPage21 ||
-         kind == LinkKind_aarch64::RequestGOTAndTransformToPageOffset12;
+  return kind == LinkKind_aarch64::Page21 ||
+         kind == LinkKind_aarch64::PageOffset12;
 }
 
 bool JeandleAssembler::is_routine_call_reloc_kind(LinkKind kind) {
