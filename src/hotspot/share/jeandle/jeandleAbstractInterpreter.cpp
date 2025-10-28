@@ -1417,8 +1417,8 @@ llvm::Value* JeandleAbstractInterpreter::find_or_insert_oop(ciObject* oop) {
                                JeandleType::java2llvm(BasicType::T_OBJECT, *_context));
   llvm::GlobalVariable* global_oop_handle = llvm::cast<llvm::GlobalVariable>(global);
   global_oop_handle->setDSOLocal(true);
-  _oops[oop_handle] = oop_value;
-  return oop_value;
+  _oops[oop_handle] = global_oop_handle;
+  return global_oop_handle;
 }
 
 // TODO: clinit_barrier check.
