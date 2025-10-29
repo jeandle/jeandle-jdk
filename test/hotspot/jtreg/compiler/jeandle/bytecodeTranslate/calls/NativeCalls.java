@@ -67,7 +67,7 @@ public class NativeCalls {
         init();
     }
     static void init() {
-        System.loadLibrary("NativeCalls");
+        System.loadLibrary("JeandleNativeCalls");
         wb = WhiteBox.getWhiteBox();
         try {
             emptyStaticNativeMethod = NativeCalls.class.getDeclaredMethod("emptyStaticNative");

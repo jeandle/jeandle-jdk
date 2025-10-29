@@ -1062,6 +1062,10 @@ void JeandleAbstractInterpreter::invoke() {
   assert(declared_signature != nullptr, "cannot be null");
   assert(will_link == target->is_loaded(), "");
 
+  if (!will_link) {
+    // TODO: Uncommon trap.
+  }
+
   // try inline callee as intrinsic
   if (target->is_loaded()
     && target->check_intrinsic_candidate()
@@ -1077,10 +1081,6 @@ void JeandleAbstractInterpreter::invoke() {
   const Bytecodes::Code bc = _bytecodes.cur_bc();
 
   if (bc == Bytecodes::_invokedynamic) {
-    if (!will_link) {
-      // TODO: Trap here
-      Unimplemented();
-    }
     if (_bytecodes.has_appendix()) {
       llvm::Value* appendix_oop_handle = find_or_insert_oop(_bytecodes.get_appendix());
       llvm::Value* appendix_oop = _ir_builder.CreateLoad(JeandleType::java2llvm(BasicType::T_OBJECT, *_context), appendix_oop_handle);
@@ -1107,11 +1107,19 @@ void JeandleAbstractInterpreter::invoke() {
     args_type[0] = JeandleType::java2llvm(BasicType::T_OBJECT, *_context);
   }
 
+  // Blow is a temporary solution for invokedynamic testcases, which needs to be removed after the uncommon_trap is implemented.
   if (bc == Bytecodes::_invokedynamic && !will_link) {
     BasicType return_type = declared_signature->return_type()->basic_type();
     switch (return_type) {
       case T_BOOLEAN: _jvm->push(return_type, JeandleType::int_const(_ir_builder, 0)); break;
-      case T_OBJECT: _jvm->push(return_type, llvm::ConstantPointerNull::get(llvm::cast<llvm::PointerType>(JeandleType::java2llvm(T_OBJECT, *_context)))); break;
+      case T_BYTE:    _jvm->push(return_type, JeandleType::int_const(_ir_builder, 0)); break;
+      case T_CHAR:    _jvm->push(return_type, JeandleType::int_const(_ir_builder, 0)); break;
+      case T_SHORT:   _jvm->push(return_type, JeandleType::int_const(_ir_builder, 0)); break;
+      case T_INT:     _jvm->push(return_type, JeandleType::int_const(_ir_builder, 0)); break;
+      case T_LONG:    _jvm->push(return_type, JeandleType::long_const(_ir_builder, 0)); break;
+      case T_FLOAT:   _jvm->push(return_type, JeandleType::float_const(_ir_builder, 0)); break;
+      case T_DOUBLE:  _jvm->push(return_type, JeandleType::double_const(_ir_builder, 0)); break;
+      case T_OBJECT:  _jvm->push(return_type, llvm::ConstantPointerNull::get(llvm::cast<llvm::PointerType>(JeandleType::java2llvm(T_OBJECT, *_context)))); break;
       default: ShouldNotReachHere();
     }
     return;

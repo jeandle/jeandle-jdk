@@ -27,7 +27,7 @@ package compiler.jeandle.bytecodeTranslate.calls;
 
 public class TestDirtyInt {
     static {
-        System.loadLibrary("TestDirtyInt");
+        System.loadLibrary("JeandleTestDirtyInt");
     }
 
     native static int test(int v);

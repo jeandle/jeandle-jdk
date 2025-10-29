@@ -70,7 +70,7 @@ public abstract class CallsBase {
      * Loads native library(libCallsNative.so)
      */
     protected static void loadNativeLibrary() {
-        System.loadLibrary("CallsNative");
+        System.loadLibrary("JeandleCallsNative");
     }
 
     /**

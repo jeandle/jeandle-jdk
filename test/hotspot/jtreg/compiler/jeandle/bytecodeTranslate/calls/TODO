@@ -1,3 +1,0 @@
-All the tests in this directory are written based on those in test/hotspot/jtreg/compiler/calls/.
-Tests for method calls should include parameters of various types. However, Jeandle's type support is currently incomplete.
-Comprehensive testing of different parameter types should be conducted after Jeandle's type support is fully implemented.
