@@ -31,6 +31,6 @@
  * @run main/othervm/native -XX:+UseJeandleCompiler
  *    -XX:CompileCommand=compileonly,compiler.jeandle.bytecodeTranslate.calls.common.*::*
  *    -XX:+UnlockDiagnosticVMOptions -XX:+WhiteBoxAPI -Xbootclasspath/a:.
- *    -XX:CompileCommand=exclude,compiler.jeandle.bytecodeTranslate.calls.common.InvokeDynamic::caller  compiler.jeandle.bytecodeTranslate.calls.common.InvokeDynamic
+ *    -XX:CompileCommand=exclude,compiler.jeandle.bytecodeTranslate.calls.common.InvokeDynamic::caller compiler.jeandle.bytecodeTranslate.calls.common.InvokeDynamic
  *    -checkCallerCompileLevel 0 -nativeCallee
  */

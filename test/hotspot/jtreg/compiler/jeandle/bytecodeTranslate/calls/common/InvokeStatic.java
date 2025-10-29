@@ -39,26 +39,25 @@ public class InvokeStatic extends CallsBase {
     public native void callerNative();
 
     /**
-     * A caller method, assumed to called "callee"
+     * A caller method, assumed to called "callee"/"calleeNative"
      */
     @Override
-    public void callerCallNormal() {
-        Asserts.assertTrue(callee(this, 1, 2L, 3, 4, 5));
-    }
-
-    /**
-     * A caller method, assumed to called "calleeNative"
-     */
-    @Override
-    public void callerCallNative() {
-        Asserts.assertTrue(calleeNative(this, 1, 2L, 3, 4, 5));
+    public void caller() {
+        if (nativeCallee) {
+            Asserts.assertTrue(calleeNative(this, 1, 2L, 3.0f, 4.0d, "5"),
+                    CALL_ERR_MSG);
+        } else {
+            Asserts.assertTrue(callee(this, 1, 2L, 3.0f, 4.0d, "5"),
+                    CALL_ERR_MSG);
+        }
     }
 
     /**
      * A callee method, assumed to be called by "caller"/"callerNative"
      */
     public static boolean callee(InvokeStatic instance, int param1,
-            long param2, int param3, int param4, int param5) {
+            long param2, float param3, double param4, String param5) {
+        instance.calleeVisited = true;
         CallsBase.checkValues(param1, param2, param3, param4, param5);
         return true;
     }
@@ -67,7 +66,7 @@ public class InvokeStatic extends CallsBase {
      * A native callee method, assumed to be called by "caller"/"callerNative"
      */
     public static native boolean calleeNative(InvokeStatic instance,
-            int param1, long param2, int param3, int param4, int param5);
+            int param1, long param2, float param3, double param4, String param5);
 
     /**
      * Returns object to lock execution on
@@ -84,6 +83,6 @@ public class InvokeStatic extends CallsBase {
      */
     protected Class[] getCalleeParametersTypes() {
         return new Class[]{InvokeStatic.class, int.class, long.class,
-            int.class, int.class, int.class};
+            float.class, double.class, String.class};
     }
 }

@@ -20,16 +20,15 @@
 
 /*
  * @test
- * @summary check calls from interpreted to native using InvokeSpecial
+ * @summary check calls from native to interpreted using InvokeStatic
  * @modules java.base/jdk.internal.misc
  * @library /test/lib /
- * @compile -source 10 -target 10 ../common/InvokeSpecial.java
  *
- * @build compiler.jeandle.bytecodeTranslate.calls.common.InvokeSpecial
+ * @build jdk.test.whitebox.WhiteBox
  * @run driver jdk.test.lib.helpers.ClassFileInstaller jdk.test.whitebox.WhiteBox
  * @run main/othervm/native -XX:+UseJeandleCompiler
  *    -XX:CompileCommand=compileonly,compiler.jeandle.bytecodeTranslate.calls.common.*::*
  *    -XX:+UnlockDiagnosticVMOptions -XX:+WhiteBoxAPI -Xbootclasspath/a:.
- *    -XX:CompileCommand=exclude,compiler.jeandle.bytecodeTranslate.calls.common.InvokeSpecial::caller compiler.jeandle.bytecodeTranslate.calls.common.InvokeSpecial
- *    -checkCallerCompileLevel 0 -nativeCallee
+ *    -XX:CompileCommand=exclude,compiler.jeandle.bytecodeTranslate.calls.common.InvokeStatic::callee compiler.jeandle.bytecodeTranslate.calls.common.InvokeStatic
+ *    -nativeCaller -checkCalleeCompileLevel 0
  */

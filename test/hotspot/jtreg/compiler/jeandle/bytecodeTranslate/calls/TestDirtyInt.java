@@ -18,18 +18,30 @@
  *
  */
 
-/*
- * @test
- * @summary check calls from interpreted to native using InvokeSpecial
- * @modules java.base/jdk.internal.misc
- * @library /test/lib /
- * @compile -source 10 -target 10 ../common/InvokeSpecial.java
- *
- * @build compiler.jeandle.bytecodeTranslate.calls.common.InvokeSpecial
- * @run driver jdk.test.lib.helpers.ClassFileInstaller jdk.test.whitebox.WhiteBox
- * @run main/othervm/native -XX:+UseJeandleCompiler
- *    -XX:CompileCommand=compileonly,compiler.jeandle.bytecodeTranslate.calls.common.*::*
- *    -XX:+UnlockDiagnosticVMOptions -XX:+WhiteBoxAPI -Xbootclasspath/a:.
- *    -XX:CompileCommand=exclude,compiler.jeandle.bytecodeTranslate.calls.common.InvokeSpecial::caller compiler.jeandle.bytecodeTranslate.calls.common.InvokeSpecial
- *    -checkCallerCompileLevel 0 -nativeCallee
+/* @test
+
+ * @run main/native compiler.jeandle.bytecodeTranslate.calls.TestDirtyInt
  */
+
+package compiler.jeandle.bytecodeTranslate.calls;
+
+public class TestDirtyInt {
+    static {
+        System.loadLibrary("TestDirtyInt");
+    }
+
+    native static int test(int v);
+
+    static int compiled(int v) {
+        return test(v<<2);
+    }
+
+    static public void main(String[] args) {
+        for (int i = 0; i < 20000; i++) {
+            int res = compiled(Integer.MAX_VALUE);
+            if (res != 0x42) {
+                throw new RuntimeException("Test failed");
+            }
+        }
+    }
+}

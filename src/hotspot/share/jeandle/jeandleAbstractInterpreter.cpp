@@ -917,7 +917,7 @@ void JeandleAbstractInterpreter::load_constant() {
     case BasicType::T_DOUBLE: value = JeandleType::double_const(_ir_builder, con.as_double()); break;
     case BasicType::T_OBJECT: {
       llvm::Value* oop_handle = find_or_insert_oop(con.as_object());
-      value = _ir_builder.CreateAddrSpaceCast(oop_handle, JeandleType::java2llvm(T_OBJECT, *_context));
+      value = _ir_builder.CreateLoad(JeandleType::java2llvm(BasicType::T_OBJECT, *_context), oop_handle);
       break;
     }
     default: Unimplemented(); break;
@@ -1077,13 +1077,13 @@ void JeandleAbstractInterpreter::invoke() {
   const Bytecodes::Code bc = _bytecodes.cur_bc();
 
   if (bc == Bytecodes::_invokedynamic) {
-    // if (!will_link) {
-    //   // TODO: Trap here
-    //   Unimplemented();
-    // }
+    if (!will_link) {
+      // TODO: Trap here
+      Unimplemented();
+    }
     if (_bytecodes.has_appendix()) {
       llvm::Value* appendix_oop_handle = find_or_insert_oop(_bytecodes.get_appendix());
-      llvm::Value* appendix_oop = _ir_builder.CreateAddrSpaceCast(appendix_oop_handle, JeandleType::java2llvm(T_OBJECT, *_context));
+      llvm::Value* appendix_oop = _ir_builder.CreateLoad(JeandleType::java2llvm(BasicType::T_OBJECT, *_context), appendix_oop_handle);
       _jvm->push(T_OBJECT, appendix_oop);
     }
     declared_signature = target->signature();
