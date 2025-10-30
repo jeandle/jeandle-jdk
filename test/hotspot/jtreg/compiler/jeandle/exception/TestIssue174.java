@@ -21,6 +21,9 @@
 /**
  * @test
  * @summary https://github.com/jeandle/jeandle-jdk/issues/174
+ *          Statepoints require landingpad type to be token, but if we define landingpad type as token in frontend,
+ *          some optimization passes will fail. So we need to define landingpad type as i64 (any type other than
+ *          token is OK) in frontend, and rewrite it in RewriteStatepoints4GC.
  * @library /test/lib /
  * @run main/othervm -XX:CompileCommand=compileonly,compiler.jeandle.exception.TestIssue174::addCounter
  *      -Xcomp -XX:-TieredCompilation -XX:+UseJeandleCompiler compiler.jeandle.exception.TestIssue174
