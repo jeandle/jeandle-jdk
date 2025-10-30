@@ -339,7 +339,11 @@ class JeandleAbstractInterpreter : public StackObj {
   DispatchedDest dispatch_exception_for_invoke(); // Dispatch exceptions raised by invoke.
   void dispatch_exception_to_handler(llvm::Value* exception_oop); // Generate a series of IR to dispatch an exception to its handler.
   void throw_exception(llvm::Value* exception_oop);
+
   void newarray(int element_type);
+
+  // Implementation of _new
+  void do_new();
 
   void monitorenter();
   void monitorexit();

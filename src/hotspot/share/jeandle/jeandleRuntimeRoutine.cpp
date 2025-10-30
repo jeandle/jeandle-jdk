@@ -29,6 +29,21 @@
 #include "runtime/interfaceSupport.inline.hpp"
 #include "runtime/safepoint.hpp"
 
+// This should be called in an assertion at the start of JeandleRuntime routines
+// which are entered from compiled code (all of them)
+#ifdef ASSERT
+static bool check_jeandle_compiled_frame(JavaThread* thread) {
+  assert(thread->last_frame().is_runtime_frame(), "cannot call runtime directly from compiled code");
+  RegisterMap map(thread,
+                  RegisterMap::UpdateMap::skip,
+                  RegisterMap::ProcessFrames::include,
+                  RegisterMap::WalkContinuation::skip);
+  frame caller = thread->last_frame().sender(&map);
+  assert(caller.is_jeandle_compiled_frame(), "not being called from Jeandle compiled like code");
+  return true;
+}
+#endif // ASSERT
+
 #define GEN_C_ROUTINE_STUB(c_func, return_type, ...)                                                 \
   {                                                                                                  \
     std::unique_ptr<llvm::LLVMContext> context_ptr = std::make_unique<llvm::LLVMContext>();          \
@@ -112,4 +127,41 @@ JRT_END
 JRT_ENTRY(void, JeandleRuntimeRoutine::new_typeArray(int type, int length, JavaThread* current))
   oop obj = oopFactory::new_typeArray(static_cast<BasicType>(type), length, current);
   current->set_vm_result(obj);
+JRT_END
+
+// It's a copy of OptoRuntime::new_instance_C
+JRT_BLOCK_ENTRY(void, JeandleRuntimeRoutine::new_instance(InstanceKlass* klass, JavaThread* current))
+  JRT_BLOCK;
+#ifndef PRODUCT
+    SharedRuntime::_new_instance_ctr++;         // new instance requires GC
+#endif
+    assert(check_jeandle_compiled_frame(current), "incorrect caller");
+
+    // These checks are cheap to make and support reflective allocation.
+    int lh = klass->layout_helper();
+    if (Klass::layout_helper_needs_slow_path(lh) || !InstanceKlass::cast(klass)->is_initialized()) {
+      Handle holder(current, klass->klass_holder()); // keep the klass alive
+      klass->check_valid_for_instantiation(false, THREAD);
+      if (!HAS_PENDING_EXCEPTION) {
+        InstanceKlass::cast(klass)->initialize(THREAD);
+      }
+    }
+
+    if (!HAS_PENDING_EXCEPTION) {
+      // Scavenge and allocate an instance.
+      Handle holder(current, klass->klass_holder()); // keep the klass alive
+      oop result = InstanceKlass::cast(klass)->allocate_instance(THREAD);
+      current->set_vm_result(result);
+
+      // Pass oops back through thread local storage.  Our apparent type to Java
+      // is that we return an oop, but we can block on exit from this routine and
+      // a GC can trash the oop in C's return register.  The generated stub will
+      // fetch the oop from TLS after any possible GC.
+    }
+
+    // TODO: deoptimize_caller_frame(current, HAS_PENDING_EXCEPTION);
+  JRT_BLOCK_END;
+
+  // inform GC that we won't do card marks for initializing writes.
+  SharedRuntime::on_slowpath_allocation_exit(current);
 JRT_END

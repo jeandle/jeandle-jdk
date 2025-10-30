@@ -33,6 +33,7 @@
 
 #include "jeandle/__hotspotHeadersBegin__.hpp"
 #include "ci/ciMethodBlocks.hpp"
+#include "ci/ciSymbols.hpp"
 #include "logging/log.hpp"
 #include "runtime/sharedRuntime.hpp"
 #include "runtime/stubRoutines.hpp"
@@ -824,7 +825,7 @@ void JeandleAbstractInterpreter::interpret_block(JeandleBasicBlock* block) {
       case Bytecodes::_invokeinterface:  // fall through
       case Bytecodes::_invokedynamic: invoke(); break;
 
-      case Bytecodes::_new: Unimplemented(); break;
+      case Bytecodes::_new: do_new(); break;
       case Bytecodes::_newarray: newarray(_bytecodes.get_index_u1()); break;
       case Bytecodes::_anewarray: Unimplemented(); break;
 
@@ -1164,6 +1165,14 @@ bool JeandleAbstractInterpreter::inline_intrinsic(const ciMethod* target) {
       _jvm->fpush(_ir_builder.CreateIntrinsic(JeandleType::java2llvm(BasicType::T_FLOAT, *_context), llvm::Intrinsic::fabs, {_jvm->fpop()}));
       break;
     }
+    case vmIntrinsicID::_iabs: {
+      _jvm->ipush(_ir_builder.CreateIntrinsic(JeandleType::java2llvm(BasicType::T_INT, *_context), llvm::Intrinsic::abs, {_jvm->ipop(), _ir_builder.getInt1(false)}));
+      break;
+    }
+    case vmIntrinsicID::_labs: {
+      _jvm->lpush(_ir_builder.CreateIntrinsic(JeandleType::java2llvm(BasicType::T_LONG, *_context), llvm::Intrinsic::abs, {_jvm->lpop(), _ir_builder.getInt1(false)}));
+      break;
+    }
     case vmIntrinsicID::_dsin: {
       llvm::FunctionCallee callee = StubRoutines::dsin() != nullptr ? JeandleRuntimeRoutine::hotspot_StubRoutines_dsin_callee(_module) :
                                                                       JeandleRuntimeRoutine::hotspot_SharedRuntime_dsin_callee(_module);
@@ -1395,16 +1404,18 @@ llvm::CallInst* JeandleAbstractInterpreter::call_java_op(llvm::StringRef java_op
 
 llvm::Value* JeandleAbstractInterpreter::find_or_insert_oop(ciObject* oop) {
   jobject oop_handle = oop->constant_encoding();
-  if (llvm::Value* oop_value = _oops.lookup(oop_handle)) {
-    return oop_value;
+  if (llvm::Value* global_oop_handle = _oops.lookup(oop_handle)) {
+    return global_oop_handle;
   }
   llvm::StringRef oop_name = next_oop_name();
   _compiled_code.oop_handles()[oop_name] = oop_handle;
-  llvm::Value* oop_value = _module.getOrInsertGlobal(
+  llvm::Value* global = _module.getOrInsertGlobal(
                                oop_name,
                                JeandleType::java2llvm(BasicType::T_OBJECT, *_context));
-  _oops[oop_handle] = oop_value;
-  return oop_value;
+  llvm::GlobalVariable* global_oop_handle = llvm::cast<llvm::GlobalVariable>(global);
+  global_oop_handle->setDSOLocal(true);
+  _oops[oop_handle] = global_oop_handle;
+  return global_oop_handle;
 }
 
 // TODO: clinit_barrier check.
@@ -1469,7 +1480,8 @@ llvm::Value* JeandleAbstractInterpreter::compute_instance_field_address(llvm::Va
 
 llvm::Value* JeandleAbstractInterpreter::compute_static_field_address(ciInstanceKlass* holder, int offset) {
   ciInstance* holder_instance = holder->java_mirror();
-  llvm::Value* holder_oop = find_or_insert_oop(holder_instance);
+  llvm::Value* holder_oop_handle = find_or_insert_oop(holder_instance);
+  llvm::Value* holder_oop = _ir_builder.CreateLoad(JeandleType::java2llvm(BasicType::T_OBJECT, *_context), holder_oop_handle);
   return _ir_builder.CreateInBoundsGEP(llvm::Type::getInt8Ty(*_context),
                                        holder_oop,
                                        _ir_builder.getInt64(offset));
@@ -1669,6 +1681,35 @@ void JeandleAbstractInterpreter::do_array_store(Bytecodes::Code code) {
     }
     default: ShouldNotReachHere();
   }
+}
+
+void JeandleAbstractInterpreter::do_new() {
+  bool will_link;
+  ciKlass* klass = _bytecodes.get_klass(will_link);
+  assert(will_link, "_new: not link");
+
+  if (klass->is_abstract() || klass->is_interface() ||
+      klass->name() == ciSymbols::java_lang_Class() ||
+      _bytecodes.is_unresolved_klass()) {
+    /* TODO: Uncommon trap.
+    uncommon_trap(Deoptimization::Reason_unhandled,
+                  Deoptimization::Action_none,
+                  klass);
+    */
+    Unimplemented();
+    return;
+  }
+  // TODO: cl init barrier
+  jint layout_helper = klass->layout_helper();
+  assert(Klass::layout_helper_is_instance(layout_helper), "Unexpected klass");
+  llvm::Value* size_in_bytes = _ir_builder.getInt32(Klass::layout_helper_size_in_bytes(layout_helper));
+
+  Klass* klass_enc = (Klass*)(klass->constant_encoding());
+  llvm::PointerType* klass_type = llvm::PointerType::get(*_context, llvm::jeandle::AddrSpace::CHeapAddrSpace);
+  llvm::Value* klass_addr = _ir_builder.getInt64((int64_t)klass_enc);
+  llvm::Value* klass_ptr = _ir_builder.CreateIntToPtr(klass_addr, klass_type);
+
+  _jvm->apush(call_java_op("jeandle.new_instance", {klass_ptr, size_in_bytes}));
 }
 
 JeandleAbstractInterpreter::DispatchedDest JeandleAbstractInterpreter::dispatch_exception_for_invoke() {
