@@ -21,7 +21,6 @@
 /**
  * @test
  * @summary https://github.com/jeandle/jeandle-jdk/issues/174
- * @requires os.arch=="amd64" | os.arch=="x86_64"
  * @library /test/lib /
  * @run main/othervm -XX:CompileCommand=compileonly,compiler.jeandle.exception.TestIssue174::addCounter
  *      -Xcomp -XX:-TieredCompilation -XX:+UseJeandleCompiler compiler.jeandle.exception.TestIssue174
