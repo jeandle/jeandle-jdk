@@ -157,18 +157,6 @@ llvm::Value* JeandleVMState::pop(BasicType type) {
   return v;
 }
 
-llvm::Value* JeandleVMState::peek(BasicType type) {
-  int index = _stack.size() - 1;
-  if (is_double_word_type(type)) {
-    assert(_stack.back() == nullptr, "hi-word of doubleword value must be null");
-    index--;
-  }
-  llvm::Value* v = _stack[index];
-  assert(v != nullptr, "null value to peek");
-  assert(v->getType() == JeandleType::java2llvm(type, *_context), "type must match");
-  return v;
-}
-
 // Locals operations:
 
 llvm::Value* JeandleVMState::load(BasicType type, int index) {
@@ -1841,9 +1829,11 @@ void JeandleAbstractInterpreter::monitorenter() {
 }
 
 void JeandleAbstractInterpreter::monitorexit() {
-  null_check(_jvm->apeek());
 
   llvm::Value* obj = _jvm->apop();
+
+  null_check(obj);
+
   llvm::Value* lock = _jvm->pop_lock();
 
   llvm::FunctionCallee monitorexit_callee = JeandleRuntimeRoutine::hotspot_SharedRuntime_complete_monitor_unlocking_C_callee(_module);

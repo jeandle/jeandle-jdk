@@ -63,7 +63,6 @@ class JeandleVMState : public JeandleCompilationResourceObj {
 
   void push(BasicType type, llvm::Value* value);
   llvm::Value* pop(BasicType type);
-  llvm::Value* peek(BasicType type);
 
   void ipush(llvm::Value* value) { push(BasicType::T_INT, value); }
   llvm::Value* ipop() { return pop(BasicType::T_INT); }
@@ -73,7 +72,6 @@ class JeandleVMState : public JeandleCompilationResourceObj {
 
   void apush(llvm::Value* value) { push(BasicType::T_OBJECT, value); }
   llvm::Value* apop() { return pop(BasicType::T_OBJECT); }
-  llvm::Value* apeek() { return peek(BasicType::T_OBJECT); }
 
   void fpush(llvm::Value* value) { push(BasicType::T_FLOAT, value); }
   llvm::Value* fpop() { return pop(BasicType::T_FLOAT); }
