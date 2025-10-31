@@ -1717,7 +1717,7 @@ JeandleAbstractInterpreter::DispatchedDest JeandleAbstractInterpreter::dispatch_
 
   // Create a landingpad instruction to indicate this is an unwind entry. But we never use the result from it.
   // Create our landingpad result type
-  llvm::Type* landingpad_result_type = llvm::Type::getTokenTy(*_context); // We can only use result of token type to support statepoint.
+  llvm::Type* landingpad_result_type = llvm::Type::getInt64Ty(*_context); // The landingpad type will be rewrite to token type by RS4GC to support statepoint.
   llvm::LandingPadInst* landingpad = _ir_builder.CreateLandingPad(landingpad_result_type,
                                                                   0 /* NumClauses */);
   // This landingpad should always be entered during exception handling.

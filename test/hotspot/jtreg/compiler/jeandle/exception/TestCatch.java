@@ -38,8 +38,11 @@ public class TestCatch {
         String currentDir = System.getProperty("user.dir");
         FileCheck fileCheck = new FileCheck(currentDir, TestCatch.class.getDeclaredMethod("testCatch"), false);
         fileCheck.check("bci_2_unwind_dest:");
-        fileCheck.checkNext("landingpad token");
+        fileCheck.checkNext("landingpad i64");
         fileCheck.checkNext("cleanup");
+
+        FileCheck fileCheckOpt = new FileCheck(currentDir, TestCatch.class.getDeclaredMethod("testCatch"), true);
+        fileCheckOpt.check("landingpad token");
     }
 
     static boolean testCatch() {
