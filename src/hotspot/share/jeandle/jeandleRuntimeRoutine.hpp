@@ -40,6 +40,9 @@
   def(install_exceptional_return, llvm::Type::getVoidTy(context), llvm::PointerType::get(context, llvm::jeandle::AddrSpace::JavaHeapAddrSpace), \
                                                                   llvm::PointerType::get(context, llvm::jeandle::AddrSpace::CHeapAddrSpace))    \
                                                                                                                                                 \
+  def(new_instance,               llvm::PointerType::get(context, llvm::jeandle::AddrSpace::JavaHeapAddrSpace),                                 \
+                                                                  llvm::PointerType::get(context, llvm::jeandle::AddrSpace::CHeapAddrSpace),    \
+                                                                  llvm::PointerType::get(context, llvm::jeandle::AddrSpace::CHeapAddrSpace))    \
   def(new_typeArray,              llvm::PointerType::get(context, llvm::jeandle::AddrSpace::JavaHeapAddrSpace),                                 \
                                                                   llvm::Type::getInt32Ty(context),                                              \
                                                                   llvm::Type::getInt32Ty(context),                                              \
@@ -137,6 +140,7 @@ class JeandleRuntimeRoutine : public AllStatic {
 
   // Array allocation routine
   static void new_typeArray(int type, int length, JavaThread* current);
+  static void new_instance(InstanceKlass* klass, JavaThread* current);
 
   // Assembly routine implementations:
 

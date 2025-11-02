@@ -172,7 +172,7 @@ int JeandleAssembler::fixup_routine_call_inst_offset(int offset) {
 }
 
 bool JeandleAssembler::is_oop_reloc_kind(LinkKind kind) {
-  return kind == LinkKind_x86_64::RequestGOTAndTransformToPCRel32GOTLoadREXRelaxable;
+  return kind == LinkKind_x86_64::Delta32;
 }
 
 bool JeandleAssembler::is_routine_call_reloc_kind(LinkKind kind) {

@@ -33,7 +33,7 @@ Jeandle includes many LLVM header files in the Hotspot source code, and produces
 #include "jeandle/..."
 #include "jeandle/..."
 
-#include "jeandle/__hostpotHeadersBegin__.hpp"
+#include "jeandle/__hotspotHeadersBegin__.hpp"
 // Here we can include header files from Hotspot.
 ```
 

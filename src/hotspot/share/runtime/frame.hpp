@@ -184,6 +184,7 @@ class frame {
   bool is_native_frame()         const;
   bool is_runtime_frame()        const;
   bool is_compiled_frame()       const;
+  bool is_jeandle_compiled_frame() const;
   bool is_safepoint_blob_frame() const;
   bool is_deoptimized_frame()    const;
   bool is_upcall_stub_frame()    const;
