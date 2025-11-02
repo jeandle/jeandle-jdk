@@ -134,13 +134,15 @@ DEF_JAVA_OP(card_table_barrier, 1, llvm::Type::getVoidTy(context), llvm::Pointer
 
     // Card is not dirty, store dirty value.
     ir_builder.SetInsertPoint(store_dirty_block);
-    ir_builder.CreateStore(llvm::ConstantInt::get(ir_builder.getInt8Ty(), (uint64_t)dirty_value), card_table_addr);
+    llvm::StoreInst* store_inst = ir_builder.CreateStore(llvm::ConstantInt::get(ir_builder.getInt8Ty(), (uint64_t)dirty_value), card_table_addr);
+    store_inst->setAtomic(llvm::AtomicOrdering::Unordered);
     ir_builder.CreateBr(already_dirty_block);
 
     // Card is dirty, return.
     ir_builder.SetInsertPoint(already_dirty_block);
   } else {
-    ir_builder.CreateStore(llvm::ConstantInt::get(ir_builder.getInt8Ty(), (uint64_t)dirty_value), card_table_addr);
+    llvm::StoreInst* store_inst = ir_builder.CreateStore(llvm::ConstantInt::get(ir_builder.getInt8Ty(), (uint64_t)dirty_value), card_table_addr);
+    store_inst->setAtomic(llvm::AtomicOrdering::Unordered);
   }
 
   ir_builder.CreateRetVoid();

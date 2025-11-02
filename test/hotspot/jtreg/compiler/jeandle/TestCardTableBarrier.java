@@ -105,7 +105,7 @@ public class TestCardTableBarrier {
                 fileCheck.checkNext("%0 = ptrtoint ptr addrspace(1) %addr to i64");
                 fileCheck.checkNext("%1 = lshr i64 %0, 9");
                 fileCheck.checkNext("%2 = getelementptr inbounds i8, ptr inttoptr");
-                fileCheck.checkNext("store i8 0, ptr %2, align 1");
+                fileCheck.checkNext("store atomic i8 0, ptr %2 unordered, align 1");
                 fileCheck.checkNext("ret void");
             } else {
                 FileCheck fileCheck = new FileCheck(currentDir, TestCardTableBarrier.class.getDeclaredMethod("testYGC", OldObject.class), false, 1);
@@ -120,7 +120,7 @@ public class TestCardTableBarrier {
                 fileCheck.checkNext("already_dirty:");
                 fileCheck.checkNext("ret void");
                 fileCheck.checkNext("store_dirty:");
-                fileCheck.checkNext("store i8 0, ptr %2, align 1");
+                fileCheck.checkNext("store atomic i8 0, ptr %2 unordered, align 1");
                 fileCheck.checkNext("br label %already_dirty");
             }
         }
