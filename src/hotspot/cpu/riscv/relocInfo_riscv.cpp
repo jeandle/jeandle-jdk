@@ -2,6 +2,7 @@
  * Copyright (c) 1998, 2023, Oracle and/or its affiliates. All rights reserved.
  * Copyright (c) 2014, Red Hat Inc. All rights reserved.
  * Copyright (c) 2020, 2022, Huawei Technologies Co., Ltd. All rights reserved.
+ * Copyright (c) 2025, the Jeandle-JDK Authors. All Rights Reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -91,6 +92,10 @@ void Relocation::pd_set_call_destination(address x) {
   MacroAssembler::pd_patch_instruction_size(addr(), x);
   address pd_call = pd_call_destination(addr());
   assert(pd_call == x, "fail in reloc");
+}
+
+void Relocation::pd_set_jeandle_data_value(address x, bool verify_only) {
+  Unimplemented();
 }
 
 address* Relocation::pd_address_in_code() {

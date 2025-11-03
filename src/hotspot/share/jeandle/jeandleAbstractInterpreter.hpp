@@ -45,8 +45,8 @@ class JeandleVMState : public JeandleCompilationResourceObj {
 
   JeandleVMState(int max_stack, int max_locals, llvm::LLVMContext *context);
 
-  JeandleVMState* copy(MethodLivenessResult liveness, bool clear_stack = false);
-  JeandleVMState* copy_for_exception_handler(MethodLivenessResult liveness, llvm::Value* exception_oop);
+  JeandleVMState* copy(bool clear_stack = false);
+  JeandleVMState* copy_for_exception_handler(llvm::Value* exception_oop);
 
   // Check with another JeandleVMState if all stack values are same types and locals sizes are the same.
   bool match(JeandleVMState* jvm);
@@ -61,6 +61,9 @@ class JeandleVMState : public JeandleCompilationResourceObj {
 
   llvm::Value* stack_at(int index) { return _stack[index]; }
 
+  void push(BasicType type, llvm::Value* value);
+  llvm::Value* pop(BasicType type);
+
   void ipush(llvm::Value* value) { push(BasicType::T_INT, value); }
   llvm::Value* ipop() { return pop(BasicType::T_INT); }
 
@@ -69,9 +72,6 @@ class JeandleVMState : public JeandleCompilationResourceObj {
 
   void apush(llvm::Value* value) { push(BasicType::T_OBJECT, value); }
   llvm::Value* apop() { return pop(BasicType::T_OBJECT); }
-
-  void push(BasicType type, llvm::Value* value);
-  llvm::Value* pop(BasicType type);
 
   void fpush(llvm::Value* value) { push(BasicType::T_FLOAT, value); }
   llvm::Value* fpop() { return pop(BasicType::T_FLOAT); }
@@ -111,9 +111,16 @@ class JeandleVMState : public JeandleCompilationResourceObj {
   llvm::Value* dload(int index) { return load(BasicType::T_DOUBLE, index); }
   void dstore(int index, llvm::Value* value) { store(BasicType::T_DOUBLE, index, value); }
 
+  // Locks operations:
+  void push_lock(llvm::Value* lock) { _locks.push_back(lock); }
+  llvm::Value* pop_lock() { llvm::Value* v = _locks.back(); _locks.pop_back(); return v; }
+  size_t locks_size() const { return _locks.size(); }
+  llvm::Value* lock_at(int index) { return _locks[index]; }
+
  private:
   llvm::SmallVector<llvm::Value*> _stack;
   llvm::SmallVector<llvm::Value*> _locals;
+  llvm::SmallVector<llvm::Value*> _locks;
 
   llvm::LLVMContext* _context;
 
@@ -125,7 +132,7 @@ class JeandleBasicBlock : public JeandleCompilationResourceObj {
   JeandleBasicBlock(int block_id, int start_bci, int limit_bci, llvm::BasicBlock* llvm_block, ciBlock* ci_block);
 
   // Update the JeandleVMState according to the predecessor block's stack values and locals.
-  bool merge_VM_state_from(JeandleBasicBlock* from, ciMethod* method);
+  bool merge_VM_state_from(JeandleVMState* vm_state, llvm::BasicBlock* incoming, ciMethod* method);
 
   enum Flag {
     no_flag                       = 0,
@@ -168,7 +175,6 @@ class JeandleBasicBlock : public JeandleCompilationResourceObj {
   bool is_exception_handler() { return _ci_block->is_handler(); }
   int exeption_range_start_bci() { return _ci_block->ex_start_bci(); }
   int exeption_range_limit_bci() { return _ci_block->ex_limit_bci(); }
-  bool merge_exception_handler_VM_state(JeandleVMState* vm_state, llvm::BasicBlock* incoming, ciMethod* method);
 
  private:
   int _block_id;
@@ -331,9 +337,16 @@ class JeandleAbstractInterpreter : public StackObj {
   DispatchedDest dispatch_exception_for_invoke(); // Dispatch exceptions raised by invoke.
   void dispatch_exception_to_handler(llvm::Value* exception_oop); // Generate a series of IR to dispatch an exception to its handler.
   void throw_exception(llvm::Value* exception_oop);
+
   void newarray(int element_type);
+
   // Implementation of _new
   void do_new();
+
+  void monitorenter();
+  void monitorexit();
+
+  void null_check(llvm::Value* obj);
 };
 
 #endif // SHARE_JEANDLE_ABSTRACT_INTERPRETER_HPP
