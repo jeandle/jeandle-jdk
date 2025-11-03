@@ -1107,7 +1107,7 @@ void JeandleAbstractInterpreter::invoke() {
     args_type[0] = JeandleType::java2llvm(BasicType::T_OBJECT, *_context);
   }
 
-  // Blow is a temporary solution for invokedynamic testcases, which needs to be removed after the uncommon_trap is implemented.
+  // TODO: Blow is a temporary solution for invokedynamic testcases, which needs to be removed after the uncommon_trap is implemented.
   if (bc == Bytecodes::_invokedynamic && !will_link) {
     BasicType return_type = declared_signature->return_type()->basic_type();
     switch (return_type) {

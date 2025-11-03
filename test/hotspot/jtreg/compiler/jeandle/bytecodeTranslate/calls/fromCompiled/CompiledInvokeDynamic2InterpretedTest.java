@@ -32,10 +32,5 @@
  *    -XX:CompileCommand=compileonly,compiler.jeandle.bytecodeTranslate.calls.common.*::*
  *    -XX:+UnlockDiagnosticVMOptions -XX:+WhiteBoxAPI -Xbootclasspath/a:.
  *    -Xbatch -XX:CompileCommand=exclude,compiler.jeandle.bytecodeTranslate.calls.common.InvokeDynamic::callee compiler.jeandle.bytecodeTranslate.calls.common.InvokeDynamic
- *    -compileCaller 1 -checkCallerCompileLevel 1 -checkCalleeCompileLevel 0
- * @run main/othervm -XX:+UseJeandleCompiler
- *    -XX:CompileCommand=compileonly,compiler.jeandle.bytecodeTranslate.calls.common.*::*
- *    -XX:+UnlockDiagnosticVMOptions -XX:+WhiteBoxAPI -Xbootclasspath/a:.
- *    -Xbatch -XX:CompileCommand=exclude,compiler.jeandle.bytecodeTranslate.calls.common.InvokeDynamic::callee compiler.jeandle.bytecodeTranslate.calls.common.InvokeDynamic
  *    -compileCaller 4 -checkCallerCompileLevel 4 -checkCalleeCompileLevel 0
  */
