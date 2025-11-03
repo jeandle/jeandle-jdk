@@ -48,6 +48,7 @@ jobs:
     outputs:
       linux-x64: true # We always run test on x86
       linux-aarch64: ${{ contains(github.event.pull_request.labels.*.name, 'AArch64') }}
+      linux-riscv64: ${{ contains(github.event.pull_request.labels.*.name, 'RISC-V') }}
 
     steps:
       - name: 'Checkout the scripts'
@@ -88,6 +89,34 @@ jobs:
       make-arguments: ${{ github.event.inputs.make-arguments }}
       runs-on: ubuntu-22.04-arm
     if: needs.prepare.outputs.linux-aarch64 == 'true'
+
+  build-linux-aarch64-cross-compile:
+    name: linux-aarch64-cross-compile
+    needs: prepare
+    uses: ./.github/workflows/build-cross-compile.yml
+    with:
+      gcc-major-version: '10'
+      target-cpu: aarch64
+      gnu-arch: aarch64
+      debian-arch: arm64
+      debian-repository: http://ports.ubuntu.com/ubuntu-ports/
+      debian-version: jammy
+      llvm-target: AArch64
+    if: needs.prepare.outputs.linux-aarch64 == 'true'
+
+  build-linux-riscv64-cross-compile:
+    name: linux-riscv64-cross-compile
+    needs: prepare
+    uses: ./.github/workflows/build-cross-compile.yml
+    with:
+      gcc-major-version: '10'
+      target-cpu: riscv64
+      gnu-arch: riscv64
+      debian-arch: riscv64
+      debian-repository: http://ports.ubuntu.com/ubuntu-ports/
+      debian-version: jammy
+      llvm-target: RISCV
+    if: needs.prepare.outputs.linux-riscv64 == 'true'
 
   ###
   ### Test jobs

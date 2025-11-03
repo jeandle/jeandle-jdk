@@ -71,6 +71,11 @@ JeandleCompilation::JeandleCompilation(llvm::TargetMachine* target_machine,
                                        _context(std::make_unique<llvm::LLVMContext>()),
                                        _code(env, method),
                                        _error_msg(nullptr) {
+  if (entry_bci != InvocationEntryBci) {
+    env->record_method_not_compilable("OSR not supported");
+    return;
+  }
+
   // Setup compilation.
   initialize();
   setup_llvm_module(template_buffer);

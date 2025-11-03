@@ -1,5 +1,6 @@
 #
 # Copyright (c) 2011, 2023, Oracle and/or its affiliates. All rights reserved.
+# Copyright (c) 2025, the Jeandle-JDK Authors. All Rights Reserved.
 # DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
 #
 # This code is free software; you can redistribute it and/or modify it
@@ -283,6 +284,9 @@ AC_DEFUN_ONCE([JVM_FEATURES_CHECK_JEANDLE],
       AC_MSG_RESULT([yes])
     elif test "x$OPENJDK_TARGET_CPU_ARCH" = "xaarch64" && \
           test "x$OPENJDK_TARGET_OS" = xlinux; then
+      AC_MSG_RESULT([yes])
+    elif test "x$OPENJDK_TARGET_CPU_ARCH" = "xriscv" && \
+      test "x$OPENJDK_TARGET_OS" = xlinux; then
       AC_MSG_RESULT([yes])
     else
       AC_MSG_RESULT([no, $OPENJDK_TARGET_OS-$OPENJDK_TARGET_CPU])

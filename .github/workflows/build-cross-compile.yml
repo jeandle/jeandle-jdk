@@ -1,5 +1,6 @@
 #
 # Copyright (c) 2022, Oracle and/or its affiliates. All rights reserved.
+# Copyright (c) 2025, the Jeandle-JDK Authors. All Rights Reserved.
 # DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
 #
 # This code is free software; you can redistribute it and/or modify it
@@ -31,6 +32,24 @@ on:
       gcc-major-version:
         required: true
         type: string
+      target-cpu:
+        required: true
+        type: string
+      gnu-arch:
+        required: true
+        type: string
+      debian-arch:
+        required: true
+        type: string
+      debian-repository:
+        required: true
+        type: string
+      debian-version:
+        required: true
+        type: string
+      llvm-target:
+        required: true
+        type: string
       extra-conf-options:
         required: false
         type: string
@@ -46,51 +65,13 @@ jobs:
     name: build
     runs-on: ubuntu-22.04
 
-    strategy:
-      fail-fast: false
-      matrix:
-        target-cpu:
-          - aarch64
-          - arm
-          - s390x
-          - ppc64le
-          - riscv64
-        include:
-          - target-cpu: aarch64
-            gnu-arch: aarch64
-            debian-arch: arm64
-            debian-repository: https://httpredir.debian.org/debian/
-            debian-version: bullseye
-            tolerate-sysroot-errors: false
-          - target-cpu: arm
-            gnu-arch: arm
-            debian-arch: armhf
-            debian-repository: https://httpredir.debian.org/debian/
-            debian-version: bullseye
-            tolerate-sysroot-errors: false
-            gnu-abi: eabihf
-          - target-cpu: s390x
-            gnu-arch: s390x
-            debian-arch: s390x
-            debian-repository: https://httpredir.debian.org/debian/
-            debian-version: bullseye
-            tolerate-sysroot-errors: false
-          - target-cpu: ppc64le
-            gnu-arch: powerpc64le
-            debian-arch: ppc64el
-            debian-repository: https://httpredir.debian.org/debian/
-            debian-version: bullseye
-            tolerate-sysroot-errors: false
-          - target-cpu: riscv64
-            gnu-arch: riscv64
-            debian-arch: riscv64
-            debian-repository: https://httpredir.debian.org/debian/
-            debian-version: sid
-            tolerate-sysroot-errors: true
-
     steps:
       - name: 'Checkout the JDK source'
         uses: actions/checkout@v4
+        with:
+          repository: ${{ github.event.pull_request.head.repo.full_name }}
+          ref: ${{ github.event.pull_request.head.ref }}
+          fetch-depth: 1
 
       - name: 'Get the BootJDK'
         id: bootjdk
@@ -111,37 +92,72 @@ jobs:
           sudo apt-get install \
               gcc-${{ inputs.gcc-major-version }} \
               g++-${{ inputs.gcc-major-version }} \
-              gcc-${{ inputs.gcc-major-version }}-${{ matrix.gnu-arch }}-linux-gnu${{ matrix.gnu-abi}} \
-              g++-${{ inputs.gcc-major-version }}-${{ matrix.gnu-arch }}-linux-gnu${{ matrix.gnu-abi}} \
+              gcc-${{ inputs.gcc-major-version }}-${{ inputs.gnu-arch }}-linux-gnu${{ inputs.gnu-abi }} \
+              g++-${{ inputs.gcc-major-version }}-${{ inputs.gnu-arch }}-linux-gnu${{ inputs.gnu-abi }} \
               libxrandr-dev libxtst-dev libcups2-dev libasound2-dev
           sudo update-alternatives --install /usr/bin/gcc gcc /usr/bin/gcc-${{ inputs.gcc-major-version }} 100 --slave /usr/bin/g++ g++ /usr/bin/g++-${{ inputs.gcc-major-version }}
+          if [[ "${{ inputs.gnu-arch }}" == "aarch64" ]]; then
+            sudo ln -s /usr/aarch64-linux-gnu${{ inputs.gnu-abi }}/lib/ld-linux-aarch64.so.1  /lib/ld-linux-aarch64.so.1
+          elif [[ "${{ inputs.gnu-arch }}" == "riscv64" ]]; then
+            sudo ln -s /usr/riscv64-linux-gnu${{ inputs.gnu-abi }}/lib/ld-linux-riscv64-lp64d.so.1  /lib/ld-linux-riscv64-lp64d.so.1
+          fi
 
-      - name: 'Check cache for sysroot'
-        id: get-cached-sysroot
-        uses: actions/cache@v4
-        with:
-          path: sysroot
-          key: sysroot-${{ matrix.debian-arch }}-${{ hashFiles('./.github/workflows/build-cross-compile.yml') }}
+      - name: 'Build Host LLVM'
+        run: |
+          echo "github workspace: ${GITHUB_WORKSPACE}"
+          # set CO_REPO and CO_BRANCH
+          TARGET_REPO=`git log -n 1 | grep "CO_REPO" | sed -E 's/^[[:space:]]*CO_REPO[[:space:]]*:[[:space:]]*(.*)$/\1/'`
+          TARGET_BRANCH=`git log -n 1 | grep "CO_BRANCH" | sed -E 's/^[[:space:]]*CO_BRANCH[[:space:]]*:[[:space:]]*(.*)$/\1/'`
+
+          if [ -z "${TARGET_REPO}" ]; then
+            TARGET_REPO="https://github.com/jeandle/jeandle-llvm.git"
+          fi
+          echo "target repo of llvm: $TARGET_REPO"
+
+          if [ -z "${TARGET_BRANCH}" ]; then
+            TARGET_BRANCH="main"
+          fi
+          echo "target branch of llvm: $TARGET_BRANCH"
+
+          # clone llvm
+          pushd ../
+          echo "Cloning jeandle-llvm: git clone -b ${TARGET_BRANCH} --depth=1 ${TARGET_REPO} jeandle-llvm..."
+          git clone -b ${TARGET_BRANCH} --depth=1 ${TARGET_REPO} jeandle-host-llvm
+          LLVM_DIR=`pwd`/jeandle-host-llvm
+
+          #build llvm
+          pushd ${LLVM_DIR}
+          mkdir build
+          pushd build
+          cmake -G "Unix Makefiles" \
+          -DLLVM_TARGETS_TO_BUILD=X86 \
+          -DCMAKE_BUILD_TYPE=Release \
+          -DCMAKE_INSTALL_PREFIX="$GITHUB_WORKSPACE/install_host_llvm" \
+          -DLLVM_BUILD_LLVM_DYLIB=ON \
+          -DLLVM_DYLIB_COMPONENTS=all ../llvm
+          cmake --build . --target install -j $[$(nproc)/2]
+          popd
+          popd # enter to root dir of jeandle
+          # delete llvm repo to spare space for building jdk.
+          rm -rf jeandle-host-llvm/
 
       - name: 'Install sysroot dependencies'
         run: sudo apt-get install debootstrap qemu-user-static
-        if: steps.get-cached-sysroot.outputs.cache-hit != 'true'
 
       - name: 'Create sysroot'
         id: create-sysroot
         run: >
           sudo debootstrap
           --no-merged-usr
-          --arch=${{ matrix.debian-arch }}
+          --arch=${{ inputs.debian-arch }}
           --verbose
-          --include=fakeroot,symlinks,build-essential,libx11-dev,libxext-dev,libxrender-dev,libxrandr-dev,libxtst-dev,libxt-dev,libcups2-dev,libfontconfig1-dev,libasound2-dev,libfreetype-dev,libpng-dev
+          --components=main,universe
+          --include=fakeroot,symlinks,build-essential,libx11-dev,libxext-dev,libxrender-dev,libxrandr-dev,libxtst-dev,libxt-dev,libcups2-dev,libfontconfig1-dev,libasound2-dev,libfreetype6-dev,libpng-dev,libffi-dev
           --resolve-deps
           --variant=minbase
-          ${{ matrix.debian-version }}
+          ${{ inputs.debian-version }}
           sysroot
-          ${{ matrix.debian-repository }}
-        continue-on-error: ${{ matrix.tolerate-sysroot-errors }}
-        if: steps.get-cached-sysroot.outputs.cache-hit != 'true'
+          ${{ inputs.debian-repository }}
 
       - name: 'Prepare sysroot'
         run: |
@@ -150,43 +166,100 @@ jobs:
           sudo chown ${USER} -R sysroot
           rm -rf sysroot/{dev,proc,run,sys,var}
           rm -rf sysroot/usr/{sbin,bin,share}
-          rm -rf sysroot/usr/lib/{apt,gcc,udev,systemd}
+          rm -rf sysroot/usr/lib/{apt,udev,systemd}
           rm -rf sysroot/usr/libexec/gcc
           # /{bin,sbin,lib}/ are not symbolic links to /usr/{bin,sbin,lib}/ when debootstrap with --no-merged-usr
           rm -rf sysroot/{sbin,bin}
           rm -rf sysroot/lib/{udev,systemd}
-        if: steps.create-sysroot.outcome == 'success' && steps.get-cached-sysroot.outputs.cache-hit != 'true'
+        if: steps.create-sysroot.outcome == 'success'
 
       - name: 'Remove broken sysroot'
         run: |
           sudo rm -rf sysroot/
-        if: steps.create-sysroot.outcome != 'success' && steps.get-cached-sysroot.outputs.cache-hit != 'true'
+        if: steps.create-sysroot.outcome != 'success'
+
+      - name: 'Build Target LLVM'
+        run: |
+          echo "github workspace: ${GITHUB_WORKSPACE}"
+          # set CO_REPO and CO_BRANCH
+          TARGET_REPO=`git log -n 1 | grep "CO_REPO" | sed -E 's/^[[:space:]]*CO_REPO[[:space:]]*:[[:space:]]*(.*)$/\1/'`
+          TARGET_BRANCH=`git log -n 1 | grep "CO_BRANCH" | sed -E 's/^[[:space:]]*CO_BRANCH[[:space:]]*:[[:space:]]*(.*)$/\1/'`
+
+          if [ -z "${TARGET_REPO}" ]; then
+            TARGET_REPO="https://github.com/jeandle/jeandle-llvm.git"
+          fi
+          echo "target repo of llvm: $TARGET_REPO"
+
+          if [ -z "${TARGET_BRANCH}" ]; then
+            TARGET_BRANCH="main"
+          fi
+          echo "target branch of llvm: $TARGET_BRANCH"
+
+          # clone llvm
+          pushd ../
+          echo "Cloning jeandle-llvm: git clone -b ${TARGET_BRANCH} --depth=1 ${TARGET_REPO} jeandle-llvm..."
+          git clone -b ${TARGET_BRANCH} --depth=1 ${TARGET_REPO} jeandle-llvm-${{ inputs.target-cpu }}
+          LLVM_DIR=`pwd`/jeandle-llvm-${{ inputs.target-cpu }}
+
+          #build llvm
+          pushd ${LLVM_DIR}
+          mkdir build
+          pushd build
+          cmake -G "Unix Makefiles" \
+          -DLLVM_TARGETS_TO_BUILD=${{ inputs.llvm-target }} \
+          -DCMAKE_BUILD_TYPE=Release \
+          -DLLVM_DEFAULT_TARGET_TRIPLE=${{ inputs.gnu-arch }}-unknown-linux-gnu${{ inputs.gnu-abi }}  \
+          -DCMAKE_SYSROOT=$GITHUB_WORKSPACE/sysroot \
+          -DCMAKE_SYSTEM_NAME=Linux \
+          -DCMAKE_SYSTEM_PROCESSOR=${{ inputs.target-cpu }} \
+          -DCMAKE_C_COMPILER=${{ inputs.gnu-arch }}-linux-gnu${{ inputs.gnu-abi }}-gcc-${{ inputs.gcc-major-version }} \
+          -DCMAKE_CXX_COMPILER=${{ inputs.gnu-arch }}-linux-gnu${{ inputs.gnu-abi }}-g++-${{ inputs.gcc-major-version }} \
+          -DCMAKE_C_COMPILER_TARGET=${{ inputs.gnu-arch }}-linux-gnu${{ inputs.gnu-abi }} \
+          -DCMAKE_CXX_COMPILER_TARGET=${{ inputs.gnu-arch }}-linux-gnu${{ inputs.gnu-abi }} \
+          -DCMAKE_FIND_ROOT_PATH=$GITHUB_WORKSPACE/sysroot \
+          -DCMAKE_FIND_ROOT_PATH_MODE_PROGRAM=NEVER \
+          -DCMAKE_FIND_ROOT_PATH_MODE_LIBRARY=ONLY \
+          -DCMAKE_FIND_ROOT_PATH_MODE_INCLUDE=ONLY \
+          -DCMAKE_FIND_ROOT_PATH_MODE_PACKAGE=ONLY \
+          -DCMAKE_EXE_LINKER_FLAGS="-L$GITHUB_WORKSPACE/sysroot/usr/lib/${{ inputs.gnu-arch }}-linux-gnu${{ inputs.gnu-abi }} -L$GITHUB_WORKSPACE/sysroot/usr/lib/gcc/${{ inputs.gnu-arch }}-linux-gnu${{ inputs.gnu-abi }}/${{ inputs.gcc-major-version }} -latomic -lpthread" \
+          -DCMAKE_SHARED_LINKER_FLAGS="-L$GITHUB_WORKSPACE/sysroot/usr/lib/${{ inputs.gnu-arch }}-linux-gnu${{ inputs.gnu-abi }}  -L$GITHUB_WORKSPACE/sysroot/usr/lib/gcc/${{ inputs.gnu-arch }}-linux-gnu${{ inputs.gnu-abi }}/${{ inputs.gcc-major-version }} -latomic -lpthread" \
+          -DCMAKE_INSTALL_PREFIX="$GITHUB_WORKSPACE/install_llvm_${{ inputs.target-cpu }}" \
+          -DLLVM_BUILD_LLVM_DYLIB=ON \
+          -DLLVM_DYLIB_COMPONENTS=all ../llvm
+          cmake --build . --target install -j $[$(nproc)/2]
+          popd
+          popd # enter to root dir of jeandle
+          # delete llvm repo to spare space for building jdk.
+          rm -rf jeandle-llvm-${{ inputs.target-cpu }}/
+          sudo ldconfig -r $GITHUB_WORKSPACE/sysroot
+          echo "LD_LIBRARY_PATH=$LD_LIBRARY_PATH:$GITHUB_WORKSPACE/sysroot/lib:$GITHUB_WORKSPACE/sysroot/usr/lib:$GITHUB_WORKSPACE/sysroot/lib/${{ inputs.target-cpu }}-linux-gnu${{ inputs.gnu-abi }}:$GITHUB_WORKSPACE/sysroot/usr/lib/${{ inputs.target-cpu }}-linux-gnu${{ inputs.gnu-abi }}:$GITHUB_WORKSPACE/install_llvm_${{ inputs.target-cpu }}/lib" >> $GITHUB_ENV
 
       - name: 'Configure'
         run: >
           bash configure
-          --with-conf-name=linux-${{ matrix.target-cpu }}
+          --with-conf-name=linux-${{ inputs.target-cpu }}
           --with-version-opt=${GITHUB_ACTOR}-${GITHUB_SHA}
           --with-boot-jdk=${{ steps.bootjdk.outputs.path }}
           --with-gtest=${{ steps.gtest.outputs.path }}
           --with-zlib=system
+          --disable-warnings-as-errors
           --enable-debug
           --disable-precompiled-headers
-          --openjdk-target=${{ matrix.gnu-arch }}-linux-gnu${{ matrix.gnu-abi}}
-          --with-sysroot=sysroot
+          --openjdk-target=${{ inputs.gnu-arch }}-linux-gnu${{ inputs.gnu-abi }}
+          --with-sysroot=$GITHUB_WORKSPACE/sysroot
+          --with-host-jeandle-llvm=$GITHUB_WORKSPACE/install_host_llvm
+          --with-jeandle-llvm=$GITHUB_WORKSPACE/install_llvm_${{ inputs.target-cpu }}
           --with-jmod-compress=zip-1
-          CC=${{ matrix.gnu-arch }}-linux-gnu${{ matrix.gnu-abi}}-gcc-${{ inputs.gcc-major-version }}
-          CXX=${{ matrix.gnu-arch }}-linux-gnu${{ matrix.gnu-abi}}-g++-${{ inputs.gcc-major-version }}
+          CC=${{ inputs.gnu-arch }}-linux-gnu${{ inputs.gnu-abi }}-gcc-${{ inputs.gcc-major-version }}
+          CXX=${{ inputs.gnu-arch }}-linux-gnu${{ inputs.gnu-abi }}-g++-${{ inputs.gcc-major-version }}
           ${{ inputs.extra-conf-options }} ${{ inputs.configure-arguments }} || (
           echo "Dumping config.log:" &&
           cat config.log &&
           exit 1)
-        if: steps.create-sysroot.outcome == 'success' || steps.get-cached-sysroot.outputs.cache-hit == 'true'
 
       - name: 'Build'
         id: build
         uses: ./.github/actions/do-build
         with:
           make-target: 'hotspot ${{ inputs.make-arguments }}'
-          platform: linux-${{ matrix.target-cpu }}
-        if: steps.create-sysroot.outcome == 'success' || steps.get-cached-sysroot.outputs.cache-hit == 'true'
+          platform: linux-${{ inputs.target-cpu }}

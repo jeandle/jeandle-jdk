@@ -22,15 +22,18 @@
  * @test TestInstanceof.java
  * @summary Test instanceof Java op
  *  issue: https://github.com/jeandle/jeandle-jdk/issues/6
- * @library /test/lib
+ * @library /test/lib /
+ * @build compiler.jeandle.fileCheck.FileCheck
  * @run main/othervm -XX:-TieredCompilation -Xcomp
  *      -XX:CompileCommand=compileonly,compiler.jeandle.bytecodeTranslate.TestInstanceof::test*
- *      -XX:+UseJeandleCompiler compiler.jeandle.bytecodeTranslate.TestInstanceof
+ *      -XX:+UseJeandleCompiler -XX:+JeandleDumpIR compiler.jeandle.bytecodeTranslate.TestInstanceof
  */
 
 package compiler.jeandle.bytecodeTranslate;
 
 import jdk.test.lib.Asserts;
+
+import compiler.jeandle.fileCheck.FileCheck;
 
 public class TestInstanceof {
     static class Animal {}
@@ -66,5 +69,33 @@ public class TestInstanceof {
         // test not_instanceof
         Asserts.assertFalse(testNotSubClass(myDog));
         Asserts.assertFalse(testNotSubInterface(myDog));
+
+        // check dead global variable elimination
+        String currentDir = System.getProperty("user.dir");
+        {
+            // before optimization
+            FileCheck fileCheck = new FileCheck(currentDir,
+                                                TestInstanceof.class.getDeclaredMethod("testSubClass", Object.class),
+                                                false);
+            fileCheck.check("@ArrayKlass.base_offset_in_bytes = private constant");
+            fileCheck.check("@ArrayKlass.length_offset_in_bytes = private constant");
+            fileCheck.check("@arrayOopDesc.length_offset_in_bytes = private constant");
+            fileCheck.check("@Klass.secondary_super_cache_offset = private constant");
+            fileCheck.check("@Klass.secondary_supers_offset = private constant");
+            fileCheck.check("@Klass.super_check_offset_offset = private constant");
+            fileCheck.check("@oopDesc.klass_offset_in_bytes = private constant");
+
+            // after optimization
+            FileCheck fileCheckOpt = new FileCheck(currentDir,
+                                                   TestInstanceof.class.getDeclaredMethod("testSubClass", Object.class),
+                                                   true);
+            fileCheckOpt.checkNot("@ArrayKlass.base_offset_in_bytes");
+            fileCheckOpt.checkNot("@ArrayKlass.length_offset_in_bytes");
+            fileCheckOpt.checkNot("@arrayOopDesc.length_offset_in_bytes");
+            fileCheckOpt.checkNot("@Klass.secondary_super_cache_offset");
+            fileCheckOpt.checkNot("@Klass.secondary_supers_offset");
+            fileCheckOpt.checkNot("@Klass.super_check_offset_offset");
+            fileCheckOpt.checkNot("@oopDesc.klass_offset_in_bytes");
+        }
     }
 }

@@ -39,10 +39,10 @@
     if (RuntimeDefinedJavaOps::failed()) { return; }                                            \
     llvm::LLVMContext& context = template_module.getContext();                                  \
     llvm::FunctionType* func_type = llvm::FunctionType::get(return_type, {__VA_ARGS__}, false); \
-    llvm::Function* func = llvm::Function::Create(func_type,                                    \
-                                                  llvm::Function::PrivateLinkage,               \
-                                                  "jeandle."#name,                              \
-                                                  template_module);                             \
+    llvm::StringRef func_name = "jeandle."#name;                                                \
+    llvm::Function* func = llvm::cast<llvm::Function>(                                          \
+        template_module.getOrInsertFunction(func_name, func_type).getCallee());                 \
+    func->setLinkage(llvm::Function::PrivateLinkage);                                           \
     func->addFnAttr("lower-phase", #lower_phase);                                               \
     func->addFnAttr(llvm::Attribute::NoInline);                                                 \
     func->setCallingConv(llvm::CallingConv::Hotspot_JIT);                                       \
@@ -103,6 +103,27 @@ DEF_JAVA_OP(safepoint_poll, 1, llvm::Type::getVoidTy(context))
   ir_builder.CreateRetVoid();
 JAVA_OP_END
 
+DEF_JAVA_OP(new_instance, 1, llvm::PointerType::get(context, llvm::jeandle::AddrSpace::JavaHeapAddrSpace),
+  llvm::PointerType::get(context, llvm::jeandle::AddrSpace::CHeapAddrSpace),  // klass
+  llvm::Type::getInt32Ty(context))                                                        // size_in_bytes
+  llvm::Value* klass = func->getArg(0);
+  llvm::Value* size = func->getArg(1);
+  // Get current thread pointer using jeandle.current_thread JavaOp
+  llvm::Function* current_thread_func = template_module.getFunction("jeandle.current_thread");
+  if (!current_thread_func) {
+    RuntimeDefinedJavaOps::set_failed("jeandle.current_thread is not found in template module");
+    return;
+  }
+  llvm::CallInst* current_thread = ir_builder.CreateCall(current_thread_func);
+  current_thread->setCallingConv(llvm::CallingConv::Hotspot_JIT);
+
+  // slow path allocation, TODO: implement fast path allocation
+  llvm::CallInst* call_inst = ir_builder.CreateCall(JeandleRuntimeRoutine::new_instance_callee(template_module), {klass, current_thread});
+  call_inst->setCallingConv(llvm::CallingConv::Hotspot_JIT);
+
+  ir_builder.CreateRet(call_inst);
+JAVA_OP_END
+
 } // anonymous namespace
 
 const char* RuntimeDefinedJavaOps::_error_msg = nullptr;
@@ -119,6 +140,7 @@ bool RuntimeDefinedJavaOps::define_all(llvm::Module& template_module) {
   // Define all runtime defined JavaOps:
   define_current_thread(template_module);
   define_safepoint_poll(template_module);
+  define_new_instance(template_module);
 
   return failed();
 }
@@ -152,6 +174,7 @@ void RuntimeDefinedJavaOps::define_global_variables(llvm::Module& template_modul
 
     global_var->setInitializer(llvm::ConstantInt::get(type, value));
     global_var->setConstant(true);
+    global_var->setLinkage(llvm::GlobalValue::PrivateLinkage);
   };
 
   llvm::Type* int32_type = llvm::Type::getInt32Ty(context);

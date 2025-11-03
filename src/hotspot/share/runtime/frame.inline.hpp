@@ -71,6 +71,15 @@ inline bool frame::is_compiled_frame() const {
   return false;
 }
 
+inline bool frame::is_jeandle_compiled_frame() const {
+  if (_cb != nullptr &&
+      _cb->is_compiled_by_jeandle() &&
+      ((CompiledMethod*)_cb)->is_java_method()) {
+    return true;
+  }
+  return false;
+}
+
 template <typename RegisterMapT>
 inline address frame::oopmapreg_to_location(VMReg reg, const RegisterMapT* reg_map) const {
   if (reg->is_reg()) {
