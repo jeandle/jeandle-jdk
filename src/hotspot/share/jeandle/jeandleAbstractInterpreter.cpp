@@ -603,7 +603,9 @@ void JeandleAbstractInterpreter::interpret_block(JeandleBasicBlock* block) {
       case Bytecodes::_dconst_0: _jvm->dpush(JeandleType::double_const(_ir_builder, 0)); break;
       case Bytecodes::_dconst_1: _jvm->dpush(JeandleType::double_const(_ir_builder, 1)); break;
 
-      case Bytecodes::_aconst_null: Unimplemented(); break;
+      case Bytecodes::_aconst_null:
+        _jvm->apush(llvm::ConstantPointerNull::get(llvm::cast<llvm::PointerType>(JeandleType::java2llvm(BasicType::T_OBJECT, *_context))));
+        break;
 
       case Bytecodes::_bipush: _jvm->ipush(JeandleType::int_const(_ir_builder, (((signed char*)_bytecodes.cur_bcp())[1]))); break;
       case Bytecodes::_sipush: _jvm->ipush(JeandleType::int_const(_ir_builder, (short)Bytes::get_Java_u2(_bytecodes.cur_bcp()+1))); break;
