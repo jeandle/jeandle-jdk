@@ -221,7 +221,7 @@ void JeandleCompilation::setup_llvm_module(llvm::MemoryBuffer* template_buffer) 
   _llvm_module->setModuleIdentifier(JeandleFuncSig::method_name(_method));
   _llvm_module->setDataLayout(*_data_layout);
 
-  llvm::NamedMDNode* metadata_node = _llvm_module->getOrInsertNamedMetadata(llvm::jeandle::Metadata::JavaCompiledMethod);
+  llvm::NamedMDNode* metadata_node = _llvm_module->getOrInsertNamedMetadata(llvm::jeandle::Metadata::JavaMethodCompilation);
   assert(metadata_node != nullptr, "invalid metadata node");
 }
 
