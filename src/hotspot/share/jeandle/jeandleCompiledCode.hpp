@@ -169,6 +169,7 @@ class JeandleCompiledCode : public StackObj {
   OopMap* build_oop_map(StackMapParser::record_iterator& record);
 
   void build_exception_handler_table();
+  void build_implicit_exception_table();
 
   int frame_size_in_slots();
 };

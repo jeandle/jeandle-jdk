@@ -270,8 +270,21 @@ void JeandleCompilation::compile_module() {
   llvm::SmallVector<char, 0> obj_buffer;
 
   {
-    llvm::raw_svector_ostream obj_stream(obj_buffer);
+    // Pass extra options to codegen.
+    std::vector<std::string> argv_string = {
+      "placeholder",
+      "-enable-implicit-null-checks",
+      "-imp-null-check-page-size=" + std::to_string(os::vm_page_size())
+    };
 
+    std::vector<const char*> argv;
+    for (const auto& s : argv_string) {
+        argv.push_back(s.c_str());
+    }
+
+    llvm::cl::ParseCommandLineOptions(argv.size(), argv.data());
+
+    llvm::raw_svector_ostream obj_stream(obj_buffer);
     llvm::legacy::PassManager pm;
     llvm::MCContext *ctx;
 
