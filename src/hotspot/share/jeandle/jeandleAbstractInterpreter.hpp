@@ -291,7 +291,7 @@ class JeandleAbstractInterpreter : public StackObj {
   void arith_op(BasicType type, Bytecodes::Code code);
 
   llvm::CallInst* call_java_op(llvm::StringRef java_op, llvm::ArrayRef<llvm::Value*> args);
-  llvm::CallInst* call_jeandle_routine(llvm::FunctionCallee callee, llvm::ArrayRef<llvm::Value*> arg, llvm::CallingConv::ID calling_conv);
+  void call_jeandle_routine(llvm::FunctionCallee callee, llvm::ArrayRef<llvm::Value*> args, BasicType return_type);
 
   void add_safepoint_poll();
 

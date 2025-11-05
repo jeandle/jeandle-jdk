@@ -25,6 +25,7 @@
 #include "llvm/IR/Jeandle/Metadata.h"
 #include "llvm/IR/Module.h"
 #include "llvm/Target/TargetMachine.h"
+#include "llvm/IR/Attributes.h"
 
 #include "jeandle/__hotspotHeadersBegin__.hpp"
 #include "memory/allStatic.hpp"
@@ -52,34 +53,34 @@
   def(exceptional_return)                  \
   def(exception_handler)
 
-//-----------------------------------------------------------------------------------------------------------------------------------
-//    name                                       | func_entry             | return_type                        | arg_types
-//-----------------------------------------------------------------------------------------------------------------------------------
+//------------------------------------------------------------------------------------------------------------------------------------------------------------
+//    name                                       | func_entry             | return_type                      | is_leaf    | arg_types
+//------------------------------------------------------------------------------------------------------------------------------------------------------------
 #define ALL_HOTSPOT_ROUTINES(def)                                                                                                                         \
-  def(SharedRuntime_dsin,                         SharedRuntime::dsin,     llvm::Type::getDoubleTy(context),    llvm::Type::getDoubleTy(context))         \
+  def(SharedRuntime_dsin,                         SharedRuntime::dsin,     llvm::Type::getDoubleTy(context),  true,       llvm::Type::getDoubleTy(context))         \
                                                                                                                                                           \
-  def(StubRoutines_dsin,                          StubRoutines::dsin(),    llvm::Type::getDoubleTy(context),    llvm::Type::getDoubleTy(context))         \
+  def(StubRoutines_dsin,                          StubRoutines::dsin(),    llvm::Type::getDoubleTy(context),  true,       llvm::Type::getDoubleTy(context))         \
                                                                                                                                                           \
-  def(SharedRuntime_dcos,                         SharedRuntime::dcos,     llvm::Type::getDoubleTy(context),    llvm::Type::getDoubleTy(context))         \
+  def(SharedRuntime_dcos,                         SharedRuntime::dcos,     llvm::Type::getDoubleTy(context),  true,       llvm::Type::getDoubleTy(context))         \
                                                                                                                                                           \
-  def(StubRoutines_dcos,                          StubRoutines::dcos(),    llvm::Type::getDoubleTy(context),    llvm::Type::getDoubleTy(context))         \
+  def(StubRoutines_dcos,                          StubRoutines::dcos(),    llvm::Type::getDoubleTy(context),  true,       llvm::Type::getDoubleTy(context))         \
                                                                                                                                                           \
-  def(SharedRuntime_dtan,                         SharedRuntime::dtan,     llvm::Type::getDoubleTy(context),    llvm::Type::getDoubleTy(context))         \
+  def(SharedRuntime_dtan,                         SharedRuntime::dtan,     llvm::Type::getDoubleTy(context),  true,       llvm::Type::getDoubleTy(context))         \
                                                                                                                                                           \
-  def(StubRoutines_dtan,                          StubRoutines::dtan(),    llvm::Type::getDoubleTy(context),    llvm::Type::getDoubleTy(context))         \
+  def(StubRoutines_dtan,                          StubRoutines::dtan(),    llvm::Type::getDoubleTy(context),  true,       llvm::Type::getDoubleTy(context))         \
                                                                                                                                                           \
-  def(SharedRuntime_drem,                         SharedRuntime::drem,     llvm::Type::getDoubleTy(context),    llvm::Type::getDoubleTy(context),         \
-                                                                                                                llvm::Type::getDoubleTy(context))         \
+  def(SharedRuntime_drem,                         SharedRuntime::drem,     llvm::Type::getDoubleTy(context),  true,       llvm::Type::getDoubleTy(context),         \
+                                                                                                                          llvm::Type::getDoubleTy(context))         \
                                                                                                                                                           \
-  def(SharedRuntime_frem,                         SharedRuntime::frem,     llvm::Type::getFloatTy(context),     llvm::Type::getFloatTy(context),          \
-                                                                                                                llvm::Type::getFloatTy(context))          \
+  def(SharedRuntime_frem,                         SharedRuntime::frem,     llvm::Type::getFloatTy(context),   true,       llvm::Type::getFloatTy(context),          \
+                                                                                                                          llvm::Type::getFloatTy(context))          \
                                                                                                                                                           \
-  def(SharedRuntime_complete_monitor_locking_C,   SharedRuntime::complete_monitor_locking_C, llvm::Type::getVoidTy(context),                                             \
+  def(SharedRuntime_complete_monitor_locking_C,   SharedRuntime::complete_monitor_locking_C, llvm::Type::getVoidTy(context),    false,                                   \
                                                                                            llvm::PointerType::get(context, llvm::jeandle::AddrSpace::JavaHeapAddrSpace), \
                                                                                            llvm::PointerType::get(context, llvm::jeandle::AddrSpace::CHeapAddrSpace),    \
                                                                                            llvm::PointerType::get(context, llvm::jeandle::AddrSpace::CHeapAddrSpace))    \
                                                                                                                                                                          \
-  def(SharedRuntime_complete_monitor_unlocking_C, SharedRuntime::complete_monitor_unlocking_C, llvm::Type::getVoidTy(context),                                           \
+  def(SharedRuntime_complete_monitor_unlocking_C, SharedRuntime::complete_monitor_unlocking_C, llvm::Type::getVoidTy(context),  false,                                   \
                                                                                            llvm::PointerType::get(context, llvm::jeandle::AddrSpace::JavaHeapAddrSpace), \
                                                                                            llvm::PointerType::get(context, llvm::jeandle::AddrSpace::CHeapAddrSpace),    \
                                                                                            llvm::PointerType::get(context, llvm::jeandle::AddrSpace::CHeapAddrSpace))
@@ -124,12 +125,16 @@ class JeandleRuntimeRoutine : public AllStatic {
 
   ALL_JEANDLE_ASSEMBLY_ROUTINES(DEF_ASSEMBLY_ROUTINE_NAME);
 
-#define DEF_HOTSPOT_ROUTINE_CALLEE(name, func_entry, return_type, ...)                          \
+#define DEF_HOTSPOT_ROUTINE_CALLEE(name, func_entry, return_type, is_leaf, ...)                 \
   static llvm::FunctionCallee hotspot_##name##_callee(llvm::Module& target_module) {            \
     llvm::LLVMContext& context = target_module.getContext();                                    \
     llvm::FunctionType* func_type = llvm::FunctionType::get(return_type, {__VA_ARGS__}, false); \
     llvm::FunctionCallee callee = target_module.getOrInsertFunction(#name, func_type);          \
-    llvm::cast<llvm::Function>(callee.getCallee())->setCallingConv(llvm::CallingConv::C);       \
+    llvm::Function* func = llvm::cast<llvm::Function>(callee.getCallee());                      \
+    func->setCallingConv(llvm::CallingConv::C);                                                 \
+    if (is_leaf) {                                                                              \
+      func->addFnAttr(llvm::Attribute::get(context, "gc-leaf-function"));                       \
+    }                                                                                           \
     return callee;                                                                              \
   }
 
