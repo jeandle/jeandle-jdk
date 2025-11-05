@@ -20,39 +20,52 @@
 
 package compiler.jeandle.bytecodeTranslate.calls.common;
 
-import jdk.test.lib.Asserts;
+import java.lang.invoke.CallSite;
+import java.lang.invoke.ConstantCallSite;
+import java.lang.invoke.MethodHandles;
+import java.lang.invoke.MethodType;
 
 /**
- * A test class checking InvokeVirtual instruction
+ * A test class checking InvokeDynamic instruction.
+ * This is not quite "ready-to-use" class, since javac can't generate indy
+ * directly(only as part of lambda init) so, this class bytecode should be
+ * patched with method "caller" which uses indy. Other methods can be written in
+ * java for easier support and readability.
  */
 
-public class InvokeVirtual extends CallsBase {
+public class InvokeDynamic extends CallsBase {
     private static final Object LOCK = new Object();
 
     public static void main(String args[]) {
-        new InvokeVirtual().runTest(args);
+        new InvokeDynamic().runTest(args);
     }
 
     /**
-     * A native caller method, assumed to called "callee"/"calleeNative"
-     */
-    @Override
-    public native void callerNative();
-
-    /**
-     * A caller method, assumed to called "callee"/"calleeNative"
+     * Caller method to call "callee" method. Must be overwritten with InvokeDynamicPatcher
      */
     @Override
     public void caller() {
-        if (nativeCallee) {
-            Asserts.assertTrue(calleeNative(1, 2L, 3.0f, 4.0d, "5"), CALL_ERR_MSG);
-        } else {
-            Asserts.assertTrue(callee(1, 2L, 3.0f, 4.0d, "5"), CALL_ERR_MSG);
-        }
     }
 
     /**
-     * A callee method, assumed to be called by "caller"/"callerNative"
+     * A bootstrap method for invokedynamic
+     * @param lookup a lookup object
+     * @param methodName methodName
+     * @param type method type
+     * @return CallSite for method
+     */
+    public static CallSite bootstrapMethod(MethodHandles.Lookup lookup,
+            String methodName, MethodType type) throws IllegalAccessException,
+            NoSuchMethodException {
+        MethodType mtype = MethodType.methodType(boolean.class,
+                new Class<?>[]{int.class, long.class, float.class,
+                    double.class, String.class});
+        return new ConstantCallSite(lookup.findVirtual(lookup.lookupClass(),
+                methodName, mtype));
+    }
+
+    /**
+     * A callee method, assumed to be called by "caller"
      */
     public boolean callee(int param1, long param2, float param3, double param4,
             String param5) {
@@ -62,7 +75,7 @@ public class InvokeVirtual extends CallsBase {
     }
 
     /**
-     * A native callee method, assumed to be called by "caller"/"callerNative"
+     * A native callee method, assumed to be called by "caller"
      */
     public native boolean calleeNative(int param1, long param2, float param3,
             double param4, String param5);
@@ -74,5 +87,10 @@ public class InvokeVirtual extends CallsBase {
     @Override
     protected Object getLockObject() {
         return LOCK;
+    }
+
+    @Override
+    protected void callerNative() {
+        throw new Error("No native call for invokedynamic");
     }
 }

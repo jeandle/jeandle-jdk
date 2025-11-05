@@ -18,17 +18,7 @@
  *
  */
 
-/*
- * @test
- * @summary check calls from compiled to native using InvokeVirtual
- * @modules java.base/jdk.internal.misc
- * @library /test/lib /
- *
- * @build jdk.test.whitebox.WhiteBox
- * @run driver jdk.test.lib.helpers.ClassFileInstaller jdk.test.whitebox.WhiteBox
- * @run main/othervm/native -XX:+UseJeandleCompiler
- *    -XX:CompileCommand=compileonly,compiler.jeandle.bytecodeTranslate.calls.common.*::*
- *    -XX:+UnlockDiagnosticVMOptions -XX:+WhiteBoxAPI -Xbootclasspath/a:.
- *    -Xbatch compiler.jeandle.bytecodeTranslate.calls.common.InvokeVirtual
- *    -compileCaller 4 -checkCallerCompileLevel 4 -nativeCallee
- */
+#include "jni.h"
+
+JNIEXPORT
+void JNICALL Java_compiler_jeandle_bytecodeTranslate_calls_NativeCalls_emptyStaticNative(JNIEnv* env, jclass jclazz) {}

@@ -33,13 +33,13 @@ import java.util.Arrays;
 public abstract class CallsBase {
     public static final String CALL_ERR_MSG = "Call insuccessfull";
     protected final Method calleeMethod;
-    protected final Method callerCallNormalMethod;
-    protected final Method callerCallNativeMethod;
+    protected final Method callerMethod;
     protected final WhiteBox wb = WhiteBox.getWhiteBox();
     protected int compileCallee = -1;
     protected int compileCaller = -1;
     protected boolean nativeCallee = false;
     protected boolean nativeCaller = false;
+    protected boolean calleeVisited = false;
     protected boolean checkCallerCompilationLevel;
     protected boolean checkCalleeCompilationLevel;
     protected int expectedCallerCompilationLevel;
@@ -47,12 +47,10 @@ public abstract class CallsBase {
 
     protected CallsBase() {
         try {
-            callerCallNormalMethod = getClass().getDeclaredMethod("callerCallNormal");
-            callerCallNativeMethod = getClass().getDeclaredMethod("callerCallNative");
+            callerMethod = getClass().getDeclaredMethod("caller");
             calleeMethod = getClass().getDeclaredMethod("callee",
                     getCalleeParametersTypes());
-            wb.testSetDontInlineMethod(callerCallNormalMethod, /* dontinline= */ true);
-            wb.testSetDontInlineMethod(callerCallNativeMethod, /* dontinline= */ true);
+            wb.testSetDontInlineMethod(callerMethod, /* dontinline= */ true);
             wb.testSetDontInlineMethod(calleeMethod, /* dontinline= */ true);
         } catch (NoSuchMethodException e) {
             throw new Error("TEST BUG: can't find test method", e);
@@ -64,12 +62,12 @@ public abstract class CallsBase {
      * @return array of types
      */
     protected Class[] getCalleeParametersTypes() {
-        return new Class[] {int.class, long.class, int.class,
-            int.class, int.class};
+        return new Class[] {int.class, long.class, float.class,
+            double.class, String.class};
     }
 
     /**
-     * Loads native library(libJeandleCallsNative.so)
+     * Loads native library(libCallsNative.so)
      */
     protected static void loadNativeLibrary() {
         System.loadLibrary("JeandleCallsNative");
@@ -147,11 +145,8 @@ public abstract class CallsBase {
                test are launched in same vm */
             synchronized (lock) {
                 if (compileCaller > 0 || compileCallee > 0) {
-                    // call once to have everything loaded
-                    callerCallNormal();
-                    if (nativeCallee) {
-                        callerCallNative();
-                    }
+                    caller(); // call once to have everything loaded
+                    calleeVisited = false; // reset state
                 }
                 // compile with requested level if needed
                 if (compileCallee > 0 && !compileMethod(calleeMethod, compileCallee)) {
@@ -163,29 +158,20 @@ public abstract class CallsBase {
                             wb.getMethodCompilationLevel(calleeMethod),
                             "Unexpected callee compilation level");
                 }
-                if (compileCaller > 0 && !compileMethod(callerCallNormalMethod, compileCaller)) {
-                    System.out.println("WARNING: Blocking compilation failed for callerCallNormalMethod (timeout?). Skipping.");
-                    return;
-                }
-                if (compileCaller > 0 && !compileMethod(callerCallNativeMethod, compileCaller)) {
-                    System.out.println("WARNING: Blocking compilation failed for callerCallNativeMethod (timeout?). Skipping.");
+                if (compileCaller > 0 && !compileMethod(callerMethod, compileCaller)) {
+                    System.out.println("WARNING: Blocking compilation failed for callerMethod (timeout?). Skipping.");
                     return;
                 }
                 if (checkCallerCompilationLevel) {
                     Asserts.assertEQ(expectedCallerCompilationLevel,
-                            wb.getMethodCompilationLevel(callerCallNormalMethod),
-                            "Unexpected caller compilation level");
-                            Asserts.assertEQ(expectedCallerCompilationLevel,
-                            wb.getMethodCompilationLevel(callerCallNativeMethod),
+                            wb.getMethodCompilationLevel(callerMethod),
                             "Unexpected caller compilation level");
                 }
                 // do calling work
                 if (nativeCaller) {
                     callerNative();
-                } else if (nativeCallee) {
-                    callerCallNative();
                 } else {
-                    callerCallNormal();
+                    caller();
                 }
             }
         } else {
@@ -212,8 +198,7 @@ public abstract class CallsBase {
 
     protected abstract Object getLockObject();
 
-    protected abstract void callerCallNormal();
-    protected abstract void callerCallNative();
+    protected abstract void caller();
 
     protected abstract void callerNative();
 
@@ -222,12 +207,12 @@ public abstract class CallsBase {
      * passed as expected. Parameter N should have a value indicating number "N"
      * in respective type representation.
      */
-    public static void checkValues(int param1, long param2, int param3,
-            int param4, int param5) {
+    public static void checkValues(int param1, long param2, float param3,
+            double param4, String param5) {
         Asserts.assertEQ(param1, 1);
         Asserts.assertEQ(param2, 2L);
-        Asserts.assertEQ(param3, 3);
-        Asserts.assertEQ(param4, 4);
-        Asserts.assertEQ(param5, 5);
+        Asserts.assertEQ(param3, 3.0f);
+        Asserts.assertEQ(param4, 4.0d);
+        Asserts.assertEQ(param5, "5");
     }
 }

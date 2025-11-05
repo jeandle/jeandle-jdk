@@ -20,16 +20,17 @@
 
 /*
  * @test
- * @summary check calls from native to interpreted using InvokeSpecial
- * @modules java.base/jdk.internal.misc
+ * @summary check calls from interpreted to compiled using InvokeDynamic
  * @library /test/lib /
- * @compile -source 10 -target 10 ../common/InvokeSpecial.java
+ * @modules java.base/jdk.internal.misc
+ *          java.base/jdk.internal.org.objectweb.asm
  *
  * @build jdk.test.whitebox.WhiteBox
+ * @run driver compiler.jeandle.bytecodeTranslate.calls.common.InvokeDynamicPatcher
  * @run driver jdk.test.lib.helpers.ClassFileInstaller jdk.test.whitebox.WhiteBox
- * @run main/othervm/native -XX:+UseJeandleCompiler
+ * @run main/othervm -XX:+UseJeandleCompiler
  *    -XX:CompileCommand=compileonly,compiler.jeandle.bytecodeTranslate.calls.common.*::*
  *    -XX:+UnlockDiagnosticVMOptions -XX:+WhiteBoxAPI -Xbootclasspath/a:.
- *    -XX:CompileCommand=exclude,compiler.jeandle.bytecodeTranslate.calls.common.InvokeSpecial::callee compiler.jeandle.bytecodeTranslate.calls.common.InvokeSpecial
- *    -nativeCaller -checkCalleeCompileLevel 0
+ *    -XX:CompileCommand=exclude,compiler.jeandle.bytecodeTranslate.calls.common.InvokeDynamic::caller -Xbatch compiler.jeandle.bytecodeTranslate.calls.common.InvokeDynamic
+ *    -checkCallerCompileLevel 0 -compileCallee 4 -checkCalleeCompileLevel 4
  */

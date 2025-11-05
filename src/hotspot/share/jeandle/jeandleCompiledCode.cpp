@@ -252,7 +252,6 @@ void JeandleCompiledCode::finalize() {
     _offsets.set_value(CodeOffsets::Exceptions, assembler.emit_exception_handler());
   }
 
-
   // generate shared trampoline stubs
   if (!_code_buffer.finalize_stubs()) {
     JeandleCompilation::report_jeandle_error("code cache full");

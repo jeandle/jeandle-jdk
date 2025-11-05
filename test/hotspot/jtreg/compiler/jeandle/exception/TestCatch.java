@@ -36,26 +36,91 @@ public class TestCatch {
         Asserts.assertTrue(testCatch());
 
         String currentDir = System.getProperty("user.dir");
+        FileCheck fileCheckOpt = new FileCheck(currentDir, TestCatch.class.getDeclaredMethod("testCatch"), true);
+        fileCheckOpt.check("landingpad token");
+
         FileCheck fileCheck = new FileCheck(currentDir, TestCatch.class.getDeclaredMethod("testCatch"), false);
-        fileCheck.check("bci_2_unwind_dest:");
+        fileCheck.check("bci_2_exception_dispatch_to_bci_52:");
+        fileCheck.checkNext("call hotspotcc i32 @jeandle.instanceof");
+
+        fileCheck.check("bci_446_unwind_dest:");
         fileCheck.checkNext("landingpad i64");
         fileCheck.checkNext("cleanup");
 
-        FileCheck fileCheckOpt = new FileCheck(currentDir, TestCatch.class.getDeclaredMethod("testCatch"), true);
-        fileCheckOpt.check("landingpad token");
+        fileCheck.check("call hotspotcc void @install_exceptional_return");
+
     }
 
     static boolean testCatch() {
-        boolean catched = false;
+        int catched1 = 0;
         try {
-            justThrow();
+            justThrow1();
+        } catch (ArrayIndexOutOfBoundsException e) {
+            catched1 = 1;
+            for (int i = 0; i < 10; i++) {
+                int handler = -i;
+                try {
+                    justThrow3();
+                } catch (RuntimeException e1) {
+                    handler = i;
+                } catch (Exception e2) {
+                    handler = 2 * i;
+                } finally {
+                    handler *= 10;
+                }
+                Asserts.assertEquals(handler, 10 * i);
+            }
         } catch (RuntimeException e) {
-            catched = true;
+            catched1 = 2;
+        } catch (Exception e) {
+            catched1 = 3;
+        } finally {
+            int handler = 1;
+            try {
+                justThrow1();
+            } catch (ArrayIndexOutOfBoundsException e) {
+                handler = 2;
+            } finally {
+                handler *= 10;
+            }
+            Asserts.assertEquals(handler, 20);
         }
-        return true;
+
+        int catched2 = 0;
+        try {
+            justThrow2();
+        } catch (ArrayIndexOutOfBoundsException e) {
+            catched2 = 1;
+        } catch (RuntimeException e) {
+            catched2 = 2;
+        } catch (Exception e) {
+            for (int i = 0; i < 10; i++) {
+                int handler = -i;
+                try {
+                    justThrow2();
+                } catch (RuntimeException e1) {
+                    handler = i;
+                } catch (Exception e2) {
+                    handler = 2 * i;
+                } finally {
+                    handler *= 10;
+                }
+                Asserts.assertEquals(handler, 20 * i);
+            }
+            catched2 = 3;
+        }
+        return catched1 == 1 && catched2 == 3;
     }
 
-    static void justThrow() throws RuntimeException {
-        throw new RuntimeException("Expected Exception");
+    static void justThrow1() throws ArrayIndexOutOfBoundsException {
+        throw new ArrayIndexOutOfBoundsException("Expected ArrayIndexOutOfBoundsException");
+    }
+
+    static void justThrow2() throws Exception {
+        throw new Exception("Expected Exception");
+    }
+
+    static void justThrow3() throws RuntimeException {
+        throw new RuntimeException("Expected RuntimeException");
     }
 }

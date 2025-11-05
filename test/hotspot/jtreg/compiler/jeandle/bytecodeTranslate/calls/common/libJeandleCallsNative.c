@@ -26,8 +26,8 @@
 extern "C" {
 #endif
 
-#define METHOD_SIGNATURE "(IJIII)Z"
-#define STATIC_CALLEE_SIGNATURE "(Lcompiler/jeandle/bytecodeTranslate/calls/common/InvokeStatic;IJIII)Z"
+#define METHOD_SIGNATURE "(IJFDLjava/lang/String;)Z"
+#define STATIC_CALLEE_SIGNATURE "(Lcompiler/jeandle/bytecodeTranslate/calls/common/InvokeStatic;IJFDLjava/lang/String;)Z"
 #define BASE_CLASS "compiler/jeandle/bytecodeTranslate/calls/common/CallsBase"
 
 #define CHECK_EXCEPTIONS if ((*env)->ExceptionCheck(env)) return
@@ -37,37 +37,46 @@ extern "C" {
 #define NOT_STATIC 0
 
 jboolean doCalleeWork(JNIEnv *env, jobject self, jint param1, jlong param2,
-    jint param3, jint param4, jint param5) {
+    jfloat param3, jdouble param4, jstring param5) {
+  jclass cls = (*env)->GetObjectClass(env, self);
+  jfieldID calleeVisitedID = (*env)->GetFieldID(env, cls, "calleeVisited", "Z");
   jclass CheckCallsBaseClass;
   jmethodID checkValuesID;
+  CHECK_EXCEPTIONS_FALSE;
+  (*env)->SetBooleanField(env, self, calleeVisitedID, JNI_TRUE);
   CHECK_EXCEPTIONS_FALSE;
   CheckCallsBaseClass = (*env)->FindClass(env, BASE_CLASS);
   CHECK_EXCEPTIONS_FALSE;
   checkValuesID = (*env)->GetStaticMethodID(env, CheckCallsBaseClass,
-      "checkValues", "(IJIII)V");
+      "checkValues", "(IJFDLjava/lang/String;)V");
   CHECK_EXCEPTIONS_FALSE;
   (*env)->CallStaticVoidMethod(env, CheckCallsBaseClass, checkValuesID,
       param1, param2, param3, param4, param5);
   return JNI_TRUE;
 }
 
+JNIEXPORT jboolean JNICALL Java_compiler_jeandle_bytecodeTranslate_calls_common_InvokeDynamic_calleeNative(JNIEnv *env, jobject obj,
+    jint param1, jlong param2, jfloat param3, jdouble param4, jstring param5) {
+  return doCalleeWork(env, obj, param1, param2, param3, param4, param5);
+}
+
 JNIEXPORT jboolean JNICALL Java_compiler_jeandle_bytecodeTranslate_calls_common_InvokeInterface_calleeNative(JNIEnv *env, jobject obj,
-    jint param1, jlong param2, jint param3, jint param4, jint param5) {
+    jint param1, jlong param2, jfloat param3, jdouble param4, jstring param5) {
   return doCalleeWork(env, obj, param1, param2, param3, param4, param5);
 }
 
 JNIEXPORT jboolean JNICALL Java_compiler_jeandle_bytecodeTranslate_calls_common_InvokeSpecial_calleeNative(JNIEnv *env, jobject obj,
-    jint param1, jlong param2, jint param3, jint param4, jint param5) {
+    jint param1, jlong param2, jfloat param3, jdouble param4, jstring param5) {
   return doCalleeWork(env, obj, param1, param2, param3, param4, param5);
 }
 
 JNIEXPORT jboolean JNICALL Java_compiler_jeandle_bytecodeTranslate_calls_common_InvokeVirtual_calleeNative(JNIEnv *env, jobject obj,
-    jint param1, jlong param2, jint param3, jint param4, jint param5) {
+    jint param1, jlong param2, jfloat param3, jdouble param4, jstring param5) {
   return doCalleeWork(env, obj, param1, param2, param3, param4, param5);
 }
 
 JNIEXPORT jboolean JNICALL Java_compiler_jeandle_bytecodeTranslate_calls_common_InvokeStatic_calleeNative(JNIEnv *env, jclass obj,
-    jobject self, jint param1, jlong param2, jint param3, jint param4, jint param5) {
+    jobject self, jint param1, jlong param2, jfloat param3, jdouble param4, jstring param5) {
   return doCalleeWork(env, self, param1, param2, param3, param4, param5);
 }
 
@@ -98,10 +107,10 @@ void doCallerWork(JNIEnv *env, jobject obj, int isStatic) {
   CHECK_EXCEPTIONS;
   if (isStatic) {
     result = (*env)->CallStaticBooleanMethod(env, cls, calleeMethodID, obj,
-        (jint) 1, (jlong) 2L, (jint) 3, (jint) 4, (jint) 5);
+        (jint) 1, (jlong) 2L, (jfloat) 3.0f, (jdouble) 4.0, (*env)->NewStringUTF(env, "5"));
   } else {
     result = (*env)->CallBooleanMethod(env, obj, calleeMethodID,
-        (jint) 1, (jlong) 2L, (jint) 3, (jint) 4, (jint) 5);
+        (jint) 1, (jlong) 2L, (jfloat) 3.0f, (jdouble) 4.0, (*env)->NewStringUTF(env, "5"));
   }
   CHECK_EXCEPTIONS;
   baseClass = (*env)->FindClass(env, BASE_CLASS);

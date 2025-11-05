@@ -53,26 +53,36 @@
   def(exception_handler)
 
 //-----------------------------------------------------------------------------------------------------------------------------------
-//  name                     | func_entry            | return_type                        | arg_types
+//    name                                       | func_entry             | return_type                        | arg_types
 //-----------------------------------------------------------------------------------------------------------------------------------
-#define ALL_HOTSPOT_ROUTINES(def)                                                                                                    \
-  def(SharedRuntime_dsin,    SharedRuntime::dsin,     llvm::Type::getDoubleTy(context),    llvm::Type::getDoubleTy(context))         \
-                                                                                                                                     \
-  def(StubRoutines_dsin,     StubRoutines::dsin(),    llvm::Type::getDoubleTy(context),    llvm::Type::getDoubleTy(context))         \
-                                                                                                                                     \
-  def(SharedRuntime_dcos,    SharedRuntime::dcos,     llvm::Type::getDoubleTy(context),    llvm::Type::getDoubleTy(context))         \
-                                                                                                                                     \
-  def(StubRoutines_dcos,     StubRoutines::dcos(),    llvm::Type::getDoubleTy(context),    llvm::Type::getDoubleTy(context))         \
-                                                                                                                                     \
-  def(SharedRuntime_dtan,    SharedRuntime::dtan,     llvm::Type::getDoubleTy(context),    llvm::Type::getDoubleTy(context))         \
-                                                                                                                                     \
-  def(StubRoutines_dtan,     StubRoutines::dtan(),    llvm::Type::getDoubleTy(context),    llvm::Type::getDoubleTy(context))         \
-                                                                                                                                     \
-  def(SharedRuntime_drem,    SharedRuntime::drem,     llvm::Type::getDoubleTy(context),    llvm::Type::getDoubleTy(context),         \
-                                                                                           llvm::Type::getDoubleTy(context))         \
-                                                                                                                                     \
-  def(SharedRuntime_frem,    SharedRuntime::frem,     llvm::Type::getFloatTy(context),     llvm::Type::getFloatTy(context),          \
-                                                                                           llvm::Type::getFloatTy(context))
+#define ALL_HOTSPOT_ROUTINES(def)                                                                                                                         \
+  def(SharedRuntime_dsin,                         SharedRuntime::dsin,     llvm::Type::getDoubleTy(context),    llvm::Type::getDoubleTy(context))         \
+                                                                                                                                                          \
+  def(StubRoutines_dsin,                          StubRoutines::dsin(),    llvm::Type::getDoubleTy(context),    llvm::Type::getDoubleTy(context))         \
+                                                                                                                                                          \
+  def(SharedRuntime_dcos,                         SharedRuntime::dcos,     llvm::Type::getDoubleTy(context),    llvm::Type::getDoubleTy(context))         \
+                                                                                                                                                          \
+  def(StubRoutines_dcos,                          StubRoutines::dcos(),    llvm::Type::getDoubleTy(context),    llvm::Type::getDoubleTy(context))         \
+                                                                                                                                                          \
+  def(SharedRuntime_dtan,                         SharedRuntime::dtan,     llvm::Type::getDoubleTy(context),    llvm::Type::getDoubleTy(context))         \
+                                                                                                                                                          \
+  def(StubRoutines_dtan,                          StubRoutines::dtan(),    llvm::Type::getDoubleTy(context),    llvm::Type::getDoubleTy(context))         \
+                                                                                                                                                          \
+  def(SharedRuntime_drem,                         SharedRuntime::drem,     llvm::Type::getDoubleTy(context),    llvm::Type::getDoubleTy(context),         \
+                                                                                                                llvm::Type::getDoubleTy(context))         \
+                                                                                                                                                          \
+  def(SharedRuntime_frem,                         SharedRuntime::frem,     llvm::Type::getFloatTy(context),     llvm::Type::getFloatTy(context),          \
+                                                                                                                llvm::Type::getFloatTy(context))          \
+                                                                                                                                                          \
+  def(SharedRuntime_complete_monitor_locking_C,   SharedRuntime::complete_monitor_locking_C, llvm::Type::getVoidTy(context),                                             \
+                                                                                           llvm::PointerType::get(context, llvm::jeandle::AddrSpace::JavaHeapAddrSpace), \
+                                                                                           llvm::PointerType::get(context, llvm::jeandle::AddrSpace::CHeapAddrSpace),    \
+                                                                                           llvm::PointerType::get(context, llvm::jeandle::AddrSpace::CHeapAddrSpace))    \
+                                                                                                                                                                         \
+  def(SharedRuntime_complete_monitor_unlocking_C, SharedRuntime::complete_monitor_unlocking_C, llvm::Type::getVoidTy(context),                                           \
+                                                                                           llvm::PointerType::get(context, llvm::jeandle::AddrSpace::JavaHeapAddrSpace), \
+                                                                                           llvm::PointerType::get(context, llvm::jeandle::AddrSpace::CHeapAddrSpace),    \
+                                                                                           llvm::PointerType::get(context, llvm::jeandle::AddrSpace::CHeapAddrSpace))
 
 
 // JeandleRuntimeRoutine contains C/C++/Assembly routines and Hotspot routines that can be called from Jeandle compiled code.

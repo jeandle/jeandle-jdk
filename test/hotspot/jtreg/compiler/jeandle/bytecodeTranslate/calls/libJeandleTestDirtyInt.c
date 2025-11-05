@@ -18,18 +18,13 @@
  *
  */
 
-/*
- * @test
- * @summary check calls from native to native using InvokeSpecial
- * @modules java.base/jdk.internal.misc
- * @library /test/lib /
- * @compile -source 10 -target 10 ../common/InvokeSpecial.java
- *
- * @build jdk.test.whitebox.WhiteBox
- * @run driver jdk.test.lib.helpers.ClassFileInstaller jdk.test.whitebox.WhiteBox
- * @run main/othervm/native -XX:+UseJeandleCompiler
- *    -XX:CompileCommand=compileonly,compiler.jeandle.bytecodeTranslate.calls.common.*::*
- *    -XX:+UnlockDiagnosticVMOptions -XX:+WhiteBoxAPI -Xbootclasspath/a:.
- *    compiler.jeandle.bytecodeTranslate.calls.common.InvokeSpecial
- *    -nativeCaller -nativeCallee
- */
+#include "jni.h"
+#include <stdio.h>
+
+static int array = 0x42;
+
+JNIEXPORT jint JNICALL Java_compiler_jeandle_bytecodeTranslate_calls_TestDirtyInt_test(JNIEnv* env, jclass jclazz, jint v)
+{
+  int* ptr = &array + v + 4;
+  return *ptr;
+}
