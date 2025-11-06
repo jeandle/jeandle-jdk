@@ -1202,19 +1202,19 @@ bool JeandleAbstractInterpreter::inline_intrinsic(const ciMethod* target) {
     case vmIntrinsicID::_dsin: {
       llvm::FunctionCallee callee = StubRoutines::dsin() != nullptr ? JeandleRuntimeRoutine::hotspot_StubRoutines_dsin_callee(_module) :
                                                                       JeandleRuntimeRoutine::hotspot_SharedRuntime_dsin_callee(_module);
-      call_jeandle_routine(callee, {_jvm->dpop()}, BasicType::T_DOUBLE);
+      _jvm->dpush(call_jeandle_routine(callee, {_jvm->dpop()}, llvm::CallingConv::C));
       break;
     }
     case vmIntrinsicID::_dcos: {
       llvm::FunctionCallee callee = StubRoutines::dcos() != nullptr ? JeandleRuntimeRoutine::hotspot_StubRoutines_dcos_callee(_module) :
                                                                       JeandleRuntimeRoutine::hotspot_SharedRuntime_dcos_callee(_module);
-      call_jeandle_routine(callee, {_jvm->dpop()}, BasicType::T_DOUBLE);
+      _jvm->dpush(call_jeandle_routine(callee, {_jvm->dpop()}, llvm::CallingConv::C));
       break;
     }
     case vmIntrinsicID::_dtan: {
       llvm::FunctionCallee callee = StubRoutines::dtan() != nullptr ? JeandleRuntimeRoutine::hotspot_StubRoutines_dtan_callee(_module) :
                                                                       JeandleRuntimeRoutine::hotspot_SharedRuntime_dtan_callee(_module);
-      call_jeandle_routine(callee, {_jvm->dpop()}, BasicType::T_DOUBLE);
+      _jvm->dpush(call_jeandle_routine(callee, {_jvm->dpop()}, llvm::CallingConv::C));
       break;
     }
     default:
@@ -1224,53 +1224,10 @@ bool JeandleAbstractInterpreter::inline_intrinsic(const ciMethod* target) {
 }
 
 // Generate IR for calling into JeandleRuntimeRoutine
-void JeandleAbstractInterpreter::call_jeandle_routine(llvm::FunctionCallee callee, llvm::ArrayRef<llvm::Value *> args, BasicType return_type) {
-  llvm::Function* func = llvm::cast<llvm::Function>(callee.getCallee());
-  bool is_leaf = func->hasFnAttribute("gc-leaf-function");
-  llvm::Value* result_value = nullptr;
-
-  if (is_leaf) {
-    llvm::CallInst *call = _ir_builder.CreateCall(callee, args);
-    call->setCallingConv(func->getCallingConv());
-    result_value = call;
-  } else {
-    // Record this call.
-    JeandleCompiledCall::Type call_type = JeandleCompiledCall::STATIC_CALL;
-    llvm::StringRef func_name = func->getName();
-    address dest = JeandleRuntimeRoutine::get_routine_entry(func_name);
-    assert(dest != nullptr, "routine must have valid entry point");
-
-    int cur_bci = _bytecodes.cur_bci();
-    uint32_t id = _compiled_code.next_statepoint_id();
-    _compiled_code.push_non_routine_call_site(new CallSiteInfo(call_type, dest, cur_bci, id));
-
-    // Every call instruction may throw exceptions, handle them here.
-    DispatchedDest dispatched = dispatch_exception_for_invoke();
-
-    // Create the invoke instruction.
-    llvm::InvokeInst* invoke = _ir_builder.CreateInvoke(callee, dispatched._normal_dest, dispatched._unwind_dest, args);
-
-    // Continue to interpret the remaining bytecodes in the current JeandleBasicBlock at dispatched._normal_dest.
-    _ir_builder.SetInsertPoint(dispatched._normal_dest);
-    _block->set_tail_llvm_block(dispatched._normal_dest);
-
-    // Apply attributes and calling convention.
-    invoke->setCallingConv(func->getCallingConv());
-    llvm::Attribute id_attr = llvm::Attribute::get(*_context,
-                                                   llvm::jeandle::Attribute::StatepointID,
-                                                   std::to_string(id));
-    llvm::Attribute patch_bytes_attr = llvm::Attribute::get(*_context,
-                                                   llvm::jeandle::Attribute::StatepointNumPatchBytes,
-                                                   std::to_string(JeandleCompiledCall::call_site_patch_size(call_type)));
-    invoke->addFnAttr(id_attr);
-    invoke->addFnAttr(patch_bytes_attr);
-
-    result_value = invoke;
-  }
-  if (return_type != BasicType::T_VOID) {
-    assert(result_value != nullptr && !func->getReturnType()->isVoidTy(), "result value must be valid");
-    _jvm->push(return_type, result_value);
-  }
+llvm::CallInst* JeandleAbstractInterpreter::call_jeandle_routine(llvm::FunctionCallee callee, llvm::ArrayRef<llvm::Value *> args, llvm::CallingConv::ID calling_conv) {
+  llvm::CallInst *call = _ir_builder.CreateCall(callee, args);
+  call->setCallingConv(calling_conv);
+  return call;
 }
 
 void JeandleAbstractInterpreter::stack_op(Bytecodes::Code code) {
@@ -1446,11 +1403,11 @@ void JeandleAbstractInterpreter::arith_op(BasicType type, Bytecodes::Code code) 
     case Bytecodes::_fdiv: // fall through
     case Bytecodes::_ddiv: _jvm->push(type, _ir_builder.CreateFDiv(l, r)); break;
     case Bytecodes::_frem: {
-      call_jeandle_routine(JeandleRuntimeRoutine::hotspot_SharedRuntime_frem_callee(_module), {l, r}, BasicType::T_FLOAT);
+      _jvm->fpush(call_jeandle_routine(JeandleRuntimeRoutine::hotspot_SharedRuntime_frem_callee(_module), {l, r}, llvm::CallingConv::C));
       break;
     }
     case Bytecodes::_drem: {
-      call_jeandle_routine(JeandleRuntimeRoutine::hotspot_SharedRuntime_drem_callee(_module), {l, r}, BasicType::T_DOUBLE);
+      _jvm->dpush(call_jeandle_routine(JeandleRuntimeRoutine::hotspot_SharedRuntime_drem_callee(_module), {l, r}, llvm::CallingConv::C));
       break;
     }
     case Bytecodes::_fneg: // fall through
@@ -1884,8 +1841,8 @@ void JeandleAbstractInterpreter::dispatch_exception_to_handler(llvm::Value* exce
 void JeandleAbstractInterpreter::throw_exception(llvm::Value* exception_oop) {
   // Call install_exceptional_return.
   llvm::CallInst* current_thread = call_java_op("jeandle.current_thread", {});
-  call_jeandle_routine(JeandleRuntimeRoutine::install_exceptional_return_callee(_module),
-                       {exception_oop, current_thread}, BasicType::T_VOID);
+  llvm::CallInst* call_inst = call_jeandle_routine(JeandleRuntimeRoutine::install_exceptional_return_callee(_module),
+                                                   {exception_oop, current_thread}, llvm::CallingConv::Hotspot_JIT);
 
   // Return
   llvm::Type* ret_type = _llvm_func->getReturnType();
@@ -1922,9 +1879,8 @@ void JeandleAbstractInterpreter::monitorenter() {
 
   llvm::FunctionCallee monitorenter_callee = JeandleRuntimeRoutine::hotspot_SharedRuntime_complete_monitor_locking_C_callee(_module);
   llvm::CallInst* current_thread = call_java_op("jeandle.current_thread", {});
-  // llvm::CallInst* call_monitorenter = _ir_builder.CreateCall(monitorenter_callee, {obj, lock, current_thread});
-  // call_monitorenter->setCallingConv(llvm::CallingConv::C);
-  call_jeandle_routine(monitorenter_callee, {obj, lock, current_thread}, BasicType::T_VOID);
+  llvm::CallInst* call_monitorenter = _ir_builder.CreateCall(monitorenter_callee, {obj, lock, current_thread});
+  call_monitorenter->setCallingConv(llvm::CallingConv::C);
 }
 
 void JeandleAbstractInterpreter::monitorexit() {
@@ -1937,9 +1893,8 @@ void JeandleAbstractInterpreter::monitorexit() {
 
   llvm::FunctionCallee monitorexit_callee = JeandleRuntimeRoutine::hotspot_SharedRuntime_complete_monitor_unlocking_C_callee(_module);
   llvm::CallInst* current_thread = call_java_op("jeandle.current_thread", {});
-  // llvm::CallInst* call_monitorexit = _ir_builder.CreateCall(monitorexit_callee, {obj, lock, current_thread});
-  // call_monitorexit->setCallingConv(llvm::CallingConv::C);
-  call_jeandle_routine(monitorexit_callee, {obj, lock, current_thread}, BasicType::T_VOID);
+  llvm::CallInst* call_monitorexit = _ir_builder.CreateCall(monitorexit_callee, {obj, lock, current_thread});
+  call_monitorexit->setCallingConv(llvm::CallingConv::C);
 }
 
 // TODO: Implement me!
