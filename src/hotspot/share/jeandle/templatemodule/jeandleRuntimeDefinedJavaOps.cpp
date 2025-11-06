@@ -149,8 +149,8 @@ DEF_JAVA_OP(card_table_barrier, 1, llvm::Type::getVoidTy(context), llvm::Pointer
 JAVA_OP_END
 
 DEF_JAVA_OP(new_instance, 1, llvm::PointerType::get(context, llvm::jeandle::AddrSpace::JavaHeapAddrSpace),
-  llvm::PointerType::get(context, llvm::jeandle::AddrSpace::CHeapAddrSpace),  // klass
-  llvm::Type::getInt32Ty(context))                                                        // size_in_bytes
+            llvm::PointerType::get(context, llvm::jeandle::AddrSpace::CHeapAddrSpace), // klass
+            llvm::Type::getInt32Ty(context)) // size_in_bytes
   llvm::Value* klass = func->getArg(0);
   llvm::Value* size = func->getArg(1);
   // Get current thread pointer using jeandle.current_thread JavaOp
