@@ -26,6 +26,7 @@ import jdk.test.lib.Utils;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
+import java.util.Comparator;
 import java.util.List;
 import java.util.regex.Pattern;
 import java.util.regex.Matcher;
@@ -42,6 +43,10 @@ public class FileCheck {
     private List<String> lines;
 
     public FileCheck(String path, Method method, boolean optimized) throws Exception {
+        this(path, method, optimized, 0);
+    }
+
+    public FileCheck(String path, Method method, boolean optimized, int fileIndex) throws Exception {
         this.lineIndex = 0;
 
         Class declaringClass = method.getDeclaringClass();
@@ -74,12 +79,16 @@ public class FileCheck {
         if (files.isEmpty()) {
             throw new FileNotFoundException("No matched file found");
         }
-        if (files.size() > 1) {
-            // TODO: Support read more than one matched files.
-            System.out.println("FileCheck Warning: more than one matched files found, only reading one of them");
+
+        if (files.size() <= fileIndex) {
+            throw new IllegalArgumentException("fileIndex out of range");
         }
 
-        this.lines = Files.readAllLines(files.get(0))
+        List<Path> sortedFiles = files.stream()
+                                      .sorted(Comparator.comparing(iter -> iter.getFileName().toString()))
+                                      .collect(Collectors.toList());
+
+        this.lines = Files.readAllLines(sortedFiles.get(fileIndex))
                           .stream()
                           .map(str -> str.replaceAll("\\s+", " ").trim())
                           .filter(str -> !str.isEmpty())

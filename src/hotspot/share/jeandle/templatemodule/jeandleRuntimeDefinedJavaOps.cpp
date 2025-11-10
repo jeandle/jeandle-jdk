@@ -27,6 +27,9 @@
 #include "jeandle/jeandleRegister.hpp"
 
 #include "jeandle/__hotspotHeadersBegin__.hpp"
+#include "ci/ciUtilities.hpp"
+#include "gc/shared/cardTable.hpp"
+#include "gc/shared/gc_globals.hpp"
 #include "oops/arrayOop.hpp"
 #include "oops/array.hpp"
 #include "oops/klass.hpp"
@@ -103,9 +106,51 @@ DEF_JAVA_OP(safepoint_poll, 1, llvm::Type::getVoidTy(context))
   ir_builder.CreateRetVoid();
 JAVA_OP_END
 
+DEF_JAVA_OP(card_table_barrier, 1, llvm::Type::getVoidTy(context), llvm::PointerType::get(context, llvm::jeandle::AddrSpace::JavaHeapAddrSpace))
+  llvm::Value* obj_addr = func->getArg(0);
+  llvm::Type* intptr_type = ir_builder.getIntPtrTy(template_module.getDataLayout());
+  llvm::Value* obj_ptr = ir_builder.CreatePtrToInt(obj_addr, intptr_type);
+
+  // Find the card table address.
+  llvm::Value* card_table_offset = ir_builder.CreateLShr(obj_ptr, llvm::ConstantInt::get(intptr_type, (uint64_t)CardTable::card_shift()));
+
+  llvm::Value* card_table_base_addr = ir_builder.CreateIntToPtr(llvm::ConstantInt::get(intptr_type, (uint64_t)ci_card_table_address()),
+                                                                llvm::PointerType::get(context, llvm::jeandle::AddrSpace::CHeapAddrSpace));
+
+  llvm::Value* card_table_addr = ir_builder.CreateInBoundsGEP(llvm::Type::getInt8Ty(context), card_table_base_addr, card_table_offset);
+
+  // Store dirty value to card table.
+  CardTable::CardValue dirty_value = CardTable::dirty_card_val();
+  if (UseCondCardMark) {
+    llvm::BasicBlock* already_dirty_block = llvm::BasicBlock::Create(context, "already_dirty", func);
+    llvm::BasicBlock* store_dirty_block = llvm::BasicBlock::Create(context, "store_dirty", func);
+    llvm::Value* card_value = ir_builder.CreateLoad(ir_builder.getInt8Ty(), card_table_addr);
+
+    // Card is already dirty, skip storing dirty value.
+    llvm::Value* if_already_dirty = ir_builder.CreateICmp(llvm::CmpInst::ICMP_EQ,
+                                                          card_value,
+                                                          llvm::ConstantInt::get(ir_builder.getInt8Ty(), (uint64_t)dirty_value));
+    ir_builder.CreateCondBr(if_already_dirty, already_dirty_block, store_dirty_block);
+
+    // Card is not dirty, store dirty value.
+    ir_builder.SetInsertPoint(store_dirty_block);
+    llvm::StoreInst* store_inst = ir_builder.CreateStore(llvm::ConstantInt::get(ir_builder.getInt8Ty(), (uint64_t)dirty_value), card_table_addr);
+    store_inst->setAtomic(llvm::AtomicOrdering::Unordered);
+    ir_builder.CreateBr(already_dirty_block);
+
+    // Card is dirty, return.
+    ir_builder.SetInsertPoint(already_dirty_block);
+  } else {
+    llvm::StoreInst* store_inst = ir_builder.CreateStore(llvm::ConstantInt::get(ir_builder.getInt8Ty(), (uint64_t)dirty_value), card_table_addr);
+    store_inst->setAtomic(llvm::AtomicOrdering::Unordered);
+  }
+
+  ir_builder.CreateRetVoid();
+JAVA_OP_END
+
 DEF_JAVA_OP(new_instance, 1, llvm::PointerType::get(context, llvm::jeandle::AddrSpace::JavaHeapAddrSpace),
-  llvm::PointerType::get(context, llvm::jeandle::AddrSpace::CHeapAddrSpace),  // klass
-  llvm::Type::getInt32Ty(context))                                                        // size_in_bytes
+            llvm::PointerType::get(context, llvm::jeandle::AddrSpace::CHeapAddrSpace), // klass
+            llvm::Type::getInt32Ty(context)) // size_in_bytes
   llvm::Value* klass = func->getArg(0);
   llvm::Value* size = func->getArg(1);
   // Get current thread pointer using jeandle.current_thread JavaOp
@@ -140,6 +185,7 @@ bool RuntimeDefinedJavaOps::define_all(llvm::Module& template_module) {
   // Define all runtime defined JavaOps:
   define_current_thread(template_module);
   define_safepoint_poll(template_module);
+  define_card_table_barrier(template_module);
   define_new_instance(template_module);
 
   return failed();
