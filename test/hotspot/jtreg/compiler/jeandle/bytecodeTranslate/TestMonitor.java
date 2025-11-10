@@ -32,7 +32,6 @@ package compiler.jeandle.bytecodeTranslate;
 
 import java.lang.reflect.Method;
 
-import compiler.jeandle.bytecodeTranslate.TestBuildCFG;
 import jdk.test.lib.Asserts;
 import jdk.test.whitebox.WhiteBox;
 

@@ -214,6 +214,8 @@ class BasicBlockBuilder : public JeandleCompilationResourceObj {
     parent_block->add_successor(child_block);
   }
 
+  void remove_dead_blocks();
+
  private:
   llvm::SmallVector<JeandleBasicBlock*> _bci2block;
   ciMethod* _method;

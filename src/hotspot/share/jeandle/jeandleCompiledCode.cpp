@@ -516,8 +516,10 @@ void JeandleCompiledCode::build_implicit_exception_table() {
 
   for (uint32_t i = 0; i < num_faulting_pcs; i++) {
     auto fault_info = function_info.getFunctionFaultInfoAt(i);
+
     auto faulting_offset = fault_info.getFaultingPCOffset() + _prolog_length;
     auto handler_offset = fault_info.getHandlerPCOffset() + _prolog_length;
+
     _implicit_exception_table.append(faulting_offset, handler_offset);
   }
 }

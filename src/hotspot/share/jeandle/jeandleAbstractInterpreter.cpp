@@ -436,6 +436,26 @@ void BasicBlockBuilder::setup_control_flow() {
   }
 }
 
+void BasicBlockBuilder::remove_dead_blocks() {
+  for (size_t i = 0; i < _bci2block.size(); i++) {
+    JeandleBasicBlock* block = _bci2block[i];
+    if (block == nullptr) {
+      continue;
+    }
+
+    // Remove blocks that are not compiled.
+    if (!block->is_set(JeandleBasicBlock::is_compiled)) {
+      llvm::BasicBlock* llvm_block = block->header_llvm_block();
+      if (llvm_block && llvm_block->getParent()) {
+        llvm_block->eraseFromParent();
+      }
+
+      assert(_bci2block[i]->VM_state() == nullptr, "VM state should be null");
+      _bci2block[i] = nullptr;
+    }
+  }
+}
+
 void BasicBlockBuilder::mark_loops() {
   ResourceMark rm;
 
@@ -546,6 +566,8 @@ void JeandleAbstractInterpreter::interpret() {
 
     interpret_block(current);
   }
+
+  _block_builder->remove_dead_blocks();
 }
 
 void JeandleAbstractInterpreter::interpret_block(JeandleBasicBlock* block) {
@@ -555,6 +577,12 @@ void JeandleAbstractInterpreter::interpret_block(JeandleBasicBlock* block) {
 
   _block = block;
   _jvm = block->VM_state();
+
+  // Skip exception handler block that is not merged.
+  if (_jvm == nullptr && _block->is_exception_handler()) {
+    return;
+  }
+
   assert(_jvm != nullptr, "JeandleVMState should not be null");
 
   _bytecodes.reset_to_bci(block->start_bci());
@@ -1896,10 +1924,8 @@ void JeandleAbstractInterpreter::monitorenter() {
 }
 
 void JeandleAbstractInterpreter::monitorexit() {
-
+  // TODO: need to check if the monitor is balanced.
   llvm::Value* obj = _jvm->apop();
-
-  null_check(obj);
 
   llvm::Value* lock = _jvm->pop_lock();
 
@@ -1909,7 +1935,7 @@ void JeandleAbstractInterpreter::monitorexit() {
   call_monitorexit->setCallingConv(llvm::CallingConv::C);
 }
 
-// TODO: Implement me!
+// TODO: Reimplement null_check_fail block with uncommon trap.
 void JeandleAbstractInterpreter::null_check(llvm::Value* obj) {
   int cur_bci = _bytecodes.cur_bci();
   llvm::BasicBlock* null_check_pass = llvm::BasicBlock::Create(*_context,
@@ -1923,11 +1949,10 @@ void JeandleAbstractInterpreter::null_check(llvm::Value* obj) {
                                                 llvm::ConstantPointerNull::get(llvm::cast<llvm::PointerType>(obj->getType())));
   llvm::BranchInst* null_check_br = _ir_builder.CreateCondBr(if_null, null_check_fail, null_check_pass);
 
-  // Add make.implicit metadata, and the ImplicitNullChecksPass transforms explicit checks into implicit ones.
+  // Add make.implicit metadata, and the ImplicitNullChecksPass will transform it into an implicit check.
   llvm::MDNode* make_implicit = llvm::MDNode::get(*_context, {});
   null_check_br->setMetadata(llvm::LLVMContext::MD_make_implicit, make_implicit);
 
-  // TODO: workaround, we need an uncommon trap here.
   _ir_builder.SetInsertPoint(null_check_fail);
   llvm::FunctionCallee null_check_fail_callee = JeandleRuntimeRoutine::hotspot_SharedRuntime_throw_NullPointerException_callee(_module);
   llvm::CallInst* current_thread = call_java_op("jeandle.current_thread", {});
