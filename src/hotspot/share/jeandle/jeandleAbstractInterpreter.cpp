@@ -579,11 +579,9 @@ void JeandleAbstractInterpreter::interpret_block(JeandleBasicBlock* block) {
   _jvm = block->VM_state();
 
   // Skip exception handler block that is not merged.
-  if (_jvm == nullptr && _block->is_exception_handler()) {
+  if (_jvm == nullptr) {
     return;
   }
-
-  assert(_jvm != nullptr, "JeandleVMState should not be null");
 
   _bytecodes.reset_to_bci(block->start_bci());
 
