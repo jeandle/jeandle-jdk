@@ -66,6 +66,7 @@ JeandleVMState* JeandleVMState::copy_for_exception_handler(llvm::Value* exceptio
   return copied;
 }
 
+// Like C1's ValueStack::is_same.
 bool JeandleVMState::match(JeandleVMState* to_match) {
   if (_locals.size() != to_match->_locals.size()) {
     return false;
@@ -89,6 +90,16 @@ bool JeandleVMState::match(JeandleVMState* to_match) {
 
     // For call instructions, getType() returns the return type.
     if (_stack[i]->getType() != to_match->_stack[i]->getType()) {
+      return false;
+    }
+  }
+
+  if (_locks.size() != to_match->_locks.size()) {
+    return false;
+  }
+
+  for (size_t i = 0; i < _locks.size(); i++) {
+    if (_locks[i] != to_match->_locks[i]) {
       return false;
     }
   }
