@@ -44,9 +44,8 @@ public class TestNullCheck {
     private static final String[] procArgs = new String[] {
         "-Xcomp",
         "-XX:-TieredCompilation",
-        "-XX:CompileCommand=compileonly,TestNullCheck::testInvoke",
-        "-XX:CompileCommand=compileonly,TestNullCheck::testAccess",
-        "-XX:CompileCommand=compileonly,TestNullCheck::testMulti",
+        "-XX:CompileCommand=compileonly,TestNullCheck::test*",
+        "-XX:CompileCommand=compileonly,TestNullCheck::justThrowNull",
         "-XX:+JeandleDumpIR",
         "-XX:+UseJeandleCompiler",
         "TestNullCheck"
@@ -60,19 +59,20 @@ public class TestNullCheck {
         } else if (args[0].equals("testBase")) {
             MyClass myClass = new MyClass();
             Asserts.assertEquals(testInvoke(myClass), 1);
-            checkIRFile(TestNullCheck.class.getDeclaredMethod("testInvoke", MyClass.class));
 
             Asserts.assertEquals(testAccess(myClass), 1);
-            checkIRFile(TestNullCheck.class.getDeclaredMethod("testAccess", MyClass.class));
+            checkFileNull(TestNullCheck.class.getDeclaredMethod("testAccess", MyClass.class));
 
             Asserts.assertEquals(testMulti(myClass, myClass), 9);
-            checkIRFile(TestNullCheck.class.getDeclaredMethod("testMulti", MyClass.class, MyClass.class));
+            checkFileNull(TestNullCheck.class.getDeclaredMethod("testMulti", MyClass.class, MyClass.class));
         } else if (args[0].equals("testInvoke")) {
             testInvoke(null);
         } else if (args[0].equals("testAccess")) {
             testAccess(null);
         } else if (args[0].equals("testMulti")) {
             testMulti(null, null);
+        } else if (args[0].equals("testThrowNull")) {
+            testThrowNull();
         } else {
             throw new IllegalArgumentException("Unsupported argument: " + args[0]);
         }
@@ -93,6 +93,10 @@ public class TestNullCheck {
         output = runTestProcess("testMulti");
         output.shouldHaveExitValue(1);
         output.shouldContain(NPE_STRING);
+
+        output = runTestProcess("testThrowNull");
+        output.shouldHaveExitValue(1);
+        output.shouldContain(NPE_STRING);
     }
 
     private static OutputAnalyzer runTestProcess(String testType) throws Exception {
@@ -107,7 +111,7 @@ public class TestNullCheck {
         return ProcessTools.executeProcess(pb);
     }
 
-    private static void checkIRFile(Method method) throws Exception {
+    private static void checkFileNull(Method method) throws Exception {
         String currentDir = System.getProperty("user.dir");
 
         FileCheck fileCheck = new FileCheck(currentDir, method, false);
@@ -129,6 +133,18 @@ public class TestNullCheck {
         }
         int y = b.field + 4;
         return x + y;
+    }
+
+    private static void testThrowNull() {
+        try {
+            justThrowNull();
+        } catch (Exception e) {
+            // Should not reach here.
+        }
+    }
+
+    private static void justThrowNull() throws Exception {
+        throw null;
     }
 }
 

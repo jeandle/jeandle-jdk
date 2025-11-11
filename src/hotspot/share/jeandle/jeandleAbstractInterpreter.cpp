@@ -157,6 +157,19 @@ llvm::Value* JeandleVMState::pop(BasicType type) {
   return v;
 }
 
+llvm::Value* JeandleVMState::peek(BasicType type, size_t offset) {
+  if (is_double_word_type(type)) {
+    assert(_stack[_stack.size() - 1 - offset] == nullptr, "hi-word of doubleword value must be null");
+    offset++;
+  }
+
+  assert(offset < _stack.size(), "offset out of range");
+  llvm::Value* v = _stack[_stack.size() - 1 - offset];
+  assert(v != nullptr, "null value to peek");
+  assert(v->getType() == JeandleType::java2llvm(type, *_context), "type must match");
+  return v;
+}
+
 // Locals operations:
 
 llvm::Value* JeandleVMState::load(BasicType type, int index) {
@@ -578,7 +591,7 @@ void JeandleAbstractInterpreter::interpret_block(JeandleBasicBlock* block) {
   _block = block;
   _jvm = block->VM_state();
 
-  // Skip exception handler block that is not merged.
+  // Skip blocks that are unreachable.
   if (_jvm == nullptr) {
     return;
   }
@@ -846,7 +859,10 @@ void JeandleAbstractInterpreter::interpret_block(JeandleBasicBlock* block) {
       case Bytecodes::_anewarray: Unimplemented(); break;
 
       case Bytecodes::_arraylength: arraylength(); break;
-      case Bytecodes::_athrow: dispatch_exception_to_handler(_jvm->apop()); break;
+      case Bytecodes::_athrow:
+        null_check(_jvm->apeek());
+        dispatch_exception_to_handler(_jvm->apop());
+        break;
 
       case Bytecodes::_checkcast: Unimplemented(); break;
       case Bytecodes::_instanceof: instanceof(_bytecodes.get_index_u2()); break;
@@ -1501,6 +1517,7 @@ void JeandleAbstractInterpreter::do_get_xxx(ciField* field, bool is_static) {
   if (is_static) {
     addr = compute_static_field_address(field->holder(), offset);
   } else {
+    null_check(_jvm->apeek());
     addr = compute_instance_field_address(_jvm->apop(), offset);
   }
 
@@ -1518,6 +1535,7 @@ void JeandleAbstractInterpreter::do_put_xxx(ciField* field, bool is_static) {
   if (is_static) {
     addr = compute_static_field_address(field->holder(), offset);
   } else {
+    null_check(_jvm->apeek());
     addr = compute_instance_field_address(_jvm->apop(), offset);
   }
 
@@ -1526,8 +1544,6 @@ void JeandleAbstractInterpreter::do_put_xxx(ciField* field, bool is_static) {
 }
 
 llvm::Value* JeandleAbstractInterpreter::compute_instance_field_address(llvm::Value* obj, int offset) {
-  null_check(obj);
-
   return _ir_builder.CreateInBoundsGEP(llvm::Type::getInt8Ty(*_context), obj,
                                        _ir_builder.getInt64(offset));
 }
@@ -1615,19 +1631,19 @@ void JeandleAbstractInterpreter::add_safepoint_poll() {
 }
 
 void JeandleAbstractInterpreter::arraylength() {
-    llvm::Value* array_oop = _jvm->apop();
+    null_check(_jvm->apeek());
 
-    null_check(array_oop);
+    llvm::Value* array_oop = _jvm->apop();
 
     llvm::CallInst* call = call_java_op("jeandle.arraylength", {array_oop});
     _jvm->ipush(call);
 }
 
 llvm::Value* JeandleAbstractInterpreter::compute_array_element_address(BasicType basic_type, llvm::Type* type) {
+  null_check(_jvm->apeek(1));
+
   llvm::Value* index = _jvm->ipop();
   llvm::Value* array_oop = _jvm->apop();
-
-  null_check(array_oop);
 
   llvm::Value* array_base_offset = _ir_builder.getInt32(arrayOopDesc::base_offset_in_bytes(basic_type));
   llvm::Value* array_base = _ir_builder.CreateInBoundsPtrAdd(array_oop, array_base_offset, "array_element_base");
@@ -1819,8 +1835,6 @@ JeandleAbstractInterpreter::DispatchedDest JeandleAbstractInterpreter::dispatch_
 }
 
 void JeandleAbstractInterpreter::dispatch_exception_to_handler(llvm::Value* exception_oop) {
-  null_check(exception_oop);
-
   // traverse exception handler table
   for (ciExceptionHandlerStream handlers(_method, _bytecodes.cur_bci()); !handlers.is_done(); handlers.next()) {
     ciExceptionHandler* handler = handlers.handler();
@@ -1903,9 +1917,9 @@ void JeandleAbstractInterpreter::newarray(int element_type){
 }
 
 void JeandleAbstractInterpreter::monitorenter() {
-  llvm::Value* obj = _jvm->apop();
+  null_check(_jvm->apeek());
 
-  null_check(obj);
+  llvm::Value* obj = _jvm->apop();
 
   // Allocate a BasicLock on stack.
   // Alloca insts should be in the entry block to be 'StaticAlloca'. Then they could be folded into prologue code.
