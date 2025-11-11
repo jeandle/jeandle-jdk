@@ -484,7 +484,7 @@ JeandleAbstractInterpreter::JeandleAbstractInterpreter(ciEnv* env,
                                                        int entry_bci,
                                                        llvm::Module& target_module,
                                                        JeandleCompiledCode& code) :
-                                                       _env(env)
+                                                       _env(env),
                                                        _method(method),
                                                        _llvm_func(JeandleFuncSig::create_llvm_func(method, target_module)),
                                                        _entry_bci(entry_bci),
