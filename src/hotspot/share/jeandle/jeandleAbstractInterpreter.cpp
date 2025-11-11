@@ -1536,9 +1536,6 @@ llvm::Value* JeandleAbstractInterpreter::compute_static_field_address(ciInstance
   ciInstance* holder_instance = holder->java_mirror();
   llvm::Value* holder_oop_handle = find_or_insert_oop(holder_instance);
   llvm::Value* holder_oop = _ir_builder.CreateLoad(JeandleType::java2llvm(BasicType::T_OBJECT, *_context), holder_oop_handle);
-
-  null_check(holder_oop);
-
   return _ir_builder.CreateInBoundsGEP(llvm::Type::getInt8Ty(*_context),
                                        holder_oop,
                                        _ir_builder.getInt64(offset));
@@ -1618,7 +1615,6 @@ void JeandleAbstractInterpreter::add_safepoint_poll() {
 }
 
 void JeandleAbstractInterpreter::arraylength() {
-    // TODO: need null pointer check in the future
     llvm::Value* array_oop = _jvm->apop();
 
     null_check(array_oop);
