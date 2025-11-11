@@ -534,8 +534,12 @@ void JeandleAbstractInterpreter::interpret() {
 
   initialize_VM_state();
 
-  if (!current->merge_VM_state_from(_block_builder->entry_block()->VM_state(), _block_builder->entry_block()->tail_llvm_block(), _method)) {
+  if (!current->merge_VM_state_from(
+        _block_builder->entry_block()->VM_state(),
+        _block_builder->entry_block()->tail_llvm_block(),
+        _method)) {
     JeandleCompilation::report_jeandle_error("failed to create initial VM state");
+    return;
   }
 
   // Iterate all blocks
