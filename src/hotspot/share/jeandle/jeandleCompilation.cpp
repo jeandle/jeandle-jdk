@@ -228,7 +228,7 @@ void JeandleCompilation::setup_llvm_module(llvm::MemoryBuffer* template_buffer) 
 void JeandleCompilation::compile_java_method() {
   // Build basic blocks. Then fill basic blocks with LLVM IR.
   {
-    JeandleAbstractInterpreter interpret(_method, _entry_bci, *_llvm_module, _code);
+    JeandleAbstractInterpreter interpret(_env, _method, _entry_bci, *_llvm_module, _code);
   }
 
   if (JeandleDumpIR) {

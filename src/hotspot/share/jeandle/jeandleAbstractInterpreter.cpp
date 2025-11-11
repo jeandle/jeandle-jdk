@@ -32,6 +32,7 @@
 #include "jeandle/jeandleUtils.hpp"
 
 #include "jeandle/__hotspotHeadersBegin__.hpp"
+#include "classfile/javaClasses.hpp"
 #include "ci/ciMethodBlocks.hpp"
 #include "ci/ciSymbols.hpp"
 #include "logging/log.hpp"
@@ -478,10 +479,12 @@ void BasicBlockBuilder::mark_loops(JeandleBasicBlock* block) {
   block->set_reverse_post_order(_next_block_order--);
 }
 
-JeandleAbstractInterpreter::JeandleAbstractInterpreter(ciMethod* method,
+JeandleAbstractInterpreter::JeandleAbstractInterpreter(ciEnv* env,
+                                                       ciMethod* method,
                                                        int entry_bci,
                                                        llvm::Module& target_module,
                                                        JeandleCompiledCode& code) :
+                                                       _env(env)
                                                        _method(method),
                                                        _llvm_func(JeandleFuncSig::create_llvm_func(method, target_module)),
                                                        _entry_bci(entry_bci),
@@ -822,7 +825,7 @@ void JeandleAbstractInterpreter::interpret_block(JeandleBasicBlock* block) {
       case Bytecodes::_arraylength: arraylength(); break;
       case Bytecodes::_athrow: dispatch_exception_to_handler(_jvm->apop()); break;
 
-      case Bytecodes::_checkcast: Unimplemented(); break;
+      case Bytecodes::_checkcast: checkcast(); break;
       case Bytecodes::_instanceof: instanceof(_bytecodes.get_index_u2()); break;
 
       case Bytecodes::_monitorenter: monitorenter(); break;
@@ -1337,6 +1340,40 @@ void JeandleAbstractInterpreter::shift_op(BasicType type, Bytecodes::Code code) 
     }
     default: ShouldNotReachHere();
   }
+}
+
+void JeandleAbstractInterpreter::checkcast() {
+  llvm::Value* obj = _jvm->apop();
+
+  // TODO：check klass's loading state.
+  ciKlass* ci_super_klass = _bytecodes.get_klass();
+  assert(ci_super_klass->is_loaded(), "klass must be loaded");
+
+  Klass* super_klass = (Klass*)(ci_super_klass->constant_encoding());
+  llvm::PointerType* klass_type = llvm::PointerType::get(*_context,llvm::jeandle::AddrSpace::CHeapAddrSpace);
+
+  llvm::Value* super_klass_addr = _ir_builder.getInt64((intptr_t)super_klass);
+  llvm::Value* super_klass_ptr = _ir_builder.CreateIntToPtr(super_klass_addr,klass_type);
+
+  llvm::CallInst* call = call_java_op("jeandle.checkcast", {super_klass_ptr, obj});
+
+  llvm::Function* current_func = _ir_builder.GetInsertBlock()->getParent();
+  llvm::BasicBlock* check_pass = llvm::BasicBlock::Create(*_context, "_check_pass", current_func);
+  llvm::BasicBlock* check_fail = llvm::BasicBlock::Create(*_context, "_check_fail", current_func);
+
+  _ir_builder.CreateCondBr(call, check_pass, check_fail);
+
+  _ir_builder.SetInsertPoint(check_fail);
+  // TODO: UncommonTrap Handling
+  llvm::Value* exception_oop_handle = find_or_insert_oop(_env->ClassCastException_instance());
+  llvm::Value* exception_oop = _ir_builder.CreateLoad(JeandleType::java2llvm(BasicType::T_OBJECT, *_context), exception_oop_handle);
+
+  dispatch_exception_to_handler(exception_oop);
+
+  _ir_builder.SetInsertPoint(check_pass);
+  _jvm->apush(obj);
+
+  _block->set_tail_llvm_block(check_pass);
 }
 
 void JeandleAbstractInterpreter::instanceof(int klass_index) {

@@ -171,3 +171,24 @@ entry:
 
 ; Declaration of Java card table barrier.
 declare hotspotcc void @jeandle.card_table_barrier(ptr addrspace(1) %addr) noinline "lower-phase"="1";
+
+; Implementation of Java checkcast operation
+define hotspotcc i1 @jeandle.checkcast(ptr addrspace(0) nocapture %super_klass, ptr addrspace(1) nocapture %oop) noinline "lower-phase"="0" {
+entry:
+  %is_null = icmp eq ptr addrspace(1) %oop, null
+  br i1 %is_null, label %return, label %check_subtype
+
+check_subtype:
+  %sub_klass = call hotspotcc ptr addrspace(0) @jeandle.load_klass(ptr addrspace(1) %oop)
+
+  %is_subtype = call hotspotcc i1 @jeandle.check_klass_subtype(ptr addrspace(0) %sub_klass, ptr addrspace(0) %super_klass)
+
+  br i1 %is_subtype, label %return, label %throw_exception
+
+throw_exception:
+  ; TODO: UncommonTrap Handling
+  ret i1 false
+
+return:
+  ret i1 true
+}

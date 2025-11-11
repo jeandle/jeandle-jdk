@@ -1,0 +1,103 @@
+/*
+ * Copyright (c) 2025, the Jeandle-JDK Authors. All Rights Reserved.
+ * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
+ *
+ * This code is free software; you can redistribute it and/or modify it
+ * under the terms of the GNU General Public License version 2 only, as
+ * published by the Free Software Foundation.
+ *
+ * This code is distributed in the hope that it will be useful, but WITHOUT
+ * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
+ * FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General Public License
+ * version 2 for more details (a copy is included in the LICENSE file that
+ * accompanied this code).
+ *
+ * You should have received a copy of the GNU General Public License version
+ * 2 along with this work; if not, write to the Free Software Foundation,
+ * Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301 USA.
+ *
+ */
+
+/**
+ * @test
+ * @library /test/lib
+ * @build jdk.test.lib.Asserts
+ * @run main/othervm -XX:-TieredCompilation -Xcomp -Xbatch
+ *      -XX:CompileCommand=compileonly,compiler.jeandle.bytecodeTranslate.TestCheckCast::checkCastToDouble
+ *      -XX:CompileCommand=compileonly,compiler.jeandle.bytecodeTranslate.TestCheckCast::checkCastToInteger
+ *      -XX:CompileCommand=compileonly,compiler.jeandle.bytecodeTranslate.TestCheckCast::checkCastToFather
+ *      -XX:+UseJeandleCompiler compiler.jeandle.bytecodeTranslate.TestCheckCast
+ */
+
+package compiler.jeandle.bytecodeTranslate;
+
+import jdk.test.lib.Asserts;
+
+public class TestCheckCast {
+    public static boolean thowException;
+    public static Double checkCastToDouble(Object obj) {
+       Double d = null;
+       try {
+           d = (Double)obj;
+       } catch (ClassCastException e) {
+           thowException = true;
+       }
+       return d;
+    }
+    public static Integer checkCastToInteger(Object obj) {
+        Integer i = null;
+        try {
+            i = (Integer)obj;
+        } catch (ClassCastException e) {
+            thowException=true;
+        }
+        return i;
+    }
+
+    public static TestCheckCast checkCastToFather(Object obj) {
+        TestCheckCast t = null;
+        try {
+            t = (TestCheckCast)obj;
+        } catch (ClassCastException e) {
+            thowException=true;
+        }
+        return t;
+    }
+
+    public static class SonClass extends TestCheckCast {}
+
+    private static void testBasicCastScenarios() {
+        Double validDouble = Double.valueOf(3.6);
+        Asserts.assertEquals(checkCastToDouble(validDouble), 3.6);
+
+        Integer validInteger = Integer.valueOf(2);
+        Asserts.assertEquals(checkCastToInteger(validInteger), 2);
+
+        SonClass subClass = new SonClass();
+        Asserts.assertEquals(checkCastToFather(subClass), subClass);
+
+        Object nullObj = null;
+        Asserts.assertNull(checkCastToDouble(nullObj),null);
+    }
+
+    private static void testFailingCastScenarios() {
+        // TODO: UnCommonTrap implements exceptions.
+        Object invalidObj = "not a Double";
+        thowException=false;
+        checkCastToDouble(invalidObj);
+        Asserts.assertEquals(thowException,true);
+
+        thowException=false;
+        checkCastToInteger(invalidObj);
+        Asserts.assertEquals(thowException,true);
+
+        thowException=false;
+        checkCastToFather(invalidObj);
+        Asserts.assertEquals(thowException,true);
+    }
+
+    public static void main(String[] args) {
+        testBasicCastScenarios();
+        testFailingCastScenarios();
+    }
+}
