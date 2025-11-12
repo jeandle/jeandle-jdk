@@ -36,6 +36,7 @@
 #include "ci/ciMethodBlocks.hpp"
 #include "ci/compilerInterface.hpp"
 #include "memory/allocation.hpp"
+#include "memory/universe.hpp"
 #include "utilities/bitMap.inline.hpp"
 
 // Used by the abstract interpreter to trace JVM states.
@@ -306,7 +307,10 @@ class JeandleAbstractInterpreter : public StackObj {
   llvm::Value* find_or_insert_oop(ciObject* oop);
 
   int _oop_idx;
-  std::string next_oop_name() { return std::string("oop_handle_") + std::to_string(_oop_idx++); }
+  std::string next_oop_name(const char* klass_name) {
+      assert(klass_name != nullptr, "klass_name can not be null");
+      return std::string("oop_handle_") + std::string(klass_name) + "_" + std::to_string(_oop_idx++);
+  }
 
   // Implementation of _get* and _put* bytecodes.
   void do_getstatic() { do_field_access(true, true); }
@@ -345,6 +349,8 @@ class JeandleAbstractInterpreter : public StackObj {
   void throw_exception(llvm::Value* exception_oop);
 
   void newarray(int element_type);
+  void anewarray(int klass_index);
+  void do_unified_newarray(Klass* array_klass);
 
   // Implementation of _new
   void do_new();
@@ -353,6 +359,7 @@ class JeandleAbstractInterpreter : public StackObj {
   void monitorexit();
 
   void null_check(llvm::Value* obj);
+
 };
 
 #endif // SHARE_JEANDLE_ABSTRACT_INTERPRETER_HPP

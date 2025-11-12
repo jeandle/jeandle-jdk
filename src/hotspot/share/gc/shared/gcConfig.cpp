@@ -143,6 +143,17 @@ GCArguments* GCConfig::select_gc() {
   // Fail immediately if an unsupported GC is selected
   fail_if_non_included_gc_is_selected();
 
+  if (UseJeandleCompiler) {
+    FOR_EACH_INCLUDED_GC(gc) {
+      if (gc->_name == CollectedHeap::Serial) {
+        gc->_flag = true;
+      } else if (gc->_flag) {
+        warning("Only serial GC is supported on jeandle for now. It will be enabled by default until jeandle supports other GCs.");
+        gc->_flag = false;
+      }
+    }
+  }
+
   if (is_no_gc_selected()) {
     // Try select GC ergonomically
     select_gc_ergonomically();

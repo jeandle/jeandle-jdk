@@ -23,21 +23,21 @@
  * @summary Support newarray
  * issue: https://github.com/jeandle/jeandle-jdk/issues/11
  * @library /test/lib
- * @run main/othervm -Xcomp -XX:-TieredCompilation -XX:CompileCommand=compileonly,compiler.jeandle.bytecodeTranslate.TestNewArray::newArray
- * -XX:+UseJeandleCompiler compiler.jeandle.bytecodeTranslate.TestNewArray
+ * @run main/othervm -Xcomp -XX:-TieredCompilation -XX:CompileCommand=compileonly,compiler.jeandle.bytecodeTranslate.array.TestNewArray::main
+ * -XX:+UseJeandleCompiler compiler.jeandle.bytecodeTranslate.array.TestNewArray
  */
 
-package compiler.jeandle.bytecodeTranslate;
+package compiler.jeandle.bytecodeTranslate.array;
 
 import jdk.test.lib.Asserts;
 
 public class TestNewArray {
     public static void main(String[] args) {
-        newArray();
-    }
-
-    public static void newArray() {
-        Asserts.assertEQ(new int[10].length, 10);
+        int[] intArray = new int[10];
+        intArray[2] = 2;
+        Asserts.assertEQ(intArray.length, 10);
+        Asserts.assertEQ(intArray[2], 2);
+        
         Asserts.assertEQ(new double[10].length, 10);
         Asserts.assertEQ(new float[10].length, 10);
         Asserts.assertEQ(new long[10].length, 10);

@@ -87,7 +87,7 @@ JeandleCompilation::JeandleCompilation(llvm::TargetMachine* target_machine,
   if (error_occurred()) {
 #ifdef ASSERT
     if (JeandleCrashOnError) {
-      fatal("%s", _error_msg);
+      fatal("Compilation failed in function '%s': %s", _method->name()->as_utf8(), _error_msg);
     }
 #endif
     _env->record_method_not_compilable(_error_msg);

@@ -42,7 +42,7 @@ import jdk.test.lib.process.OutputAnalyzer;
 import jdk.test.lib.process.ProcessTools;
 
 public class TestCodeCacheLoadUnload {
-    private static final String METHOD_FULL_NAME = "Icompiler.jeandle.codecache.Foo.doSomething(II)";
+    private static final String METHOD_FULL_NAME = "compiler.jeandle.codecache.Foo.doSomething(II)I";
 
     private static final String[] procArgs = new String[] {
         "-Xcomp",
