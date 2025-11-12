@@ -23,6 +23,7 @@
  * @requires os.arch=="amd64" | os.arch=="x86_64"
  * @library /test/lib /
  * @run main/othervm -XX:CompileCommand=compileonly,compiler.jeandle.exception.TestCatch::testCatch
+ *      -XX:CompileCommand=compileonly,compiler.jeandle.exception.TestCatch::catchException
  *      -Xcomp -XX:-TieredCompilation -XX:+JeandleDumpIR -XX:+UseJeandleCompiler compiler.jeandle.exception.TestCatch
  */
 
@@ -122,5 +123,22 @@ public class TestCatch {
 
     static void justThrow3() throws RuntimeException {
         throw new RuntimeException("Expected RuntimeException");
+    }
+
+
+    // For issue: https://github.com/jeandle/jeandle-jdk/issues/214
+    static void catchException() {
+        try {
+            invoke();
+            invoke();
+        } catch (Exception e) {
+            reportException(e);
+        }
+    }
+
+    public static void invoke() {}
+
+    public static void reportException(Exception e) {
+        System.out.println("Caught exception: " + e.getClass().getName() + " -> " + e.getMessage());
     }
 }

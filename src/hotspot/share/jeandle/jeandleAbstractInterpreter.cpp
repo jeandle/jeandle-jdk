@@ -218,12 +218,14 @@ bool JeandleBasicBlock::merge_VM_state_from(JeandleVMState* vm_state, llvm::Basi
       return false;
     }
 
-    if (_predecessors.size() == 1) {
+    if (_predecessors.size() == 1 && !is_exception_handler()) {
       // Just one predecessor. Copy its JeandleVMState.
       assert(!is_set(is_loop_header), "should not be a loop header");
       _jvm = vm_state->copy();
     } else {
       // More than one predecessors. Set up phi nodes.
+      // NOTE: Since we don't know exactly how many predecessor blocks an exception handler will have, we create
+      // phi nodes for every exception handler conservatively.
       initialize_VM_state_from(vm_state, incoming, method->liveness_at_bci(_start_bci));
     }
 
@@ -235,7 +237,7 @@ bool JeandleBasicBlock::merge_VM_state_from(JeandleVMState* vm_state, llvm::Basi
     return true;
 
   } else if (!is_set(is_compiled) && !is_set(is_loop_header)) {
-    assert(_predecessors.size() > 1, "more than one predecessors are needed for phi nodes");
+    assert(_predecessors.size() > 1 || is_exception_handler(), "more than one predecessors are needed for phi nodes");
     return _jvm->update_phi_nodes(vm_state, incoming);
   } else if (is_set(is_loop_header)) {
     assert(_initial_jvm != nullptr, "loop header initial JeandleVMState is needed");
