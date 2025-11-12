@@ -157,19 +157,6 @@ llvm::Value* JeandleVMState::pop(BasicType type) {
   return v;
 }
 
-llvm::Value* JeandleVMState::peek(BasicType type, size_t offset) {
-  if (is_double_word_type(type)) {
-    assert(_stack[_stack.size() - 1 - offset] == nullptr, "hi-word of doubleword value must be null");
-    offset++;
-  }
-
-  assert(offset < _stack.size(), "offset out of range");
-  llvm::Value* v = _stack[_stack.size() - 1 - offset];
-  assert(v != nullptr, "null value to peek");
-  assert(v->getType() == JeandleType::java2llvm(type, *_context), "type must match");
-  return v;
-}
-
 // Locals operations:
 
 llvm::Value* JeandleVMState::load(BasicType type, int index) {
@@ -671,14 +658,14 @@ void JeandleAbstractInterpreter::interpret_block(JeandleBasicBlock* block) {
       case Bytecodes::_aload_3: _jvm->apush(_jvm->aload(3)); break;
       case Bytecodes::_aload: _jvm->apush(_jvm->aload(_bytecodes.get_index())); break;
 
-      case Bytecodes::_iaload: // fall through
-      case Bytecodes::_laload: // fall through
-      case Bytecodes::_faload: // fall through
-      case Bytecodes::_daload: // fall through
-      case Bytecodes::_aaload: // fall through
-      case Bytecodes::_baload: // fall through
-      case Bytecodes::_caload: // fall through
-      case Bytecodes::_saload: do_array_load(code); break;
+      case Bytecodes::_iaload: do_array_load(T_INT); break;
+      case Bytecodes::_laload: do_array_load(T_LONG); break;
+      case Bytecodes::_faload: do_array_load(T_FLOAT); break;
+      case Bytecodes::_daload: do_array_load(T_DOUBLE); break;
+      case Bytecodes::_aaload: do_array_load(T_OBJECT); break;
+      case Bytecodes::_baload: do_array_load(T_BYTE); break;
+      case Bytecodes::_caload: do_array_load(T_CHAR); break;
+      case Bytecodes::_saload: do_array_load(T_SHORT); break;
 
       // Stores:
 
@@ -712,14 +699,14 @@ void JeandleAbstractInterpreter::interpret_block(JeandleBasicBlock* block) {
       case Bytecodes::_astore_3: _jvm->astore(3, _jvm->apop()); break;
       case Bytecodes::_astore: _jvm->astore(_bytecodes.get_index(), _jvm->apop()); break;
 
-      case Bytecodes::_iastore: // fall through
-      case Bytecodes::_lastore: // fall through
-      case Bytecodes::_fastore: // fall through
-      case Bytecodes::_dastore: // fall through
-      case Bytecodes::_aastore: // fall through
-      case Bytecodes::_bastore: // fall through
-      case Bytecodes::_castore: // fall through
-      case Bytecodes::_sastore: do_array_store(code); break;
+      case Bytecodes::_iastore: do_array_store(T_INT); break;
+      case Bytecodes::_lastore: do_array_store(T_LONG); break;
+      case Bytecodes::_fastore: do_array_store(T_FLOAT); break;
+      case Bytecodes::_dastore: do_array_store(T_DOUBLE); break;
+      case Bytecodes::_aastore: do_array_store(T_OBJECT); break;
+      case Bytecodes::_bastore: do_array_store(T_BYTE); break;
+      case Bytecodes::_castore: do_array_store(T_CHAR); break;
+      case Bytecodes::_sastore: do_array_store(T_SHORT); break;
 
       // Stack:
 
@@ -860,7 +847,7 @@ void JeandleAbstractInterpreter::interpret_block(JeandleBasicBlock* block) {
 
       case Bytecodes::_arraylength: arraylength(); break;
       case Bytecodes::_athrow:
-        null_check(_jvm->apeek());
+        null_check(_jvm->raw_peek());
         dispatch_exception_to_handler(_jvm->apop());
         break;
 
@@ -1501,7 +1488,12 @@ void JeandleAbstractInterpreter::do_field_access(bool is_get, bool is_static) {
         // TODO: Uncommon trap.
         Unimplemented();
         return;
-      }
+  }
+
+  if (!is_static) {
+    size_t depth = is_get ? 0 : field->type()->size();
+    null_check(_jvm->raw_peek(depth));
+  }
 
   if (is_get) {
     do_get_xxx(field, is_static);
@@ -1517,7 +1509,6 @@ void JeandleAbstractInterpreter::do_get_xxx(ciField* field, bool is_static) {
   if (is_static) {
     addr = compute_static_field_address(field->holder(), offset);
   } else {
-    null_check(_jvm->apeek());
     addr = compute_instance_field_address(_jvm->apop(), offset);
   }
 
@@ -1535,7 +1526,6 @@ void JeandleAbstractInterpreter::do_put_xxx(ciField* field, bool is_static) {
   if (is_static) {
     addr = compute_static_field_address(field->holder(), offset);
   } else {
-    null_check(_jvm->apeek());
     addr = compute_instance_field_address(_jvm->apop(), offset);
   }
 
@@ -1631,7 +1621,7 @@ void JeandleAbstractInterpreter::add_safepoint_poll() {
 }
 
 void JeandleAbstractInterpreter::arraylength() {
-    null_check(_jvm->apeek());
+    null_check(_jvm->raw_peek());
 
     llvm::Value* array_oop = _jvm->apop();
 
@@ -1640,8 +1630,6 @@ void JeandleAbstractInterpreter::arraylength() {
 }
 
 llvm::Value* JeandleAbstractInterpreter::compute_array_element_address(BasicType basic_type, llvm::Type* type) {
-  null_check(_jvm->apeek(1));
-
   llvm::Value* index = _jvm->ipop();
   llvm::Value* array_oop = _jvm->apop();
 
@@ -1658,45 +1646,51 @@ llvm::Value* JeandleAbstractInterpreter::do_array_load_inner(BasicType basic_typ
   return load_inst;
 }
 
-void JeandleAbstractInterpreter::do_array_load(Bytecodes::Code code) {
-  switch (code) {
-    case Bytecodes::_iaload: {
+void JeandleAbstractInterpreter::do_array_load(BasicType basic_type) {
+  // Operand Stack: ..., arrayref, index ->
+  //                     |
+  //                     depth = 1
+  //
+  null_check(_jvm->raw_peek(1));
+
+  switch (basic_type) {
+    case T_INT: {
       llvm::Value* load_value = do_array_load_inner(T_INT, llvm::Type::getInt32Ty(*_context));
       _jvm->ipush(load_value);
       break;
     }
-    case Bytecodes::_laload: {
+    case T_LONG: {
       llvm::Value* load_value = do_array_load_inner(T_LONG, llvm::Type::getInt64Ty(*_context));
       _jvm->lpush(load_value);
       break;
     }
-    case Bytecodes::_faload: {
+    case T_FLOAT: {
       llvm::Value* load_value = do_array_load_inner(T_FLOAT, llvm::Type::getFloatTy(*_context));
       _jvm->fpush(load_value);
       break;
     }
-    case Bytecodes::_daload: {
+    case T_DOUBLE: {
       llvm::Value* load_value = do_array_load_inner(T_DOUBLE, llvm::Type::getDoubleTy(*_context));
       _jvm->dpush(load_value);
       break;
     }
-    case Bytecodes::_aaload: {
+    case T_OBJECT: {
       llvm::Value* load_value = do_array_load_inner(
               T_OBJECT, llvm::PointerType::get(*_context, llvm::jeandle::AddrSpace::JavaHeapAddrSpace));
       _jvm->apush(load_value);
       break;
     }
-    case Bytecodes::_baload: {
+    case T_BYTE: {
       llvm::Value* load_value = do_array_load_inner(T_BYTE, llvm::Type::getInt8Ty(*_context));
       _jvm->ipush(_ir_builder.CreateSExt(load_value, JeandleType::java2llvm(BasicType::T_BYTE, *_context)));
       break;
     }
-    case Bytecodes::_caload: {
+    case T_CHAR: {
       llvm::Value* load_value = do_array_load_inner(T_CHAR, llvm::Type::getInt16Ty(*_context));
       _jvm->ipush(_ir_builder.CreateZExt(load_value, JeandleType::java2llvm(BasicType::T_CHAR, *_context)));
       break;
     }
-    case Bytecodes::_saload: {
+    case T_SHORT: {
       llvm::Value* load_value = do_array_load_inner(T_SHORT, llvm::Type::getInt16Ty(*_context));
       _jvm->ipush(_ir_builder.CreateSExt(load_value, JeandleType::java2llvm(BasicType::T_SHORT, *_context)));
       break;
@@ -1711,45 +1705,53 @@ void JeandleAbstractInterpreter::do_array_store_inner(BasicType basic_type, llvm
   store_inst->setAtomic(llvm::AtomicOrdering::Unordered);
 }
 
-void JeandleAbstractInterpreter::do_array_store(Bytecodes::Code code) {
+void JeandleAbstractInterpreter::do_array_store(BasicType basic_type) {
+  // Operand Stack: ..., arrayref, index, value ->
+  //                     |
+  //                     depth = sizeof(value) + 1
+  //
+  size_t depth = (is_double_word_type(basic_type) ? 2 : 1) + 1;
+  llvm::Value* array_ref = _jvm->raw_peek(depth);
+  null_check(array_ref);
+
   llvm::Value* value = nullptr;
-  switch (code) {
-    case Bytecodes::_iastore: {
+  switch (basic_type) {
+    case T_INT: {
       value = _jvm->ipop();
       do_array_store_inner(T_INT, llvm::Type::getInt32Ty(*_context), value);
       break;
     }
-    case Bytecodes::_lastore: {
+    case T_LONG: {
       value = _jvm->lpop();
       do_array_store_inner(T_LONG, llvm::Type::getInt64Ty(*_context), value);
       break;
     }
-    case Bytecodes::_fastore: {
+    case T_FLOAT: {
       value = _jvm->fpop();
       do_array_store_inner(T_FLOAT, llvm::Type::getFloatTy(*_context), value);
       break;
     }
-    case Bytecodes::_dastore: {
+    case T_DOUBLE: {
       value = _jvm->dpop();
       do_array_store_inner(T_DOUBLE, llvm::Type::getDoubleTy(*_context), value);
       break;
     }
-    case Bytecodes::_aastore: {
+    case T_OBJECT: {
       value = _jvm->apop();
       do_array_store_inner(T_OBJECT, llvm::PointerType::get(*_context, llvm::jeandle::AddrSpace::JavaHeapAddrSpace), value);
       break;
     }
-    case Bytecodes::_bastore: {
+    case T_BYTE: {
       value = _ir_builder.CreateTrunc(_jvm->ipop(), llvm::Type::getInt8Ty(*_context));
       do_array_store_inner(T_BYTE, llvm::Type::getInt8Ty(*_context), value);
       break;
     }
-    case Bytecodes::_castore: {
+    case T_CHAR: {
       value = _ir_builder.CreateTrunc(_jvm->ipop(), llvm::Type::getInt16Ty(*_context));
       do_array_store_inner(T_CHAR, llvm::Type::getInt16Ty(*_context), value);
       break;
     }
-    case Bytecodes::_sastore: {
+    case T_SHORT: {
       value = _ir_builder.CreateTrunc(_jvm->ipop(), llvm::Type::getInt16Ty(*_context));
       do_array_store_inner(T_SHORT, llvm::Type::getInt16Ty(*_context), value);
       break;
@@ -1917,7 +1919,7 @@ void JeandleAbstractInterpreter::newarray(int element_type){
 }
 
 void JeandleAbstractInterpreter::monitorenter() {
-  null_check(_jvm->apeek());
+  null_check(_jvm->raw_peek());
 
   llvm::Value* obj = _jvm->apop();
 
@@ -1948,6 +1950,8 @@ void JeandleAbstractInterpreter::monitorexit() {
 
 // TODO: Reimplement null_check_fail block with uncommon trap.
 void JeandleAbstractInterpreter::null_check(llvm::Value* obj) {
+  assert(obj->getType() == llvm::PointerType::get(*_context, llvm::jeandle::AddrSpace::JavaHeapAddrSpace), "must be a java object");
+
   int cur_bci = _bytecodes.cur_bci();
   llvm::BasicBlock* null_check_pass = llvm::BasicBlock::Create(*_context,
                                                                "bci_" + std::to_string(cur_bci) + "_null_check_pass",

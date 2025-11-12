@@ -275,6 +275,7 @@ void JeandleCompilation::compile_module() {
 
   {
     llvm::raw_svector_ostream obj_stream(obj_buffer);
+
     llvm::legacy::PassManager pm;
     llvm::MCContext *ctx;
 
