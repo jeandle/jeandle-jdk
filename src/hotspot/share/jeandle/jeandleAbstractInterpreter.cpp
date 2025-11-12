@@ -1433,7 +1433,7 @@ llvm::Value* JeandleAbstractInterpreter::find_or_insert_oop(ciObject* oop) {
   if (llvm::Value* global_oop_handle = _oops.lookup(oop_handle)) {
     return global_oop_handle;
   }
-  std::string oop_name = next_oop_name();
+  std::string oop_name = next_oop_name(oop->klass()->external_name());
   _compiled_code.oop_handles()[oop_name] = oop_handle;
   llvm::Value* global = _module.getOrInsertGlobal(
                                oop_name,
