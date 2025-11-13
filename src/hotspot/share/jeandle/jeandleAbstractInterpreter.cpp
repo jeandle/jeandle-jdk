@@ -20,7 +20,6 @@
 
 #include "jeandle/__llvmHeadersBegin__.hpp"
 #include "llvm/IR/Attributes.h"
-#include "llvm/IR/Instructions.h"
 #include "llvm/IR/Jeandle/Attributes.h"
 #include "llvm/IR/Jeandle/GCStrategy.h"
 #include "llvm/IR/Jeandle/Metadata.h"
@@ -1402,7 +1401,7 @@ void JeandleAbstractInterpreter::arith_op(BasicType type, Bytecodes::Code code) 
     case Bytecodes::_iand: // fall through
     case Bytecodes::_land: _jvm->push(type, _ir_builder.CreateAnd(l, r)); break;
     case Bytecodes::_ior:  // fall through
-    case Bytecodes::_lor:  _jvm->push(type, _ir_builder.CreateBinOp(llvm::Instruction::Or, l, r)); break;
+    case Bytecodes::_lor:  _jvm->push(type, _ir_builder.CreateOr(l, r)); break;
     case Bytecodes::_ixor: // fall through
     case Bytecodes::_lxor: _jvm->push(type, _ir_builder.CreateXor(l, r)); break;
     case Bytecodes::_ineg: // fall through
