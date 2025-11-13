@@ -38,6 +38,52 @@ make images
 ```
 Then the compiled JDK can be found in a directory like ```build/linux-x86_64-server-release/images/jdk/``` under the jeandle-jdk path.
 
+### Build with Dockerfile
+
+Jeandle-jdk ships with a Dockerfile so you can build inside a reproducible container instead of installing every dependency on the host. Build the image once, then start a container that mirrors your user ID and mounts your home directory so existing SSH keys and sources stay accessible.
+
+1. Build the image:
+   ```
+   cd jeandle-jdk
+   docker build -t jeandle-dev:latest -f Dockerfile .
+   ```
+2. Launch the container (runs as the current user and reuses your home folder):
+   ```
+   docker run -it --rm \
+     --name jeandle-dev \
+     -u $(id -u):$(id -g) \
+     -w /home/$(id -un) \
+     -v /etc/passwd:/etc/passwd:ro \
+     -v /etc/group:/etc/group:ro \
+     -v /home/$(id -un):/home/$(id -un) \
+     jeandle-dev:latest
+   ```
+3. Inside the container, clone and build jeandle-llvm:
+   ```
+   git clone https://github.com/jeandle/jeandle-llvm.git
+   cd jeandle-llvm
+   mkdir build && cd build
+   cmake -G "Unix Makefiles" \
+         -DLLVM_TARGETS_TO_BUILD=X86 \
+         -DCMAKE_BUILD_TYPE="Release" \
+         -DCMAKE_INSTALL_PREFIX="/home/$(id -un)/jeandle-llvm-install" \
+         -DLLVM_BUILD_LLVM_DYLIB=On \
+         -DLLVM_DYLIB_COMPONENTS=all \
+         ../llvm
+   cmake --build . --target install --parallel
+   ```
+4. Clone jeandle-jdk and build it against the freshly installed LLVM:
+   ```
+   git clone https://github.com/jeandle/jeandle-jdk.git
+   cd jeandle-jdk
+   bash configure \
+         --with-boot-jdk=/usr/ \
+         --with-debug-level=release \
+         --with-jeandle-llvm=/home/$(id -un)/jeandle-llvm-install
+   make images
+   ```
+The resulting JDK lives under `build/linux-x86_64-server-release/images/jdk/` inside the jeandle-jdk tree.
+
 ## Debug Builds
 The same debug level should be configured for both jeandle-llvm and jeandle-jdk. To build a debug version of Jeandle, use the following build options:
 ```
