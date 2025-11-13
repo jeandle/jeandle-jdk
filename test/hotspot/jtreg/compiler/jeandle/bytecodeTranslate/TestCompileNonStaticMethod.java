@@ -33,7 +33,7 @@ package compiler.jeandle.bytecodeTranslate;
 public class TestCompileNonStaticMethod {
     public static void main(String[] args) throws Exception {
         if (!new TestCall().callSuccessfully(1, 2, 3)) {
-            throw new RuntimeException("Exeption during test");
+            throw new RuntimeException("Exception during test");
         }
     }
 }

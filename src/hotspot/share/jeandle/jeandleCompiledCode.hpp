@@ -138,13 +138,13 @@ class JeandleCompiledCode : public StackObj {
   CodeBuffer _code_buffer; // Relocations and stubs.
 
   // Call sites in our compiled code:
-  // Note that the main different between routine calls and non-routine calls is, routine calls are found
-  // from relocation of compiled objects directly, and non-routine calls are found from stackmaps then
+  // Note that the main difference between routine calls and non-routine calls is that routine calls are found
+  // from relocation of compiled objects directly, and non-routine calls are found from stackmaps and then
   // matched with the compile-time generated statepoint id.
   llvm::DenseMap<int, CallSiteInfo*> _routine_call_sites; // Contains all routine call sites, constructed from
-                                                          // relocations of compiled object in resolve_reloc_info.
+                                                          // relocations of compiled objects in resolve_reloc_info.
   llvm::SmallVector<CallSiteInfo*> _non_routine_call_sites; // Contains all other call sites,
-                                                            // constructed during LLVM IR generating.
+                                                            // constructed during LLVM IR generation.
 
   llvm::StringMap<address> _const_sections;
   llvm::StringMap<jobject> _oop_handles;
@@ -160,11 +160,11 @@ class JeandleCompiledCode : public StackObj {
 
   void setup_frame_size();
 
-  void resolve_reloc_info(JeandleAssembler& assmebler);
+  void resolve_reloc_info(JeandleAssembler& assembler);
 
   // Lookup address of const section in CodeBuffer.
-  address lookup_const_section(llvm::StringRef name, JeandleAssembler& assmebler);
-  address resolve_const_edge(LinkBlock& block, LinkEdge& edge, JeandleAssembler& assmebler);
+  address lookup_const_section(llvm::StringRef name, JeandleAssembler& assembler);
+  address resolve_const_edge(LinkBlock& block, LinkEdge& edge, JeandleAssembler& assembler);
 
   OopMap* build_oop_map(StackMapParser::record_iterator& record);
 
