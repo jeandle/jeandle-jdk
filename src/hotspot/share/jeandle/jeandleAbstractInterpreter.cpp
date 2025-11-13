@@ -67,6 +67,7 @@ JeandleVMState* JeandleVMState::copy_for_exception_handler(llvm::Value* exceptio
   return copied;
 }
 
+// Like C1's ValueStack::is_same.
 bool JeandleVMState::match(JeandleVMState* to_match) {
   if (_locals.size() != to_match->_locals.size()) {
     return false;
@@ -90,6 +91,16 @@ bool JeandleVMState::match(JeandleVMState* to_match) {
 
     // For call instructions, getType() returns the return type.
     if (_stack[i]->getType() != to_match->_stack[i]->getType()) {
+      return false;
+    }
+  }
+
+  if (_locks.size() != to_match->_locks.size()) {
+    return false;
+  }
+
+  for (size_t i = 0; i < _locks.size(); i++) {
+    if (_locks[i] != to_match->_locks[i]) {
       return false;
     }
   }
@@ -208,12 +219,14 @@ bool JeandleBasicBlock::merge_VM_state_from(JeandleVMState* vm_state, llvm::Basi
       return false;
     }
 
-    if (_predecessors.size() == 1) {
+    if (_predecessors.size() == 1 && !is_exception_handler()) {
       // Just one predecessor. Copy its JeandleVMState.
       assert(!is_set(is_loop_header), "should not be a loop header");
       _jvm = vm_state->copy();
     } else {
       // More than one predecessors. Set up phi nodes.
+      // NOTE: Since we don't know exactly how many predecessor blocks an exception handler will have, we create
+      // phi nodes for every exception handler conservatively.
       initialize_VM_state_from(vm_state, incoming, method->liveness_at_bci(_start_bci));
     }
 
@@ -225,7 +238,7 @@ bool JeandleBasicBlock::merge_VM_state_from(JeandleVMState* vm_state, llvm::Basi
     return true;
 
   } else if (!is_set(is_compiled) && !is_set(is_loop_header)) {
-    assert(_predecessors.size() > 1, "more than one predecessors are needed for phi nodes");
+    assert(_predecessors.size() > 1 || is_exception_handler(), "more than one predecessors are needed for phi nodes");
     return _jvm->update_phi_nodes(vm_state, incoming);
   } else if (is_set(is_loop_header)) {
     assert(_initial_jvm != nullptr, "loop header initial JeandleVMState is needed");
@@ -537,8 +550,12 @@ void JeandleAbstractInterpreter::interpret() {
 
   initialize_VM_state();
 
-  if (!current->merge_VM_state_from(_block_builder->entry_block()->VM_state(), _block_builder->entry_block()->tail_llvm_block(), _method)) {
+  if (!current->merge_VM_state_from(
+        _block_builder->entry_block()->VM_state(),
+        _block_builder->entry_block()->tail_llvm_block(),
+        _method)) {
     JeandleCompilation::report_jeandle_error("failed to create initial VM state");
+    return;
   }
 
   // Iterate all blocks
@@ -1470,7 +1487,7 @@ llvm::Value* JeandleAbstractInterpreter::find_or_insert_oop(ciObject* oop) {
   if (llvm::Value* global_oop_handle = _oops.lookup(oop_handle)) {
     return global_oop_handle;
   }
-  std::string oop_name = next_oop_name();
+  std::string oop_name = next_oop_name(oop->klass()->external_name());
   _compiled_code.oop_handles()[oop_name] = oop_handle;
   llvm::Value* global = _module.getOrInsertGlobal(
                                oop_name,
