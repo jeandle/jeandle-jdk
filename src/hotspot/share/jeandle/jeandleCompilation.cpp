@@ -136,7 +136,7 @@ JeandleCompilation::JeandleCompilation(llvm::TargetMachine* target_machine,
     dump_ir(false);
   }
 
-    // Optimize.
+  // Optimize.
   llvm::jeandle::optimize(_llvm_module.get(), llvm::OptimizationLevel::O3);
 
   if (JeandleDumpRuntimeStubs) {

@@ -66,6 +66,7 @@ JeandleVMState* JeandleVMState::copy_for_exception_handler(llvm::Value* exceptio
   return copied;
 }
 
+// Like C1's ValueStack::is_same.
 bool JeandleVMState::match(JeandleVMState* to_match) {
   if (_locals.size() != to_match->_locals.size()) {
     return false;
@@ -89,6 +90,16 @@ bool JeandleVMState::match(JeandleVMState* to_match) {
 
     // For call instructions, getType() returns the return type.
     if (_stack[i]->getType() != to_match->_stack[i]->getType()) {
+      return false;
+    }
+  }
+
+  if (_locks.size() != to_match->_locks.size()) {
+    return false;
+  }
+
+  for (size_t i = 0; i < _locks.size(); i++) {
+    if (_locks[i] != to_match->_locks[i]) {
       return false;
     }
   }
@@ -207,12 +218,14 @@ bool JeandleBasicBlock::merge_VM_state_from(JeandleVMState* vm_state, llvm::Basi
       return false;
     }
 
-    if (_predecessors.size() == 1) {
+    if (_predecessors.size() == 1 && !is_exception_handler()) {
       // Just one predecessor. Copy its JeandleVMState.
       assert(!is_set(is_loop_header), "should not be a loop header");
       _jvm = vm_state->copy();
     } else {
       // More than one predecessors. Set up phi nodes.
+      // NOTE: Since we don't know exactly how many predecessor blocks an exception handler will have, we create
+      // phi nodes for every exception handler conservatively.
       initialize_VM_state_from(vm_state, incoming, method->liveness_at_bci(_start_bci));
     }
 
@@ -224,7 +237,7 @@ bool JeandleBasicBlock::merge_VM_state_from(JeandleVMState* vm_state, llvm::Basi
     return true;
 
   } else if (!is_set(is_compiled) && !is_set(is_loop_header)) {
-    assert(_predecessors.size() > 1, "more than one predecessors are needed for phi nodes");
+    assert(_predecessors.size() > 1 || is_exception_handler(), "more than one predecessors are needed for phi nodes");
     return _jvm->update_phi_nodes(vm_state, incoming);
   } else if (is_set(is_loop_header)) {
     assert(_initial_jvm != nullptr, "loop header initial JeandleVMState is needed");
@@ -525,7 +538,7 @@ void JeandleAbstractInterpreter::initialize_VM_state() {
   int locals_idx = 0; // next index in locals
   int arg_idx = 0;  // next index in arguments
 
-  // Store the reciever into locals.
+  // Store the receiver into locals.
   if (!_method->is_static()) {
     initial_jvm->store(BasicType::T_OBJECT, 0, _llvm_func->getArg(0));
     locals_idx = 1;
@@ -1110,19 +1123,19 @@ void JeandleAbstractInterpreter::invoke() {
   }
 
   // Construct arguments.
-  const int reciever =
+  const int receiver =
     bc == Bytecodes::_invokespecial   ||
     bc == Bytecodes::_invokevirtual   ||
     bc == Bytecodes::_invokeinterface;
-  const int arg_size = declared_signature->count() + reciever;
+  const int arg_size = declared_signature->count() + receiver;
   llvm::SmallVector<llvm::Value*> args(arg_size);
   llvm::SmallVector<llvm::Type*> args_type(arg_size);
   for (int i = declared_signature->count() - 1; i >= 0; --i) {
     BasicType type = declared_signature->type_at(i)->basic_type();
-    args[i + reciever] = _jvm->pop(type);
-    args_type[i + reciever] = JeandleType::java2llvm(type, *_context);
+    args[i + receiver] = _jvm->pop(type);
+    args_type[i + receiver] = JeandleType::java2llvm(type, *_context);
   }
-  if (reciever) {
+  if (receiver) {
     args[0] = _jvm->pop(BasicType::T_OBJECT);
     args_type[0] = JeandleType::java2llvm(BasicType::T_OBJECT, *_context);
   }
@@ -1153,7 +1166,7 @@ void JeandleAbstractInterpreter::invoke() {
   func->setCallingConv(llvm::CallingConv::Hotspot_JIT);
   func->setGC(llvm::jeandle::JeandleGC);
 
-  // Decide call type and detination.
+  // Decide call type and destination.
   JeandleCompiledCall::Type call_type = JeandleCompiledCall::NOT_A_CALL;
   address dest = nullptr;
   switch (bc) {
