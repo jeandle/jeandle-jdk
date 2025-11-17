@@ -57,6 +57,53 @@ class JeandleType : public AllStatic {
   static llvm::ConstantFP* double_const(llvm::IRBuilder<>& builder, double value) {
     return (llvm::ConstantFP*)llvm::ConstantFP::get(builder.getDoubleTy(), value);
   }
+
+  // Convert a Java type to computational type
+  // Reference: https://docs.oracle.com/javase/specs/jvms/se21/html/jvms-2.html#jvms-2.11.1-320
+  static BasicType actual2computational(BasicType bt) {
+    switch (bt) {
+      case T_BYTE   :
+      case T_CHAR   :
+      case T_SHORT  :
+      case T_BOOLEAN:
+      case T_INT    :
+        return T_INT;
+      case T_VOID   :
+      case T_LONG   :
+      case T_FLOAT  :
+      case T_DOUBLE :
+        return bt;
+      case T_ARRAY  :
+      case T_OBJECT :
+        return T_OBJECT;
+      default       :
+        ShouldNotReachHere();
+    }
+  }
+};
+
+/* A pair of BasicType and llvm::Value* used by JeandleVMState */
+class TypedValue {
+private:
+  BasicType _basic_type;
+  llvm::Value * _value;
+
+public:
+  TypedValue(BasicType type, llvm::Value* value) : _basic_type(type), _value(value) {
+    if (value == nullptr) {
+      assert(type == T_ILLEGAL, "value is null");
+    } else {
+      assert(value->getType() == JeandleType::java2llvm(type, value->getContext()), "type does not match");
+    }
+  }
+  TypedValue() : _basic_type(T_ILLEGAL), _value(nullptr) {}
+
+  static TypedValue null_value() { return TypedValue(T_ILLEGAL, nullptr); }
+  bool   is_null() const { return _basic_type == T_ILLEGAL && _value == nullptr; }
+
+  BasicType computational_type() const { return JeandleType::actual2computational(_basic_type); }
+  BasicType        actual_type() const { return _basic_type; }
+  llvm::Value*           value() const { return _value; }
 };
 
 #endif // SHARE_JEANDLE_TYPE_HPP

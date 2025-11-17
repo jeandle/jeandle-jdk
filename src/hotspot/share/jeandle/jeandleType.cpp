@@ -24,7 +24,9 @@
 #include "jeandle/jeandleType.hpp"
 
 llvm::Type* JeandleType::java2llvm(BasicType java_type, llvm::LLVMContext& context) {
-  switch (java_type) {
+  // Make sure java2llvm(type) == java2llvm(actual2computational(type))
+  BasicType computational_type = actual2computational(java_type);
+  switch (computational_type) {
     case BasicType::T_BOOLEAN:
     case BasicType::T_CHAR:
     case BasicType::T_BYTE:

@@ -29,7 +29,7 @@ llvm::Function* JeandleFuncSig::create_llvm_func(ciMethod* method, llvm::Module&
   llvm::SmallVector<llvm::Type*> args;
   llvm::LLVMContext& context = target_module.getContext();
 
-  // Reciever is the first argument.
+  // Receiver is the first argument.
   if (!method->is_static()) {
     args.push_back(JeandleType::java2llvm(BasicType::T_OBJECT, context));
   }

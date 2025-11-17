@@ -61,6 +61,8 @@ class JeandleCompiler : public AbstractCompiler {
   std::unique_ptr<llvm::MemoryBuffer> _template_buffer;
 
   bool initialize_template_buffer();
+
+  bool initialize_commandline_options();
 };
 
 #endif // SHARE_JEANDLE_COMPILER_HPP

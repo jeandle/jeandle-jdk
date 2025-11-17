@@ -66,6 +66,10 @@ JeandleCompiler* JeandleCompiler::create() {
 
 void JeandleCompiler::initialize() {
   if (should_perform_init()) {
+    if (!initialize_commandline_options()) {
+      set_state(failed);
+      return;
+    }
     if (!JeandleRuntimeRoutine::generate(target_machine(), data_layout())) {
       set_state(failed);
       return;
@@ -120,4 +124,19 @@ bool JeandleCompiler::initialize_template_buffer() {
   _template_buffer = std::make_unique<llvm::SmallVectorMemoryBuffer>(std::move(bitcode_buffer), "template module", false);
   assert(_template_buffer != nullptr, "cannot initialize template module buffer");
   return _template_buffer != nullptr;
+}
+
+bool JeandleCompiler::initialize_commandline_options() {
+    std::vector<std::string> argv_string = {
+      "placeholder",
+      "-enable-implicit-null-checks",
+      "-imp-null-check-page-size=" + std::to_string(os::vm_page_size())
+    };
+
+    std::vector<const char*> argv;
+    for (const auto& s : argv_string) {
+        argv.push_back(s.c_str());
+    }
+
+    return llvm::cl::ParseCommandLineOptions(argv.size(), argv.data());
 }
