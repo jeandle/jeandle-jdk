@@ -34,6 +34,7 @@
 #include "jeandle/__hotspotHeadersBegin__.hpp"
 #include "ci/ciMethodBlocks.hpp"
 #include "ci/ciSymbols.hpp"
+#include "classfile/javaClasses.hpp"
 #include "logging/log.hpp"
 #include "runtime/sharedRuntime.hpp"
 #include "runtime/stubRoutines.hpp"
@@ -1651,6 +1652,8 @@ llvm::Value* JeandleAbstractInterpreter::compute_array_element_address(BasicType
   llvm::Value* index = _jvm->ipop();
   llvm::Value* array_oop = _jvm->apop();
 
+  boundary_check(array_oop, index);
+
   llvm::Value* array_base_offset = _ir_builder.getInt32(arrayOopDesc::base_offset_in_bytes(basic_type));
   llvm::Value* array_base = _ir_builder.CreateInBoundsPtrAdd(array_oop, array_base_offset, "array_element_base");
   llvm::Value* element_address = _ir_builder.CreateInBoundsGEP(type, array_base, index, "array_element_address");
@@ -2030,4 +2033,33 @@ void JeandleAbstractInterpreter::null_check(llvm::Value* obj) {
 
   _ir_builder.SetInsertPoint(null_check_pass);
   _block->set_tail_llvm_block(null_check_pass);
+}
+
+// TODO:
+void JeandleAbstractInterpreter::boundary_check(llvm::Value* array_oop, llvm::Value* index) {
+  assert(obj->getType() == llvm::PointerType::get(*_context, llvm::jeandle::AddrSpace::JavaHeapAddrSpace), "must be a java object");
+
+  int cur_bci = _bytecodes.cur_bci();
+  llvm::BasicBlock* boundary_check_pass = llvm::BasicBlock::Create(*_context,
+                                                                   "bci_" + std::to_string(cur_bci) + "_boundary_check_pass",
+                                                                   _llvm_func);
+  llvm::BasicBlock* boundary_check_fail = llvm::BasicBlock::Create(*_context,
+                                                                   "bci_" + std::to_string(cur_bci) + "_boundary_check_fail",
+                                                                   _llvm_func);
+  llvm::CallInst* call = call_java_op("jeandle.arraylength", {array_oop});
+  llvm::Value* if_out_of_bounds = _ir_builder.CreateICmp(llvm::CmpInst::ICMP_UGE, index, call);
+  _ir_builder.CreateCondBr(if_out_of_bounds, boundary_check_fail, boundary_check_pass);
+
+  _ir_builder.SetInsertPoint(boundary_check_fail);
+  llvm::Value* exception_oop_handle = find_or_insert_oop(CURRENT_ENV->ArrayIndexOutOfBoundsException_instance());
+  llvm::Value* exception_oop = _ir_builder.CreateLoad(JeandleType::java2llvm(BasicType::T_OBJECT, *_context), exception_oop_handle);
+  int detailMessage_offset = java_lang_Throwable::get_detailMessage_offset();
+  llvm::Value* detailMessage_addr = compute_instance_field_address(exception_oop, detailMessage_offset);
+  llvm::StoreInst* store_inst = _ir_builder.CreateStore(llvm::ConstantPointerNull::get(llvm::cast<llvm::PointerType>(JeandleType::java2llvm(BasicType::T_OBJECT, *_context))),
+                                                        exception_oop_addr);
+  store_inst->setAtomic(llvm::AtomicOrdering::Unordered);
+  dispatch_exception_to_handler(exception_oop);
+
+  _ir_builder.SetInsertPoint(boundary_check_pass);
+  _block->set_tail_llvm_block(boundary_check_pass);
 }

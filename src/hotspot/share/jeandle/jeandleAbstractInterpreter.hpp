@@ -365,6 +365,7 @@ class JeandleAbstractInterpreter : public StackObj {
 
   void null_check(llvm::Value* obj);
 
+  void boundary_check(llvm::Value* array_oop, llvm::Value* index);
 };
 
 #endif // SHARE_JEANDLE_ABSTRACT_INTERPRETER_HPP
