@@ -2625,11 +2625,12 @@ void nmethod::print_pcs_on(outputStream* st) {
 
 void nmethod::print_handler_table() {
   if (is_compiled_by_jeandle()) {
+#ifdef JEANDLE
     JeandleExceptionHandlerTable(this).print(code_begin());
+#endif
   } else {
     ExceptionHandlerTable(this).print(code_begin());
   }
-
 }
 
 void nmethod::print_nul_chk_table() {
