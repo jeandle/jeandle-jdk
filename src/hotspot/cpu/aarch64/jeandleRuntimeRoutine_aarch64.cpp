@@ -91,7 +91,7 @@ void JeandleRuntimeRoutine::generate_exceptional_return() {
 
   __ reset_last_Java_frame(false);
 
-  // Now the exception handler is in rscratch1.
+  // Now the exception handler is in retval.
   __ mov(rscratch1, retval);
 
   // Move the exception oop to r0. Exception handler will use this.
