@@ -20,8 +20,5 @@ RUN apt-get update && \
         libfontconfig1-dev \
         libx11-dev libxext-dev libxrender-dev libxrandr-dev libxtst-dev libxt-dev
 
-# Working directory
-WORKDIR /home/jeandle/
-
 # Default command for interactive development
 CMD ["bash"]

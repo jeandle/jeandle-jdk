@@ -40,14 +40,17 @@ Then the compiled JDK can be found in a directory like ```build/linux-x86_64-ser
 
 ### Build with Dockerfile
 
-Jeandle-jdk ships with a Dockerfile so you can build inside a reproducible container instead of installing every dependency on the host. Build the image once, then start a container that mirrors your user ID and mounts your home directory so existing SSH keys and sources stay accessible.
+Jeandle-jdk ships with a Dockerfile so you can build inside a reproducible container instead of installing every dependency on the host. Build the image once from the Dockerfile alone, then clone the repositories *inside* the container. This avoids cloning jeandle-jdk twice.
 
-1. Build the image:
+1. Copy the Dockerfile to an empty directory (for example, download the raw file):
    ```
-   cd jeandle-jdk
+   curl -O https://raw.githubusercontent.com/jeandle/jeandle-jdk/main/Dockerfile
+   ```
+2. Build the image from that directory:
+   ```
    docker build -t jeandle-dev:latest -f Dockerfile .
    ```
-2. Launch the container (runs as the current user and reuses your home folder):
+3. Launch the container (runs as the current user and reuses your home folder):
    ```
    docker run -it --rm \
      --name jeandle-dev \
@@ -58,7 +61,8 @@ Jeandle-jdk ships with a Dockerfile so you can build inside a reproducible conta
      -v /home/$(id -un):/home/$(id -un) \
      jeandle-dev:latest
    ```
-3. Inside the container, clone and build jeandle-llvm:
+   The working directory is set via `-w`, so the Dockerfile does not need its own `WORKDIR`.
+4. Inside the container, clone and build jeandle-llvm:
    ```
    git clone https://github.com/jeandle/jeandle-llvm.git
    cd jeandle-llvm
@@ -72,8 +76,9 @@ Jeandle-jdk ships with a Dockerfile so you can build inside a reproducible conta
          ../llvm
    cmake --build . --target install --parallel
    ```
-4. Clone jeandle-jdk and build it against the freshly installed LLVM:
+5. Clone jeandle-jdk in the container and build it against the freshly installed LLVM:
    ```
+   cd /home/$(id -un)
    git clone https://github.com/jeandle/jeandle-jdk.git
    cd jeandle-jdk
    bash configure \
