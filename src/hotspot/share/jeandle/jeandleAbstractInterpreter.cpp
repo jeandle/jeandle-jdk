@@ -2037,7 +2037,7 @@ void JeandleAbstractInterpreter::null_check(llvm::Value* obj) {
 
 // TODO:
 void JeandleAbstractInterpreter::boundary_check(llvm::Value* array_oop, llvm::Value* index) {
-  assert(obj->getType() == llvm::PointerType::get(*_context, llvm::jeandle::AddrSpace::JavaHeapAddrSpace), "must be a java object");
+  assert(array_oop->getType() == llvm::PointerType::get(*_context, llvm::jeandle::AddrSpace::JavaHeapAddrSpace), "must be a java object");
 
   int cur_bci = _bytecodes.cur_bci();
   llvm::BasicBlock* boundary_check_pass = llvm::BasicBlock::Create(*_context,
@@ -2056,7 +2056,7 @@ void JeandleAbstractInterpreter::boundary_check(llvm::Value* array_oop, llvm::Va
   int detailMessage_offset = java_lang_Throwable::get_detailMessage_offset();
   llvm::Value* detailMessage_addr = compute_instance_field_address(exception_oop, detailMessage_offset);
   llvm::StoreInst* store_inst = _ir_builder.CreateStore(llvm::ConstantPointerNull::get(llvm::cast<llvm::PointerType>(JeandleType::java2llvm(BasicType::T_OBJECT, *_context))),
-                                                        exception_oop_addr);
+                                                        detailMessage_addr);
   store_inst->setAtomic(llvm::AtomicOrdering::Unordered);
   dispatch_exception_to_handler(exception_oop);
 

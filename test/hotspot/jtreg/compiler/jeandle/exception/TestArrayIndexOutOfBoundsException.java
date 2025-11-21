@@ -18,7 +18,7 @@
  *
  */
 
-package compiler.jeandle;
+package compiler.jeandle.exception;
 
 import jdk.test.lib.Asserts;
 
@@ -27,8 +27,8 @@ import jdk.test.lib.Asserts;
  * @requires os.arch=="amd64" | os.arch=="x86_64" | os.arch=="aarch64"
  * @library /test/lib
  * @run main/othervm -Xcomp -XX:-TieredCompilation -XX:+UseJeandleCompiler
- *      -XX:CompileCommand=compileonly,compiler.jeandle.TestArrayIndexOutOfBoundsException::test*
- *      compiler.jeandle.TestArrayIndexOutOfBoundsException
+ *      -XX:CompileCommand=compileonly,compiler.jeandle.exception.TestArrayIndexOutOfBoundsException::test*
+ *      compiler.jeandle.exception.TestArrayIndexOutOfBoundsException
  */
 
 public class TestArrayIndexOutOfBoundsException {
