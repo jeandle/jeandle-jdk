@@ -32,7 +32,9 @@
 #include "jeandle/__hotspotHeadersBegin__.hpp"
 #include "asm/macroAssembler.hpp"
 #include "ci/ciEnv.hpp"
+#include "code/nativeInst.hpp"
 #include "code/vmreg.inline.hpp"
+#include "runtime/os.hpp"
 
 namespace {
 
@@ -192,6 +194,36 @@ class JeandleOopReloc : public JeandleReloc {
 
 } // anonymous namespace
 
+static int entry_alignment(uint64_t align_from_obj) {
+  // Use the alignment from the object file when possible.
+  return (align_from_obj > 1) ? static_cast<int>(align_from_obj) : 1;
+}
+
+static void emit_verified_entry_nops(MacroAssembler& masm) {
+#ifdef X86
+  masm.nop(NativeJump::instruction_size);
+#elif defined(AARCH64) || defined(RISCV)
+  constexpr int nop_size = NativeInstruction::instruction_size;
+  STATIC_ASSERT(NativeJump::instruction_size % nop_size == 0);
+  for (int i = 0; i < NativeJump::instruction_size / nop_size; i++) {
+    masm.nop();
+  }
+#else
+  Unimplemented();
+#endif
+}
+
+static bool need_stack_overflow_check(const ciMethod* method,
+                                      bool has_java_calls,
+                                      int frame_size_in_bytes) {
+  if (method == nullptr) {
+    return false;
+  }
+
+  return has_java_calls ||
+         frame_size_in_bytes > (int)(os::vm_page_size() >> 3) DEBUG_ONLY(|| true);
+}
+
 void JeandleCompiledCode::install_obj(std::unique_ptr<ObjectBuffer> obj) {
   _obj = std::move(obj);
   llvm::MemoryBufferRef memory_buffer = _obj->getMemBufferRef();
@@ -217,6 +249,11 @@ void JeandleCompiledCode::finalize() {
     return;
   }
 
+  setup_frame_size();
+  if (_frame_size <= 0) {
+    return;
+  }
+
   // An estimated initial value.
   uint64_t consts_size = 6144 * wordSize;
 
@@ -237,13 +274,29 @@ void JeandleCompiledCode::finalize() {
     assembler.emit_ic_check();
   }
 
+  int align_bytes = entry_alignment(align);
+  if (align_bytes > 1) {
+    masm->align(align_bytes);
+  }
+
   _offsets.set_value(CodeOffsets::Verified_Entry, masm->offset());
+
+  emit_verified_entry_nops(*masm);
+
+  int frame_size_in_bytes = (_frame_size > 0) ? _frame_size * BytesPerWord : 0;
+  bool has_java_calls = !_non_routine_call_sites.empty();
+  if (frame_size_in_bytes > 0 && need_stack_overflow_check(_method, has_java_calls, frame_size_in_bytes)) {
+    int bang_size_in_bytes = frame_size_in_bytes + os::extra_bang_size_in_bytes();
+    masm->generate_stack_overflow_check(bang_size_in_bytes);
+  }
+
+  if (align_bytes > 1) {
+    masm->align(align_bytes);
+  }
 
   _prolog_length = masm->offset();
 
   assembler.emit_insts(((address) _obj->getBufferStart()) + offset, code_size);
-
-  setup_frame_size();
 
   resolve_reloc_info(assembler);
 
