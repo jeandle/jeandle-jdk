@@ -53,7 +53,7 @@ endif
 # platform dependent.
 
 ifeq ($(call isTargetOs, linux), true)
-  DUMP_SYMBOLS_CMD := $(NM) $(NMFLAGS) --defined-only *$(OBJ_SUFFIX)
+  DUMP_SYMBOLS_CMD := $(NM) $(NMFLAGS) --defined-only --extern-only *$(OBJ_SUFFIX)
   ifneq ($(FILTER_SYMBOLS_PATTERN), )
     FILTER_SYMBOLS_PATTERN := $(FILTER_SYMBOLS_PATTERN)|
   endif
