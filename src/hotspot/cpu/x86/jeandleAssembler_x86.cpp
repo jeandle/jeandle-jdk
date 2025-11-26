@@ -133,6 +133,10 @@ void JeandleAssembler::emit_ic_check() {
     __ nop(nops_cnt);
 }
 
+void JeandleAssembler::emit_verified_entry_nops() {
+  __ nop(NativeJump::instruction_size);
+}
+
 int JeandleAssembler::emit_exception_handler() {
   address base = __ start_a_stub(NativeJump::instruction_size);
   if (base == nullptr) {

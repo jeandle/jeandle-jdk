@@ -194,25 +194,8 @@ class JeandleOopReloc : public JeandleReloc {
 
 } // anonymous namespace
 
-static int entry_alignment(uint64_t align_from_obj) {
-  // Use the alignment from the object file when possible.
-  return (align_from_obj > 1) ? static_cast<int>(align_from_obj) : 1;
-}
-
-static void emit_verified_entry_nops(MacroAssembler& masm) {
-#ifdef X86
-  masm.nop(NativeJump::instruction_size);
-#elif defined(AARCH64) || defined(RISCV)
-  constexpr int nop_size = NativeInstruction::instruction_size;
-  STATIC_ASSERT(NativeJump::instruction_size % nop_size == 0);
-  for (int i = 0; i < NativeJump::instruction_size / nop_size; i++) {
-    masm.nop();
-  }
-#else
-  Unimplemented();
-#endif
-}
-
+// Decide whether to emit a stack overflow check for the compiled entry based on
+// Java call presence and frame size pressure.
 static bool need_stack_overflow_check(const ciMethod* method,
                                       bool has_java_calls,
                                       int frame_size_in_bytes) {
@@ -250,9 +233,7 @@ void JeandleCompiledCode::finalize() {
   }
 
   setup_frame_size();
-  if (_frame_size <= 0) {
-    return;
-  }
+  assert(_frame_size > 0, "frame size must be positive");
 
   // An estimated initial value.
   uint64_t consts_size = 6144 * wordSize;
@@ -274,25 +255,22 @@ void JeandleCompiledCode::finalize() {
     assembler.emit_ic_check();
   }
 
-  int align_bytes = entry_alignment(align);
-  if (align_bytes > 1) {
-    masm->align(align_bytes);
-  }
+  assert(align > 1, "invalid alignment");
+  int align_bytes = static_cast<int>(align);
+  masm->align(align_bytes);
 
   _offsets.set_value(CodeOffsets::Verified_Entry, masm->offset());
 
-  emit_verified_entry_nops(*masm);
+  assembler.emit_verified_entry_nops();
 
-  int frame_size_in_bytes = (_frame_size > 0) ? _frame_size * BytesPerWord : 0;
+  int frame_size_in_bytes = _frame_size * BytesPerWord;
   bool has_java_calls = !_non_routine_call_sites.empty();
-  if (frame_size_in_bytes > 0 && need_stack_overflow_check(_method, has_java_calls, frame_size_in_bytes)) {
+  if (need_stack_overflow_check(_method, has_java_calls, frame_size_in_bytes)) {
     int bang_size_in_bytes = frame_size_in_bytes + os::extra_bang_size_in_bytes();
     masm->generate_stack_overflow_check(bang_size_in_bytes);
   }
 
-  if (align_bytes > 1) {
-    masm->align(align_bytes);
-  }
+  masm->align(align_bytes);
 
   _prolog_length = masm->offset();
 

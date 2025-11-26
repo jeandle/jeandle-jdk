@@ -46,6 +46,7 @@ class JeandleAssembler : public StackObj {
   void patch_ic_call_site(int inst_offset, CallSiteInfo* call);
 
   void emit_ic_check();
+  void emit_verified_entry_nops();
 
   int emit_exception_handler();
 
