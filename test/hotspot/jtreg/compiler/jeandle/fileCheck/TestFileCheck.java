@@ -39,7 +39,7 @@ public class TestFileCheck {
             FileCheck fileCheck = new FileCheck(currentDir,
                                                 TestFileCheck.class.getDeclaredMethod("add", int.class, int.class),
                                                 false);
-            fileCheck.check("define hotspotcc i32 @\"compiler_jeandle_fileCheck_TestFileCheck_add_(II)I\"(i32 %0, i32 %1)");
+            fileCheck.check("define hotspotcc i32 @compiler_jeandle_fileCheck_TestFileCheck_add");
             fileCheck.checkNext("entry:");
             fileCheck.checkNext("br label %bci_0");
         }
@@ -47,7 +47,7 @@ public class TestFileCheck {
             FileCheck fileCheck = new FileCheck(currentDir,
                                                 TestFileCheck.class.getDeclaredMethod("add", int.class, int.class),
                                                 true);
-            fileCheck.check("define hotspotcc i32 @\"compiler_jeandle_fileCheck_TestFileCheck_add_(II)I\"(i32 %0, i32 %1)");
+            fileCheck.check("define hotspotcc i32 @compiler_jeandle_fileCheck_TestFileCheck_add");
             fileCheck.checkNext("entry:");
             fileCheck.checkNext("%2 = add i32 %1, %0");
             fileCheck.checkNot("define private hotspotcc void @jeandle.safepoint_poll() #2 {");
@@ -56,7 +56,7 @@ public class TestFileCheck {
             FileCheck fileCheck = new FileCheck(currentDir,
                                                 TestFileCheck.class.getDeclaredMethod("add", int.class, int.class),
                                                 false);
-            fileCheck.checkPattern("define hotspotcc i32 @\"compiler_jeandle_fileCheck_TestFileCheck_add_\\(II\\)I\"\\(i32 %[0-9]+, i32 %[0-9]+\\)");
+            fileCheck.checkPattern("define hotspotcc i32 @compiler_jeandle_fileCheck_TestFileCheck_add");
             fileCheck.checkNextPattern("entry:");
             fileCheck.checkNextPattern("br label %bci_[0-9]+");
         }
@@ -64,7 +64,7 @@ public class TestFileCheck {
             FileCheck fileCheck = new FileCheck(currentDir,
                                                 TestFileCheck.class.getDeclaredMethod("add", int.class, int.class),
                                                 true);
-            fileCheck.checkPattern("define hotspotcc i32 @\"compiler_jeandle_fileCheck_TestFileCheck_add_\\(II\\)I\"\\(i32 %[0-9]+, i32 %[0-9]+\\)");
+            fileCheck.checkPattern("define hotspotcc i32 @compiler_jeandle_fileCheck_TestFileCheck_add");
             fileCheck.checkNextPattern("entry:");
             fileCheck.checkNextPattern("%[0-9]+ = add i32 %[0-9]+, %[0-9]+");
             fileCheck.checkNotPattern("define private hotspotcc void @jeandle\\.safepoint_poll\\(\\) #\\d+ \\{");

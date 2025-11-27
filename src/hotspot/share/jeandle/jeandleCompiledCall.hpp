@@ -34,7 +34,7 @@ class JeandleCompiledCall : public AllStatic {
 
   enum Type {
     // To call a Java method, static calls dispatch directly to the verified entry point of a method and
-    // are used for static calls and non−inlined virtual calls that have only one receiver.
+    // are used for static calls and non-inlined virtual calls that have only one receiver.
     STATIC_CALL,
 
     // To call a Java method, dynamic calls dispatch to the unverified entry point of a method and are
@@ -58,7 +58,7 @@ class JeandleCompiledCall : public AllStatic {
   // Call site size for a call type.
   static int call_site_size(Type call_type);
 
-  // Nop instruction size that should be emited for a call site.
+  // Nop instruction size that should be emitted for a call site.
   static int call_site_patch_size(Type call_type);
 };
 

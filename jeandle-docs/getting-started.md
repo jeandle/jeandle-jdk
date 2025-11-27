@@ -38,6 +38,57 @@ make images
 ```
 Then the compiled JDK can be found in a directory like ```build/linux-x86_64-server-release/images/jdk/``` under the jeandle-jdk path.
 
+### Build with Dockerfile
+
+Jeandle-jdk ships with a Dockerfile so you can build inside a reproducible container instead of installing every dependency on the host. Build the image once from the Dockerfile alone, then clone the repositories *inside* the container. This avoids cloning jeandle-jdk twice.
+
+1. Copy the Dockerfile to an empty directory (for example, download the raw file):
+   ```
+   curl -O https://raw.githubusercontent.com/jeandle/jeandle-jdk/main/Dockerfile
+   ```
+2. Build the image from that directory:
+   ```
+   docker build -t jeandle-dev:latest -f Dockerfile .
+   ```
+3. Launch the container (runs as the current user and reuses your home folder):
+   ```
+   docker run -it --rm \
+     --name jeandle-dev \
+     -u $(id -u):$(id -g) \
+     -w /home/$(id -un) \
+     -v /etc/passwd:/etc/passwd:ro \
+     -v /etc/group:/etc/group:ro \
+     -v /home/$(id -un):/home/$(id -un) \
+     jeandle-dev:latest
+   ```
+   The working directory is set via `-w`, so the Dockerfile does not need its own `WORKDIR`.
+4. Inside the container, clone and build jeandle-llvm:
+   ```
+   git clone https://github.com/jeandle/jeandle-llvm.git
+   cd jeandle-llvm
+   mkdir build && cd build
+   cmake -G "Unix Makefiles" \
+         -DLLVM_TARGETS_TO_BUILD=X86 \
+         -DCMAKE_BUILD_TYPE="Release" \
+         -DCMAKE_INSTALL_PREFIX="/home/$(id -un)/jeandle-llvm-install" \
+         -DLLVM_BUILD_LLVM_DYLIB=On \
+         -DLLVM_DYLIB_COMPONENTS=all \
+         ../llvm
+   cmake --build . --target install --parallel
+   ```
+5. Clone jeandle-jdk in the container and build it against the freshly installed LLVM:
+   ```
+   cd /home/$(id -un)
+   git clone https://github.com/jeandle/jeandle-jdk.git
+   cd jeandle-jdk
+   bash configure \
+         --with-boot-jdk=/usr/ \
+         --with-debug-level=release \
+         --with-jeandle-llvm=/home/$(id -un)/jeandle-llvm-install
+   make images
+   ```
+The resulting JDK lives under `build/linux-x86_64-server-release/images/jdk/` inside the jeandle-jdk tree.
+
 ## Debug Builds
 The same debug level should be configured for both jeandle-llvm and jeandle-jdk. To build a debug version of Jeandle, use the following build options:
 ```

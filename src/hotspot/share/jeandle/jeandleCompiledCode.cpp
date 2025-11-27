@@ -20,6 +20,7 @@
 
 #include "jeandle/__llvmHeadersBegin__.hpp"
 #include "llvm/BinaryFormat/Dwarf.h"
+#include "llvm/Object/FaultMapParser.h"
 #include "llvm/Support/DataExtractor.h"
 
 #include "jeandle/jeandleAssembler.hpp"
@@ -251,6 +252,8 @@ void JeandleCompiledCode::finalize() {
     build_exception_handler_table();
     _offsets.set_value(CodeOffsets::Exceptions, assembler.emit_exception_handler());
   }
+
+  build_implicit_exception_table();
 
   // generate shared trampoline stubs
   if (!_code_buffer.finalize_stubs()) {
@@ -485,6 +488,39 @@ void JeandleCompiledCode::build_exception_handler_table() {
       data_extractor.getULEB128(data_cursor);
       assert(data_cursor, "invalid exception handler action table entry");
     }
+  }
+}
+
+void JeandleCompiledCode::build_implicit_exception_table() {
+  SectionInfo section_info(".llvm_faultmaps");
+  if (!ReadELF::findSection(*_elf, section_info)) {
+      // No implicit exception table.
+      return;
+  }
+
+  uint64_t section_begin = (uint64_t)object_start() + section_info._offset;
+  uint64_t section_end = section_begin + section_info._size;
+
+  llvm::FaultMapParser faultmaps((uint8_t*)section_begin, (uint8_t*)section_end);
+
+#ifdef ASSERT
+  auto version = faultmaps.getFaultMapVersion();
+  assert(version == 1, "unsupported fault map version");
+
+  auto num_functions = faultmaps.getNumFunctions();
+  assert(num_functions == 1, "only one function should exist in the fault map");
+#endif
+
+  auto function_info = faultmaps.getFirstFunctionInfo();
+  auto num_faulting_pcs = function_info.getNumFaultingPCs();
+
+  for (uint32_t i = 0; i < num_faulting_pcs; i++) {
+    auto fault_info = function_info.getFunctionFaultInfoAt(i);
+
+    auto faulting_offset = fault_info.getFaultingPCOffset() + _prolog_length;
+    auto handler_offset = fault_info.getHandlerPCOffset() + _prolog_length;
+
+    _implicit_exception_table.append(faulting_offset, handler_offset);
   }
 }
 

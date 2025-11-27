@@ -23,6 +23,7 @@
 
 #include "jeandle/jeandleAssembler.hpp"
 #include "jeandle/jeandleCompilation.hpp"
+#include "jeandle/jeandleRuntimeRoutine.hpp"
 
 #include "jeandle/__hotspotHeadersBegin__.hpp"
 #include "code/nativeInst.hpp"
@@ -140,8 +141,17 @@ void JeandleAssembler::emit_ic_check() {
 }
 
 int JeandleAssembler::emit_exception_handler() {
-  // TODO
-  return 0;
+  int stub_size = __ far_codestub_branch_size();
+  address base = __ start_a_stub(stub_size);
+  if (base == nullptr) {
+    JeandleCompilation::report_jeandle_error("CodeCache is full");
+    return 0;
+  }
+  int offset = __ offset();
+  __ far_jump(RuntimeAddress(JeandleRuntimeRoutine::get_routine_entry(JeandleRuntimeRoutine::_exception_handler)));
+  assert(__ offset() - offset <= stub_size, "overflow");
+  __ end_a_stub();
+  return offset;
 }
 
 using LinkKind_aarch64 = llvm::jitlink::aarch64::EdgeKind_aarch64;

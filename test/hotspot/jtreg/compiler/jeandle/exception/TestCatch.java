@@ -20,7 +20,7 @@
 
 /**
  * @test
- * @requires os.arch=="amd64" | os.arch=="x86_64"
+ * @requires os.arch=="amd64" | os.arch=="x86_64" | os.arch=="aarch64"
  * @library /test/lib /
  * @run main/othervm -XX:CompileCommand=compileonly,compiler.jeandle.exception.TestCatch::testCatch
  *      -XX:CompileCommand=compileonly,compiler.jeandle.exception.TestCatch::catchException

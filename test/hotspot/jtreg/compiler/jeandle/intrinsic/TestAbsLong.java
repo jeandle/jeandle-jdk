@@ -56,7 +56,7 @@ public class TestAbsLong {
         FileCheck checker = new FileCheck(dump_path, TestWrapper.class.getMethod("abs_long", long.class), false);
         // find compiled method
         checker.check(
-                "define hotspotcc i64 @\"compiler_jeandle_intrinsic_TestAbsLong$TestWrapper_abs_long_(J)J\"(i64 %0)");
+                "define hotspotcc i64 @\"compiler_jeandle_intrinsic_TestAbsLong$TestWrapper_abs_long");
         // check IR
         checker.checkNext("entry:");
         checker.checkNext("br label %bci_0");

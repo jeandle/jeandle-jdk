@@ -135,7 +135,7 @@ void JeandleAssembler::emit_ic_check() {
 
 int JeandleAssembler::emit_exception_handler() {
   address base = __ start_a_stub(NativeJump::instruction_size);
-  if (base == NULL) {
+  if (base == nullptr) {
     JeandleCompilation::report_jeandle_error("CodeCache is full");
     return 0;
   }

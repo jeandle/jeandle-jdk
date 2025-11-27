@@ -29,7 +29,7 @@ llvm::Function* JeandleFuncSig::create_llvm_func(ciMethod* method, llvm::Module&
   llvm::SmallVector<llvm::Type*> args;
   llvm::LLVMContext& context = target_module.getContext();
 
-  // Reciever is the first argument.
+  // Receiver is the first argument.
   if (!method->is_static()) {
     args.push_back(JeandleType::java2llvm(BasicType::T_OBJECT, context));
   }
@@ -60,10 +60,5 @@ std::string JeandleFuncSig::method_name(ciMethod* method) {
   std::string method_name = std::string(method->name()->as_utf8());
   std::replace(method_name.begin(), method_name.end(), '/', '_');
 
-  std::string sig_name = std::string(method->signature()->as_symbol()->as_utf8());
-  std::replace(sig_name.begin(), sig_name.end(), '/', '_');
-
-  return class_name
-         + "_" + method_name
-         + "_" + sig_name;
+  return class_name + "_" + method_name;
 }

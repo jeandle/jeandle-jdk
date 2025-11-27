@@ -20,7 +20,7 @@
 
 /**
  * @test
- * @requires os.arch=="amd64" | os.arch=="x86_64"
+ * @requires os.arch=="amd64" | os.arch=="x86_64" | os.arch=="aarch64"
  * @run main/othervm -XX:CompileCommand=compileonly,compiler.jeandle.exception.TestThrow::testThrow
  *      -Xcomp -XX:-TieredCompilation -XX:+UseJeandleCompiler compiler.jeandle.exception.TestThrow
  */

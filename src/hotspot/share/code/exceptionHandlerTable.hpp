@@ -32,7 +32,6 @@
 // Here is a class to make JeandleExceptionHandlerTable compatible with ExceptionHandlerTable.
 class ExceptionHandlerTableInterface {
  public:
-  virtual ~ExceptionHandlerTableInterface() = default;
   virtual int size_in_bytes() const = 0;
   virtual void copy_to(CompiledMethod* nm) = 0;
   virtual void print(address base) const = 0;

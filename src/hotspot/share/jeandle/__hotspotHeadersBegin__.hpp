@@ -22,7 +22,7 @@
 // For more information on macro conflicts, see __llvmHeadersBegin__.hpp
 
 // __hotspotHeadersBegin__.hpp undefines 'assert' from stdlib, and redefines
-// 'AArch64' becuase it may be undefined by __llvmHeadersBegin__.hpp.
+// 'AArch64' because it may be undefined by __llvmHeadersBegin__.hpp.
 
 #undef assert
 #ifdef SHARE_UTILITIES_DEBUG_HPP

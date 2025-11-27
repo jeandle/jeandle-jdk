@@ -50,9 +50,9 @@ public class FileCheck {
         this.lineIndex = 0;
 
         Class declaringClass = method.getDeclaringClass();
-        String filePrefix = declaringClass.getName().replace('.', '_') + "_" + method.getName() + "_" + getMethodSignature(method).replace('/', '_');
+        String filePrefix = declaringClass.getName().replace('.', '_') + "_" + method.getName();
         String fileSuffix = ".ll";
-        String optimizedFileSuffix = "-optimized.ll";
+        String optimizedFileSuffix = "_optimized.ll";
 
         Path folder = Paths.get(path);
         if (!Files.exists(folder)) {

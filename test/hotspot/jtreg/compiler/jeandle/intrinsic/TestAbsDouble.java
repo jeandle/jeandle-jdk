@@ -56,7 +56,7 @@ public class TestAbsDouble {
         // Verify llvm IR
         FileCheck checker = new FileCheck(dump_path, TestWrapper.class.getMethod("abs_double", double.class), false);
         // find compiled method
-        checker.check("define hotspotcc double @\"compiler_jeandle_intrinsic_TestAbsDouble$TestWrapper_abs_double_(D)D\"(double %0)");
+        checker.check("define hotspotcc double @\"compiler_jeandle_intrinsic_TestAbsDouble$TestWrapper_abs_double");
         // check IR
         checker.checkNext("entry:");
         checker.checkNext("br label %bci_0");

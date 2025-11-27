@@ -56,7 +56,7 @@ public class TestAbsInt {
         FileCheck checker = new FileCheck(dump_path, TestWrapper.class.getMethod("abs_int", int.class), false);
         // find compiled method
         checker.check(
-                "define hotspotcc i32 @\"compiler_jeandle_intrinsic_TestAbsInt$TestWrapper_abs_int_(I)I\"(i32 %0)");
+                "define hotspotcc i32 @\"compiler_jeandle_intrinsic_TestAbsInt$TestWrapper_abs_int");
         // check IR
         checker.checkNext("entry:");
         checker.checkNext("br label %bci_0");
