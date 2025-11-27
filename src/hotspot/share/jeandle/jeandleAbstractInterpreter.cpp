@@ -2039,7 +2039,7 @@ void JeandleAbstractInterpreter::boundary_check(llvm::Value* array_oop, llvm::Va
   assert(array_oop->getType() == llvm::PointerType::get(*_context, llvm::jeandle::AddrSpace::JavaHeapAddrSpace), "must be a java object");
 
   if (CURRENT_ENV->ArrayIndexOutOfBoundsException_instance() == nullptr) {
-    // TODO: Uncomnon_trap here;
+    // TODO: Uncommon trap here
     return;
   }
 
