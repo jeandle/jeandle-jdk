@@ -1412,10 +1412,10 @@ void JeandleAbstractInterpreter::checkcast() {
   llvm::Value* exception_oop_handle = find_or_insert_oop(CURRENT_ENV->ClassCastException_instance());
   llvm::Value* exception_oop = _ir_builder.CreateLoad(JeandleType::java2llvm(BasicType::T_OBJECT, *_context), exception_oop_handle);
 
-  int detail_message_offset = java_lang_Throwable::get_detailMessage_offset();
-  llvm::Value* detail_message_addr = compute_instance_field_address(exception_oop, detail_message_offset);
+  int detailMessage_offset = java_lang_Throwable::get_detailMessage_offset();
+  llvm::Value* detailMessage_addr = compute_instance_field_address(exception_oop, detailMessage_offset);
   llvm::StoreInst* store_inst = _ir_builder.CreateStore(llvm::ConstantPointerNull::get(llvm::cast<llvm::PointerType>(JeandleType::java2llvm(BasicType::T_OBJECT, *_context))),
-                                                        detail_message_addr);
+                                                        detailMessage_addr);
   store_inst->setAtomic(llvm::AtomicOrdering::Unordered);
   dispatch_exception_to_handler(exception_oop);
 
