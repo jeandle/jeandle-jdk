@@ -2035,9 +2035,13 @@ void JeandleAbstractInterpreter::null_check(llvm::Value* obj) {
   _block->set_tail_llvm_block(null_check_pass);
 }
 
-// TODO:
 void JeandleAbstractInterpreter::boundary_check(llvm::Value* array_oop, llvm::Value* index) {
   assert(array_oop->getType() == llvm::PointerType::get(*_context, llvm::jeandle::AddrSpace::JavaHeapAddrSpace), "must be a java object");
+
+  if (CURRENT_ENV->ArrayIndexOutOfBoundsException_instance() == nullptr) {
+    // TODO: Uncomnon_trap here;
+    return;
+  }
 
   int cur_bci = _bytecodes.cur_bci();
   llvm::BasicBlock* boundary_check_pass = llvm::BasicBlock::Create(*_context,
