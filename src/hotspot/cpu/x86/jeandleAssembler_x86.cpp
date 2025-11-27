@@ -133,7 +133,7 @@ void JeandleAssembler::emit_ic_check() {
     __ nop(nops_cnt);
 }
 
-void JeandleAssembler::emit_verified_entry_nops() {
+void JeandleAssembler::emit_verified_entry() {
   __ nop(NativeJump::instruction_size);
 }
 

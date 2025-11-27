@@ -44,7 +44,7 @@ void JeandleAssembler::emit_ic_check() {
   Unimplemented();
 }
 
-void JeandleAssembler::emit_verified_entry_nops() {
+void JeandleAssembler::emit_verified_entry() {
   Unimplemented();
 }
 

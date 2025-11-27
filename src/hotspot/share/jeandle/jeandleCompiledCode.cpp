@@ -290,7 +290,7 @@ void JeandleCompiledCode::finalize() {
 
   _offsets.set_value(CodeOffsets::Verified_Entry, masm->offset());
 
-  assembler.emit_verified_entry_nops();
+  assembler.emit_verified_entry();
 
   int frame_size_in_bytes = _frame_size * BytesPerWord;
   bool has_java_calls = !_non_routine_call_sites.empty();
