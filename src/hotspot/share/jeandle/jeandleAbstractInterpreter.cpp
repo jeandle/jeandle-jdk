@@ -492,12 +492,10 @@ void BasicBlockBuilder::mark_loops(JeandleBasicBlock* block) {
   block->set_reverse_post_order(_next_block_order--);
 }
 
-JeandleAbstractInterpreter::JeandleAbstractInterpreter(ciEnv* env,
-                                                       ciMethod* method,
+JeandleAbstractInterpreter::JeandleAbstractInterpreter(ciMethod* method,
                                                        int entry_bci,
                                                        llvm::Module& target_module,
                                                        JeandleCompiledCode& code) :
-                                                       _env(env),
                                                        _method(method),
                                                        _llvm_func(JeandleFuncSig::create_llvm_func(method, target_module)),
                                                        _entry_bci(entry_bci),
@@ -1381,21 +1379,20 @@ void JeandleAbstractInterpreter::checkcast() {
   _ir_builder.CreateCondBr(call, check_pass, check_fail);
 
   _ir_builder.SetInsertPoint(check_fail);
-  // TODO: UncommonTrap Handling
-  llvm::Value* exception_oop_handle = find_or_insert_oop(_env->ClassCastException_instance());
+  llvm::Value* exception_oop_handle = find_or_insert_oop(CURRENT_ENV->ClassCastException_instance());
   llvm::Value* exception_oop = _ir_builder.CreateLoad(JeandleType::java2llvm(BasicType::T_OBJECT, *_context), exception_oop_handle);
 
-  int offset = java_lang_Throwable::get_detailMessage_offset();
-  llvm::Value* exception_oop_addr = compute_instance_field_address(exception_oop, offset);
+  int detail_message_offset = java_lang_Throwable::get_detailMessage_offset();
+  llvm::Value* detail_message_addr = compute_instance_field_address(exception_oop, detail_message_offset);
   llvm::StoreInst* store_inst = _ir_builder.CreateStore(llvm::ConstantPointerNull::get(llvm::cast<llvm::PointerType>(JeandleType::java2llvm(BasicType::T_OBJECT, *_context))),
-                                                        exception_oop_addr);
+                                                        detail_message_addr);
   store_inst->setAtomic(llvm::AtomicOrdering::Unordered);
   dispatch_exception_to_handler(exception_oop);
 
   _ir_builder.SetInsertPoint(check_pass);
-  _jvm->apush(obj);
-
   _block->set_tail_llvm_block(check_pass);
+
+  _jvm->apush(obj);
 }
 
 void JeandleAbstractInterpreter::instanceof(int klass_index) {

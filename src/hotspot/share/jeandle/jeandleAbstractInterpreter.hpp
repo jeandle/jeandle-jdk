@@ -33,7 +33,6 @@
 #include "jeandle/jeandleCompilation.hpp"
 
 #include "jeandle/__hotspotHeadersBegin__.hpp"
-#include "ci/ciEnv.hpp"
 #include "ci/ciMethodBlocks.hpp"
 #include "ci/compilerInterface.hpp"
 #include "memory/allocation.hpp"
@@ -241,14 +240,12 @@ class BasicBlockBuilder : public JeandleCompilationResourceObj {
 // Convert java bytecodes to llvm ir.
 class JeandleAbstractInterpreter : public StackObj {
  public:
-  JeandleAbstractInterpreter(ciEnv* env,
-                             ciMethod* method,
+  JeandleAbstractInterpreter(ciMethod* method,
                              int entry_bci,
                              llvm::Module& target_module,
                              JeandleCompiledCode& code);
 
  private:
-  ciEnv* _env;
   ciMethod* _method;
   llvm::Function* _llvm_func;
   int _entry_bci;

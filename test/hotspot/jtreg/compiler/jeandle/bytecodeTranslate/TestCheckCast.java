@@ -64,7 +64,7 @@ public class TestCheckCast {
         return t;
     }
 
-    public static class SonClass extends TestCheckCast {}
+    public static class SubClass extends TestCheckCast {}
 
     private static void testBasicCastScenarios() {
         Double validDouble = Double.valueOf(3.6);
@@ -73,7 +73,7 @@ public class TestCheckCast {
         Integer validInteger = Integer.valueOf(2);
         Asserts.assertEquals(checkCastToInteger(validInteger), 2);
 
-        SonClass subClass = new SonClass();
+        SubClass subClass = new SubClass();
         Asserts.assertEquals(checkCastToFather(subClass), subClass);
 
         Object nullObj = null;
@@ -81,7 +81,6 @@ public class TestCheckCast {
     }
 
     private static void testFailingCastScenarios() {
-        // TODO: UnCommonTrap implements exceptions.
         Object invalidObj = "not a Double";
         thowException=false;
         checkCastToDouble(invalidObj);
