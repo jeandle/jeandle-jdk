@@ -296,12 +296,11 @@ void JeandleCompilation::compile_module() {
 static std::string construct_dump_path(const std::string& method_name,
                                        const std::string& timestamp,
                                        const std::string& suffix) {
-  assert(suffix == ".ll" || suffix == "-optimized.ll" || suffix == ".o", "invalid suffix for dump file of Jeandle compiler");
+  assert(suffix == ".ll" || suffix == "_optimized.ll" || suffix == ".o", "invalid suffix for dump file of Jeandle compiler");
   std::string dump_dir = JeandleDumpDirectory ? std::string(JeandleDumpDirectory) : std::string("./");
 
   // Full name.
-  std::string file_name = dump_dir + '/' + method_name + '-' + timestamp + suffix;
-
+  std::string file_name = dump_dir + '/' + method_name + '_' + timestamp + suffix;
   // Normalize the path and remove redundant separators.
   std::filesystem::path clean_path(std::move(file_name));
 
@@ -310,7 +309,6 @@ static std::string construct_dump_path(const std::string& method_name,
 
 void JeandleCompilation::dump_obj() {
   std::string dump_path = construct_dump_path(_llvm_module->getModuleIdentifier(), _comp_start_time, ".o");
-
   std::error_code err_code;
   llvm::raw_fd_ostream dump_stream(dump_path, err_code);
   if (err_code) {
@@ -323,8 +321,7 @@ void JeandleCompilation::dump_obj() {
 }
 
 void JeandleCompilation::dump_ir(bool optimized) {
-  std::string dump_path = construct_dump_path(_llvm_module->getModuleIdentifier(), _comp_start_time, optimized ? "-optimized.ll" : ".ll");
-
+  std::string dump_path = construct_dump_path(_llvm_module->getModuleIdentifier(), _comp_start_time, optimized ? "_optimized.ll" : ".ll");
   std::error_code err_code;
   llvm::raw_fd_ostream dump_stream(dump_path, err_code, llvm::sys::fs::OF_TextWithCRLF);
 

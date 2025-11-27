@@ -60,10 +60,5 @@ std::string JeandleFuncSig::method_name(ciMethod* method) {
   std::string method_name = std::string(method->name()->as_utf8());
   std::replace(method_name.begin(), method_name.end(), '/', '_');
 
-  std::string sig_name = std::string(method->signature()->as_symbol()->as_utf8());
-  std::replace(sig_name.begin(), sig_name.end(), '/', '_');
-
-  return class_name
-         + "_" + method_name
-         + "_" + sig_name;
+  return class_name + "_" + method_name;
 }

@@ -57,7 +57,7 @@ public class TestVolatile {
             FileCheck fileCheck = new FileCheck(currentDir,
                                                 TestVolatile.class.getDeclaredMethod("test"),
                                                 false);
-            fileCheck.check("define hotspotcc void @\"TestVolatile_test");
+            fileCheck.check("define hotspotcc void @TestVolatile_test");
             fileCheck.checkPattern("load atomic i8, ptr addrspace\\(1\\) %[0-9]+ seq_cst, align 1");
             fileCheck.checkPattern("store atomic i32 %[0-9]+, ptr addrspace\\(1\\) %[0-9]+ unordered, align 4");
             fileCheck.checkPattern("store atomic i8 0, ptr addrspace\\(1\\) %[0-9]+ seq_cst, align 1");

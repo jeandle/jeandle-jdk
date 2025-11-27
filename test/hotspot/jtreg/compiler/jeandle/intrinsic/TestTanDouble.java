@@ -62,7 +62,7 @@ public class TestTanDouble {
             // Verify llvm IR
             FileCheck checker = new FileCheck(dump_path, TestWrapper.class.getMethod("tan_double", double.class), false);
             // find compiled method
-            checker.check("define hotspotcc double @\"compiler_jeandle_intrinsic_TestTanDouble$TestWrapper_tan_double_(D)D\"(double %0)");
+            checker.check("define hotspotcc double @\"compiler_jeandle_intrinsic_TestTanDouble$TestWrapper_tan_double");
             // check IR
             checker.checkNext("entry:");
             checker.checkNext("br label %bci_0");
@@ -94,7 +94,7 @@ public class TestTanDouble {
         // Verify llvm IR
         FileCheck checker = new FileCheck(dump_path, TestWrapper.class.getMethod("tan_double", double.class), false);
         // find compiled method
-        checker.check("define hotspotcc double @\"compiler_jeandle_intrinsic_TestTanDouble$TestWrapper_tan_double_(D)D\"(double %0)");
+        checker.check("define hotspotcc double @\"compiler_jeandle_intrinsic_TestTanDouble$TestWrapper_tan_double");
         // check IR
         checker.checkNext("entry:");
         checker.checkNext("br label %bci_0");

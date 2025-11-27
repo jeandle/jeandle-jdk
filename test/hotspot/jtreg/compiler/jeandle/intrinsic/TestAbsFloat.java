@@ -56,7 +56,7 @@ public class TestAbsFloat {
         // Verify llvm IR
         FileCheck checker = new FileCheck(dump_path, TestWrapper.class.getMethod("abs_float", float.class), false);
         // find compiled method
-        checker.check("define hotspotcc float @\"compiler_jeandle_intrinsic_TestAbsFloat$TestWrapper_abs_float_(F)F\"(float %0)");
+        checker.check("define hotspotcc float @\"compiler_jeandle_intrinsic_TestAbsFloat$TestWrapper_abs_float");
         // check IR
         checker.checkNext("entry:");
         checker.checkNext("br label %bci_0");
