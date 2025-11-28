@@ -32,7 +32,6 @@ import jdk.test.lib.Asserts;
  */
 
 public class TestArrayIndexOutOfBoundsException {
-    private static boolean throwExpectedException = false;
     public static final boolean[] boolArr   = new boolean[3];
     public static final byte[]    byteArr   = new byte[3];
     public static final short[]   shortArr  = new short[3];
@@ -44,6 +43,8 @@ public class TestArrayIndexOutOfBoundsException {
     public static final Object[]  objArr    = new Object[3];
 
     public static void main(String[] args) {
+        boolean throwExpectedException = false;
+
         // ---------- boolean ----------
         testBoolStore(boolArr, 2, true);
         Asserts.assertEQ(testBoolLoad(boolArr, 2), true);
