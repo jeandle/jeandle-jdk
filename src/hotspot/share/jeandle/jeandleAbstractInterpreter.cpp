@@ -1402,25 +1402,32 @@ void JeandleAbstractInterpreter::checkcast() {
 
   llvm::CallInst* call = call_java_op("jeandle.checkcast", {super_klass_ptr, obj});
 
-  llvm::Function* current_func = _ir_builder.GetInsertBlock()->getParent();
-  llvm::BasicBlock* check_pass = llvm::BasicBlock::Create(*_context, "_check_pass", current_func);
-  llvm::BasicBlock* check_fail = llvm::BasicBlock::Create(*_context, "_check_fail", current_func);
+  int cur_bci = _bytecodes.cur_bci();
+  llvm::BasicBlock* checkcast_pass = llvm::BasicBlock::Create(*_context,
+                                                               "bci_" + std::to_string(cur_bci) + "_checkcast_pass",
+                                                               _llvm_func);
+  llvm::BasicBlock* checkcast_fail = llvm::BasicBlock::Create(*_context,
+                                                               "bci_" + std::to_string(cur_bci) + "_checkcast_fail",
+                                                               _llvm_func);
 
-  _ir_builder.CreateCondBr(call, check_pass, check_fail);
+  _ir_builder.CreateCondBr(call, checkcast_pass, checkcast_fail);
 
-  _ir_builder.SetInsertPoint(check_fail);
+  _ir_builder.SetInsertPoint(checkcast_fail);
   llvm::Value* exception_oop_handle = find_or_insert_oop(CURRENT_ENV->ClassCastException_instance());
   llvm::Value* exception_oop = _ir_builder.CreateLoad(JeandleType::java2llvm(BasicType::T_OBJECT, *_context), exception_oop_handle);
 
+  // Clear the detail message of the preallocated exception object.
+  // Weblogic sometimes mutates the detail message of exceptions using reflection.
   int detailMessage_offset = java_lang_Throwable::get_detailMessage_offset();
   llvm::Value* detailMessage_addr = compute_instance_field_address(exception_oop, detailMessage_offset);
   llvm::StoreInst* store_inst = _ir_builder.CreateStore(llvm::ConstantPointerNull::get(llvm::cast<llvm::PointerType>(JeandleType::java2llvm(BasicType::T_OBJECT, *_context))),
                                                         detailMessage_addr);
   store_inst->setAtomic(llvm::AtomicOrdering::Unordered);
+
   dispatch_exception_to_handler(exception_oop);
 
-  _ir_builder.SetInsertPoint(check_pass);
-  _block->set_tail_llvm_block(check_pass);
+  _ir_builder.SetInsertPoint(checkcast_pass);
+  _block->set_tail_llvm_block(checkcast_pass);
 
   _jvm->apush(obj);
 }

@@ -25,7 +25,7 @@
  * @run main/othervm -XX:-TieredCompilation -Xcomp -Xbatch
  *      -XX:CompileCommand=compileonly,compiler.jeandle.bytecodeTranslate.TestCheckCast::checkCastToDouble
  *      -XX:CompileCommand=compileonly,compiler.jeandle.bytecodeTranslate.TestCheckCast::checkCastToInteger
- *      -XX:CompileCommand=compileonly,compiler.jeandle.bytecodeTranslate.TestCheckCast::checkCastToFather
+ *      -XX:CompileCommand=compileonly,compiler.jeandle.bytecodeTranslate.TestCheckCast::checkCastToParentClass
  *      -XX:+UseJeandleCompiler compiler.jeandle.bytecodeTranslate.TestCheckCast
  */
 
@@ -34,7 +34,7 @@ package compiler.jeandle.bytecodeTranslate;
 import jdk.test.lib.Asserts;
 
 public class TestCheckCast {
-    public static boolean thowException;
+
     public static Double checkCastToDouble(Object obj, boolean shouldFail) {
        Double d = null;
        boolean exceptionThrowed = false;
@@ -43,26 +43,31 @@ public class TestCheckCast {
        } catch (ClassCastException e) {
            exceptionThrowed = true;
        }
-       Asserts.asserEqual(exceptionThrowed, shouldFail);
+       Asserts.assertEquals(exceptionThrowed, shouldFail);
        return d;
     }
-    public static Integer checkCastToInteger(Object obj) {
+
+    public static Integer checkCastToInteger(Object obj, boolean shouldFail) {
         Integer i = null;
+        boolean exceptionThrowed = false;
         try {
             i = (Integer)obj;
         } catch (ClassCastException e) {
-            thowException=true;
+            exceptionThrowed = true;
         }
+        Asserts.assertEquals(exceptionThrowed, shouldFail);
         return i;
     }
 
-    public static TestCheckCast checkCastToFather(Object obj) {
+    public static TestCheckCast checkCastToParentClass(Object obj, boolean shouldFail) {
         TestCheckCast t = null;
+        boolean exceptionThrowed = false;
         try {
             t = (TestCheckCast)obj;
         } catch (ClassCastException e) {
-            thowException=true;
+            exceptionThrowed = true;
         }
+        Asserts.assertEquals(exceptionThrowed, shouldFail);
         return t;
     }
 
@@ -70,31 +75,25 @@ public class TestCheckCast {
 
     private static void testBasicCastScenarios() {
         Double validDouble = Double.valueOf(3.6);
-        Asserts.assertEquals(checkCastToDouble(validDouble), 3.6);
+        Asserts.assertEquals(checkCastToDouble(validDouble, false), 3.6);
 
         Integer validInteger = Integer.valueOf(2);
-        Asserts.assertEquals(checkCastToInteger(validInteger), 2);
+        Asserts.assertEquals(checkCastToInteger(validInteger, false), 2);
 
         SubClass subClass = new SubClass();
-        Asserts.assertEquals(checkCastToFather(subClass), subClass);
+        Asserts.assertEquals(checkCastToParentClass(subClass, false), subClass);
 
-        Object nullObj = null;
-        Asserts.assertNull(checkCastToDouble(nullObj),null);
+        SubClass nullObj = null;
+        Asserts.assertEquals(checkCastToParentClass(nullObj, false), null);
     }
 
     private static void testFailingCastScenarios() {
         Object invalidObj = "not a Double";
-        thowException=false;
-        checkCastToDouble(invalidObj);
-        Asserts.assertEquals(thowException,true);
+        checkCastToDouble(invalidObj, true);
 
-        thowException=false;
-        checkCastToInteger(invalidObj);
-        Asserts.assertEquals(thowException,true);
+        checkCastToInteger(invalidObj, true);
 
-        thowException=false;
-        checkCastToFather(invalidObj);
-        Asserts.assertEquals(thowException,true);
+        checkCastToParentClass(invalidObj, true);
     }
 
     public static void main(String[] args) {

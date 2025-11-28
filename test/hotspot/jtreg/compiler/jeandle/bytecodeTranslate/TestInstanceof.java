@@ -55,9 +55,6 @@ public class TestInstanceof {
     private static boolean testNotSubClass(Object myDog) { return (myDog instanceof NotSuperClass); }
     private static boolean testNotSubInterface(Object myDog) { return (myDog instanceof NotSuperInterface); }
 
-    private static boolean testNullToClass(Object nullObj) { return (nullObj instanceof Animal); }
-    private static boolean testNullToInterface(Object nullObj) { return (nullObj instanceof Barkable); }
-
     public static void main(String[] args) throws Exception {
         // Pre-load Classes
         Class.forName("compiler.jeandle.bytecodeTranslate.TestInstanceof$NotSuperClass");
@@ -73,8 +70,8 @@ public class TestInstanceof {
         Asserts.assertFalse(testNotSubClass(myDog));
         Asserts.assertFalse(testNotSubInterface(myDog));
 
-        Asserts.assertFalse(testNullToClass(null));
-        Asserts.assertFalse(testNullToInterface(null));
+        Asserts.assertFalse(testSubClass(null));
+        Asserts.assertFalse(testSubInterface(null));
 
         // check dead global variable elimination
         String currentDir = System.getProperty("user.dir");
