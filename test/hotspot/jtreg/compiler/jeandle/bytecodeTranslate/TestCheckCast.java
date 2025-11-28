@@ -35,13 +35,15 @@ import jdk.test.lib.Asserts;
 
 public class TestCheckCast {
     public static boolean thowException;
-    public static Double checkCastToDouble(Object obj) {
+    public static Double checkCastToDouble(Object obj, boolean shouldFail) {
        Double d = null;
+       boolean exceptionThrowed = false;
        try {
            d = (Double)obj;
        } catch (ClassCastException e) {
-           thowException = true;
+           exceptionThrowed = true;
        }
+       Asserts.asserEqual(exceptionThrowed, shouldFail);
        return d;
     }
     public static Integer checkCastToInteger(Object obj) {
