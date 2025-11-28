@@ -2057,11 +2057,15 @@ void JeandleAbstractInterpreter::boundary_check(llvm::Value* array_oop, llvm::Va
   _ir_builder.SetInsertPoint(boundary_check_fail);
   llvm::Value* exception_oop_handle = find_or_insert_oop(CURRENT_ENV->ArrayIndexOutOfBoundsException_instance());
   llvm::Value* exception_oop = _ir_builder.CreateLoad(JeandleType::java2llvm(BasicType::T_OBJECT, *_context), exception_oop_handle);
+
+  // Clear the detail message of the preallocated exception object.
+  // Weblogic sometimes mutates the detail message of exceptions using reflection.
   int detailMessage_offset = java_lang_Throwable::get_detailMessage_offset();
   llvm::Value* detailMessage_addr = compute_instance_field_address(exception_oop, detailMessage_offset);
   llvm::StoreInst* store_inst = _ir_builder.CreateStore(llvm::ConstantPointerNull::get(llvm::cast<llvm::PointerType>(JeandleType::java2llvm(BasicType::T_OBJECT, *_context))),
                                                         detailMessage_addr);
   store_inst->setAtomic(llvm::AtomicOrdering::Unordered);
+
   dispatch_exception_to_handler(exception_oop);
 
   _ir_builder.SetInsertPoint(boundary_check_pass);

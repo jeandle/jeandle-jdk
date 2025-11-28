@@ -64,6 +64,22 @@ public class TestArrayIndexOutOfBoundsException {
         }
         Asserts.assertTrue(throwExpectedException);
 
+        throwExpectedException = false;
+        try {
+            testBoolLoad(boolArr, -1);
+        } catch (ArrayIndexOutOfBoundsException e) {
+            throwExpectedException = true;
+        }
+        Asserts.assertTrue(throwExpectedException);
+
+        throwExpectedException = false;
+        try {
+            testBoolStore(boolArr, -1, false);
+        } catch (ArrayIndexOutOfBoundsException e) {
+            throwExpectedException = true;
+        }
+        Asserts.assertTrue(throwExpectedException);
+
 
         // ---------- byte ----------
         testByteStore(byteArr, 2, (byte) 1);
@@ -80,6 +96,22 @@ public class TestArrayIndexOutOfBoundsException {
         throwExpectedException = false;
         try {
             testByteStore(byteArr, 3, (byte) 0);
+        } catch (ArrayIndexOutOfBoundsException e) {
+            throwExpectedException = true;
+        }
+        Asserts.assertTrue(throwExpectedException);
+
+        throwExpectedException = false;
+        try {
+            testByteLoad(byteArr, -1);
+        } catch (ArrayIndexOutOfBoundsException e) {
+            throwExpectedException = true;
+        }
+        Asserts.assertTrue(throwExpectedException);
+
+        throwExpectedException = false;
+        try {
+            testByteStore(byteArr, -1, (byte) 0);
         } catch (ArrayIndexOutOfBoundsException e) {
             throwExpectedException = true;
         }
@@ -106,6 +138,22 @@ public class TestArrayIndexOutOfBoundsException {
         }
         Asserts.assertTrue(throwExpectedException);
 
+        throwExpectedException = false;
+        try {
+            testShortLoad(shortArr, -1);
+        } catch (ArrayIndexOutOfBoundsException e) {
+            throwExpectedException = true;
+        }
+        Asserts.assertTrue(throwExpectedException);
+
+        throwExpectedException = false;
+        try {
+            testShortStore(shortArr, -1, (short) 0);
+        } catch (ArrayIndexOutOfBoundsException e) {
+            throwExpectedException = true;
+        }
+        Asserts.assertTrue(throwExpectedException);
+
 
         // ---------- int ----------
         testIntStore(intArr, 2, 1);
@@ -122,6 +170,22 @@ public class TestArrayIndexOutOfBoundsException {
         throwExpectedException = false;
         try {
             testIntStore(intArr, 3, 0);
+        } catch (ArrayIndexOutOfBoundsException e) {
+            throwExpectedException = true;
+        }
+        Asserts.assertTrue(throwExpectedException);
+
+        throwExpectedException = false;
+        try {
+            testIntLoad(intArr, -1);
+        } catch (ArrayIndexOutOfBoundsException e) {
+            throwExpectedException = true;
+        }
+        Asserts.assertTrue(throwExpectedException);
+
+        throwExpectedException = false;
+        try {
+            testIntStore(intArr, -1, 0);
         } catch (ArrayIndexOutOfBoundsException e) {
             throwExpectedException = true;
         }
@@ -148,6 +212,22 @@ public class TestArrayIndexOutOfBoundsException {
         }
         Asserts.assertTrue(throwExpectedException);
 
+        throwExpectedException = false;
+        try {
+            testLongLoad(longArr, -1);
+        } catch (ArrayIndexOutOfBoundsException e) {
+            throwExpectedException = true;
+        }
+        Asserts.assertTrue(throwExpectedException);
+
+        throwExpectedException = false;
+        try {
+            testLongStore(longArr, -1, 0L);
+        } catch (ArrayIndexOutOfBoundsException e) {
+            throwExpectedException = true;
+        }
+        Asserts.assertTrue(throwExpectedException);
+
 
         // ---------- char ----------
         testCharStore(charArr, 2, '1');
@@ -164,6 +244,22 @@ public class TestArrayIndexOutOfBoundsException {
         throwExpectedException = false;
         try {
             testCharStore(charArr, 3, '\0');
+        } catch (ArrayIndexOutOfBoundsException e) {
+            throwExpectedException = true;
+        }
+        Asserts.assertTrue(throwExpectedException);
+
+        throwExpectedException = false;
+        try {
+            testCharLoad(charArr, -1);
+        } catch (ArrayIndexOutOfBoundsException e) {
+            throwExpectedException = true;
+        }
+        Asserts.assertTrue(throwExpectedException);
+
+        throwExpectedException = false;
+        try {
+            testCharStore(charArr, -1, '\0');
         } catch (ArrayIndexOutOfBoundsException e) {
             throwExpectedException = true;
         }
@@ -190,6 +286,22 @@ public class TestArrayIndexOutOfBoundsException {
         }
         Asserts.assertTrue(throwExpectedException);
 
+        throwExpectedException = false;
+        try {
+            testFloatLoad(floatArr, -1);
+        } catch (ArrayIndexOutOfBoundsException e) {
+            throwExpectedException = true;
+        }
+        Asserts.assertTrue(throwExpectedException);
+
+        throwExpectedException = false;
+        try {
+            testFloatStore(floatArr, -1, 0.0f);
+        } catch (ArrayIndexOutOfBoundsException e) {
+            throwExpectedException = true;
+        }
+        Asserts.assertTrue(throwExpectedException);
+
 
         // ---------- double ----------
         testDoubleStore(doubleArr, 2, 1.0);
@@ -206,6 +318,22 @@ public class TestArrayIndexOutOfBoundsException {
         throwExpectedException = false;
         try {
             testDoubleStore(doubleArr, 3, 0.0);
+        } catch (ArrayIndexOutOfBoundsException e) {
+            throwExpectedException = true;
+        }
+        Asserts.assertTrue(throwExpectedException);
+
+        throwExpectedException = false;
+        try {
+            testDoubleLoad(doubleArr, -1);
+        } catch (ArrayIndexOutOfBoundsException e) {
+            throwExpectedException = true;
+        }
+        Asserts.assertTrue(throwExpectedException);
+
+        throwExpectedException = false;
+        try {
+            testDoubleStore(doubleArr, -1, 0.0);
         } catch (ArrayIndexOutOfBoundsException e) {
             throwExpectedException = true;
         }
@@ -228,6 +356,22 @@ public class TestArrayIndexOutOfBoundsException {
         throwExpectedException = false;
         try {
             testObjectStore(objArr, 3, null);
+        } catch (ArrayIndexOutOfBoundsException e) {
+            throwExpectedException = true;
+        }
+        Asserts.assertTrue(throwExpectedException);
+
+        throwExpectedException = false;
+        try {
+            testObjectLoad(objArr, -1);
+        } catch (ArrayIndexOutOfBoundsException e) {
+            throwExpectedException = true;
+        }
+        Asserts.assertTrue(throwExpectedException);
+
+        throwExpectedException = false;
+        try {
+            testObjectStore(objArr, -1, null);
         } catch (ArrayIndexOutOfBoundsException e) {
             throwExpectedException = true;
         }
