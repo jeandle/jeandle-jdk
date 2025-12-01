@@ -141,11 +141,7 @@ void JeandleAssembler::emit_ic_check() {
 }
 
 void JeandleAssembler::emit_verified_entry() {
-  constexpr int nop_size = NativeInstruction::instruction_size;
-  STATIC_ASSERT(NativeJump::instruction_size % nop_size == 0);
-  for (int i = 0; i < NativeJump::instruction_size / nop_size; i++) {
-    __ nop();
-  }
+  __ nop();
 }
 
 int JeandleAssembler::interior_entry_alignment() const {
