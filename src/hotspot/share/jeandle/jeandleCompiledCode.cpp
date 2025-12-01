@@ -210,32 +210,6 @@ static bool need_stack_overflow_check(const ciMethod* method,
          frame_size_in_bytes > (int)(os::vm_page_size() >> 3) DEBUG_ONLY(|| true);
 }
 
-static int interpreter_frame_size_in_bytes(ciMethod* method) {
-  if (method == nullptr) {
-    return 0;
-  }
-
-  // We currently have no inlining; only account for the top frame.
-  // TODO: once inlining is enabled, include caller frames as JVMState::interpreter_frame_size does.
-  int callee_parameters = method->size_of_parameters();
-  int callee_locals = method->max_locals();
-  int max_stack = method->max_stack();
-  int temps = max_stack;
-  int locks = 0;
-  int extra_args = 0;
-  bool is_top_frame = true;
-
-  int size = BytesPerWord * Interpreter::size_activation(max_stack,
-                                                         temps + callee_parameters,
-                                                         extra_args,
-                                                         locks,
-                                                         callee_parameters,
-                                                         callee_locals,
-                                                         is_top_frame);
-  size += Deoptimization::last_frame_adjust(0, callee_locals) * BytesPerWord;
-  return size;
-}
-
 void JeandleCompiledCode::install_obj(std::unique_ptr<ObjectBuffer> obj) {
   _obj = std::move(obj);
   llvm::MemoryBufferRef memory_buffer = _obj->getMemBufferRef();
@@ -295,9 +269,8 @@ void JeandleCompiledCode::finalize() {
   int frame_size_in_bytes = _frame_size * BytesPerWord;
   bool has_java_calls = !_non_routine_call_sites.empty();
   if (need_stack_overflow_check(_method, has_java_calls, frame_size_in_bytes)) {
-    int interpreter_frame_bytes = interpreter_frame_size_in_bytes(_method);
-    int bang_size_in_bytes = MAX2(frame_size_in_bytes + os::extra_bang_size_in_bytes(),
-                                  interpreter_frame_bytes);
+    // TODO: include interpreter frame sizing once the arguments are fixed.
+    int bang_size_in_bytes = frame_size_in_bytes + os::extra_bang_size_in_bytes();
     masm->generate_stack_overflow_check(bang_size_in_bytes);
   }
 
