@@ -258,6 +258,7 @@ void JeandleCompiledCode::finalize() {
   masm->align(static_cast<int>(align));
 
   _offsets.set_value(CodeOffsets::Verified_Entry, masm->offset());
+  assembler.emit_verified_entry();
 
   int frame_size_in_bytes = _frame_size * BytesPerWord;
   bool has_java_calls = !_non_routine_call_sites.empty();
@@ -265,8 +266,6 @@ void JeandleCompiledCode::finalize() {
     // TODO: include interpreter frame sizing once the arguments are fixed.
     int bang_size_in_bytes = frame_size_in_bytes + os::extra_bang_size_in_bytes();
     masm->generate_stack_overflow_check(bang_size_in_bytes);
-  } else {
-    assembler.emit_verified_entry();
   }
 
   masm->align(assembler.interior_entry_alignment());

@@ -578,7 +578,7 @@ inline bool NativeInstruction::is_jump() {
 }
 
 inline bool NativeInstruction::is_jump_or_nop() {
-  return is_nop() || is_jump() || is_general_jump();
+  return is_nop() || is_jump();
 }
 
 // Call trampoline stubs.
