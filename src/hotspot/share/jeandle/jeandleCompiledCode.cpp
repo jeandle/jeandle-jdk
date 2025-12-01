@@ -254,8 +254,7 @@ void JeandleCompiledCode::finalize() {
     assembler.emit_ic_check();
   }
 
-  assert(align > 1, "invalid alignment");
-  masm->align(static_cast<int>(align));
+  masm->align(assembler.interior_entry_alignment());
 
   _offsets.set_value(CodeOffsets::Verified_Entry, masm->offset());
   assembler.emit_verified_entry();
@@ -263,12 +262,13 @@ void JeandleCompiledCode::finalize() {
   int frame_size_in_bytes = _frame_size * BytesPerWord;
   bool has_java_calls = !_non_routine_call_sites.empty();
   if (need_stack_overflow_check(_method, has_java_calls, frame_size_in_bytes)) {
-    // TODO: include interpreter frame sizing once the arguments are fixed.
+    // TODO: redesign interpreter frame sizing based on optimization ideas.
     int bang_size_in_bytes = frame_size_in_bytes + os::extra_bang_size_in_bytes();
     masm->generate_stack_overflow_check(bang_size_in_bytes);
   }
 
-  masm->align(assembler.interior_entry_alignment());
+  assert(align > 1, "invalid alignment");
+  masm->align(static_cast<int>(align));
 
   _prolog_length = masm->offset();
 
