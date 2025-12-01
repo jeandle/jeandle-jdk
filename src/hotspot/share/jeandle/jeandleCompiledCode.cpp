@@ -32,11 +32,7 @@
 #include "jeandle/__hotspotHeadersBegin__.hpp"
 #include "asm/macroAssembler.hpp"
 #include "ci/ciEnv.hpp"
-#include "code/nativeInst.hpp"
 #include "code/vmreg.inline.hpp"
-#include "interpreter/abstractInterpreter.hpp"
-#include "interpreter/interpreter.hpp"
-#include "runtime/deoptimization.hpp"
 #include "runtime/os.hpp"
 
 namespace {
@@ -259,8 +255,7 @@ void JeandleCompiledCode::finalize() {
   }
 
   assert(align > 1, "invalid alignment");
-  int align_bytes = static_cast<int>(align);
-  masm->align(align_bytes);
+  masm->align(static_cast<int>(align));
 
   _offsets.set_value(CodeOffsets::Verified_Entry, masm->offset());
 
@@ -274,7 +269,7 @@ void JeandleCompiledCode::finalize() {
     assembler.emit_verified_entry();
   }
 
-  masm->align(align_bytes);
+  masm->align(assembler.interior_entry_alignment());
 
   _prolog_length = masm->offset();
 

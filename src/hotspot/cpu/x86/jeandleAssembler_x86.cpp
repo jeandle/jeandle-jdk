@@ -137,6 +137,11 @@ void JeandleAssembler::emit_verified_entry() {
   __ nop(NativeJump::instruction_size);
 }
 
+int JeandleAssembler::interior_entry_alignment() const {
+  // Keep interior entry 16-byte aligned (matches default HotSpot interior entry alignment).
+  return 16;
+}
+
 int JeandleAssembler::emit_exception_handler() {
   address base = __ start_a_stub(NativeJump::instruction_size);
   if (base == nullptr) {

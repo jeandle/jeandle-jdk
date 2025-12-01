@@ -48,6 +48,11 @@ void JeandleAssembler::emit_verified_entry() {
   Unimplemented();
 }
 
+int JeandleAssembler::interior_entry_alignment() const {
+  Unimplemented();
+  return 0;
+}
+
 int JeandleAssembler::emit_exception_handler() {
   Unimplemented();
   return 0;
