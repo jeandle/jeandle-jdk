@@ -484,6 +484,7 @@ void NativeJump::patch_verified_entry(address entry, address verified_entry, add
 
   assert(dest == SharedRuntime::get_handle_wrong_method_stub(), "expected fixed destination of patch");
   assert(nativeInstruction_at(verified_entry)->is_jump_or_nop()
+         || nativeInstruction_at(verified_entry)->is_general_jump()
          || nativeInstruction_at(verified_entry)->is_sigill_not_entrant(),
          "Aarch64 cannot replace non-jump with jump");
 
