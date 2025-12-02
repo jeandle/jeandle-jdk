@@ -58,7 +58,7 @@ JeandleCompiler* JeandleCompiler::create() {
   options.EmitStackSizeSection = true;
 
   llvm::TargetMachine* target_machine = target->createTargetMachine(target_triple.getTriple(), ""/* CPU */, features.getString(), options,
-                                                                    llvm::Reloc::Model::Static, llvm::CodeModel::Model::Small,
+                                                                    llvm::Reloc::Model::PIC_, llvm::CodeModel::Model::Small,
                                                                     llvm::CodeGenOptLevel::Aggressive, true/* JIT */);
 
   return new JeandleCompiler(target_machine);
