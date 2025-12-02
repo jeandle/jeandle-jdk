@@ -67,6 +67,7 @@ class JeandleAssembler : public StackObj {
 
   static bool is_const_reloc_kind(LinkKind kind);
 
+  // Mirrors C2's InteriorEntryAlignment flag.
   int interior_entry_alignment() const;
 
  private:

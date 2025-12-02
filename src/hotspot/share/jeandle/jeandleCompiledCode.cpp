@@ -194,11 +194,11 @@ class JeandleOopReloc : public JeandleReloc {
 } // anonymous namespace
 
 // Decide whether to emit a stack overflow check for the compiled entry based on
-// Java call presence and frame size pressure.
-static bool need_stack_overflow_check(const ciMethod* method,
+// Java call presence and frame size pressure (skip stub compilations).
+static bool need_stack_overflow_check(bool is_method_compilation,
                                       bool has_java_calls,
                                       int frame_size_in_bytes) {
-  if (method == nullptr) {
+  if (!is_method_compilation) {
     return false;
   }
 
@@ -260,9 +260,11 @@ void JeandleCompiledCode::finalize() {
   assembler.emit_verified_entry();
 
   int frame_size_in_bytes = _frame_size * BytesPerWord;
+  bool is_method_compilation = _method != nullptr;
   bool has_java_calls = !_non_routine_call_sites.empty();
-  if (need_stack_overflow_check(_method, has_java_calls, frame_size_in_bytes)) {
-    // TODO: redesign interpreter frame sizing based on optimization ideas.
+  if (need_stack_overflow_check(is_method_compilation, has_java_calls, frame_size_in_bytes)) {
+    // TODO: redesign interpreter frame sizing that comes from interpreter states recorded
+    // in stackmaps, which are only captured for uncommon traps (deoptimization paths).
     int bang_size_in_bytes = frame_size_in_bytes + os::extra_bang_size_in_bytes();
     masm->generate_stack_overflow_check(bang_size_in_bytes);
   }
