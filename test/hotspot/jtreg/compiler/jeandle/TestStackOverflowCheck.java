@@ -27,22 +27,25 @@
 package compiler.jeandle;
 
 public class TestStackOverflowCheck {
+  // Volatile sink to keep the recursion side-effectful and prevent dead-code elimination.
   private static volatile int sink;
 
   private static void recurse(int depth) {
-    // Allocate some stack to ensure the bang covers multiple pages quickly.
-    int[] padding = new int[128];
-    padding[0] = depth;
-    sink = padding[0];
+    sink = depth;
     recurse(depth + 1);
   }
 
   public static void main(String[] args) {
+    boolean caught = false;
     try {
       recurse(0);
       throw new RuntimeException("Expected StackOverflowError was not thrown");
     } catch (StackOverflowError expected) {
       // Expected: reaching the guard should throw and not crash the VM.
+      caught = true;
+    }
+    if (!caught) {
+      throw new RuntimeException("StackOverflowError branch was not executed");
     }
   }
 }
