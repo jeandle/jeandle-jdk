@@ -134,7 +134,8 @@ void JeandleAssembler::emit_ic_check() {
 }
 
 void JeandleAssembler::emit_verified_entry() {
-  __ nop(NativeJump::instruction_size);
+  // Emit a 5-bytes address nop for patching a jump instuction.
+  __ addr_nop_5();
 }
 
 int JeandleAssembler::interior_entry_alignment() const {
