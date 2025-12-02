@@ -43,11 +43,46 @@
   def(new_instance,               llvm::PointerType::get(context, llvm::jeandle::AddrSpace::JavaHeapAddrSpace),                                 \
                                                                   llvm::PointerType::get(context, llvm::jeandle::AddrSpace::CHeapAddrSpace),    \
                                                                   llvm::PointerType::get(context, llvm::jeandle::AddrSpace::CHeapAddrSpace))    \
-                                                                                                                                               \
-  def(new_array,                  llvm::PointerType::get(context, llvm::jeandle::AddrSpace::JavaHeapAddrSpace),                               \
-                                                                  llvm::PointerType::get(context, llvm::jeandle::AddrSpace::CHeapAddrSpace),  \
-                                                                  llvm::Type::getInt32Ty(context),                                            \
-                                                                  llvm::PointerType::get(context, llvm::jeandle::AddrSpace::CHeapAddrSpace))
+                                                                                                                                                \
+  def(new_array,                  llvm::PointerType::get(context, llvm::jeandle::AddrSpace::JavaHeapAddrSpace),                                 \
+                                                                  llvm::PointerType::get(context, llvm::jeandle::AddrSpace::CHeapAddrSpace),    \
+                                                                  llvm::Type::getInt32Ty(context),                                              \
+                                                                  llvm::PointerType::get(context, llvm::jeandle::AddrSpace::CHeapAddrSpace))    \
+                                                                                                                                                \
+  def(multianewarray2,            llvm::PointerType::get(context, llvm::jeandle::AddrSpace::JavaHeapAddrSpace),                                 \
+                                                                  llvm::PointerType::get(context, llvm::jeandle::AddrSpace::CHeapAddrSpace),    \
+                                                                  llvm::Type::getInt32Ty(context),                                              \
+                                                                  llvm::Type::getInt32Ty(context),                                              \
+                                                                  llvm::PointerType::get(context, llvm::jeandle::AddrSpace::CHeapAddrSpace))    \
+                                                                                                                                                \
+  def(multianewarray3,            llvm::PointerType::get(context, llvm::jeandle::AddrSpace::JavaHeapAddrSpace),                                 \
+                                                                  llvm::PointerType::get(context, llvm::jeandle::AddrSpace::CHeapAddrSpace),    \
+                                                                  llvm::Type::getInt32Ty(context),                                              \
+                                                                  llvm::Type::getInt32Ty(context),                                              \
+                                                                  llvm::Type::getInt32Ty(context),                                              \
+                                                                  llvm::PointerType::get(context, llvm::jeandle::AddrSpace::CHeapAddrSpace))    \
+                                                                                                                                                \
+  def(multianewarray4,            llvm::PointerType::get(context, llvm::jeandle::AddrSpace::JavaHeapAddrSpace),                                 \
+                                                                  llvm::PointerType::get(context, llvm::jeandle::AddrSpace::CHeapAddrSpace),    \
+                                                                  llvm::Type::getInt32Ty(context),                                              \
+                                                                  llvm::Type::getInt32Ty(context),                                              \
+                                                                  llvm::Type::getInt32Ty(context),                                              \
+                                                                  llvm::Type::getInt32Ty(context),                                              \
+                                                                  llvm::PointerType::get(context, llvm::jeandle::AddrSpace::CHeapAddrSpace))    \
+                                                                                                                                                \
+  def(multianewarray5,            llvm::PointerType::get(context, llvm::jeandle::AddrSpace::JavaHeapAddrSpace),                                 \
+                                                                  llvm::PointerType::get(context, llvm::jeandle::AddrSpace::CHeapAddrSpace),    \
+                                                                  llvm::Type::getInt32Ty(context),                                              \
+                                                                  llvm::Type::getInt32Ty(context),                                              \
+                                                                  llvm::Type::getInt32Ty(context),                                              \
+                                                                  llvm::Type::getInt32Ty(context),                                              \
+                                                                  llvm::Type::getInt32Ty(context),                                              \
+                                                                  llvm::PointerType::get(context, llvm::jeandle::AddrSpace::CHeapAddrSpace))    \
+                                                                                                                                                \
+  def(multianewarrayN,            llvm::PointerType::get(context, llvm::jeandle::AddrSpace::JavaHeapAddrSpace),                                 \
+                                                                  llvm::PointerType::get(context, llvm::jeandle::AddrSpace::CHeapAddrSpace),    \
+                                                                  llvm::PointerType::get(context, llvm::jeandle::AddrSpace::JavaHeapAddrSpace), \
+                                                                  llvm::PointerType::get(context, llvm::jeandle::AddrSpace::CHeapAddrSpace))    \
 
 #define ALL_JEANDLE_ASSEMBLY_ROUTINES(def) \
   def(exceptional_return)                  \
@@ -155,6 +190,13 @@ class JeandleRuntimeRoutine : public AllStatic {
   // Array allocation routine
   static void new_instance(InstanceKlass* klass, JavaThread* current);
   static void new_array(Klass* array_type, int length, JavaThread* current);
+
+  // Multi-dimensional array allocation routines
+  static void multianewarray2(Klass* elem_type, int len1, int len2, JavaThread* current);
+  static void multianewarray3(Klass* elem_type, int len1, int len2, int len3, JavaThread* current);
+  static void multianewarray4(Klass* elem_type, int len1, int len2, int len3, int len4, JavaThread* current);
+  static void multianewarray5(Klass* elem_type, int len1, int len2, int len3, int len4, int len5, JavaThread* current);
+  static void multianewarrayN(Klass* elem_type, arrayOopDesc* dims, JavaThread* current);
 
   // Assembly routine implementations:
 

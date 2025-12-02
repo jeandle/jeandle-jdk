@@ -880,7 +880,7 @@ void JeandleAbstractInterpreter::interpret_block(JeandleBasicBlock* block) {
 
       case Bytecodes::_wide: ShouldNotReachHere();
 
-      case Bytecodes::_multianewarray: Unimplemented(); break;
+      case Bytecodes::_multianewarray: multianewarray(); break;
 
       case Bytecodes::_ifnull: if_null(llvm::CmpInst::ICMP_EQ); break;
       case Bytecodes::_ifnonnull: if_null(llvm::CmpInst::ICMP_NE); break;
@@ -2007,6 +2007,85 @@ void JeandleAbstractInterpreter::do_unified_newarray(Klass* array_klass) {
   llvm::Value* array_klass_ptr =  _ir_builder.CreateIntToPtr(array_klass_addr, klass_type);
   llvm::CallInst* result = call_java_op("jeandle.newarray", {array_klass_ptr, length});
   _jvm->apush(result);
+}
+
+void JeandleAbstractInterpreter::multianewarray()
+{
+  int ndimensions = _bytecodes.get_dimensions();
+
+  bool will_link;
+  ciArrayKlass* array_klass = _bytecodes.get_klass(will_link)->as_array_klass();
+  assert(will_link, "multianewarray: not link");
+
+  // Note: Array classes are always initialized; no is_initialized check.
+
+  if (ndimensions == 1) {
+    // Use [a]newarray if only one dimension
+    Klass* klass = (Klass*)(array_klass->constant_encoding());
+    do_unified_newarray(klass);
+    return;
+  }
+
+  llvm::FunctionCallee callee = [&]() -> llvm::FunctionCallee {
+    switch (ndimensions) {
+      case 1:  ShouldNotReachHere(); break;
+      case 2:  return JeandleRuntimeRoutine::multianewarray2_callee(_module);
+      case 3:  return JeandleRuntimeRoutine::multianewarray3_callee(_module);
+      case 4:  return JeandleRuntimeRoutine::multianewarray4_callee(_module);
+      case 5:  return JeandleRuntimeRoutine::multianewarray5_callee(_module);
+      default: return JeandleRuntimeRoutine::multianewarrayN_callee(_module);
+    }
+  }();
+
+  llvm::PointerType* klass_type = llvm::PointerType::get(*_context, llvm::jeandle::AddrSpace::CHeapAddrSpace);
+  llvm::Value* array_klass_addr = _ir_builder.getInt64((intptr_t)(array_klass->constant_encoding()));
+  llvm::Value* array_klass_ptr = _ir_builder.CreateIntToPtr(array_klass_addr, klass_type);
+
+  llvm::CallInst* current_thread = call_java_op("jeandle.current_thread", {});
+
+  llvm::SmallVector<llvm::Value*> args;
+  args.push_back(array_klass_ptr);
+
+  if (ndimensions <= 5) {
+    ResourceMark rm;
+    // Get the lengths from the stack (first dimension is on top)
+    llvm::Value** length = NEW_RESOURCE_ARRAY(llvm::Value*, ndimensions);
+    for (int index = ndimensions - 1; index >= 0; index--) {
+      length[index] = _jvm->ipop();
+    }
+    // Reverse the dimension arguements
+    for (int index = 0; index < ndimensions; index++) {
+      args.push_back(length[index]);
+    }
+  } else {
+    // Create a java array for dimension sizes
+    Klass* int_array_klass = (Klass*)(ciTypeArrayKlass::make(T_INT)->constant_encoding());
+    llvm::Value* int_array_klass_addr = _ir_builder.getInt64((intptr_t)int_array_klass);
+    llvm::PointerType* klass_type = llvm::PointerType::get(*_context, llvm::jeandle::AddrSpace::CHeapAddrSpace);
+    llvm::Value* int_array_klass_ptr = _ir_builder.CreateIntToPtr(int_array_klass_addr, klass_type);
+
+    llvm::Value* dimensions_array_length = _ir_builder.getInt32(ndimensions);
+
+    llvm::CallInst* dimensions_array_oop = call_java_op("jeandle.newarray", {int_array_klass_ptr, dimensions_array_length});
+
+    // Fill-in it with values
+    for (int index = ndimensions - 1; index >= 0; index--) {
+      // No need to do boundary_check here
+      llvm::Value* array_base_offset = _ir_builder.getInt32(arrayOopDesc::base_offset_in_bytes(T_INT));
+      llvm::Value* array_base = _ir_builder.CreateInBoundsPtrAdd(dimensions_array_oop, array_base_offset, "array_element_base");
+      llvm::Value* index_value = _ir_builder.getInt32(index);
+      llvm::Value* element_address = _ir_builder.CreateInBoundsGEP(llvm::Type::getInt32Ty(*_context), array_base, index_value,
+                                                                   "array_element_address");
+      llvm::StoreInst* store_inst = _ir_builder.CreateStore(_jvm->ipop(), element_address);
+    }
+
+    // Push the dimensions_array_oop
+    args.push_back(dimensions_array_oop);
+  }
+
+  args.push_back(current_thread);
+
+  _jvm->apush(call_jeandle_routine(callee, args, llvm::CallingConv::Hotspot_JIT));
 }
 
 void JeandleAbstractInterpreter::monitorenter() {

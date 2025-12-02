@@ -197,3 +197,98 @@ JRT_BLOCK_ENTRY(void, JeandleRuntimeRoutine::new_instance(InstanceKlass* klass, 
   // inform GC that we won't do card marks for initializing writes.
   SharedRuntime::on_slowpath_allocation_exit(current);
 JRT_END
+
+// Note: multianewarray for one dimension is handled by JeandleRuntimeRoutine::new_array.
+
+// It's a copy of OptoRuntime::multianewarray2_C
+// multianewarray for 2 dimensions
+JRT_ENTRY(void, JeandleRuntimeRoutine::multianewarray2(Klass* elem_type, int len1, int len2, JavaThread* current))
+#ifndef PRODUCT
+  SharedRuntime::_multi2_ctr++;
+#endif
+  // assert(check_compiled_frame(current), "incorrect caller");
+  assert(elem_type->is_klass(), "not a class");
+  jint dims[2];
+  dims[0] = len1;
+  dims[1] = len2;
+  Handle holder(current, elem_type->klass_holder()); // keep the klass alive
+  oop obj = ArrayKlass::cast(elem_type)->multi_allocate(2, dims, THREAD);
+  // TODO: deoptimize_caller_frame(current, HAS_PENDING_EXCEPTION);
+  current->set_vm_result(obj);
+JRT_END
+
+// It's a copy of OptoRuntime::multianewarray3_C
+// multianewarray for 3 dimensions
+JRT_ENTRY(void, JeandleRuntimeRoutine::multianewarray3(Klass* elem_type, int len1, int len2, int len3, JavaThread* current))
+#ifndef PRODUCT
+  SharedRuntime::_multi3_ctr++;
+#endif
+  // assert(check_compiled_frame(current), "incorrect caller");
+  assert(elem_type->is_klass(), "not a class");
+  jint dims[3];
+  dims[0] = len1;
+  dims[1] = len2;
+  dims[2] = len3;
+  Handle holder(current, elem_type->klass_holder()); // keep the klass alive
+  oop obj = ArrayKlass::cast(elem_type)->multi_allocate(3, dims, THREAD);
+  // TODO: deoptimize_caller_frame(current, HAS_PENDING_EXCEPTION);
+  current->set_vm_result(obj);
+JRT_END
+
+// It's a copy of OptoRuntime::multianewarray4_C
+// multianewarray for 4 dimensions
+JRT_ENTRY(void, JeandleRuntimeRoutine::multianewarray4(Klass* elem_type, int len1, int len2, int len3, int len4, JavaThread* current))
+#ifndef PRODUCT
+  SharedRuntime::_multi4_ctr++;
+#endif
+  // assert(check_compiled_frame(current), "incorrect caller");
+  assert(elem_type->is_klass(), "not a class");
+  jint dims[4];
+  dims[0] = len1;
+  dims[1] = len2;
+  dims[2] = len3;
+  dims[3] = len4;
+  Handle holder(current, elem_type->klass_holder()); // keep the klass alive
+  oop obj = ArrayKlass::cast(elem_type)->multi_allocate(4, dims, THREAD);
+  // TODO: deoptimize_caller_frame(current, HAS_PENDING_EXCEPTION);
+  current->set_vm_result(obj);
+JRT_END
+
+// It's a copy of OptoRuntime::multianewarray5_C
+// multianewarray for 5 dimensions
+JRT_ENTRY(void, JeandleRuntimeRoutine::multianewarray5(Klass* elem_type, int len1, int len2, int len3, int len4, int len5, JavaThread* current))
+#ifndef PRODUCT
+  SharedRuntime::_multi5_ctr++;
+#endif
+  // assert(check_compiled_frame(current), "incorrect caller");
+  assert(elem_type->is_klass(), "not a class");
+  jint dims[5];
+  dims[0] = len1;
+  dims[1] = len2;
+  dims[2] = len3;
+  dims[3] = len4;
+  dims[4] = len5;
+  Handle holder(current, elem_type->klass_holder()); // keep the klass alive
+  oop obj = ArrayKlass::cast(elem_type)->multi_allocate(5, dims, THREAD);
+  // TODO: deoptimize_caller_frame(current, HAS_PENDING_EXCEPTION);
+  current->set_vm_result(obj);
+JRT_END
+
+// It's a copy of OptoRuntime::multianewarrayN_C
+JRT_ENTRY(void, JeandleRuntimeRoutine::multianewarrayN(Klass* elem_type, arrayOopDesc* dims, JavaThread* current))
+  // assert(check_compiled_frame(current), "incorrect caller");
+  assert(elem_type->is_klass(), "not a class");
+  assert(oop(dims)->is_typeArray(), "not an array");
+
+  ResourceMark rm;
+  jint len = dims->length();
+  assert(len > 0, "Dimensions array should contain data");
+  jint *c_dims = NEW_RESOURCE_ARRAY(jint, len);
+  ArrayAccess<>::arraycopy_to_native<>(dims, typeArrayOopDesc::element_offset<jint>(0),
+                                       c_dims, len);
+
+  Handle holder(current, elem_type->klass_holder()); // keep the klass alive
+  oop obj = ArrayKlass::cast(elem_type)->multi_allocate(len, c_dims, THREAD);
+  // TODO: deoptimize_caller_frame(current, HAS_PENDING_EXCEPTION);
+  current->set_vm_result(obj);
+JRT_END

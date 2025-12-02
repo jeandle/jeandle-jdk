@@ -357,6 +357,7 @@ class JeandleAbstractInterpreter : public StackObj {
   void newarray(int element_type);
   void anewarray(int klass_index);
   void do_unified_newarray(Klass* array_klass);
+  void multianewarray();
 
   // Implementation of _new
   void do_new();
