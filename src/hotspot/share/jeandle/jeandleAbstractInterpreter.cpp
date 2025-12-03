@@ -1976,15 +1976,14 @@ void JeandleAbstractInterpreter::throw_exception(llvm::Value* exception_oop) {
   }
 }
 
-void JeandleAbstractInterpreter::newarray(int element_type){
+void JeandleAbstractInterpreter::newarray(int element_type) {
   // Get array type from bytecode
   ciTypeArrayKlass* ci_array_klass = ciTypeArrayKlass::make(static_cast<BasicType>(element_type));
   Klass* array_klass = (Klass*)(ci_array_klass->constant_encoding());
   do_unified_newarray(array_klass);
 }
 
-void JeandleAbstractInterpreter::anewarray(int klass_index)
-{
+void JeandleAbstractInterpreter::anewarray(int klass_index) {
   // Get the element class from the constant pool index
   bool will_link;
   ciKlass* element_klass = _bytecodes.get_klass(will_link);
@@ -2009,8 +2008,7 @@ void JeandleAbstractInterpreter::do_unified_newarray(Klass* array_klass) {
   _jvm->apush(result);
 }
 
-void JeandleAbstractInterpreter::multianewarray()
-{
+void JeandleAbstractInterpreter::multianewarray() {
   int ndimensions = _bytecodes.get_dimensions();
 
   bool will_link;
@@ -2062,15 +2060,17 @@ void JeandleAbstractInterpreter::multianewarray()
 
     llvm::CallInst* dimensions_array_oop = call_java_op("jeandle.newarray", {int_array_klass_ptr, dimensions_array_length});
 
+    llvm::Value* array_base_offset = _ir_builder.CreateLoad(llvm::Type::getInt32Ty(*_context),
+                                                            _module.getGlobalVariable("arrayOopDesc.base_offset_in_bytes.int", true));
+    llvm::Value* array_base = _ir_builder.CreateInBoundsPtrAdd(dimensions_array_oop, array_base_offset,
+                                                               "dimension_array_element_base");
+
     // Fill-in it with values
     for (int index = ndimensions - 1; index >= 0; index--) {
       // No need to do boundary_check here
-      llvm::Value* array_base_offset = _ir_builder.getInt32(arrayOopDesc::base_offset_in_bytes(T_INT));
-      llvm::Value* array_base = _ir_builder.CreateInBoundsPtrAdd(dimensions_array_oop, array_base_offset,
-                                                                 "dimension_array_element_base");
       llvm::Value* index_value = _ir_builder.getInt32(index);
       llvm::Value* element_address = _ir_builder.CreateInBoundsGEP(llvm::Type::getInt32Ty(*_context), array_base, index_value,
-                                                                   "dimension_array_element_address");
+                                                                   "dimension_" + std::to_string(index) + "_array_element_address");
       llvm::StoreInst* store_inst = _ir_builder.CreateStore(_jvm->ipop(), element_address);
     }
 

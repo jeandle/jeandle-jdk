@@ -35,6 +35,7 @@
 
 ; Byte offsets of arrayOopDesc structure fields.
 @arrayOopDesc.length_offset_in_bytes = external global i32
+@arrayOopDesc.base_offset_in_bytes.int = external global i32
 
 ; Byte offsets for Klass structure fields.
 @Klass.secondary_super_cache_offset = external global i32
