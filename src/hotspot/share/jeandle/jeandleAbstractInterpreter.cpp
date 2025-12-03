@@ -2015,7 +2015,7 @@ void JeandleAbstractInterpreter::multianewarray()
 
   bool will_link;
   ciArrayKlass* array_klass = _bytecodes.get_klass(will_link)->as_array_klass();
-  assert(will_link, "multianewarray: not link");
+  assert(will_link, "multianewarray: not link"); // TODO: Uncommon trap.
 
   // Note: Array classes are always initialized; no is_initialized check.
 
@@ -2041,22 +2041,16 @@ void JeandleAbstractInterpreter::multianewarray()
   llvm::Value* array_klass_addr = _ir_builder.getInt64((intptr_t)(array_klass->constant_encoding()));
   llvm::Value* array_klass_ptr = _ir_builder.CreateIntToPtr(array_klass_addr, klass_type);
 
-  llvm::CallInst* current_thread = call_java_op("jeandle.current_thread", {});
-
-  llvm::SmallVector<llvm::Value*> args;
+  llvm::SmallVector<llvm::Value*, 7> args;
   args.push_back(array_klass_ptr);
 
   if (ndimensions <= 5) {
-    ResourceMark rm;
     // Get the lengths from the stack (first dimension is on top)
-    llvm::Value** length = NEW_RESOURCE_ARRAY(llvm::Value*, ndimensions);
-    for (int index = ndimensions - 1; index >= 0; index--) {
-      length[index] = _jvm->ipop();
-    }
-    // Reverse the dimension arguements
     for (int index = 0; index < ndimensions; index++) {
-      args.push_back(length[index]);
+      args.push_back(_jvm->ipop());
     }
+    // Reverse the dimension arguments
+    std::reverse(args.begin() + 1, args.end());
   } else {
     // Create a java array for dimension sizes
     Klass* int_array_klass = (Klass*)(ciTypeArrayKlass::make(T_INT)->constant_encoding());
@@ -2072,10 +2066,11 @@ void JeandleAbstractInterpreter::multianewarray()
     for (int index = ndimensions - 1; index >= 0; index--) {
       // No need to do boundary_check here
       llvm::Value* array_base_offset = _ir_builder.getInt32(arrayOopDesc::base_offset_in_bytes(T_INT));
-      llvm::Value* array_base = _ir_builder.CreateInBoundsPtrAdd(dimensions_array_oop, array_base_offset, "array_element_base");
+      llvm::Value* array_base = _ir_builder.CreateInBoundsPtrAdd(dimensions_array_oop, array_base_offset,
+                                                                 "dimension_array_element_base");
       llvm::Value* index_value = _ir_builder.getInt32(index);
       llvm::Value* element_address = _ir_builder.CreateInBoundsGEP(llvm::Type::getInt32Ty(*_context), array_base, index_value,
-                                                                   "array_element_address");
+                                                                   "dimension_array_element_address");
       llvm::StoreInst* store_inst = _ir_builder.CreateStore(_jvm->ipop(), element_address);
     }
 
@@ -2083,7 +2078,7 @@ void JeandleAbstractInterpreter::multianewarray()
     args.push_back(dimensions_array_oop);
   }
 
-  args.push_back(current_thread);
+  args.push_back(call_java_op("jeandle.current_thread", {}));
 
   _jvm->apush(call_jeandle_routine(callee, args, llvm::CallingConv::Hotspot_JIT));
 }
