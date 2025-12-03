@@ -206,7 +206,7 @@ JRT_ENTRY(void, JeandleRuntimeRoutine::multianewarray2(Klass* elem_type, int len
 #ifndef PRODUCT
   SharedRuntime::_multi2_ctr++;
 #endif
-  // assert(check_compiled_frame(current), "incorrect caller");
+  assert(check_jeandle_compiled_frame(current), "incorrect caller");
   assert(elem_type->is_klass(), "not a class");
   jint dims[2];
   dims[0] = len1;
@@ -223,7 +223,7 @@ JRT_ENTRY(void, JeandleRuntimeRoutine::multianewarray3(Klass* elem_type, int len
 #ifndef PRODUCT
   SharedRuntime::_multi3_ctr++;
 #endif
-  // assert(check_compiled_frame(current), "incorrect caller");
+  assert(check_jeandle_compiled_frame(current), "incorrect caller");
   assert(elem_type->is_klass(), "not a class");
   jint dims[3];
   dims[0] = len1;
@@ -241,7 +241,7 @@ JRT_ENTRY(void, JeandleRuntimeRoutine::multianewarray4(Klass* elem_type, int len
 #ifndef PRODUCT
   SharedRuntime::_multi4_ctr++;
 #endif
-  // assert(check_compiled_frame(current), "incorrect caller");
+  assert(check_jeandle_compiled_frame(current), "incorrect caller");
   assert(elem_type->is_klass(), "not a class");
   jint dims[4];
   dims[0] = len1;
@@ -260,7 +260,7 @@ JRT_ENTRY(void, JeandleRuntimeRoutine::multianewarray5(Klass* elem_type, int len
 #ifndef PRODUCT
   SharedRuntime::_multi5_ctr++;
 #endif
-  // assert(check_compiled_frame(current), "incorrect caller");
+  assert(check_jeandle_compiled_frame(current), "incorrect caller");
   assert(elem_type->is_klass(), "not a class");
   jint dims[5];
   dims[0] = len1;
@@ -276,7 +276,7 @@ JRT_END
 
 // It's a copy of OptoRuntime::multianewarrayN_C
 JRT_ENTRY(void, JeandleRuntimeRoutine::multianewarrayN(Klass* elem_type, arrayOopDesc* dims, JavaThread* current))
-  // assert(check_compiled_frame(current), "incorrect caller");
+  assert(check_jeandle_compiled_frame(current), "incorrect caller");
   assert(elem_type->is_klass(), "not a class");
   assert(oop(dims)->is_typeArray(), "not an array");
 
