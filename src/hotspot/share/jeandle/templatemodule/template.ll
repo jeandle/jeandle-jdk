@@ -30,8 +30,8 @@
 @jeandle.personality = global ptr null
 
 ; Byte offsets of Array<Klass*> structure fields.
-@ArrayKlass.base_offset_in_bytes = external global i32
-@ArrayKlass.length_offset_in_bytes = external global i32
+@KlassArray.base_offset_in_bytes = external global i32
+@KlassArray.length_offset_in_bytes = external global i32
 
 ; Byte offsets of arrayOopDesc structure fields.
 @arrayOopDesc.length_offset_in_bytes = external global i32
@@ -64,10 +64,10 @@ entry:
   %secondary_supers = load atomic ptr addrspace(0), ptr addrspace(0) %secondary_supers_addr unordered, align 8
 
   ; Load length and base address of secondary_supers array.
-  %length_offset = load i32, ptr @ArrayKlass.length_offset_in_bytes
+  %length_offset = load i32, ptr @KlassArray.length_offset_in_bytes
   %length_addr = getelementptr inbounds i8, ptr addrspace(0) %secondary_supers, i32 %length_offset
   %length = load atomic i32, ptr addrspace(0) %length_addr unordered, align 4
-  %base_offset = load i32, ptr @ArrayKlass.base_offset_in_bytes
+  %base_offset = load i32, ptr @KlassArray.base_offset_in_bytes
   %base_addr = getelementptr inbounds i8, ptr addrspace(0) %secondary_supers, i32 %base_offset
 
   br label %scan_loop
