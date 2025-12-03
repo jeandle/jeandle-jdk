@@ -133,6 +133,16 @@ void JeandleAssembler::emit_ic_check() {
     __ nop(nops_cnt);
 }
 
+void JeandleAssembler::emit_verified_entry() {
+  // Emit a 5-bytes address nop for patching a jump instuction.
+  __ addr_nop_5();
+}
+
+int JeandleAssembler::interior_entry_alignment() const {
+  // Keep interior entry 16-byte aligned (matches default HotSpot interior entry alignment).
+  return 16;
+}
+
 int JeandleAssembler::emit_exception_handler() {
   address base = __ start_a_stub(NativeJump::instruction_size);
   if (base == nullptr) {

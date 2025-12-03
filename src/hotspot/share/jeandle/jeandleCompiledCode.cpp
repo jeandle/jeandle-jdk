@@ -33,6 +33,7 @@
 #include "asm/macroAssembler.hpp"
 #include "ci/ciEnv.hpp"
 #include "code/vmreg.inline.hpp"
+#include "runtime/os.hpp"
 
 namespace {
 
@@ -192,6 +193,19 @@ class JeandleOopReloc : public JeandleReloc {
 
 } // anonymous namespace
 
+// Decide whether to emit a stack overflow check for the compiled entry based on
+// Java call presence and frame size pressure (skip stub compilations).
+static bool need_stack_overflow_check(bool is_method_compilation,
+                                      bool has_java_calls,
+                                      int frame_size_in_bytes) {
+  if (!is_method_compilation) {
+    return false;
+  }
+
+  return has_java_calls ||
+         frame_size_in_bytes > (int)(os::vm_page_size() >> 3) DEBUG_ONLY(|| true);
+}
+
 void JeandleCompiledCode::install_obj(std::unique_ptr<ObjectBuffer> obj) {
   _obj = std::move(obj);
   llvm::MemoryBufferRef memory_buffer = _obj->getMemBufferRef();
@@ -217,6 +231,9 @@ void JeandleCompiledCode::finalize() {
     return;
   }
 
+  setup_frame_size();
+  assert(_frame_size > 0, "frame size must be positive");
+
   // An estimated initial value.
   uint64_t consts_size = 6144 * wordSize;
 
@@ -237,13 +254,27 @@ void JeandleCompiledCode::finalize() {
     assembler.emit_ic_check();
   }
 
+  masm->align(assembler.interior_entry_alignment());
+
   _offsets.set_value(CodeOffsets::Verified_Entry, masm->offset());
+  assembler.emit_verified_entry();
+
+  int frame_size_in_bytes = _frame_size * BytesPerWord;
+  bool is_method_compilation = _method != nullptr;
+  bool has_java_calls = !_non_routine_call_sites.empty();
+  if (need_stack_overflow_check(is_method_compilation, has_java_calls, frame_size_in_bytes)) {
+    // TODO: redesign interpreter frame sizing that comes from interpreter states recorded
+    // in stackmaps, which are only captured for uncommon traps (deoptimization paths).
+    int bang_size_in_bytes = frame_size_in_bytes + os::extra_bang_size_in_bytes();
+    masm->generate_stack_overflow_check(bang_size_in_bytes);
+  }
+
+  assert(align > 1, "invalid alignment");
+  masm->align(static_cast<int>(align));
 
   _prolog_length = masm->offset();
 
   assembler.emit_insts(((address) _obj->getBufferStart()) + offset, code_size);
-
-  setup_frame_size();
 
   resolve_reloc_info(assembler);
 

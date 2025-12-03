@@ -30,8 +30,6 @@ void JeandleFuncSig::setup_description(llvm::Function* func, bool is_stub) {
   func->setGC(llvm::jeandle::JeandleGC);
 
   if (!is_stub) {
-    func->addFnAttr("patchable-function-entry", "1");
-
     llvm::GlobalVariable* personality_func = func->getParent()->getGlobalVariable("jeandle.personality");
     assert(personality_func != nullptr, "no personality function");
     func->setPersonalityFn(personality_func);

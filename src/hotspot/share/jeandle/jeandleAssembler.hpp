@@ -46,6 +46,7 @@ class JeandleAssembler : public StackObj {
   void patch_ic_call_site(int inst_offset, CallSiteInfo* call);
 
   void emit_ic_check();
+  void emit_verified_entry();
 
   int emit_exception_handler();
 
@@ -65,6 +66,9 @@ class JeandleAssembler : public StackObj {
   static bool is_routine_call_reloc_kind(LinkKind kind);
 
   static bool is_const_reloc_kind(LinkKind kind);
+
+  // Mirrors C2's InteriorEntryAlignment flag.
+  int interior_entry_alignment() const;
 
  private:
   MacroAssembler* _masm;

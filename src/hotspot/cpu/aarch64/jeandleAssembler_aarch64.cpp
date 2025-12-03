@@ -140,6 +140,15 @@ void JeandleAssembler::emit_ic_check() {
   __ bind(dont);
 }
 
+void JeandleAssembler::emit_verified_entry() {
+  __ nop();
+}
+
+int JeandleAssembler::interior_entry_alignment() const {
+  // Keep interior entry 16-byte aligned (matches default HotSpot interior entry alignment).
+  return 16;
+}
+
 int JeandleAssembler::emit_exception_handler() {
   int stub_size = __ far_codestub_branch_size();
   address base = __ start_a_stub(stub_size);
