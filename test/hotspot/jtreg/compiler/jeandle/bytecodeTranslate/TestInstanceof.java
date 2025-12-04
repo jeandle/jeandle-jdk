@@ -80,8 +80,8 @@ public class TestInstanceof {
             FileCheck fileCheck = new FileCheck(currentDir,
                                                 TestInstanceof.class.getDeclaredMethod("testSubClass", Object.class),
                                                 false);
-            fileCheck.check("@ArrayKlass.base_offset_in_bytes = private constant");
-            fileCheck.check("@ArrayKlass.length_offset_in_bytes = private constant");
+            fileCheck.check("@KlassArray.base_offset_in_bytes = private constant");
+            fileCheck.check("@KlassArray.length_offset_in_bytes = private constant");
             fileCheck.check("@arrayOopDesc.length_offset_in_bytes = private constant");
             fileCheck.check("@Klass.secondary_super_cache_offset = private constant");
             fileCheck.check("@Klass.secondary_supers_offset = private constant");
@@ -92,8 +92,8 @@ public class TestInstanceof {
             FileCheck fileCheckOpt = new FileCheck(currentDir,
                                                    TestInstanceof.class.getDeclaredMethod("testSubClass", Object.class),
                                                    true);
-            fileCheckOpt.checkNot("@ArrayKlass.base_offset_in_bytes");
-            fileCheckOpt.checkNot("@ArrayKlass.length_offset_in_bytes");
+            fileCheckOpt.checkNot("@KlassArray.base_offset_in_bytes");
+            fileCheckOpt.checkNot("@KlassArray.length_offset_in_bytes");
             fileCheckOpt.checkNot("@arrayOopDesc.length_offset_in_bytes");
             fileCheckOpt.checkNot("@Klass.secondary_super_cache_offset");
             fileCheckOpt.checkNot("@Klass.secondary_supers_offset");
