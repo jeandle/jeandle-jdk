@@ -22,6 +22,7 @@
 #define SHARE_JEANDLE_COMPILER_HPP
 
 #include "jeandle/__llvmHeadersBegin__.hpp"
+#include "llvm/Support/DynamicLibrary.h"
 #include "llvm/Support/MemoryBuffer.h"
 #include "llvm/Target/TargetMachine.h"
 
@@ -30,6 +31,8 @@
 #include "jeandle/__hotspotHeadersBegin__.hpp"
 #include "compiler/abstractCompiler.hpp"
 #include "compiler/compilerDirectives.hpp"
+
+using DynamicLibrary = llvm::sys::DynamicLibrary;
 
 class JeandleCompiler : public AbstractCompiler {
  public:
@@ -59,6 +62,9 @@ class JeandleCompiler : public AbstractCompiler {
 
   // Read the template file into a global read-only memory buffer to ensure thread safety.
   std::unique_ptr<llvm::MemoryBuffer> _template_buffer;
+
+  // Hold the handle for all libraries loaded into current process.
+  DynamicLibrary _dynamic_library;
 
   bool initialize_template_buffer();
 

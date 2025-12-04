@@ -1343,7 +1343,7 @@ class trampoline_stub_Relocation : public Relocation {
   void copy_into(RelocationHolder& holder) const override;
 
  private:
-  address _owner;    // Address of the NativeCall that owns the trampoline.
+  address _owner;    // Address of the NativeCall/NativeJump that owns the trampoline.
 
   trampoline_stub_Relocation(address owner)
     : Relocation(relocInfo::trampoline_stub_type),
@@ -1354,7 +1354,7 @@ class trampoline_stub_Relocation : public Relocation {
 
  public:
 
-  // Return the address of the NativeCall that owns the trampoline.
+  // Return the address of the NativeCall/NativeJump that owns the trampoline.
   address owner() { return _owner; }
 
   void pack_data_to(CodeSection * dest) override;

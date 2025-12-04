@@ -102,7 +102,10 @@ class JeandleCallReloc : public JeandleReloc {
     _env(env), _method(method), _oop_map(oop_map), _call(call) {}
 
   void emit_reloc(JeandleAssembler& assembler) override {
-    process_oop_map();
+    // Each call reloc has an oopmap, except for EXTERNAL_CALL.
+    if (_oop_map != nullptr) {
+      process_oop_map();
+    }
 
     switch (_call->type()) {
       case JeandleCompiledCall::STATIC_CALL:
@@ -122,6 +125,10 @@ class JeandleCallReloc : public JeandleReloc {
         assembler.patch_routine_call_site(offset(), _call->target());
         break;
 
+      case JeandleCompiledCall::EXTERNAL_CALL:
+        assert(_oop_map == nullptr, "no oopmap in external call");
+        assembler.patch_external_call_site(offset(), _call);
+        break;
       default:
         ShouldNotReachHere();
         break;
@@ -314,17 +321,34 @@ void JeandleCompiledCode::resolve_reloc_info(JeandleAssembler& assembler) {
     }
     for (auto& edge : block->edges()) {
       auto& target = edge.getTarget();
+      llvm::StringRef target_name = *(target.getName());
 
-      if (!target.isDefined() && JeandleAssembler::is_routine_call_reloc_kind(edge.getKind())) {
+      if (!target.isDefined() && JeandleAssembler::is_routine_call_reloc_kind(edge.getKind(), target_name)) {
         // Routine call relocations.
-        address target_addr = JeandleRuntimeRoutine::get_routine_entry(*target.getName());
+        address target_addr = JeandleRuntimeRoutine::get_routine_entry(target_name);
 
-        int inst_end_offset = JeandleAssembler::fixup_routine_call_inst_offset(static_cast<int>(block->getAddress().getValue() + edge.getOffset()));
+        int inst_end_offset = JeandleAssembler::fixup_call_inst_offset(static_cast<int>(block->getAddress().getValue() + edge.getOffset()));
 
         // TODO: Set the right bci.
+        // Delay constructing JeandleCallReloc to resolving stackmaps, as oopmap is required.
         _routine_call_sites[inst_end_offset] = new CallSiteInfo(JeandleCompiledCall::ROUTINE_CALL,
                                                                 target_addr,
                                                                 -1/* bci */);
+      } else if (!target.isDefined() && JeandleAssembler::is_external_call_reloc_kind(edge.getKind(), target_name)) {
+        // External call relocations.
+        address target_addr = (address)_dynamic_library.getAddressOfSymbol(target_name.str().c_str());
+        if (target_addr == nullptr) {
+          JeandleCompilation::report_jeandle_error("failed to find external symbol");
+          return;
+        }
+
+        int inst_end_offset = JeandleAssembler::fixup_call_inst_offset(static_cast<int>(block->getAddress().getValue() + edge.getOffset()));
+
+        // TODO: Set the right bci.
+        CallSiteInfo* call_info = new CallSiteInfo(JeandleCompiledCall::EXTERNAL_CALL,
+                                                   target_addr,
+                                                   -1/* bci */);
+        relocs.push_back(new JeandleCallReloc(inst_end_offset, _env, _method, nullptr /* no oopmap */, call_info));
       } else if (target.isDefined() && JeandleAssembler::is_const_reloc_kind(edge.getKind())) {
         // Const relocations.
         assert(target.getSection().getName().starts_with(".rodata"), "invalid const section");
@@ -335,8 +359,8 @@ void JeandleCompiledCode::resolve_reloc_info(JeandleAssembler& assembler) {
         relocs.push_back(new JeandleConstReloc(*block, edge, target_addr));
       } else if (!target.isDefined() && JeandleAssembler::is_oop_reloc_kind(edge.getKind())) {
         // Oop relocations.
-        assert((*(target.getName())).starts_with("oop_handle"), "invalid oop relocation name");
-        relocs.push_back(new JeandleOopReloc(static_cast<int>(block->getAddress().getValue() + edge.getOffset()), _oop_handles[(*(target.getName()))]));
+        assert((target_name).starts_with("oop_handle"), "invalid oop relocation name");
+        relocs.push_back(new JeandleOopReloc(static_cast<int>(block->getAddress().getValue() + edge.getOffset()), _oop_handles[(target_name)]));
       } else {
         // Unhandled relocations
         ShouldNotReachHere();

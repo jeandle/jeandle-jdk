@@ -9880,3 +9880,83 @@ void MacroAssembler::lightweight_unlock(Register obj, Register hdr, Register tmp
   movptr(Address(thread, tmp), 0);
 #endif
 }
+
+#ifdef JEANDLE
+address MacroAssembler::trampoline_branch(AddressLiteral entry) {
+  assert(entry.reloc() == relocInfo::none, "wrong reloc type");
+
+  address stub = emit_trampoline_stub(offset(), entry.target());
+  if (stub == nullptr) {
+    postcond(pc() == badAddress);
+    return nullptr; // CodeCache is full
+  }
+
+  address branch_address = pc();
+
+  // Directly generate pc-relative jump/call instructions. For trampoline_branch, we 
+  // jump/call to a fixed external routine through trampoline stub, and the stub is
+  // always reachable by pc-relative jump/call.
+  NativeInstruction* ni = nativeInstruction_at(branch_address);
+  if (ni->is_jump()) {
+    jmp_literal(stub, entry.rspec());
+  } else if (ni->is_call()) {
+    call_literal(stub, entry.rspec());
+  } else {
+    ShouldNotReachHere();
+  }
+
+  postcond(pc() != badAddress);
+  return branch_address;
+}
+
+// Emit a trampoline stub for a far jump to a target address.
+//
+// This is used when the jump target is in the external library.
+// Trampoline stubs are placed in the stub section of the code buffer and are always reachable.
+//
+// Code sequences:
+//
+// call-site:
+//   jmp to <trampoline stub>
+//
+// Related trampoline stub for this call site in the stub section:
+//   mov rscratch1, #imm_64         // Load the far absolute address into a scratch register
+//   jmp rscratch1                  // Perform an indirect jump
+//
+address MacroAssembler::emit_trampoline_stub(int insts_call_instruction_offset,
+                                             address dest) {
+  address stub = start_a_stub(max_trampoline_stub_size());
+  if (stub == nullptr) {
+    return nullptr;  // CodeBuffer::expand failed
+  }
+
+  // Create a trampoline stub relocation which relates this trampoline stub
+  // with the call instruction at insts_call_instruction_offset in the
+  // instructions code-section.
+  relocate(trampoline_stub_Relocation::spec(code()->insts()->start()
+                                            + insts_call_instruction_offset));
+  const int stub_start_offset = offset();
+
+  // Now, create the trampoline stub's code:
+  mov64(rscratch1, (int64_t)dest);
+  jmp(rscratch1);
+
+  assert(offset() - stub_start_offset <= max_trampoline_stub_size(), "invalid trampoline stub size");
+
+  const address stub_start_addr = addr_at(stub_start_offset);
+
+#ifdef ASSERT
+  NativeInstruction* ni = nativeInstruction_at(stub_start_addr);
+  assert(ni->is_far_jump(), "doesn't look like a trampoline");
+#endif // ASSERT
+
+  end_a_stub();
+  return stub_start_addr;
+}
+
+int MacroAssembler::max_trampoline_stub_size() {
+  // A far jump acts as a TrampolineStub.
+  return NativeFarJump::instruction_size;
+}
+
+#endif // JEANDLE

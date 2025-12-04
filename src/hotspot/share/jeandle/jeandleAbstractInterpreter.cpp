@@ -1302,9 +1302,11 @@ bool JeandleAbstractInterpreter::inline_intrinsic(const ciMethod* target) {
       break;
     }
     case vmIntrinsicID::_dsin: {
-      llvm::FunctionCallee callee = StubRoutines::dsin() != nullptr ? JeandleRuntimeRoutine::hotspot_StubRoutines_dsin_callee(_module) :
-                                                                      JeandleRuntimeRoutine::hotspot_SharedRuntime_dsin_callee(_module);
-      _jvm->dpush(call_jeandle_routine(callee, {_jvm->dpop()}, llvm::CallingConv::C));
+      _jvm->dpush(_ir_builder.CreateIntrinsic(JeandleType::java2llvm(BasicType::T_DOUBLE, *_context), llvm::Intrinsic::sin, {_jvm->dpop()}));
+
+      // llvm::FunctionCallee callee = StubRoutines::dsin() != nullptr ? JeandleRuntimeRoutine::hotspot_StubRoutines_dsin_callee(_module) :
+      //                                                                 JeandleRuntimeRoutine::hotspot_SharedRuntime_dsin_callee(_module);
+      // _jvm->dpush(call_jeandle_routine(callee, {_jvm->dpop()}, llvm::CallingConv::C));
       break;
     }
     case vmIntrinsicID::_dcos: {

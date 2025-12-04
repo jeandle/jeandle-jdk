@@ -52,6 +52,9 @@ class JeandleCompiledCall : public AllStatic {
     // and JeandleCallVM.
     STUB_C_CALL,
 
+    // Call a function in external library.
+    EXTERNAL_CALL,
+
     NOT_A_CALL,
   };
 

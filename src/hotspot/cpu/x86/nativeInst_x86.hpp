@@ -534,6 +534,16 @@ inline NativeJump* nativeJump_at(address address) {
 // far jump reg
 class NativeFarJump: public NativeInstruction {
  public:
+
+#ifdef JEANDLE
+  enum {
+    rex_size = 1,
+    // mov reg, #imm64;
+    // jmp reg;
+    instruction_size = (1 + rex_size + wordSize) + 3,
+  };
+#endif // JEANDLE
+
   address jump_destination() const;
 
   // Creation

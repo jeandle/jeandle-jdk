@@ -27,6 +27,7 @@
 #include "llvm/IR/Statepoint.h"
 #include "llvm/Object/ELFObjectFile.h"
 #include "llvm/Object/StackMapParser.h"
+#include "llvm/Support/DynamicLibrary.h"
 #include "llvm/Support/MemoryBuffer.h"
 
 #include "jeandle/jeandleExceptionHandlerTable.hpp"
@@ -114,7 +115,8 @@ class CallSiteInfo : public JeandleCompilationResourceObj {
     // We don't need to assign a unique statepoint id for each routine call site, only call type and target is used.
     bool use_default_statepoint_id = (statepoint_id == llvm::StatepointDirectives::DefaultStatepointID);
     bool is_routine_call = (type == JeandleCompiledCall::ROUTINE_CALL);
-    assert(use_default_statepoint_id == is_routine_call, "routine calls should use the default statepoint id");
+    bool is_external_call = (type == JeandleCompiledCall::EXTERNAL_CALL);
+    assert(use_default_statepoint_id == is_routine_call || is_external_call, "routine calls should use the default statepoint id");
 #endif // ASSERT
   }
 
@@ -160,7 +162,8 @@ class JeandleCompiledCode : public StackObj {
  public:
   // For compiled Java methods.
   JeandleCompiledCode(ciEnv* env,
-                      ciMethod* method) :
+                      ciMethod* method,
+                      llvm::sys::DynamicLibrary dynamic_library) :
                       _obj(nullptr),
                       _elf(nullptr),
                       _code_buffer("JeandleCompiledCode"),
@@ -169,7 +172,8 @@ class JeandleCompiledCode : public StackObj {
                       _env(env),
                       _method(method),
                       _routine_entry(nullptr),
-                      _func_name(JeandleFuncSig::method_name(_method)) {}
+                      _func_name(JeandleFuncSig::method_name(_method)),
+                      _dynamic_library(dynamic_library) {}
 
   // For compiled Jeandle runtime stubs.
   JeandleCompiledCode(ciEnv* env, const char* func_name) :
@@ -234,6 +238,7 @@ class JeandleCompiledCode : public StackObj {
   ciMethod* _method;
   address _routine_entry;
   std::string _func_name;
+  llvm::sys::DynamicLibrary _dynamic_library;
 
   void setup_frame_size();
 

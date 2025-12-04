@@ -145,6 +145,14 @@ class JeandleRuntimeRoutine : public AllStatic {
     return _routine_entry.lookup(name);
   }
 
+  static bool is_routine_entry(llvm::StringRef name) {
+    return _routine_entry.contains(name);
+  }
+
+#ifdef ASSERT
+  static llvm::StringMap<address> routine_entry() { return _routine_entry; }
+#endif
+
 // Define all routines' llvm::FunctionCallee.
 #define DEF_LLVM_CALLEE(c_func, return_type, ...)                                                   \
   static llvm::FunctionCallee c_func##_callee(llvm::Module& target_module) {                        \

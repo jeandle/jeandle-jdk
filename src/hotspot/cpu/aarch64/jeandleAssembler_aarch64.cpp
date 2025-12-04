@@ -185,7 +185,7 @@ void JeandleAssembler::emit_oop_reloc(int offset, jobject oop_handle) {
   __ code_section()->relocate(at_addr, rspec);
 }
 
-int JeandleAssembler::fixup_routine_call_inst_offset(int offset) {
+int JeandleAssembler::fixup_call_inst_offset(int offset) {
   assert(offset >= 0, "invalid offset");
   // point to the end of call instruction
   return offset + NativeInstruction::instruction_size;
@@ -196,8 +196,12 @@ bool JeandleAssembler::is_oop_reloc_kind(LinkKind kind) {
          kind == LinkKind_aarch64::PageOffset12;
 }
 
-bool JeandleAssembler::is_routine_call_reloc_kind(LinkKind kind) {
-  return kind == LinkKind_aarch64::Branch26PCRel;
+bool JeandleAssembler::is_routine_call_reloc_kind(LinkKind kind, llvm::StringRef name) {
+  return kind == LinkKind_aarch64::Branch26PCRel && JeandleRuntimeRoutine::is_routine_entry(name);
+}
+
+bool JeandleAssembler::is_external_call_reloc_kind(LinkKind kind, llvm::StringRef name) {
+  return kind == LinkKind_aarch64::Branch26PCRel && !JeandleRuntimeRoutine::is_routine_entry(name);
 }
 
 bool JeandleAssembler::is_const_reloc_kind(LinkKind kind) {

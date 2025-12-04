@@ -63,14 +63,15 @@ JeandleCompilation::JeandleCompilation(llvm::TargetMachine* target_machine,
                                        ciMethod* method,
                                        int entry_bci,
                                        bool should_install,
-                                       llvm::MemoryBuffer* template_buffer) :
+                                       llvm::MemoryBuffer* template_buffer,
+                                       DynamicLibrary dynamic_library) :
                                        _target_machine(target_machine),
                                        _data_layout(data_layout),
                                        _env(env),
                                        _method(method),
                                        _entry_bci(entry_bci),
                                        _context(std::make_unique<llvm::LLVMContext>()),
-                                       _code(env, method),
+                                       _code(env, method, dynamic_library),
                                        _error_msg(nullptr) {
   if (entry_bci != InvocationEntryBci) {
     env->record_method_not_compilable("OSR not supported");

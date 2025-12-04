@@ -25,6 +25,7 @@
 #include "llvm/IR/Module.h"
 #include "llvm/IR/Function.h"
 #include "llvm/IR/LLVMContext.h"
+#include "llvm/Support/DynamicLibrary.h"
 #include "llvm/Target/TargetMachine.h"
 
 #include <memory>
@@ -36,6 +37,8 @@
 #include "ci/ciMethod.hpp"
 #include "memory/arena.hpp"
 
+using DynamicLibrary = llvm::sys::DynamicLibrary;
+
 class JeandleCompilation : public StackObj {
  public:
   // Compile a Java method.
@@ -45,7 +48,8 @@ class JeandleCompilation : public StackObj {
                      ciMethod* method,
                      int entry_bci,
                      bool install_code,
-                     llvm::MemoryBuffer* template_buffer);
+                     llvm::MemoryBuffer* template_buffer,
+                     DynamicLibrary dynamic_library);
 
   // Compile a runtime stub that call a JeandleRuntimeRoutine.
   JeandleCompilation(llvm::TargetMachine* target_machine,
