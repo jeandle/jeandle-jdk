@@ -946,10 +946,15 @@ void JeandleAbstractInterpreter::load_constant() {
   llvm::Value* value = nullptr;
 
   switch (con.basic_type()) {
+    case BasicType::T_BOOLEAN: value = JeandleType::int_const(_ir_builder, con.as_boolean()); break;
+    case BasicType::T_BYTE: value = JeandleType::int_const(_ir_builder, con.as_byte()); break;
+    case BasicType::T_CHAR: value = JeandleType::int_const(_ir_builder, con.as_char()); break;
+    case BasicType::T_SHORT: value = JeandleType::int_const(_ir_builder, con.as_short()); break;
     case BasicType::T_INT: value = JeandleType::int_const(_ir_builder, con.as_int()); break;
     case BasicType::T_LONG: value = JeandleType::long_const(_ir_builder, con.as_long()); break;
     case BasicType::T_FLOAT: value = JeandleType::float_const(_ir_builder, con.as_float()); break;
     case BasicType::T_DOUBLE: value = JeandleType::double_const(_ir_builder, con.as_double()); break;
+    case BasicType::T_ARRAY: // fall-through
     case BasicType::T_OBJECT: {
       llvm::Value* oop_handle = find_or_insert_oop(con.as_object());
       value = _ir_builder.CreateLoad(JeandleType::java2llvm(BasicType::T_OBJECT, *_context), oop_handle);
