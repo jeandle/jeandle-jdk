@@ -50,6 +50,9 @@
   product(bool, JeandleDumpRuntimeStubs, false,                             \
           "Dump Jeandle runtime stubs")                                     \
                                                                             \
+  product(bool, JeandleUseRuntimeIntrinsics, false,                         \
+          "Use hotspot runtime intrinsics, or use LLVM intrinsics")         \
+                                                                            \
 
 // end of JEANDLE_FLAGS
 
