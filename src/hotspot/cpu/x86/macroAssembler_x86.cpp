@@ -9882,7 +9882,8 @@ void MacroAssembler::lightweight_unlock(Register obj, Register hdr, Register tmp
 }
 
 #ifdef JEANDLE
-address MacroAssembler::trampoline_branch(AddressLiteral entry) {
+// Emit a call via a trampoline.
+address MacroAssembler::trampoline_call(AddressLiteral entry) {
   assert(entry.reloc() == relocInfo::none, "wrong reloc type");
 
   address stub = emit_trampoline_stub(offset(), entry.target());
@@ -9891,38 +9892,26 @@ address MacroAssembler::trampoline_branch(AddressLiteral entry) {
     return nullptr; // CodeCache is full
   }
 
-  address branch_address = pc();
+  address call_address = pc();
 
-  // Directly generate pc-relative jump/call instructions. For trampoline_branch, we 
-  // jump/call to a fixed external routine through trampoline stub, and the stub is
-  // always reachable by pc-relative jump/call.
-  NativeInstruction* ni = nativeInstruction_at(branch_address);
-  if (ni->is_jump()) {
-    jmp_literal(stub, entry.rspec());
-  } else if (ni->is_call()) {
-    call_literal(stub, entry.rspec());
-  } else {
-    ShouldNotReachHere();
-  }
+#ifdef ASSERT
+  NativeInstruction* ni = nativeInstruction_at(call_address);
+  assert(ni->is_call(), "doesn't look like a call");
+#endif // ASSERT
+
+  call_literal(stub, entry.rspec());
 
   postcond(pc() != badAddress);
-  return branch_address;
+  return call_address;
 }
 
-// Emit a trampoline stub for a far jump to a target address.
-//
-// This is used when the jump target is in the external library.
-// Trampoline stubs are placed in the stub section of the code buffer and are always reachable.
+// A trampoline stub is used when the jump target is unreachable through a pc-relative call.
+// This stub uses an indirect far jump instruction and resides in the code buffer's stub section,
+// enabling the call site to reach it through a PC-relative call.
 //
 // Code sequences:
-//
-// call-site:
-//   jmp to <trampoline stub>
-//
-// Related trampoline stub for this call site in the stub section:
 //   mov rscratch1, #imm_64         // Load the far absolute address into a scratch register
 //   jmp rscratch1                  // Perform an indirect jump
-//
 address MacroAssembler::emit_trampoline_stub(int insts_call_instruction_offset,
                                              address dest) {
   address stub = start_a_stub(max_trampoline_stub_size());

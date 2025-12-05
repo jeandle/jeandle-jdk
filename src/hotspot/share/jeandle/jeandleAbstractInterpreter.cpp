@@ -1302,7 +1302,7 @@ bool JeandleAbstractInterpreter::inline_intrinsic(const ciMethod* target) {
       break;
     }
     case vmIntrinsicID::_dsin: {
-      if (JeandleUseRuntimeIntrinsics) {
+      if (JeandleUseHotspotIntrinsics) {
         llvm::FunctionCallee callee = StubRoutines::dsin() != nullptr ? JeandleRuntimeRoutine::hotspot_StubRoutines_dsin_callee(_module) :
                                                                         JeandleRuntimeRoutine::hotspot_SharedRuntime_dsin_callee(_module);
         _jvm->dpush(call_jeandle_routine(callee, {_jvm->dpop()}, llvm::CallingConv::C));
@@ -1312,7 +1312,7 @@ bool JeandleAbstractInterpreter::inline_intrinsic(const ciMethod* target) {
       break;
     }
     case vmIntrinsicID::_dcos: {
-      if (JeandleUseRuntimeIntrinsics) {
+      if (JeandleUseHotspotIntrinsics) {
         llvm::FunctionCallee callee = StubRoutines::dcos() != nullptr ? JeandleRuntimeRoutine::hotspot_StubRoutines_dcos_callee(_module) :
                                                                         JeandleRuntimeRoutine::hotspot_SharedRuntime_dcos_callee(_module);
         _jvm->dpush(call_jeandle_routine(callee, {_jvm->dpop()}, llvm::CallingConv::C));
@@ -1323,7 +1323,7 @@ bool JeandleAbstractInterpreter::inline_intrinsic(const ciMethod* target) {
       break;
     }
     case vmIntrinsicID::_dtan: {
-      if (JeandleUseRuntimeIntrinsics) {
+      if (JeandleUseHotspotIntrinsics) {
         llvm::FunctionCallee callee = StubRoutines::dtan() != nullptr ? JeandleRuntimeRoutine::hotspot_StubRoutines_dtan_callee(_module) :
                                                                         JeandleRuntimeRoutine::hotspot_SharedRuntime_dtan_callee(_module);
         _jvm->dpush(call_jeandle_routine(callee, {_jvm->dpop()}, llvm::CallingConv::C));

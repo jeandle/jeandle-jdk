@@ -39,8 +39,7 @@ JeandleCompiler::JeandleCompiler(llvm::TargetMachine* target_machine) :
                                  AbstractCompiler(compiler_jeandle),
                                  _target_machine(target_machine),
                                  _data_layout(target_machine->createDataLayout()),
-                                 _template_buffer(nullptr),
-                                 _dynamic_library(DynamicLibrary::getPermanentLibrary(nullptr)) {}
+                                 _template_buffer(nullptr) {}
 
 JeandleCompiler* JeandleCompiler::create() {
   llvm::Triple target_triple = llvm::Triple(llvm::sys::getProcessTriple());
@@ -75,22 +74,26 @@ void JeandleCompiler::initialize() {
       set_state(failed);
       return;
     }
-#ifdef ASSERT
-    for (auto& routine_entry : JeandleRuntimeRoutine::routine_entry()) {
-      assert(_dynamic_library.getAddressOfSymbol(routine_entry.first().data()) == nullptr, "overlapping symbol");
-    }
-#endif
     if (!initialize_template_buffer()) {
       set_state(failed);
       return;
     }
+    if (!initialize_dynamic_library()) {
+      set_state(failed);
+      return;
+    }
+    #ifdef ASSERT
+    for (auto& routine_entry : JeandleRuntimeRoutine::routine_entry()) {
+      assert(DynamicLibrary::SearchForAddressOfSymbol(routine_entry.first().data()) == nullptr, "overlapping symbol");
+    }
+#endif
     set_state(initialized);
   }
 }
 
 void JeandleCompiler::compile_method(ciEnv* env, ciMethod* target, int entry_bci, bool install_code, DirectiveSet* directive) {
   ResourceMark rm;
-  JeandleCompilation compilation(target_machine(), data_layout(), env, target, entry_bci, install_code, _template_buffer.get(), _dynamic_library);
+  JeandleCompilation compilation(target_machine(), data_layout(), env, target, entry_bci, install_code, _template_buffer.get());
 }
 
 void JeandleCompiler::print_timers() {
@@ -145,4 +148,8 @@ bool JeandleCompiler::initialize_commandline_options() {
     }
 
     return llvm::cl::ParseCommandLineOptions(argv.size(), argv.data());
+}
+
+bool JeandleCompiler::initialize_dynamic_library() {
+  return !DynamicLibrary::LoadLibraryPermanently(LibmName);
 }

@@ -21,7 +21,14 @@
 #ifndef SHARE_GLOBALDEFINITIONS_JEANDLE_HPP
 #define SHARE_GLOBALDEFINITIONS_JEANDLE_HPP
 
-// Use trampoline stub fix in jeandle for calling external functions.
+#ifdef LINUX
+// Only libmath is supported for now.
+constexpr const char* LibmName = "libm.so.6";
+#else
+#error "Unsupported OS"
+#endif
+
+// USE_TRAMPOLINE_STUB_FIX_OWNER enables relocating trampoline stubs. Needed for external function calls.
 #define USE_TRAMPOLINE_STUB_FIX_OWNER
 
 #endif // SHARE_GLOBALDEFINITIONS_JEANDLE_HPP

@@ -211,20 +211,10 @@ void metadata_Relocation::pd_fix_value(address x) {
 }
 
 #ifdef JEANDLE
-// Fix the call or jump destination at the original code location after the code
+// Fix the call destination at the original code location after the code
 // containing the trampoline stub has been moved.
 void trampoline_stub_Relocation::pd_fix_owner_after_move() {
-  // The call/jump instruction that owns this trampoline
-  address call_or_jump = owner();
   address trampoline = addr();
-
-  NativeInstruction* ni = nativeInstruction_at(call_or_jump);
-  if (ni->is_call()) {
-    nativeCall_at(call_or_jump)->set_destination(trampoline);
-  } else if (ni->is_jump()) {
-    nativeJump_at(call_or_jump)->set_jump_destination(trampoline);
-  } else {
-    ShouldNotReachHere();
-  }
+  nativeCall_at(_owner)->set_destination(trampoline);
 }
 #endif // JEANDLE

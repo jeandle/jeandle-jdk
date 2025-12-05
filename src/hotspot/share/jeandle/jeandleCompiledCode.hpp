@@ -156,14 +156,14 @@ using ObjectBuffer = llvm::MemoryBuffer;
 using LinkBlock   = llvm::jitlink::Block;
 using LinkEdge    = llvm::jitlink::Edge;
 using StackMapParser = llvm::StackMapParser<ELFT::Endianness>;
+using DynamicLibrary = llvm::sys::DynamicLibrary;
 
 class JeandleAssembler;
 class JeandleCompiledCode : public StackObj {
  public:
   // For compiled Java methods.
   JeandleCompiledCode(ciEnv* env,
-                      ciMethod* method,
-                      llvm::sys::DynamicLibrary dynamic_library) :
+                      ciMethod* method) :
                       _obj(nullptr),
                       _elf(nullptr),
                       _code_buffer("JeandleCompiledCode"),
@@ -172,8 +172,7 @@ class JeandleCompiledCode : public StackObj {
                       _env(env),
                       _method(method),
                       _routine_entry(nullptr),
-                      _func_name(JeandleFuncSig::method_name(_method)),
-                      _dynamic_library(dynamic_library) {}
+                      _func_name(JeandleFuncSig::method_name(_method)) {}
 
   // For compiled Jeandle runtime stubs.
   JeandleCompiledCode(ciEnv* env, const char* func_name) :
@@ -238,7 +237,6 @@ class JeandleCompiledCode : public StackObj {
   ciMethod* _method;
   address _routine_entry;
   std::string _func_name;
-  llvm::sys::DynamicLibrary _dynamic_library;
 
   void setup_frame_size();
 

@@ -50,7 +50,7 @@ public class TestTanDouble {
                 "-Xlog:jeandle=debug", "-XX:+JeandleDumpIR",
                 "-XX:JeandleDumpDirectory="+dump_path,
                 "-XX:CompileCommand=compileonly,"+TestEqualsWrapper.class.getName()+"::tan_double",
-                "-XX:+UnlockDiagnosticVMOptions", "-XX:+UseLibmIntrinsic", "-XX:+JeandleUseRuntimeIntrinsics",
+                "-XX:+UnlockDiagnosticVMOptions", "-XX:+UseLibmIntrinsic", "-XX:+JeandleUseHotspotIntrinsics",
                 TestEqualsWrapper.class.getName()));
 
             ProcessBuilder pb = ProcessTools.createLimitedTestJavaProcessBuilder(command_args);
@@ -83,7 +83,7 @@ public class TestTanDouble {
             "-Xlog:jeandle=debug", "-XX:+JeandleDumpIR",
             "-XX:JeandleDumpDirectory="+dump_path,
             "-XX:CompileCommand=compileonly,"+TestEqualsWrapper.class.getName()+"::tan_double",
-            "-XX:+JeandleUseRuntimeIntrinsics"));
+            "-XX:+JeandleUseHotspotIntrinsics"));
         if (is_x86) {
             command_args.addAll(List.of("-XX:+UnlockDiagnosticVMOptions", "-XX:-UseLibmIntrinsic"));
         }
@@ -116,7 +116,7 @@ public class TestTanDouble {
                 "-Xlog:jeandle=debug", "-XX:+JeandleDumpIR",
                 "-XX:JeandleDumpDirectory="+dump_path,
                 "-XX:CompileCommand=compileonly,"+TestApproximateWrapper.class.getName()+"::tan_double",
-                "-XX:-JeandleUseRuntimeIntrinsics"));
+                "-XX:-JeandleUseHotspotIntrinsics"));
             command_args.add(TestApproximateWrapper.class.getName());
             pb = ProcessTools.createLimitedTestJavaProcessBuilder(command_args);
             output = ProcessTools.executeCommand(pb);

@@ -330,13 +330,13 @@ void JeandleCompiledCode::resolve_reloc_info(JeandleAssembler& assembler) {
         int inst_end_offset = JeandleAssembler::fixup_call_inst_offset(static_cast<int>(block->getAddress().getValue() + edge.getOffset()));
 
         // TODO: Set the right bci.
-        // Delay constructing JeandleCallReloc to resolving stackmaps, as oopmap is required.
+        // JeandleCallReloc for a routine call site will be created during stackmaps resolving because an oopmap is required.
         _routine_call_sites[inst_end_offset] = new CallSiteInfo(JeandleCompiledCall::ROUTINE_CALL,
                                                                 target_addr,
                                                                 -1/* bci */);
       } else if (!target.isDefined() && JeandleAssembler::is_external_call_reloc_kind(edge.getKind(), target_name)) {
         // External call relocations.
-        address target_addr = (address)_dynamic_library.getAddressOfSymbol(target_name.str().c_str());
+        address target_addr = (address)DynamicLibrary::SearchForAddressOfSymbol(target_name.str().c_str());
         if (target_addr == nullptr) {
           JeandleCompilation::report_jeandle_error("failed to find external symbol");
           return;
@@ -348,6 +348,7 @@ void JeandleCompiledCode::resolve_reloc_info(JeandleAssembler& assembler) {
         CallSiteInfo* call_info = new CallSiteInfo(JeandleCompiledCall::EXTERNAL_CALL,
                                                    target_addr,
                                                    -1/* bci */);
+        // LLVM doesn't rewrite statepoints for intrinsics used in the JVM, so we don't need oopmaps for external calls.
         relocs.push_back(new JeandleCallReloc(inst_end_offset, _env, _method, nullptr /* no oopmap */, call_info));
       } else if (target.isDefined() && JeandleAssembler::is_const_reloc_kind(edge.getKind())) {
         // Const relocations.
