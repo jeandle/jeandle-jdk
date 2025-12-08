@@ -69,6 +69,7 @@ class JeandleCompilation : public StackObj {
   bool error_occurred() const { return _error_msg != nullptr; }
   static void report_jeandle_error(const char* msg) { JeandleCompilation::current()->report_error(msg); }
   static bool jeandle_error_occurred() { return JeandleCompilation::current()->error_occurred(); }
+  static void print_timers();
 
   JeandleCompiledCode* compiled_code() { return &_code; }
 
