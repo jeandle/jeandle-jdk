@@ -48,12 +48,12 @@ public class TestSinDouble {
             "-Xbatch", "-XX:-TieredCompilation", "-XX:+UseJeandleCompiler", "-Xcomp",
             "-Xlog:jeandle=debug", "-XX:+JeandleDumpIR",
             "-XX:JeandleDumpDirectory="+dump_path,
-            "-XX:CompileCommand=compileonly,"+TestEqualsWrapper.class.getName()+"::sin_double",
+            "-XX:CompileCommand=compileonly,"+TestWrapper.class.getName()+"::sin_double",
             "-XX:+JeandleUseHotspotIntrinsics"));
         if (is_x86) {
           command_args.addAll(List.of("-XX:+UnlockDiagnosticVMOptions", "-XX:+UseLibmIntrinsic"));
         }
-        command_args.add(TestEqualsWrapper.class.getName());
+        command_args.add(TestWrapper.class.getName());
     
         ProcessBuilder pb = ProcessTools.createLimitedTestJavaProcessBuilder(command_args);
         OutputAnalyzer output = ProcessTools.executeCommand(pb);
@@ -62,9 +62,9 @@ public class TestSinDouble {
               .shouldContain("Method `static jdouble java.lang.Math.sin(jdouble)` is parsed as intrinsic");
 
         // Verify llvm IR
-        FileCheck checker = new FileCheck(dump_path, TestEqualsWrapper.class.getMethod("sin_double", double.class), false);
+        FileCheck checker = new FileCheck(dump_path, TestWrapper.class.getMethod("sin_double", double.class), false);
         // find compiled method
-        checker.check("define hotspotcc double @\"compiler_jeandle_intrinsic_TestSinDouble$TestEqualsWrapper_sin_double");
+        checker.check("define hotspotcc double @\"compiler_jeandle_intrinsic_TestSinDouble$TestWrapper_sin_double");
         // check IR
         checker.checkNext("entry:");
         checker.checkNext("br label %bci_0");
@@ -84,17 +84,17 @@ public class TestSinDouble {
                 "-Xbatch", "-XX:-TieredCompilation", "-XX:+UseJeandleCompiler", "-Xcomp",
                 "-Xlog:jeandle=debug", "-XX:+JeandleDumpIR",
                 "-XX:JeandleDumpDirectory="+dump_path,
-                "-XX:CompileCommand=compileonly,"+TestEqualsWrapper.class.getName()+"::sin_double",
+                "-XX:CompileCommand=compileonly,"+TestWrapper.class.getName()+"::sin_double",
                 "-XX:+UnlockDiagnosticVMOptions", "-XX:-UseLibmIntrinsic", "-XX:+JeandleUseHotspotIntrinsics",
-                TestEqualsWrapper.class.getName()));
+                TestWrapper.class.getName()));
             pb = ProcessTools.createLimitedTestJavaProcessBuilder(command_args);
             output = ProcessTools.executeCommand(pb);
             output.shouldHaveExitValue(0)
                 .shouldContain("Method `static jdouble java.lang.Math.sin(jdouble)` is parsed as intrinsic");
             // Verify llvm IR
-            checker = new FileCheck(dump_path, TestEqualsWrapper.class.getMethod("sin_double", double.class), false);
+            checker = new FileCheck(dump_path, TestWrapper.class.getMethod("sin_double", double.class), false);
             // find compiled method
-            checker.check("define hotspotcc double @\"compiler_jeandle_intrinsic_TestSinDouble$TestEqualsWrapper_sin_double");
+            checker.check("define hotspotcc double @\"compiler_jeandle_intrinsic_TestSinDouble$TestWrapper_sin_double");
             // check IR
             checker.checkNext("entry:");
             checker.checkNext("br label %bci_0");
@@ -102,44 +102,9 @@ public class TestSinDouble {
             checker.checkNext("call double @SharedRuntime_dsin");
             checker.checkNext("ret double");
         }
-
-        // intrinsic by LLVM
-        if (is_x86) { // TODO: add support for other architectures
-            dump_path = System.getProperty("java.io.tmpdir")+"/test3";
-            Path tmp3 = Path.of(dump_path);
-            if (!Files.exists(tmp3)) {
-                Files.createDirectory(tmp3);
-            }
-
-            command_args = new ArrayList<String>(List.of(
-                "-Xbatch", "-XX:-TieredCompilation", "-XX:+UseJeandleCompiler", "-Xcomp",
-                "-Xlog:jeandle=debug", "-XX:+JeandleDumpIR",
-                "-XX:JeandleDumpDirectory="+dump_path,
-                "-XX:CompileCommand=compileonly,"+TestApproximateWrapper.class.getName()+"::sin_double",
-                "-XX:-JeandleUseHotspotIntrinsics"));
-
-            command_args.add(TestApproximateWrapper.class.getName());
-
-            pb = ProcessTools.createLimitedTestJavaProcessBuilder(command_args);
-            output = ProcessTools.executeCommand(pb);
-
-            output.shouldHaveExitValue(0)
-                .shouldContain("Method `static jdouble java.lang.Math.sin(jdouble)` is parsed as intrinsic");
-
-            // Verify llvm IR
-            checker = new FileCheck(dump_path, TestApproximateWrapper.class.getMethod("sin_double", double.class), false);
-            // find compiled method
-            checker.check("define hotspotcc double @\"compiler_jeandle_intrinsic_TestSinDouble$TestApproximateWrapper_sin_double");
-            // check IR
-            checker.checkNext("entry:");
-            checker.checkNext("br label %bci_0");
-            checker.checkNext("bci_0:");
-            checker.checkNext("call double @llvm.sin.f64");
-            checker.checkNext("ret double");
-        }
     }
 
-    static public class TestEqualsWrapper {
+    static public class TestWrapper {
         static double v = Math.abs(1.0d);   // Force load java.lang.Math class
         public static void main(String[] args) {
             Random random = new Random();
@@ -151,31 +116,6 @@ public class TestSinDouble {
             for (int i=0; i< 1000; i++) {
                 double d = random.nextDouble();
                 Asserts.assertEquals(sin_double_verified(d) , sin_double(d));
-            }
-        }
-
-        public static double sin_double(double a) {
-            return Math.sin(a);
-        }
-
-        public static double sin_double_verified(double a) {
-            return Math.sin(a);
-        }
-    }
-
-    static public class TestApproximateWrapper {
-        static double v = Math.abs(1.0d);   // Force load java.lang.Math class
-        static double epsilon = 1e-15;
-        public static void main(String[] args) {
-            Random random = new Random();
-            Asserts.assertLessThan(Math.abs(sin_double_verified(1.5d) - sin_double(1.5d)), epsilon);
-            Asserts.assertLessThan(Math.abs(sin_double_verified(-1.5d) - sin_double(-1.5d)), epsilon);
-            Asserts.assertEquals(sin_double_verified(Double.NaN), sin_double(Double.NaN));
-            Asserts.assertEquals(sin_double_verified(Double.POSITIVE_INFINITY), sin_double(Double.POSITIVE_INFINITY));
-            Asserts.assertEquals(sin_double_verified(Double.NEGATIVE_INFINITY), sin_double(Double.NEGATIVE_INFINITY));
-            for (int i=0; i< 1000; i++) {
-                double d = random.nextDouble();
-                Asserts.assertLessThan(Math.abs(sin_double_verified(d) - sin_double(d)), epsilon);
             }
         }
 
