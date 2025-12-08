@@ -74,11 +74,11 @@ bool JeandleAssembler::is_oop_reloc_kind(LinkKind kind) {
   Unimplemented();
 }
 
-bool JeandleAssembler::is_routine_call_reloc_kind(LinkKind kind, llvm::StringRef name) {
+bool JeandleAssembler::is_routine_call_reloc_kind(LinkKind kind) {
   Unimplemented();
 }
 
-bool JeandleAssembler::is_external_call_reloc_kind(LinkKind kind, llvm::StringRef name) {
+bool JeandleAssembler::is_external_call_reloc_kind(LinkKind kind) {
   Unimplemented();
 }
 

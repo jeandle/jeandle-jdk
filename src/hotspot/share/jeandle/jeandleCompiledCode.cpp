@@ -323,7 +323,7 @@ void JeandleCompiledCode::resolve_reloc_info(JeandleAssembler& assembler) {
       auto& target = edge.getTarget();
       llvm::StringRef target_name = *(target.getName());
 
-      if (!target.isDefined() && JeandleAssembler::is_routine_call_reloc_kind(edge.getKind(), target_name)) {
+      if (!target.isDefined() && JeandleRuntimeRoutine::is_routine_entry(target_name) && JeandleAssembler::is_routine_call_reloc_kind(edge.getKind())) {
         // Routine call relocations.
         address target_addr = JeandleRuntimeRoutine::get_routine_entry(target_name);
 
@@ -334,7 +334,7 @@ void JeandleCompiledCode::resolve_reloc_info(JeandleAssembler& assembler) {
         _routine_call_sites[inst_end_offset] = new CallSiteInfo(JeandleCompiledCall::ROUTINE_CALL,
                                                                 target_addr,
                                                                 -1/* bci */);
-      } else if (!target.isDefined() && JeandleAssembler::is_external_call_reloc_kind(edge.getKind(), target_name)) {
+      } else if (!target.isDefined() && !JeandleRuntimeRoutine::is_routine_entry(target_name) && JeandleAssembler::is_external_call_reloc_kind(edge.getKind())) {
         // External call relocations.
         address target_addr = (address)DynamicLibrary::SearchForAddressOfSymbol(target_name.str().c_str());
         if (target_addr == nullptr) {

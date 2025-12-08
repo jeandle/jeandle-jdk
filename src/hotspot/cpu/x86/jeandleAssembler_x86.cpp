@@ -202,12 +202,12 @@ bool JeandleAssembler::is_oop_reloc_kind(LinkKind kind) {
   return kind == LinkKind_x86_64::Delta32;
 }
 
-bool JeandleAssembler::is_routine_call_reloc_kind(LinkKind kind, llvm::StringRef name) {
-  return kind == LinkKind_x86_64::BranchPCRel32 && JeandleRuntimeRoutine::is_routine_entry(name);
+bool JeandleAssembler::is_routine_call_reloc_kind(LinkKind kind) {
+  return kind == LinkKind_x86_64::BranchPCRel32;
 }
 
-bool JeandleAssembler::is_external_call_reloc_kind(LinkKind kind, llvm::StringRef name) {
-  return kind == LinkKind_x86_64::BranchPCRel32 && !JeandleRuntimeRoutine::is_routine_entry(name);;
+bool JeandleAssembler::is_external_call_reloc_kind(LinkKind kind) {
+  return kind == LinkKind_x86_64::BranchPCRel32;
 }
 
 bool JeandleAssembler::is_const_reloc_kind(LinkKind kind) {

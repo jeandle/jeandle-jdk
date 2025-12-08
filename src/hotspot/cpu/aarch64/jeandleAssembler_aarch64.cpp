@@ -196,12 +196,12 @@ bool JeandleAssembler::is_oop_reloc_kind(LinkKind kind) {
          kind == LinkKind_aarch64::PageOffset12;
 }
 
-bool JeandleAssembler::is_routine_call_reloc_kind(LinkKind kind, llvm::StringRef name) {
-  return kind == LinkKind_aarch64::Branch26PCRel && JeandleRuntimeRoutine::is_routine_entry(name);
+bool JeandleAssembler::is_routine_call_reloc_kind(LinkKind kind) {
+  return kind == LinkKind_aarch64::Branch26PCRel;
 }
 
-bool JeandleAssembler::is_external_call_reloc_kind(LinkKind kind, llvm::StringRef name) {
-  return kind == LinkKind_aarch64::Branch26PCRel && !JeandleRuntimeRoutine::is_routine_entry(name);
+bool JeandleAssembler::is_external_call_reloc_kind(LinkKind kind) {
+  return kind == LinkKind_aarch64::Branch26PCRel;
 }
 
 bool JeandleAssembler::is_const_reloc_kind(LinkKind kind) {
