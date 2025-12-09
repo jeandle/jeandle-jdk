@@ -29,6 +29,10 @@ JRT_ENTRY(void, JeandleRuntimeRoutine::install_exceptional_return(oopDesc* excep
   Unimplemented();
 JRT_END
 
+JRT_ENTRY(void, JeandleRuntimeRoutine::install_exceptional_return_for_call_vm())
+  Unimplemented();
+JRT_END
+
 void JeandleRuntimeRoutine::generate_exceptional_return() {
   Unimplemented();
 }

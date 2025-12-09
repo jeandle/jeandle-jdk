@@ -150,12 +150,6 @@ class JeandleCallReloc : public JeandleReloc {
     DebugToken *expvals = recorder->create_scope_values(_oop_map->stack());
     DebugToken *monvals = recorder->create_monitor_values(monarray);
 
-#ifdef ASSERT
-    if (_call->type() != JeandleCompiledCall::STUB_C_CALL) {
-      // If we are not compiling a call vm stub, there must be a valid Java method.
-      assert(_method, "invalid Java method");
-    }
-#endif
     recorder->describe_scope(inst_end_offset(),
                              methodHandle(),
                              _method,

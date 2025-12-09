@@ -306,6 +306,7 @@ class JeandleAbstractInterpreter : public StackObj {
 
   llvm::CallInst* call_java_op(llvm::StringRef java_op, llvm::ArrayRef<llvm::Value*> args);
   llvm::CallInst* call_jeandle_routine(llvm::FunctionCallee callee, llvm::ArrayRef<llvm::Value*> arg, llvm::CallingConv::ID calling_conv);
+  llvm::InvokeInst* call_jeandle_routine_ex(llvm::FunctionCallee callee, llvm::ArrayRef<llvm::Value*> arg, llvm::CallingConv::ID calling_conv);
 
   void add_safepoint_poll();
 

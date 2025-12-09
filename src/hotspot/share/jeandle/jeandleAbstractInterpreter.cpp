@@ -1325,11 +1325,31 @@ bool JeandleAbstractInterpreter::inline_intrinsic(const ciMethod* target) {
   return true;
 }
 
-// Generate IR for calling into JeandleRuntimeRoutine
+// Generate IR for calling into JeandleRuntimeRoutine, without exception handling.
 llvm::CallInst* JeandleAbstractInterpreter::call_jeandle_routine(llvm::FunctionCallee callee, llvm::ArrayRef<llvm::Value *> args, llvm::CallingConv::ID calling_conv) {
   llvm::CallInst *call = _ir_builder.CreateCall(callee, args);
   call->setCallingConv(calling_conv);
   return call;
+}
+
+// Generate IR for calling into JeandleRuntimeRoutine, with exception handling.
+llvm::InvokeInst* JeandleAbstractInterpreter::call_jeandle_routine_ex(llvm::FunctionCallee callee, llvm::ArrayRef<llvm::Value *> args, llvm::CallingConv::ID calling_conv) {
+
+  // Every invoke instruction may throw exceptions, handle them here.
+  DispatchedDest dispatched = dispatch_exception_for_invoke();
+
+  // Create the invoke instruction.
+  llvm::InvokeInst* invoke = _ir_builder.CreateInvoke(callee, dispatched._normal_dest, dispatched._unwind_dest, args);
+
+  // Continue to interpret the remaining bytecodes in the current JeandleBasicBlock at dispatched._normal_dest.
+  _ir_builder.SetInsertPoint(dispatched._normal_dest);
+
+  // The dispatched._normal_dest is now the new tail block for the current JeandleBasicBlock.
+  _block->set_tail_llvm_block(dispatched._normal_dest);
+
+  invoke->setCallingConv(calling_conv);
+
+  return invoke;
 }
 
 void JeandleAbstractInterpreter::stack_op(Bytecodes::Code code) {
@@ -1899,14 +1919,16 @@ void JeandleAbstractInterpreter::do_new() {
   // TODO: cl init barrier
   jint layout_helper = klass->layout_helper();
   assert(Klass::layout_helper_is_instance(layout_helper), "Unexpected klass");
-  llvm::Value* size_in_bytes = _ir_builder.getInt32(Klass::layout_helper_size_in_bytes(layout_helper));
 
   Klass* klass_enc = (Klass*)(klass->constant_encoding());
   llvm::PointerType* klass_type = llvm::PointerType::get(*_context, llvm::jeandle::AddrSpace::CHeapAddrSpace);
   llvm::Value* klass_addr = _ir_builder.getInt64((int64_t)klass_enc);
   llvm::Value* klass_ptr = _ir_builder.CreateIntToPtr(klass_addr, klass_type);
 
-  _jvm->apush(call_java_op("jeandle.new_instance", {klass_ptr, size_in_bytes}));
+  // slow path allocation, TODO: implement fast path allocation
+  _jvm->apush(call_jeandle_routine_ex(JeandleRuntimeRoutine::new_instance_callee(_module),
+                                      {klass_ptr, call_java_op("jeandle.current_thread", {})},
+                                      llvm::CallingConv::Hotspot_JIT));
 }
 
 JeandleAbstractInterpreter::DispatchedDest JeandleAbstractInterpreter::dispatch_exception_for_invoke() {
@@ -2018,7 +2040,7 @@ void JeandleAbstractInterpreter::throw_exception(llvm::Value* exception_oop) {
   // Return
   llvm::Type* ret_type = _llvm_func->getReturnType();
   if (ret_type->isVoidTy()) {
-    _ir_builder.CreateRetVoid();;
+    _ir_builder.CreateRetVoid();
   } else if (ret_type->isIntegerTy()) {
     _ir_builder.CreateRet(llvm::ConstantInt::get(ret_type, 0));
   } else if (ret_type->isFloatTy() || ret_type->isDoubleTy()) {
@@ -2058,7 +2080,10 @@ void JeandleAbstractInterpreter::do_unified_newarray(Klass* array_klass) {
   llvm::PointerType* klass_type = llvm::PointerType::get(*_context, llvm::jeandle::AddrSpace::CHeapAddrSpace);
   llvm::Value* array_klass_addr = _ir_builder.getInt64((intptr_t)array_klass);
   llvm::Value* array_klass_ptr =  _ir_builder.CreateIntToPtr(array_klass_addr, klass_type);
-  llvm::CallInst* result = call_java_op("jeandle.newarray", {array_klass_ptr, length});
+  llvm::CallInst* current_thread = call_java_op("jeandle.current_thread", {});
+  llvm::InvokeInst* result = call_jeandle_routine_ex(JeandleRuntimeRoutine::new_array_callee(_module),
+                                                     {array_klass_ptr, length, current_thread},
+                                                     llvm::CallingConv::Hotspot_JIT);
   _jvm->apush(result);
 }
 
@@ -2112,7 +2137,10 @@ void JeandleAbstractInterpreter::multianewarray() {
 
     llvm::Value* dimensions_array_length = _ir_builder.getInt32(ndimensions);
 
-    llvm::CallInst* dimensions_array_oop = call_java_op("jeandle.newarray", {int_array_klass_ptr, dimensions_array_length});
+    llvm::CallInst* current_thread = call_java_op("jeandle.current_thread", {});
+    llvm::InvokeInst* dimensions_array_oop = call_jeandle_routine_ex(JeandleRuntimeRoutine::new_array_callee(_module),
+                                                                     {int_array_klass_ptr, dimensions_array_length, current_thread},
+                                                                     llvm::CallingConv::Hotspot_JIT);
 
     llvm::Value* array_base_offset = _ir_builder.CreateLoad(llvm::Type::getInt32Ty(*_context),
                                                             _module.getGlobalVariable("arrayOopDesc.base_offset_in_bytes.int", true));
@@ -2134,7 +2162,7 @@ void JeandleAbstractInterpreter::multianewarray() {
 
   args.push_back(call_java_op("jeandle.current_thread", {}));
 
-  _jvm->apush(call_jeandle_routine(callee, args, llvm::CallingConv::Hotspot_JIT));
+  _jvm->apush(call_jeandle_routine_ex(callee, args, llvm::CallingConv::Hotspot_JIT));
 }
 
 void JeandleAbstractInterpreter::monitorenter() {

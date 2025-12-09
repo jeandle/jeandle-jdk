@@ -110,6 +110,8 @@
   def(SharedRuntime_frem,                         SharedRuntime::frem,     llvm::Type::getFloatTy(context),     llvm::Type::getFloatTy(context),          \
                                                                                                                 llvm::Type::getFloatTy(context))          \
                                                                                                                                                           \
+  def(install_exceptional_return_for_call_vm,     JeandleRuntimeRoutine::install_exceptional_return_for_call_vm, llvm::Type::getVoidTy(context))          \
+                                                                                                                                                          \
   def(SharedRuntime_complete_monitor_locking_C,   SharedRuntime::complete_monitor_locking_C, llvm::Type::getVoidTy(context),                                             \
                                                                                            llvm::PointerType::get(context, llvm::jeandle::AddrSpace::JavaHeapAddrSpace), \
                                                                                            llvm::PointerType::get(context, llvm::jeandle::AddrSpace::CHeapAddrSpace),    \
@@ -181,7 +183,11 @@ class JeandleRuntimeRoutine : public AllStatic {
 
   static void safepoint_handler(JavaThread* current);
 
+  // Install exceptional_return into the current java frame, for throwing exceptions.
   static void install_exceptional_return(oopDesc* exception, JavaThread* current);
+
+  // Install exceptional_return into call_VM stub frame, for checking exceptions during call_VM.
+  static void install_exceptional_return_for_call_vm();
 
   static address get_exception_handler(JavaThread* current);
 

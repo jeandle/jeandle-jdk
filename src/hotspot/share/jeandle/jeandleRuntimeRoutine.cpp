@@ -71,15 +71,14 @@ static bool check_jeandle_compiled_frame(JavaThread* thread) {
 llvm::StringMap<address> JeandleRuntimeRoutine::_routine_entry;
 
 bool JeandleRuntimeRoutine::generate(llvm::TargetMachine* target_machine, llvm::DataLayout* data_layout) {
-  // For each C/C++ function, compile a runtime stub to wrap it.
-  ALL_JEANDLE_C_ROUTINES(GEN_C_ROUTINE_STUB);
+  // Register hotspot routines
+  ALL_HOTSPOT_ROUTINES(REGISTER_HOTSPOT_ROUTINE);
 
   // Generate assembly routines.
   ALL_JEANDLE_ASSEMBLY_ROUTINES(GEN_ASSEMBLY_ROUTINE_BLOB);
 
-  // Register hotspot routines
-  ALL_HOTSPOT_ROUTINES(REGISTER_HOTSPOT_ROUTINE);
-
+  // For each C/C++ function, compile a runtime stub to wrap it.
+  ALL_JEANDLE_C_ROUTINES(GEN_C_ROUTINE_STUB);
   return true;
 }
 

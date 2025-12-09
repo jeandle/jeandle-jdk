@@ -167,17 +167,6 @@ entry:
   ret i32 %length
 }
 
-declare hotspotcc ptr @jeandle.current_thread()
-declare hotspotcc ptr addrspace(1) @new_array(ptr, i32, ptr)
-
-; Implementation of Java anewarray and newarray operation
-define private hotspotcc ptr addrspace(1) @jeandle.newarray(ptr %array_klass, i32 %length) noinline "lower-phase"="0"  {
-entry:
-  %current_thread = call hotspotcc ptr @jeandle.current_thread()
-  %array_oop = call hotspotcc ptr addrspace(1) @new_array(ptr %array_klass, i32 %length, ptr %current_thread)
-  ret ptr addrspace(1) %array_oop
-}
-
 ; Declaration of Java card table barrier.
 declare hotspotcc void @jeandle.card_table_barrier(ptr addrspace(1) %addr) noinline "lower-phase"="1";
 

@@ -29,6 +29,8 @@
 #include "jeandle/jeandleUtils.hpp"
 #include "jeandle/jeandleCallVM.hpp"
 #include "jeandle/jeandleRegister.hpp"
+#include "jeandle/jeandleRuntimeRoutine.hpp"
+#include "jeandle/jeandleType.hpp"
 
 void JeandleCallVM::generate_call_VM(const char* name, address c_func, llvm::FunctionType* func_type, llvm::Module& target_module, JeandleCompiledCode& code) {
   llvm::Function* llvm_func = llvm::Function::Create(func_type,
@@ -81,7 +83,36 @@ void JeandleCallVM::generate_call_VM(const char* name, address c_func, llvm::Fun
   call_c_func->addFnAttr(id_attr);
   call_c_func->addFnAttr(patch_bytes_attr);
 
-  // TODO: Check exceptions.
+  llvm::Value* pending_exception_addr = ir_builder.CreateIntToPtr(ir_builder.getInt64((uint64_t)Thread::pending_exception_offset()),
+                                                                  llvm::PointerType::get(context, llvm::jeandle::AddrSpace::TLSAddrSpace));
+  llvm::Value* pending_exception = ir_builder.CreateLoad(JeandleType::java2llvm(T_OBJECT, context), pending_exception_addr);
+  llvm::Value* null_oop = llvm::ConstantPointerNull::get(llvm::cast<llvm::PointerType>(JeandleType::java2llvm(T_OBJECT, context)));
+  llvm::Value* if_not_null = ir_builder.CreateICmp(llvm::CmpInst::ICMP_NE, pending_exception, null_oop);
+
+  llvm::BasicBlock* forward_exception_block = llvm::BasicBlock::Create(context, "forward_exception", llvm_func);
+  llvm::BasicBlock* no_exception_block = llvm::BasicBlock::Create(context, "no_exception", llvm_func);
+
+  ir_builder.CreateCondBr(if_not_null, forward_exception_block, no_exception_block);
+  ir_builder.SetInsertPoint(forward_exception_block);
+
+  llvm::CallInst* call_inst = ir_builder.CreateCall(JeandleRuntimeRoutine::hotspot_install_exceptional_return_for_call_vm_callee(target_module), {});
+  call_inst->setCallingConv(llvm::CallingConv::C);
+
+  // Return
+  llvm::Type* ret_type = func_type->getReturnType();
+  if (ret_type->isVoidTy()) {
+    ir_builder.CreateRetVoid();;
+  } else if (ret_type->isIntegerTy()) {
+    ir_builder.CreateRet(llvm::ConstantInt::get(ret_type, 0));
+  } else if (ret_type->isFloatTy() || ret_type->isDoubleTy()) {
+    ir_builder.CreateRet(llvm::ConstantFP::get(ret_type, 0.0));
+  } else if (ret_type->isPointerTy()) {
+    ir_builder.CreateRet(llvm::ConstantPointerNull::get(llvm::cast<llvm::PointerType>(ret_type)));
+  } else {
+    ShouldNotReachHere();
+  }
+
+  ir_builder.SetInsertPoint(no_exception_block);
 
   // Clear the last_Java_sp.
   ir_builder.CreateStore(ir_builder.getInt64((intptr_t)nullptr), last_Java_sp_ptr);
