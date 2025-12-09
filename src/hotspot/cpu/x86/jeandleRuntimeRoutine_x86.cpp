@@ -53,7 +53,7 @@ JRT_LEAF(void, JeandleRuntimeRoutine::install_exceptional_return(oopDesc* except
   *return_address = _routine_entry[_exceptional_return];
 JRT_END
 
-// When a Jeandle c routine throwing an exception, patch its return address to exceptional_return blob.
+// When a Jeandle C routine throwing an exception, patch its return address to exceptional_return blob.
 JRT_LEAF(void, JeandleRuntimeRoutine::install_exceptional_return_for_call_vm())
   JavaThread* current = JavaThread::current();
   assert(oopDesc::is_oop(current->pending_exception()), "must be a valid oop");

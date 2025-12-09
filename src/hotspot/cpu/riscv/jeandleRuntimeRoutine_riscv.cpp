@@ -25,11 +25,11 @@
 #include "runtime/interfaceSupport.inline.hpp"
 #include "utilities/debug.hpp"
 
-JRT_ENTRY(void, JeandleRuntimeRoutine::install_exceptional_return(oopDesc* exception, JavaThread* current))
+JRT_LEAF(void, JeandleRuntimeRoutine::install_exceptional_return(oopDesc* exception, JavaThread* current))
   Unimplemented();
 JRT_END
 
-JRT_ENTRY(void, JeandleRuntimeRoutine::install_exceptional_return_for_call_vm())
+JRT_LEAF(void, JeandleRuntimeRoutine::install_exceptional_return_for_call_vm())
   Unimplemented();
 JRT_END
 

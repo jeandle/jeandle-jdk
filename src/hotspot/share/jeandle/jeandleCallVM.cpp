@@ -83,6 +83,7 @@ void JeandleCallVM::generate_call_VM(const char* name, address c_func, llvm::Fun
   call_c_func->addFnAttr(id_attr);
   call_c_func->addFnAttr(patch_bytes_attr);
 
+  // Check exceptions.
   llvm::Value* pending_exception_addr = ir_builder.CreateIntToPtr(ir_builder.getInt64((uint64_t)Thread::pending_exception_offset()),
                                                                   llvm::PointerType::get(context, llvm::jeandle::AddrSpace::TLSAddrSpace));
   llvm::Value* pending_exception = ir_builder.CreateLoad(JeandleType::java2llvm(T_OBJECT, context), pending_exception_addr);
