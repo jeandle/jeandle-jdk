@@ -198,18 +198,24 @@ int JeandleAssembler::fixup_call_inst_offset(int offset) {
   return offset - NativeJump::data_offset + NativeJump::instruction_size;
 }
 
-bool JeandleAssembler::is_oop_reloc_kind(LinkKind kind) {
-  return kind == LinkKind_x86_64::Delta32;
+bool JeandleAssembler::is_oop_reloc(LinkSymbol& target, LinkKind kind) {
+  return !target.isDefined() && kind == LinkKind_x86_64::Delta32;
 }
 
-bool JeandleAssembler::is_routine_call_reloc_kind(LinkKind kind) {
-  return kind == LinkKind_x86_64::BranchPCRel32;
+bool JeandleAssembler::is_routine_call_reloc(LinkSymbol& target, LinkKind kind) {
+  llvm::StringRef target_name = *(target.getName());
+  return !target.isDefined() &&
+         JeandleRuntimeRoutine::is_routine_entry(target_name) &&
+         kind == LinkKind_x86_64::BranchPCRel32;
 }
 
-bool JeandleAssembler::is_external_call_reloc_kind(LinkKind kind) {
-  return kind == LinkKind_x86_64::BranchPCRel32;
+bool JeandleAssembler::is_external_call_reloc(LinkSymbol& target, LinkKind kind) {
+  llvm::StringRef target_name = *(target.getName());
+  return !target.isDefined() &&
+         !JeandleRuntimeRoutine::is_routine_entry(target_name) &&
+         kind == LinkKind_x86_64::BranchPCRel32;
 }
 
-bool JeandleAssembler::is_const_reloc_kind(LinkKind kind) {
-  return kind == LinkKind_x86_64::Delta32;
+bool JeandleAssembler::is_const_reloc(LinkSymbol& target, LinkKind kind) {
+  return target.isDefined() && kind == LinkKind_x86_64::Delta32;
 }
