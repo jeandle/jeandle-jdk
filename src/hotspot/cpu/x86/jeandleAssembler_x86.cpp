@@ -121,6 +121,10 @@ void JeandleAssembler::patch_external_call_site(int inst_offset, CallSiteInfo* c
   assert(call->type() == JeandleCompiledCall::EXTERNAL_CALL, "legal call type");
 
   address call_address = __ addr_at(inst_offset);
+#ifdef ASSERT
+  NativeInstruction* ni = nativeInstruction_at(call_address);
+  assert(ni->is_call(), "doesn't look like a call");
+#endif // ASSERT
 
   // Set insts_end to where to patch.
   address insts_end = __ code()->insts_end();

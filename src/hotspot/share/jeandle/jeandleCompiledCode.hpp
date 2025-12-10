@@ -116,7 +116,7 @@ class CallSiteInfo : public JeandleCompilationResourceObj {
     bool use_default_statepoint_id = (statepoint_id == llvm::StatepointDirectives::DefaultStatepointID);
     bool is_routine_call = (type == JeandleCompiledCall::ROUTINE_CALL);
     bool is_external_call = (type == JeandleCompiledCall::EXTERNAL_CALL);
-    assert(use_default_statepoint_id == is_routine_call || is_external_call, "routine calls should use the default statepoint id");
+    assert(use_default_statepoint_id == (is_routine_call || is_external_call), "routine calls and external calls should use the default statepoint id");
 #endif // ASSERT
   }
 

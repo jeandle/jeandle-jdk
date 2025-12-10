@@ -9894,11 +9894,6 @@ address MacroAssembler::trampoline_call(AddressLiteral entry) {
 
   address call_address = pc();
 
-#ifdef ASSERT
-  NativeInstruction* ni = nativeInstruction_at(call_address);
-  assert(ni->is_call(), "doesn't look like a call");
-#endif // ASSERT
-
   call_literal(stub, entry.rspec());
 
   postcond(pc() != badAddress);

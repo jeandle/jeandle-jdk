@@ -103,6 +103,9 @@ class JeandleCallReloc : public JeandleReloc {
 
   void emit_reloc(JeandleAssembler& assembler) override {
     // Each call reloc has an oopmap, except for EXTERNAL_CALL.
+    assert((_call->type() != JeandleCompiledCall::EXTERNAL_CALL && _oop_map != nullptr) ||
+           (_call->type() == JeandleCompiledCall::EXTERNAL_CALL && _oop_map == nullptr),
+           "unmatched call type and oopmap");
     if (_oop_map != nullptr) {
       process_oop_map();
     }
@@ -348,7 +351,7 @@ void JeandleCompiledCode::resolve_reloc_info(JeandleAssembler& assembler) {
         CallSiteInfo* call_info = new CallSiteInfo(JeandleCompiledCall::EXTERNAL_CALL,
                                                    target_addr,
                                                    -1/* bci */);
-        // LLVM doesn't rewrite statepoints for intrinsics used in the JVM, so we don't need oopmaps for external calls.
+        // LLVM doesn't rewrite intrinsic calls to statepoints, so we don't need oopmaps for external calls.
         relocs.push_back(new JeandleCallReloc(inst_end_offset, _env, _method, nullptr /* no oopmap */, call_info));
       } else if (JeandleAssembler::is_const_reloc(target, edge.getKind())) {
         // Const relocations.

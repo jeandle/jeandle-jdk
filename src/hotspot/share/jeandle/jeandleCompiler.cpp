@@ -82,7 +82,7 @@ void JeandleCompiler::initialize() {
       set_state(failed);
       return;
     }
-    #ifdef ASSERT
+#ifdef ASSERT
     for (auto& routine_entry : JeandleRuntimeRoutine::routine_entry()) {
       assert(DynamicLibrary::SearchForAddressOfSymbol(routine_entry.first().data()) == nullptr, "overlapping symbol");
     }
