@@ -209,6 +209,11 @@ public class TestLLVMFatalError {
         System.out.println("  - VM info found: " + foundVMInfo);
 
         // Verify essential sections are present
+        if (!foundJeandleInfo) {
+            throw new RuntimeException("Jeandle/LLVM information not found in hs_err log. " +
+                "This indicates the custom LLVM fatal error handler may not have been invoked.");
+        }
+
         if (!foundNativeFrames) {
             throw new RuntimeException("Native frames section not found in hs_err log");
         }
