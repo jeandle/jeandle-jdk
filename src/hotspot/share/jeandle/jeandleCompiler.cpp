@@ -77,7 +77,6 @@ void JeandleCompiler::initialize() {
   if (should_perform_init()) {
     // Install LLVM fatal error handler to generate hs_err logs on LLVM assertions
     llvm::install_fatal_error_handler(llvm_fatal_error_handler, nullptr);
-    
     if (!initialize_commandline_options()) {
       set_state(failed);
       return;
