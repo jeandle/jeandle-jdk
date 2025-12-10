@@ -1335,7 +1335,7 @@ llvm::CallInst* JeandleAbstractInterpreter::call_jeandle_routine(llvm::FunctionC
 // Generate IR for calling into JeandleRuntimeRoutine, with exception handling.
 llvm::InvokeInst* JeandleAbstractInterpreter::call_jeandle_routine_ex(llvm::FunctionCallee callee, llvm::ArrayRef<llvm::Value *> args, llvm::CallingConv::ID calling_conv) {
 
-  // Every invoke instruction may throw exceptions, handle them here.
+  // Handle exceptions for the routine.
   DispatchedDest dispatched = dispatch_exception_for_invoke();
 
   // Create the invoke instruction.
