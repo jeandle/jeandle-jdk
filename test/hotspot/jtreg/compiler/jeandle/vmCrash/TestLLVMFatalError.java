@@ -24,7 +24,7 @@
  *          Jeandle compilation. This test verifies that when LLVM assertions or
  *          fatal errors occur, the HotSpot VM generates a proper hs_err log file
  *          through the custom fatal error handler installed in JeandleCompiler.
- * @bug 9999999
+ * @bug 105
  * @library /test/lib
  * @requires os.family == "linux"
  * @compile Crash.jasm
