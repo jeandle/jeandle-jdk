@@ -318,7 +318,7 @@ void JeandleCompiledCode::resolve_reloc_info(JeandleAssembler& assembler) {
     }
     for (auto& edge : block->edges()) {
       auto& target = edge.getTarget();
-      llvm::StringRef target_name = *(target.getName());
+      llvm::StringRef target_name = target.hasName() ? *(target.getName()) : "";
 
       if (JeandleAssembler::is_routine_call_reloc(target, edge.getKind())) {
         // Routine call relocations.

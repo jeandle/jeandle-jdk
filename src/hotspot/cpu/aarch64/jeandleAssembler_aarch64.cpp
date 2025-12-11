@@ -201,15 +201,15 @@ bool JeandleAssembler::is_oop_reloc(LinkSymbol& target, LinkKind kind) {
 }
 
 bool JeandleAssembler::is_routine_call_reloc(LinkSymbol& target, LinkKind kind) {
-  llvm::StringRef target_name = *(target.getName());
-  return !target.isDefined() &&
+  llvm::StringRef target_name = target.hasName() ? *(target.getName()) : "";
+  return !target_name.empty() && !target.isDefined() &&
          JeandleRuntimeRoutine::is_routine_entry(target_name) &&
          kind == LinkKind_aarch64::Branch26PCRel;
 }
 
 bool JeandleAssembler::is_external_call_reloc(LinkSymbol& target, LinkKind kind) {
-  llvm::StringRef target_name = *(target.getName());
-  return !target.isDefined() &&
+  llvm::StringRef target_name = target.hasName() ? *(target.getName()) : "";
+  return !target_name.empty() && !target.isDefined() &&
          !JeandleRuntimeRoutine::is_routine_entry(target_name) &&
          kind == LinkKind_aarch64::Branch26PCRel;
 }
