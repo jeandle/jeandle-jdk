@@ -40,6 +40,10 @@ void JeandleAssembler::patch_ic_call_site(int inst_offset, CallSiteInfo* call) {
   Unimplemented();
 }
 
+void JeandleAssembler::patch_external_call_site(int inst_offset, CallSiteInfo* call) {
+  Unimplemented();
+}
+
 void JeandleAssembler::emit_ic_check() {
   Unimplemented();
 }
