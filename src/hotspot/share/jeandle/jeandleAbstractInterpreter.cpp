@@ -1587,12 +1587,20 @@ void JeandleAbstractInterpreter::arith_op(BasicType type, Bytecodes::Code code) 
   }
 }
 
+// Call a Java operation, without exception handling.
 llvm::CallInst* JeandleAbstractInterpreter::call_java_op(llvm::StringRef java_op, llvm::ArrayRef<llvm::Value*> args) {
   llvm::Function* java_op_func = _module.getFunction(java_op);
   assert(java_op_func != nullptr, "invalid JavaOp");
-  llvm::CallInst* call_inst = _ir_builder.CreateCall(java_op_func, args);
-  call_inst->setCallingConv(llvm::CallingConv::Hotspot_JIT);
+  llvm::CallInst* call_inst = call_jeandle_routine(java_op_func, args, llvm::CallingConv::Hotspot_JIT);
   return call_inst;
+}
+
+// Call a Java operation, with exception handling.
+llvm::InvokeInst* JeandleAbstractInterpreter::call_java_op_ex(llvm::StringRef java_op, llvm::ArrayRef<llvm::Value*> args) {
+  llvm::Function* java_op_func = _module.getFunction(java_op);
+  assert(java_op_func != nullptr, "invalid JavaOp");
+  llvm::InvokeInst* invoke_inst = call_jeandle_routine_ex(java_op_func, args, llvm::CallingConv::Hotspot_JIT);
+  return invoke_inst;
 }
 
 llvm::Value* JeandleAbstractInterpreter::find_or_insert_oop(ciObject* oop) {
@@ -1919,16 +1927,14 @@ void JeandleAbstractInterpreter::do_new() {
   // TODO: cl init barrier
   jint layout_helper = klass->layout_helper();
   assert(Klass::layout_helper_is_instance(layout_helper), "Unexpected klass");
+  llvm::Value* size_in_bytes = _ir_builder.getInt32(Klass::layout_helper_size_in_bytes(layout_helper));
 
   Klass* klass_enc = (Klass*)(klass->constant_encoding());
   llvm::PointerType* klass_type = llvm::PointerType::get(*_context, llvm::jeandle::AddrSpace::CHeapAddrSpace);
   llvm::Value* klass_addr = _ir_builder.getInt64((int64_t)klass_enc);
   llvm::Value* klass_ptr = _ir_builder.CreateIntToPtr(klass_addr, klass_type);
 
-  // slow path allocation, TODO: implement fast path allocation
-  _jvm->apush(call_jeandle_routine_ex(JeandleRuntimeRoutine::new_instance_callee(_module),
-                                      {klass_ptr, call_java_op("jeandle.current_thread", {})},
-                                      llvm::CallingConv::Hotspot_JIT));
+  _jvm->apush(call_java_op_ex("jeandle.new_instance", {klass_ptr, size_in_bytes}));
 }
 
 JeandleAbstractInterpreter::DispatchedDest JeandleAbstractInterpreter::dispatch_exception_for_invoke() {
@@ -2080,10 +2086,7 @@ void JeandleAbstractInterpreter::do_unified_newarray(Klass* array_klass) {
   llvm::PointerType* klass_type = llvm::PointerType::get(*_context, llvm::jeandle::AddrSpace::CHeapAddrSpace);
   llvm::Value* array_klass_addr = _ir_builder.getInt64((intptr_t)array_klass);
   llvm::Value* array_klass_ptr =  _ir_builder.CreateIntToPtr(array_klass_addr, klass_type);
-  llvm::CallInst* current_thread = call_java_op("jeandle.current_thread", {});
-  llvm::InvokeInst* result = call_jeandle_routine_ex(JeandleRuntimeRoutine::new_array_callee(_module),
-                                                     {array_klass_ptr, length, current_thread},
-                                                     llvm::CallingConv::Hotspot_JIT);
+  llvm::InvokeInst* result = call_java_op_ex("jeandle.newarray", {array_klass_ptr, length});
   _jvm->apush(result);
 }
 
@@ -2137,10 +2140,7 @@ void JeandleAbstractInterpreter::multianewarray() {
 
     llvm::Value* dimensions_array_length = _ir_builder.getInt32(ndimensions);
 
-    llvm::CallInst* current_thread = call_java_op("jeandle.current_thread", {});
-    llvm::InvokeInst* dimensions_array_oop = call_jeandle_routine_ex(JeandleRuntimeRoutine::new_array_callee(_module),
-                                                                     {int_array_klass_ptr, dimensions_array_length, current_thread},
-                                                                     llvm::CallingConv::Hotspot_JIT);
+    llvm::InvokeInst* dimensions_array_oop = call_java_op_ex("jeandle.newarray",{int_array_klass_ptr, dimensions_array_length});
 
     llvm::Value* array_base_offset = _ir_builder.CreateLoad(llvm::Type::getInt32Ty(*_context),
                                                             _module.getGlobalVariable("arrayOopDesc.base_offset_in_bytes.int", true));
