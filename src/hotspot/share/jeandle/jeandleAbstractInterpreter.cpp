@@ -1302,21 +1302,34 @@ bool JeandleAbstractInterpreter::inline_intrinsic(const ciMethod* target) {
       break;
     }
     case vmIntrinsicID::_dsin: {
-      llvm::FunctionCallee callee = StubRoutines::dsin() != nullptr ? JeandleRuntimeRoutine::hotspot_StubRoutines_dsin_callee(_module) :
-                                                                      JeandleRuntimeRoutine::hotspot_SharedRuntime_dsin_callee(_module);
-      _jvm->dpush(call_jeandle_routine(callee, {_jvm->dpop()}, llvm::CallingConv::C));
+      if (JeandleUseHotspotIntrinsics) {
+        llvm::FunctionCallee callee = StubRoutines::dsin() != nullptr ? JeandleRuntimeRoutine::hotspot_StubRoutines_dsin_callee(_module) :
+                                                                        JeandleRuntimeRoutine::hotspot_SharedRuntime_dsin_callee(_module);
+        _jvm->dpush(call_jeandle_routine(callee, {_jvm->dpop()}, llvm::CallingConv::C));
+      } else {
+        _jvm->dpush(_ir_builder.CreateIntrinsic(JeandleType::java2llvm(BasicType::T_DOUBLE, *_context), llvm::Intrinsic::sin, {_jvm->dpop()}));
+      }
       break;
     }
     case vmIntrinsicID::_dcos: {
-      llvm::FunctionCallee callee = StubRoutines::dcos() != nullptr ? JeandleRuntimeRoutine::hotspot_StubRoutines_dcos_callee(_module) :
-                                                                      JeandleRuntimeRoutine::hotspot_SharedRuntime_dcos_callee(_module);
-      _jvm->dpush(call_jeandle_routine(callee, {_jvm->dpop()}, llvm::CallingConv::C));
+      if (JeandleUseHotspotIntrinsics) {
+        llvm::FunctionCallee callee = StubRoutines::dcos() != nullptr ? JeandleRuntimeRoutine::hotspot_StubRoutines_dcos_callee(_module) :
+                                                                        JeandleRuntimeRoutine::hotspot_SharedRuntime_dcos_callee(_module);
+        _jvm->dpush(call_jeandle_routine(callee, {_jvm->dpop()}, llvm::CallingConv::C));
+      } else {
+        _jvm->dpush(_ir_builder.CreateIntrinsic(JeandleType::java2llvm(BasicType::T_DOUBLE, *_context), llvm::Intrinsic::cos, {_jvm->dpop()}));
+
+      }
       break;
     }
     case vmIntrinsicID::_dtan: {
-      llvm::FunctionCallee callee = StubRoutines::dtan() != nullptr ? JeandleRuntimeRoutine::hotspot_StubRoutines_dtan_callee(_module) :
-                                                                      JeandleRuntimeRoutine::hotspot_SharedRuntime_dtan_callee(_module);
-      _jvm->dpush(call_jeandle_routine(callee, {_jvm->dpop()}, llvm::CallingConv::C));
+      if (JeandleUseHotspotIntrinsics) {
+        llvm::FunctionCallee callee = StubRoutines::dtan() != nullptr ? JeandleRuntimeRoutine::hotspot_StubRoutines_dtan_callee(_module) :
+                                                                        JeandleRuntimeRoutine::hotspot_SharedRuntime_dtan_callee(_module);
+        _jvm->dpush(call_jeandle_routine(callee, {_jvm->dpop()}, llvm::CallingConv::C));
+      } else {
+        _jvm->dpush(_ir_builder.CreateIntrinsic(JeandleType::java2llvm(BasicType::T_DOUBLE, *_context), llvm::Intrinsic::tan, {_jvm->dpop()}));
+      }
       break;
     }
     default:

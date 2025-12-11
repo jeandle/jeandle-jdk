@@ -2025,6 +2025,12 @@ public:
 
   void lightweight_lock(Register obj, Register hdr, Register thread, Register tmp, Label& slow);
   void lightweight_unlock(Register obj, Register hdr, Register tmp, Label& slow);
+
+#ifdef JEANDLE
+  address trampoline_call(AddressLiteral entry);
+  address emit_trampoline_stub(int insts_call_instruction_offset, address dest);
+  int max_trampoline_stub_size();
+#endif
 };
 
 /**

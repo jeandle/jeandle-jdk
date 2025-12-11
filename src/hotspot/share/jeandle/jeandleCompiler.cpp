@@ -78,6 +78,15 @@ void JeandleCompiler::initialize() {
       set_state(failed);
       return;
     }
+    if (!initialize_dynamic_library()) {
+      set_state(failed);
+      return;
+    }
+#ifdef ASSERT
+    for (auto& routine_entry : JeandleRuntimeRoutine::routine_entry()) {
+      assert(DynamicLibrary::SearchForAddressOfSymbol(routine_entry.first().data()) == nullptr, "overlapping symbol");
+    }
+#endif
     set_state(initialized);
   }
 }
@@ -139,4 +148,8 @@ bool JeandleCompiler::initialize_commandline_options() {
     }
 
     return llvm::cl::ParseCommandLineOptions(argv.size(), argv.data());
+}
+
+bool JeandleCompiler::initialize_dynamic_library() {
+  return !DynamicLibrary::LoadLibraryPermanently(LibmName);
 }

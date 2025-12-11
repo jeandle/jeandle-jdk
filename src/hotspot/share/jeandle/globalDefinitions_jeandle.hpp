@@ -18,27 +18,17 @@
  *
  */
 
-#include "jeandle/__llvmHeadersBegin__.hpp"
-#include "llvm/IR/Jeandle/Attributes.h"
-#include "llvm/IR/Jeandle/GCStrategy.h"
+#ifndef SHARE_GLOBALDEFINITIONS_JEANDLE_HPP
+#define SHARE_GLOBALDEFINITIONS_JEANDLE_HPP
 
-#include "jeandle/jeandleUtils.hpp"
+#ifdef LINUX
+// Only libmath is supported for now.
+constexpr const char* LibmName = "libm.so.6";
+#else
+#error "Unsupported OS"
+#endif
 
-void JeandleFuncSig::setup_description(llvm::Function* func, bool is_stub) {
-  func->setCallingConv(llvm::CallingConv::Hotspot_JIT);
+// USE_TRAMPOLINE_STUB_FIX_OWNER enables relocating trampoline stubs. Needed for external function calls.
+#define USE_TRAMPOLINE_STUB_FIX_OWNER
 
-  func->setGC(llvm::jeandle::JeandleGC);
-
-  if (!is_stub) {
-    llvm::GlobalVariable* personality_func = func->getParent()->getGlobalVariable("jeandle.personality");
-    assert(personality_func != nullptr, "no personality function");
-    func->setPersonalityFn(personality_func);
-  }
-
-  if (UseCompressedOops) {
-    func->addFnAttr(llvm::Attribute::get(func->getContext(), llvm::jeandle::Attribute::UseCompressedOops));
-  }
-
-  // Always disable tail call for jeandle, to ensure the correct stack states.
-  func->addFnAttr("disable-tail-calls", "true");
-}
+#endif // SHARE_GLOBALDEFINITIONS_JEANDLE_HPP

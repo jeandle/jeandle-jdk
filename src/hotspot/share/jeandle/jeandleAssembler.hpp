@@ -21,15 +21,10 @@
 #ifndef SHARE_JEANDLE_ASSEMBLER_HPP
 #define SHARE_JEANDLE_ASSEMBLER_HPP
 
-#include "jeandle/__llvmHeadersBegin__.hpp"
-#include "llvm/ExecutionEngine/JITLink/JITLink.h"
-
 #include "jeandle/jeandleCompilation.hpp"
 
 #include "jeandle/__hotspotHeadersBegin__.hpp"
 #include "asm/macroAssembler.hpp"
-
-using LinkKind  = llvm::jitlink::Edge::Kind;
 
 class JeandleAssembler : public StackObj {
  public:
@@ -45,6 +40,8 @@ class JeandleAssembler : public StackObj {
 
   void patch_ic_call_site(int inst_offset, CallSiteInfo* call);
 
+  void patch_external_call_site(int inst_offset, CallSiteInfo* call);
+
   void emit_ic_check();
   void emit_verified_entry();
 
@@ -58,14 +55,17 @@ class JeandleAssembler : public StackObj {
 
   void emit_oop_reloc(int offset, jobject oop_handle);
 
-  // Redirect an offset from the displacement to the end of the call instruction
-  static int fixup_routine_call_inst_offset(int offset);
+  // Redirect an offset from the displacement to the end of the call instruction.
+  // This is used for ROUTINE_CALL and EXTERNAL_CALL.
+  static int fixup_call_inst_offset(int offset);
 
-  static bool is_oop_reloc_kind(LinkKind kind);
+  static bool is_oop_reloc(LinkSymbol& target, LinkKind kind);
 
-  static bool is_routine_call_reloc_kind(LinkKind kind);
+  static bool is_routine_call_reloc(LinkSymbol& target, LinkKind kind);
 
-  static bool is_const_reloc_kind(LinkKind kind);
+  static bool is_external_call_reloc(LinkSymbol& target, LinkKind kind);
+
+  static bool is_const_reloc(LinkSymbol& target, LinkKind kind);
 
   // Mirrors C2's InteriorEntryAlignment flag.
   int interior_entry_alignment() const;

@@ -39,4 +39,7 @@ void JeandleFuncSig::setup_description(llvm::Function* func, bool is_stub) {
   if (UseCompressedOops) {
     func->addFnAttr(llvm::Attribute::get(func->getContext(), llvm::jeandle::Attribute::UseCompressedOops));
   }
+
+  // Always disable tail call for jeandle, to ensure the correct stack states.
+  func->addFnAttr("disable-tail-calls", "true");
 }

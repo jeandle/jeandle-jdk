@@ -1381,4 +1381,8 @@ std::add_rvalue_reference_t<T> declval() noexcept;
 // handled.
 bool IEEE_subnormal_handling_OK();
 
+#ifdef JEANDLE
+#include "jeandle/globalDefinitions_jeandle.hpp"
+#endif
+
 #endif // SHARE_UTILITIES_GLOBALDEFINITIONS_HPP

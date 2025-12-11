@@ -209,3 +209,12 @@ void poll_Relocation::fix_relocation_after_move(const CodeBuffer* src, CodeBuffe
 
 void metadata_Relocation::pd_fix_value(address x) {
 }
+
+#ifdef JEANDLE
+// Fix the call destination at the original code location after the code
+// containing the trampoline stub has been moved.
+void trampoline_stub_Relocation::pd_fix_owner_after_move() {
+  address trampoline = addr();
+  nativeCall_at(_owner)->set_destination(trampoline);
+}
+#endif // JEANDLE

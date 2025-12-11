@@ -27,6 +27,7 @@ int JeandleCompiledCall::call_site_size(JeandleCompiledCall::Type call_type) {
   switch (call_type) {
     case JeandleCompiledCall::ROUTINE_CALL:
     case JeandleCompiledCall::STUB_C_CALL:
+    case JeandleCompiledCall::EXTERNAL_CALL:
       return NativeJump::instruction_size;
     default:
       break;

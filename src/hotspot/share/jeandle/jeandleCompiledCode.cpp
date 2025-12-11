@@ -102,7 +102,13 @@ class JeandleCallReloc : public JeandleReloc {
     _env(env), _method(method), _oop_map(oop_map), _call(call) {}
 
   void emit_reloc(JeandleAssembler& assembler) override {
-    process_oop_map();
+    // Each call reloc has an oopmap, except for EXTERNAL_CALL.
+    assert((_call->type() != JeandleCompiledCall::EXTERNAL_CALL && _oop_map != nullptr) ||
+           (_call->type() == JeandleCompiledCall::EXTERNAL_CALL && _oop_map == nullptr),
+           "unmatched call type and oopmap");
+    if (_oop_map != nullptr) {
+      process_oop_map();
+    }
 
     switch (_call->type()) {
       case JeandleCompiledCall::STATIC_CALL:
@@ -122,6 +128,10 @@ class JeandleCallReloc : public JeandleReloc {
         assembler.patch_routine_call_site(offset(), _call->target());
         break;
 
+      case JeandleCompiledCall::EXTERNAL_CALL:
+        assert(_oop_map == nullptr, "no oopmap in external call");
+        assembler.patch_external_call_site(offset(), _call);
+        break;
       default:
         ShouldNotReachHere();
         break;
@@ -308,18 +318,36 @@ void JeandleCompiledCode::resolve_reloc_info(JeandleAssembler& assembler) {
     }
     for (auto& edge : block->edges()) {
       auto& target = edge.getTarget();
+      llvm::StringRef target_name = *(target.getName());
 
-      if (!target.isDefined() && JeandleAssembler::is_routine_call_reloc_kind(edge.getKind())) {
+      if (JeandleAssembler::is_routine_call_reloc(target, edge.getKind())) {
         // Routine call relocations.
-        address target_addr = JeandleRuntimeRoutine::get_routine_entry(*target.getName());
+        address target_addr = JeandleRuntimeRoutine::get_routine_entry(target_name);
 
-        int inst_end_offset = JeandleAssembler::fixup_routine_call_inst_offset(static_cast<int>(block->getAddress().getValue() + edge.getOffset()));
+        int inst_end_offset = JeandleAssembler::fixup_call_inst_offset(static_cast<int>(block->getAddress().getValue() + edge.getOffset()));
 
         // TODO: Set the right bci.
+        // JeandleCallReloc for a routine call site will be created during stackmaps resolving because an oopmap is required.
         _routine_call_sites[inst_end_offset] = new CallSiteInfo(JeandleCompiledCall::ROUTINE_CALL,
                                                                 target_addr,
                                                                 -1/* bci */);
-      } else if (target.isDefined() && JeandleAssembler::is_const_reloc_kind(edge.getKind())) {
+      } else if (JeandleAssembler::is_external_call_reloc(target, edge.getKind())) {
+        // External call relocations.
+        address target_addr = (address)DynamicLibrary::SearchForAddressOfSymbol(target_name.str().c_str());
+        if (target_addr == nullptr) {
+          JeandleCompilation::report_jeandle_error("failed to find external symbol");
+          return;
+        }
+
+        int inst_end_offset = JeandleAssembler::fixup_call_inst_offset(static_cast<int>(block->getAddress().getValue() + edge.getOffset()));
+
+        // TODO: Set the right bci.
+        CallSiteInfo* call_info = new CallSiteInfo(JeandleCompiledCall::EXTERNAL_CALL,
+                                                   target_addr,
+                                                   -1/* bci */);
+        // LLVM doesn't rewrite intrinsic calls to statepoints, so we don't need oopmaps for external calls.
+        relocs.push_back(new JeandleCallReloc(inst_end_offset, _env, _method, nullptr /* no oopmap */, call_info));
+      } else if (JeandleAssembler::is_const_reloc(target, edge.getKind())) {
         // Const relocations.
         assert(target.getSection().getName().starts_with(".rodata"), "invalid const section");
         address target_addr = resolve_const_edge(*block, edge, assembler);
@@ -327,10 +355,10 @@ void JeandleCompiledCode::resolve_reloc_info(JeandleAssembler& assembler) {
           return;
         }
         relocs.push_back(new JeandleConstReloc(*block, edge, target_addr));
-      } else if (!target.isDefined() && JeandleAssembler::is_oop_reloc_kind(edge.getKind())) {
+      } else if (JeandleAssembler::is_oop_reloc(target, edge.getKind())) {
         // Oop relocations.
-        assert((*(target.getName())).starts_with("oop_handle"), "invalid oop relocation name");
-        relocs.push_back(new JeandleOopReloc(static_cast<int>(block->getAddress().getValue() + edge.getOffset()), _oop_handles[(*(target.getName()))]));
+        assert((target_name).starts_with("oop_handle"), "invalid oop relocation name");
+        relocs.push_back(new JeandleOopReloc(static_cast<int>(block->getAddress().getValue() + edge.getOffset()), _oop_handles[(target_name)]));
       } else {
         // Unhandled relocations
         ShouldNotReachHere();

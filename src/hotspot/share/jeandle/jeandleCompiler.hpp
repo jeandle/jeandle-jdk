@@ -63,6 +63,8 @@ class JeandleCompiler : public AbstractCompiler {
   bool initialize_template_buffer();
 
   bool initialize_commandline_options();
+
+  bool initialize_dynamic_library();
 };
 
 #endif // SHARE_JEANDLE_COMPILER_HPP
