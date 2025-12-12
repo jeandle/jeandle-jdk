@@ -116,3 +116,9 @@ void poll_Relocation::fix_relocation_after_move(const CodeBuffer* src, CodeBuffe
 
 void metadata_Relocation::pd_fix_value(address x) {
 }
+
+#ifdef JEANDLE
+void trampoline_stub_Relocation::pd_fix_owner_after_move() {
+  Unimplemented();
+}
+#endif // JEANDLE
