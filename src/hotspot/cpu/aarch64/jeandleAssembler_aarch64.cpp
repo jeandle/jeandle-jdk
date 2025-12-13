@@ -59,7 +59,7 @@ void JeandleAssembler::patch_static_call_site(int inst_offset, CallSiteInfo* cal
   assert(call->type() == JeandleCompiledCall::STATIC_CALL, "illegal call type");
   address call_address = __ addr_at(inst_offset);
 
-  address insts_end = __ code()->insts_end();
+  int insts_end_offset = __ code()->insts_end() - __ code()->insts_begin();
   __ code()->set_insts_end(call_address);
 
   relocInfo::relocType rtype;
@@ -72,14 +72,14 @@ void JeandleAssembler::patch_static_call_site(int inst_offset, CallSiteInfo* cal
   Address call_addr = Address(call->target(), rtype);
   // emit trampoline call for patch
   __ trampoline_call(call_addr);
-  __ code()->set_insts_end(insts_end);
+  __ code()->set_insts_end(__ code()->insts_begin() + insts_end_offset);
 }
 
 void JeandleAssembler::patch_stub_C_call_site(int inst_offset, CallSiteInfo* call) {
   assert(call->type() == JeandleCompiledCall::STUB_C_CALL, "illegal call type");
   address patch_pc = __ addr_at(inst_offset);
 
-  address insts_end = __ code()->insts_end();
+  int insts_end_offset = __ code()->insts_end() - __ code()->insts_begin();
   __ code()->set_insts_end(patch_pc);
   Label return_pc;
   return_pc.add_patch_at(__ code(), __ locator());
@@ -90,20 +90,20 @@ void JeandleAssembler::patch_stub_C_call_site(int inst_offset, CallSiteInfo* cal
   __ movptr(rscratch2, (uintptr_t)call->target());
   __ blr(rscratch2);
   __ bind(return_pc);
-  __ code()->set_insts_end(insts_end);
+  __ code()->set_insts_end(__ code()->insts_begin() + insts_end_offset);
 }
 
 void JeandleAssembler::patch_routine_call_site(int inst_offset, address target) {
   address call_pc = __ addr_at(inst_offset);
 
   // Set insts_end to where to patch
-  address insts_end = __ code()->insts_end();
+  int insts_end_offset = __ code()->insts_end() - __ code()->insts_begin();
   __ code()->set_insts_end(call_pc);
 
   __ trampoline_call(Address(target, relocInfo::runtime_call_type));
 
   // Recover insts_end
-  __ code()->set_insts_end(insts_end);
+  __ code()->set_insts_end(__ code()->insts_begin() + insts_end_offset);
 }
 
 void JeandleAssembler::patch_ic_call_site(int inst_offset, CallSiteInfo* call) {
@@ -113,14 +113,14 @@ void JeandleAssembler::patch_ic_call_site(int inst_offset, CallSiteInfo* call) {
   address call_address = __ addr_at(inst_offset);
 
   // Set insts_end to where to patch
-  address insts_end = __ code()->insts_end();
+  int insts_end_offset = __ code()->insts_end() - __ code()->insts_begin();
   __ code()->set_insts_end(call_address);
 
   // Patch
   __ ic_call(call->target());
 
   // Restore insts_end
-  __ code()->set_insts_end(insts_end);
+  __ code()->set_insts_end(__ code()->insts_begin() + insts_end_offset);
 }
 
 void JeandleAssembler::patch_external_call_site(int inst_offset, CallSiteInfo* call) {
