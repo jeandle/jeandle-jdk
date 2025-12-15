@@ -57,6 +57,11 @@ void JeandleAssembler::emit_static_call_stub(int inst_offset, CallSiteInfo* call
 
 void JeandleAssembler::patch_static_call_site(int inst_offset, CallSiteInfo* call) {
   assert(call->type() == JeandleCompiledCall::STATIC_CALL, "illegal call type");
+
+  // The following `set_insts_end` conflicts with code buffer expansion,
+  // we need to confirm that stub code section has enough space before invoking `set_insts_end`.
+  __ code()->stubs()->maybe_expand_to_ensure_remaining(__ max_trampoline_stub_size());
+
   address call_address = __ addr_at(inst_offset);
 
   int insts_end_offset = __ code()->insts_end() - __ code()->insts_begin();
@@ -94,6 +99,10 @@ void JeandleAssembler::patch_stub_C_call_site(int inst_offset, CallSiteInfo* cal
 }
 
 void JeandleAssembler::patch_routine_call_site(int inst_offset, address target) {
+  // The following `set_insts_end` conflicts with code buffer expansion,
+  // we need to confirm that stub code section has enough space before invoking `set_insts_end`.
+  __ code()->stubs()->maybe_expand_to_ensure_remaining(__ max_trampoline_stub_size());
+
   address call_pc = __ addr_at(inst_offset);
 
   // Set insts_end to where to patch
@@ -109,6 +118,10 @@ void JeandleAssembler::patch_routine_call_site(int inst_offset, address target) 
 void JeandleAssembler::patch_ic_call_site(int inst_offset, CallSiteInfo* call) {
   assert(inst_offset >= 0, "invalid call instruction address");
   assert(call->type() == JeandleCompiledCall::DYNAMIC_CALL, "illegal call type");
+
+  // The following `set_insts_end` conflicts with code buffer expansion,
+  // we need to confirm that stub code section has enough space before invoking `set_insts_end`.
+  __ code()->stubs()->maybe_expand_to_ensure_remaining(__ max_trampoline_stub_size());
 
   address call_address = __ addr_at(inst_offset);
 

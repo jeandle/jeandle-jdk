@@ -120,6 +120,10 @@ void JeandleAssembler::patch_external_call_site(int inst_offset, CallSiteInfo* c
   assert(inst_offset >= 0, "invalid call instruction address");
   assert(call->type() == JeandleCompiledCall::EXTERNAL_CALL, "legal call type");
 
+  // The following `set_insts_end` conflicts with code buffer expansion,
+  // we need to confirm that stub code section has enough space before invoking `set_insts_end`.
+  __ code()->stubs()->maybe_expand_to_ensure_remaining(__ max_trampoline_stub_size());
+
   address call_address = __ addr_at(inst_offset);
 #ifdef ASSERT
   NativeInstruction* ni = nativeInstruction_at(call_address);
