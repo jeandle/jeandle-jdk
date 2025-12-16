@@ -21,7 +21,7 @@
 /*
  * @test TestLLVMDTrigs.java
  * @summary Test LLVM DTrig intrinsics implementation
- * @requires os.arch=="amd64" | os.arch=="x86_64"
+ * @requires os.arch=="amd64" | os.arch=="x86_64" | os.arch=="aarch64"
  * @library /test/lib /
  * @build compiler.jeandle.fileCheck.FileCheck
  * @run driver TestLLVMDTrigs
