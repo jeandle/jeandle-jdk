@@ -60,7 +60,10 @@ void JeandleAssembler::patch_static_call_site(int inst_offset, CallSiteInfo* cal
 
   // The following `set_insts_end` conflicts with code buffer expansion,
   // we need to confirm that stub code section has enough space before invoking `set_insts_end`.
-  __ code()->stubs()->maybe_expand_to_ensure_remaining(__ max_trampoline_stub_size());
+  int required_space = __ max_trampoline_stub_size();
+  if (__ code()->stubs()->maybe_expand_to_ensure_remaining(required_space)) {
+    guarantee(__ code()->blob() != nullptr, "CodeCache is full");
+  }
 
   address call_address = __ addr_at(inst_offset);
 
@@ -117,7 +120,10 @@ void JeandleAssembler::patch_ic_call_site(int inst_offset, CallSiteInfo* call) {
 
   // The following `set_insts_end` conflicts with code buffer expansion,
   // we need to confirm that stub code section has enough space before invoking `set_insts_end`.
-  __ code()->stubs()->maybe_expand_to_ensure_remaining(__ max_trampoline_stub_size());
+  int required_space = __ max_trampoline_stub_size();
+  if (__ code()->stubs()->maybe_expand_to_ensure_remaining(required_space)) {
+    guarantee(__ code()->blob() != nullptr, "CodeCache is full");
+  }
 
   address call_address = __ addr_at(inst_offset);
 
