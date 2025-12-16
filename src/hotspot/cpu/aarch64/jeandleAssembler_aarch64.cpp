@@ -139,7 +139,31 @@ void JeandleAssembler::patch_ic_call_site(int inst_offset, CallSiteInfo* call) {
 }
 
 void JeandleAssembler::patch_external_call_site(int inst_offset, CallSiteInfo* call) {
-  Unimplemented();
+  assert(inst_offset >= 0, "invalid call instruction address");
+  assert(call->type() == JeandleCompiledCall::EXTERNAL_CALL, "legal call type");
+
+  // The following `set_insts_end` conflicts with code buffer expansion,
+  // we need to confirm that stub code section has enough space before invoking `set_insts_end`.
+  int required_space = __ max_trampoline_stub_size();
+  if (__ code()->stubs()->maybe_expand_to_ensure_remaining(required_space)) {
+    guarantee(__ code()->blob() != nullptr, "CodeCache is full");
+  }
+
+  address call_address = __ addr_at(inst_offset);
+#ifdef ASSERT
+  NativeInstruction* ni = nativeInstruction_at(call_address);
+  assert(ni->is_call(), "doesn't look like a call");
+#endif // ASSERT
+
+  // Set insts_end to where to patch.
+  int insts_end_offset = __ code()->insts_end() - __ code()->insts_begin();
+  __ code()->set_insts_end(call_address);
+
+  // Patch.
+  __ trampoline_call(Address(call->target(), relocInfo::runtime_call_type));
+
+  // Recover insts_end.
+  __ code()->set_insts_end(__ code()->insts_begin() + insts_end_offset);
 }
 
 void JeandleAssembler::emit_ic_check() {

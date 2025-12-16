@@ -140,7 +140,7 @@ void JeandleAssembler::patch_external_call_site(int inst_offset, CallSiteInfo* c
   // Patch.
   __ trampoline_call(AddressLiteral(call->target(), relocInfo::none));
 
-    // Recover insts_end.
+  // Recover insts_end.
   __ code()->set_insts_end(__ code()->insts_begin() + insts_end_offset);
 }
 
