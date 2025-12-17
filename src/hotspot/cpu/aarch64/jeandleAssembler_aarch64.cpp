@@ -140,7 +140,7 @@ void JeandleAssembler::patch_ic_call_site(int inst_offset, CallSiteInfo* call) {
 
 void JeandleAssembler::patch_external_call_site(int inst_offset, CallSiteInfo* call) {
   assert(inst_offset >= 0, "invalid call instruction address");
-  assert(call->type() == JeandleCompiledCall::EXTERNAL_CALL, "legal call type");
+  assert(call->type() == JeandleCompiledCall::EXTERNAL_CALL, "illegal call type");
 
   // The following `set_insts_end` conflicts with code buffer expansion,
   // we need to confirm that stub code section has enough space before invoking `set_insts_end`.
