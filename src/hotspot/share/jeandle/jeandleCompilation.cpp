@@ -53,6 +53,7 @@
 #include "jeandle/jeandleUtils.hpp"
 
 #include "jeandle/__hotspotHeadersBegin__.hpp"
+#include "ci/ciTypeFlow.hpp"
 #include "ci/ciUtilities.inline.hpp"
 #include "logging/log.hpp"
 #include "runtime/sharedRuntime.hpp"
@@ -73,6 +74,7 @@ JeandleCompilation::JeandleCompilation(llvm::TargetMachine* target_machine,
                                        _code(env, method),
                                        _error_msg(nullptr) {
   if (entry_bci != InvocationEntryBci) {
+    // TODO: OSR support - call check_can_parse for method validation
     env->record_method_not_compilable("OSR not supported");
     return;
   }
@@ -226,6 +228,13 @@ void JeandleCompilation::setup_llvm_module(llvm::MemoryBuffer* template_buffer) 
 }
 
 void JeandleCompilation::compile_java_method() {
+  // Do some parse checks.
+  const char* check_ret = check_can_parse(_method);
+  if (check_ret != nullptr) {
+    report_jeandle_error(check_ret);
+    return;
+  }
+
   // Build basic blocks. Then fill basic blocks with LLVM IR.
   {
     JeandleAbstractInterpreter interpret(_method, _entry_bci, *_llvm_module, _code);
@@ -333,4 +342,12 @@ void JeandleCompilation::dump_ir(bool optimized) {
   }
 
   _llvm_module->print(dump_stream, nullptr);
+}
+
+const char* JeandleCompilation::check_can_parse(ciMethod* method) {
+  if ( method->is_native())                     return "native method";
+  if ( method->is_abstract())                   return "abstract method";
+  if (!method->has_balanced_monitors())         return "not compilable (unbalanced monitors)";
+  if (!method->can_be_parsed())                 return "cannot be parsed";
+  return nullptr;
 }

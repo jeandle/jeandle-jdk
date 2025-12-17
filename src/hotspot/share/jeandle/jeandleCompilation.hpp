@@ -74,6 +74,8 @@ class JeandleCompilation : public StackObj {
 
   Arena* arena() { return _arena; }
 
+  static const char* check_can_parse(ciMethod *method);
+
  private:
   Arena* _arena; // Hold compilation life-time objects (JeandleCompilationResourceObj).
   llvm::TargetMachine* _target_machine;
