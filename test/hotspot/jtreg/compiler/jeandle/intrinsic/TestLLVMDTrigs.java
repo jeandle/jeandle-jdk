@@ -42,8 +42,9 @@ import jdk.test.lib.process.OutputAnalyzer;
 import jdk.test.lib.process.ProcessTools;
 
 public class TestLLVMDTrigs {
-    // Precision threshold for comparing LLVM intrinsic results with reference implementation.
-    private static final double PRECISION_THRESHOLD = 1e-15;
+    // Java.lang.Math function Error tolerance is 1~2 ulp(according to JDK doc).
+    // Test tolerance: 1 ulp (suitable for standard libm precision validation).
+    private static final int ULP_TOLERANCE = 1;
 
     private static double v = Math.abs(1.0d);   // Force load java.lang.Math class
 
@@ -122,8 +123,8 @@ public class TestLLVMDTrigs {
         Random random = new Random();
 
         // Test specific values
-        Asserts.assertLessThan(Math.abs(double_sin_verified(1.5d) - double_sin(1.5d)), PRECISION_THRESHOLD);
-        Asserts.assertLessThan(Math.abs(double_sin_verified(-1.5d) - double_sin(-1.5d)), PRECISION_THRESHOLD);
+        Asserts.assertLTE(Math.abs(double_sin_verified(1.5d) - double_sin(1.5d)), ULP_TOLERANCE * StrictMath.ulp(double_sin_verified(1.5d)));
+        Asserts.assertLTE(Math.abs(double_sin_verified(-1.5d) - double_sin(-1.5d)), ULP_TOLERANCE * StrictMath.ulp(double_sin_verified(-1.5d)));
         Asserts.assertEquals(double_sin_verified(Double.NaN), double_sin(Double.NaN));
         Asserts.assertEquals(double_sin_verified(Double.POSITIVE_INFINITY), double_sin(Double.POSITIVE_INFINITY));
         Asserts.assertEquals(double_sin_verified(Double.NEGATIVE_INFINITY), double_sin(Double.NEGATIVE_INFINITY));
@@ -131,7 +132,7 @@ public class TestLLVMDTrigs {
         // Test random values
         for (int i = 0; i < 1000; i++) {
             double d = random.nextDouble();
-            Asserts.assertLessThan(Math.abs(double_sin_verified(d) - double_sin(d)), PRECISION_THRESHOLD);
+            Asserts.assertLTE(Math.abs(double_sin_verified(d) - double_sin(d)), ULP_TOLERANCE * StrictMath.ulp(double_sin_verified(d)));
         }
     }
 
@@ -139,8 +140,8 @@ public class TestLLVMDTrigs {
         Random random = new Random();
 
         // Test specific values
-        Asserts.assertLessThan(Math.abs(double_cos_verified(1.5d) - double_cos(1.5d)), PRECISION_THRESHOLD);
-        Asserts.assertLessThan(Math.abs(double_cos_verified(-1.5d) - double_cos(-1.5d)), PRECISION_THRESHOLD);
+        Asserts.assertLTE(Math.abs(double_cos_verified(1.5d) - double_cos(1.5d)), ULP_TOLERANCE * StrictMath.ulp(double_cos_verified(1.5d)));
+        Asserts.assertLTE(Math.abs(double_cos_verified(-1.5d) - double_cos(-1.5d)), ULP_TOLERANCE * StrictMath.ulp(double_cos_verified(-1.5d)));
         Asserts.assertEquals(double_cos_verified(Double.NaN), double_cos(Double.NaN));
         Asserts.assertEquals(double_cos_verified(Double.POSITIVE_INFINITY), double_cos(Double.POSITIVE_INFINITY));
         Asserts.assertEquals(double_cos_verified(Double.NEGATIVE_INFINITY), double_cos(Double.NEGATIVE_INFINITY));
@@ -148,7 +149,7 @@ public class TestLLVMDTrigs {
         // Test random values
         for (int i = 0; i < 1000; i++) {
             double d = random.nextDouble();
-            Asserts.assertLessThan(Math.abs(double_cos_verified(d) - double_cos(d)), PRECISION_THRESHOLD);
+            Asserts.assertLTE(Math.abs(double_cos_verified(d) - double_cos(d)), ULP_TOLERANCE * StrictMath.ulp(double_cos_verified(d)));
         }
     }
 
@@ -156,8 +157,8 @@ public class TestLLVMDTrigs {
         Random random = new Random();
 
         // Test specific values
-        Asserts.assertLessThan(Math.abs(double_tan_verified(1.5d) - double_tan(1.5d)), PRECISION_THRESHOLD);
-        Asserts.assertLessThan(Math.abs(double_tan_verified(-1.5d) - double_tan(-1.5d)), PRECISION_THRESHOLD);
+        Asserts.assertLTE(Math.abs(double_tan_verified(1.5d) - double_tan(1.5d)), ULP_TOLERANCE * StrictMath.ulp(double_tan_verified(1.5d)));
+        Asserts.assertLTE(Math.abs(double_tan_verified(-1.5d) - double_tan(-1.5d)), ULP_TOLERANCE * StrictMath.ulp(double_tan_verified(-1.5d)));
         Asserts.assertEquals(double_tan_verified(Double.NaN), double_tan(Double.NaN));
         Asserts.assertEquals(double_tan_verified(Double.POSITIVE_INFINITY), double_tan(Double.POSITIVE_INFINITY));
         Asserts.assertEquals(double_tan_verified(Double.NEGATIVE_INFINITY), double_tan(Double.NEGATIVE_INFINITY));
@@ -165,7 +166,7 @@ public class TestLLVMDTrigs {
         // Test random values
         for (int i = 0; i < 1000; i++) {
             double d = random.nextDouble();
-            Asserts.assertLessThan(Math.abs(double_tan_verified(d) - double_tan(d)), PRECISION_THRESHOLD);
+            Asserts.assertLTE(Math.abs(double_tan_verified(d) - double_tan(d)), ULP_TOLERANCE * StrictMath.ulp(double_tan_verified(d)));
         }
     }
 
