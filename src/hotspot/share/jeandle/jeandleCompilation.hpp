@@ -106,11 +106,13 @@ class JeandleCompilation : public StackObj {
   void dump_obj();
   void dump_ir(bool optimized);
 };
+
+
 #ifdef ASSERT
-#define JEANDLE_CRASH_ON_ERROR(_error_msg) \
+#define JEANDLE_CRASH_ON_ERROR(_error_msg)                            \
 do {                                                                  \
   if (JeandleCrashOnError) {                                          \
-    fatal("Compilation failed in '%s': %s", JeandleCompilation::current()->name(), _error_msg);                    \
+    fatal("Compilation failed in '%s': %s", JeandleCompilation::current()->name(), _error_msg); \
   }                                                                   \
 } while (0)
 #else
