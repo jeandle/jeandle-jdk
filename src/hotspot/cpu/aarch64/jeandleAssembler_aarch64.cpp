@@ -133,8 +133,8 @@ void JeandleAssembler::patch_ic_call_site(int inst_offset, CallSiteInfo* call) {
   __ code()->set_insts_end(call_address);
 
   // Patch
-  address call = __ ic_call(call->target());
-  CHECK_AND_REPORT_JEANDLE_ERROR_VOID(call != nullptr, "trampoline stub overflow");
+  address tpc = __ ic_call(call->target());
+  CHECK_AND_REPORT_JEANDLE_ERROR_VOID(tpc != nullptr, "trampoline stub overflow");
 
   // Restore insts_end
   __ code()->set_insts_end(__ code()->insts_begin() + insts_end_offset);
