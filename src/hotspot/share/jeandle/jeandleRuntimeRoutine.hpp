@@ -109,6 +109,21 @@
                                                                                                                                                           \
   def(SharedRuntime_frem,                         SharedRuntime::frem,     llvm::Type::getFloatTy(context),     llvm::Type::getFloatTy(context),          \
                                                                                                                 llvm::Type::getFloatTy(context))          \
+  def(SharedRuntime_dlog,                         SharedRuntime::dlog,     llvm::Type::getDoubleTy(context),    llvm::Type::getDoubleTy(context))         \
+                                                                                                                                                          \
+  def(StubRoutines_dlog,                          StubRoutines::dlog(),    llvm::Type::getDoubleTy(context),    llvm::Type::getDoubleTy(context))         \
+                                                                                                                                                          \
+  def(SharedRuntime_dlog10,                       SharedRuntime::dlog10,     llvm::Type::getDoubleTy(context),  llvm::Type::getDoubleTy(context))         \
+                                                                                                                                                          \
+  def(StubRoutines_dlog10,                        StubRoutines::dlog10(),    llvm::Type::getDoubleTy(context),  llvm::Type::getDoubleTy(context))         \
+                                                                                                                                                          \
+  def(SharedRuntime_dexp,                         SharedRuntime::dexp,     llvm::Type::getDoubleTy(context),    llvm::Type::getDoubleTy(context))         \
+                                                                                                                                                          \
+  def(StubRoutines_dexp,                          StubRoutines::dexp(),    llvm::Type::getDoubleTy(context),    llvm::Type::getDoubleTy(context))         \
+                                                                                                                                                          \
+  def(SharedRuntime_dpow,                         SharedRuntime::dpow,     llvm::Type::getDoubleTy(context),    llvm::Type::getDoubleTy(context),    llvm::Type::getDoubleTy(context)) \
+                                                                                                                                                          \
+  def(StubRoutines_dpow,                          StubRoutines::dpow(),    llvm::Type::getDoubleTy(context),    llvm::Type::getDoubleTy(context),    llvm::Type::getDoubleTy(context)) \
                                                                                                                                                           \
   def(install_exceptional_return_for_call_vm,     JeandleRuntimeRoutine::install_exceptional_return_for_call_vm, llvm::Type::getVoidTy(context))          \
                                                                                                                                                           \

@@ -1332,6 +1332,50 @@ bool JeandleAbstractInterpreter::inline_intrinsic(const ciMethod* target) {
       }
       break;
     }
+    case vmIntrinsicID::_dlog: {
+      if (JeandleUseHotspotIntrinsics) {
+        llvm::FunctionCallee callee = StubRoutines::dlog() != nullptr ? JeandleRuntimeRoutine::hotspot_StubRoutines_dlog_callee(_module) :
+                                                                        JeandleRuntimeRoutine::hotspot_SharedRuntime_dlog_callee(_module);
+        _jvm->dpush(create_call(callee, {_jvm->dpop()}, llvm::CallingConv::C));
+      } else {
+        _jvm->dpush(_ir_builder.CreateIntrinsic(JeandleType::java2llvm(BasicType::T_DOUBLE, *_context), llvm::Intrinsic::log, {_jvm->dpop()}));
+      }
+      break;
+    }
+    case vmIntrinsicID::_dlog10: {
+      if (JeandleUseHotspotIntrinsics) {
+        llvm::FunctionCallee callee = StubRoutines::dlog10() != nullptr ? JeandleRuntimeRoutine::hotspot_StubRoutines_dlog10_callee(_module) :
+                                                                        JeandleRuntimeRoutine::hotspot_SharedRuntime_dlog10_callee(_module);
+        _jvm->dpush(create_call(callee, {_jvm->dpop()}, llvm::CallingConv::C));
+      } else {
+        _jvm->dpush(_ir_builder.CreateIntrinsic(JeandleType::java2llvm(BasicType::T_DOUBLE, *_context), llvm::Intrinsic::log10, {_jvm->dpop()}));
+      }
+      break;
+    }
+    case vmIntrinsicID::_dexp: {
+      if (JeandleUseHotspotIntrinsics) {
+        llvm::FunctionCallee callee = StubRoutines::dexp() != nullptr ? JeandleRuntimeRoutine::hotspot_StubRoutines_dexp_callee(_module) :
+                                                                      JeandleRuntimeRoutine::hotspot_SharedRuntime_dexp_callee(_module);
+        _jvm->dpush(create_call(callee, {_jvm->dpop()}, llvm::CallingConv::C));
+      } else {
+        _jvm->dpush(_ir_builder.CreateIntrinsic(JeandleType::java2llvm(BasicType::T_DOUBLE, *_context), llvm::Intrinsic::exp, {_jvm->dpop()}));
+      }
+      break;
+    }
+    case vmIntrinsicID::_dpow: {
+      // push the base first, then the exponent
+      // the pop order is reversed
+      llvm::Value *component = _jvm->dpop();
+      llvm::Value *base = _jvm->dpop();
+      if (JeandleUseHotspotIntrinsics) {
+        llvm::FunctionCallee callee = StubRoutines::dpow() != nullptr ? JeandleRuntimeRoutine::hotspot_StubRoutines_dpow_callee(_module) : JeandleRuntimeRoutine::hotspot_SharedRuntime_dpow_callee(_module);
+        _jvm->dpush(create_call(callee, {base, component}, llvm::CallingConv::C));
+      }
+      else {
+        _jvm->dpush(_ir_builder.CreateIntrinsic(JeandleType::java2llvm(BasicType::T_DOUBLE, *_context), llvm::Intrinsic::pow, {base, component}));
+      }
+      break;
+    }
     default:
       return false;
   }
