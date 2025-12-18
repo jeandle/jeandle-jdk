@@ -60,6 +60,14 @@ class JeandleCompilation : public StackObj {
 
   static JeandleCompilation* current() { return (JeandleCompilation*) ciEnv::current()->compiler_data(); }
 
+  const char* name() {
+    if (_method != nullptr) {
+      return _method->name()->as_utf8();
+    } else {
+      return _llvm_module->getName().data();
+    }
+  }
+
   // Error related:
   void report_error(const char* msg) {
     if (msg != nullptr) {
@@ -98,5 +106,47 @@ class JeandleCompilation : public StackObj {
   void dump_obj();
   void dump_ir(bool optimized);
 };
+#ifdef ASSERT
+#define JEANDLE_CRASH_ON_ERROR(_error_msg) \
+do {                                                                  \
+  if (JeandleCrashOnError) {                                          \
+    fatal("Compilation failed in '%s': %s", JeandleCompilation::current()->name(), _error_msg);                    \
+  }                                                                   \
+} while (0)
+#else
+#define JEANDLE_CRASH_ON_ERROR(_error_msg) (void)(0)
+#endif
+
+#define CHECK_AND_REPORT_JEANDLE_ERROR_VOID(p, msg)                   \
+do {                                                                  \
+  if (!(p)) {                                                         \
+    JeandleCompilation::report_jeandle_error(msg);                    \
+    JEANDLE_CRASH_ON_ERROR(msg);                                      \
+    return;                                                           \
+  }                                                                   \
+} while (0)
+
+#define CHECK_AND_REPORT_JEANDLE_ERROR_RETURNVAL(p, msg, return_val)  \
+do {                                                                  \
+  if (!(p)) {                                                         \
+    JeandleCompilation::report_jeandle_error(msg);                    \
+    JEANDLE_CRASH_ON_ERROR(msg);                                      \
+    return return_val;                                                \
+  }                                                                   \
+} while (0)
+
+#define CHECK_JEANDLE_ERROR_AND_RETURN_VOID()                         \
+do {                                                                  \
+  if (JeandleCompilation::jeandle_error_occurred()) {                 \
+    return;                                                           \
+  }                                                                   \
+} while (0)
+
+#define CHECK_JEANDLE_ERROR_AND_RETURN_VAL(return_val)                \
+do {                                                                  \
+  if (JeandleCompilation::jeandle_error_occurred()) {                 \
+    return return_val;                                                \
+  }                                                                   \
+} while (0)
 
 #endif // SHARE_JEANDLE_COMPILATION_HPP

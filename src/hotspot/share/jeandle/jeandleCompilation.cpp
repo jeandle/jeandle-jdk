@@ -81,15 +81,15 @@ JeandleCompilation::JeandleCompilation(llvm::TargetMachine* target_machine,
   initialize();
   setup_llvm_module(template_buffer);
 
+  if (error_occurred()) {
+    _env->record_method_not_compilable(_error_msg);
+    return;
+  }
+
   // Let's compile.
   compile_java_method();
 
   if (error_occurred()) {
-#ifdef ASSERT
-    if (JeandleCrashOnError) {
-      fatal("Compilation failed in function '%s': %s", _method->name()->as_utf8(), _error_msg);
-    }
-#endif
     _env->record_method_not_compilable(_error_msg);
     return;
   }
@@ -211,10 +211,7 @@ void JeandleCompilation::setup_llvm_module(llvm::MemoryBuffer* template_buffer) 
   // Get template module from the global memory buffer.
   llvm::Expected<std::unique_ptr<llvm::Module>> module_or_error =
       parseBitcodeFile(template_buffer->getMemBufferRef(), *_context);
-  if (!module_or_error) {
-    report_jeandle_error("Failed to parse template bitcode");
-    return;
-  }
+  CHECK_AND_REPORT_JEANDLE_ERROR_VOID(module_or_error, "Failed to parse template bitcode");
   _llvm_module = std::move(module_or_error.get());
   assert(_llvm_module != nullptr, "invalid llvm module");
 
@@ -235,9 +232,7 @@ void JeandleCompilation::compile_java_method() {
     dump_ir(false);
   }
 
-  if (error_occurred()) {
-    return;
-  }
+  CHECK_JEANDLE_ERROR_AND_RETURN_VOID();
 
 #ifdef ASSERT
   // Verify.
@@ -261,9 +256,7 @@ void JeandleCompilation::compile_java_method() {
     dump_obj();
   }
 
-  if (error_occurred()) {
-    return;
-  }
+  CHECK_JEANDLE_ERROR_AND_RETURN_VOID();
 
   // Unpack LLVM code information. Generate relocations, stubs and debug information.
   _code.finalize();
@@ -279,10 +272,8 @@ void JeandleCompilation::compile_module() {
     llvm::legacy::PassManager pm;
     llvm::MCContext *ctx;
 
-    if (_target_machine->addPassesToEmitMC(pm, ctx, obj_stream)) {
-      JeandleCompilation::report_jeandle_error("target does not support MC emission");
-      return;
-    }
+    bool unsupported = _target_machine->addPassesToEmitMC(pm, ctx, obj_stream);
+    CHECK_AND_REPORT_JEANDLE_ERROR_VOID(!unsupported, "target does not support MC emission");
 
     pm.run(*_llvm_module);
   }
