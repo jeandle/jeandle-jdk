@@ -56,7 +56,6 @@
 #include "ci/ciUtilities.inline.hpp"
 #include "logging/log.hpp"
 #include "runtime/sharedRuntime.hpp"
-
 #include "runtime/timer.hpp"
 #include "runtime/timerTrace.hpp"
 #include "compiler/compiler_globals.hpp"
