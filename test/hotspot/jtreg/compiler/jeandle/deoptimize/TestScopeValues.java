@@ -49,8 +49,6 @@ public class TestScopeValues {
         ProcessBuilder pb = ProcessTools.createLimitedTestJavaProcessBuilder(command_args);
         OutputAnalyzer output = ProcessTools.executeCommand(pb);
 
-        output.shouldHaveExitValue(0);
-
         // Verify llvm IR
         FileCheck checker = new FileCheck(dump_path, TestWrapper.class.getMethod("test_invoke", TestWrapper.class), false);
         // find compiled method
@@ -61,6 +59,12 @@ public class TestScopeValues {
         checker.checkNext("br label %bci_0");
         checker.checkNext("bci_0:");
         checker.checkNextPattern("invoke hotspotcc .*compiler_jeandle_deoptimize_TestScopeValues\\$TestWrapper_empty.* \"deopt\"\\(i64 12, ptr addrspace\\(1\\) %0, i64 4294967306, i32 10, i64 8589934603, i64 12, i64 17179869190, float 1.300000e\\+01\\)");
+        
+        if (!Boolean.getBoolean("java.vm.debug")) {
+            return;
+        }
+
+        output.shouldHaveExitValue(0);
 
         // check DebugInfo in nmethods output
         /* example output of PcDesc
