@@ -26,8 +26,6 @@
 #include "jeandle/jeandleAssembler.hpp"
 #include "jeandle/jeandleCompilation.hpp"
 #include "jeandle/jeandleCompiledCode.hpp"
-
-
 #include "jeandle/jeandleRegister.hpp"
 #include "jeandle/jeandleRuntimeRoutine.hpp"
 
@@ -328,7 +326,8 @@ void JeandleCompiledCode::resolve_reloc_info(JeandleAssembler& assembler) {
         // JeandleCallReloc for a routine call site will be created during stackmaps resolving because an oopmap is required.
         _routine_call_sites[inst_end_offset] = new CallSiteInfo(JeandleCompiledCall::ROUTINE_CALL,
                                                                 target_addr,
-                                                                -1/* bci */);
+                                                                -1/* bci */,
+                                                                target_addr == JeandleRuntimeRoutine::get_routine_entry("uncommon_trap")/* has_deopt_operands */);
       } else if (JeandleAssembler::is_external_call_reloc(target, edge.getKind())) {
         // External call relocations.
         address target_addr = (address)DynamicLibrary::SearchForAddressOfSymbol(target_name.str().c_str());
@@ -561,7 +560,12 @@ JeandleOopMap* JeandleCompiledCode::build_oop_map(StackMapParser& stackmaps, Sta
     assert(third.getKind() == StackMapParser::LocationKind::Constant, "unexpected kind");
     num_deopts = third.getSmallConstant();
     assert(num_deopts >= 0, "negative number");
-    int bci = call_info->bci();
+
+    // bci goes firt in deopt operands
+    int bci = (location++)->getSmallConstant();
+    num_deopts--;
+    call_info->set_bci(bci);
+
     if (bci != InvocationEntryBci) {
       Bytecodes::Code code = _method->java_code_at_bci(bci);
       reexecute = Interpreter::bytecode_should_reexecute(code); /* TODO: special case of multianewarray, please check GraphKit::should_reexecute_implied_by_bytecode */

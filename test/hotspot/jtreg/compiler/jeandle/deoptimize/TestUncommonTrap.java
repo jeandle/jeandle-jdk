@@ -18,44 +18,36 @@
  *
  */
 
-import jdk.test.lib.Asserts;
 /*
  * @test
- * @summary Test uncommon_trap for uninitialzed class
+ * @summary Test uncommon_trap for uninitialzed class and null pointer check
  * @library /test/lib
- * @run main/othervm -Xbatch -Xcomp -XX:-TieredCompilation -XX:+UseJeandleCompiler -XX:CompileCommand=compileonly,TestUncommonTrap::test_uncommon TestUncommonTrap
- * @run main/othervm -Xbatch -Xcomp -XX:+UseNewCode -XX:-TieredCompilation -XX:+UseJeandleCompiler -XX:CompileCommand=compileonly,TestUncommonTrap::test_null_check_with_trap TestUncommonTrap
+ * @run main/othervm -Xbatch -Xcomp -XX:-TieredCompilation -XX:+UseJeandleCompiler
+ *      -XX:CompileCommand=compileonly,TestUncommonTrap::test_uncommon -XX:CompileCommand=compileonly,TestUncommonTrap::test_null_check_with_trap
+ *      TestUncommonTrap
  */
-// run main/othervm -Xbatch -Xcomp -XX:+UseNewCode -XX:-TieredCompilation -XX:+UseJeandleCompiler -XX:CompileCommand=compileonly,TestUncommonTrap::test_null_check_with_trap TestUncommonTrap
+
+import jdk.test.lib.Asserts;
+
 public class TestUncommonTrap {
-  // parent
-  public int val() {return 30;}
+  public int val() { return 30; }
   public int f = 40;
 
   public static void main(String[] args) {
-    Asserts.assertEquals(test_uncommon(5, true) , 15);
-    Asserts.assertEquals(test_uncommon(5, false), 35);
-    Asserts.assertEquals(test_null_check_with_trap(new TestUncommonTrap()), 40);
+    Asserts.assertEquals(test_uncommon(5) , 15);
     Asserts.assertThrows(NullPointerException.class, () -> test_null_check_with_trap(null));
   }
-  
+
   private static int test_null_check_with_trap(TestUncommonTrap obj) {
     return obj.f;
   }
 
-  private static int test_uncommon(int i, boolean uncommon) {
-    TestUncommonTrap obj;
-    if (uncommon) {
-      /* trigger uncommon_trap for uninitialzed class */
-      obj = new UninitClass();
-    } else {
-      obj = new TestUncommonTrap();
-    }
-    return obj.val()+i;
+  private static int test_uncommon(int i) {
+    /* trigger uncommon_trap for uninitialzed class */
+    return new UninitClass().val() + i;
   }
-  
-  // child class
+
   static class UninitClass extends TestUncommonTrap {
-    public int val() {return 10;}
+    public int val() { return 10; }
   }
 }

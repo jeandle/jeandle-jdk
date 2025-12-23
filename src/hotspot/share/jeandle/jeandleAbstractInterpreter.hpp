@@ -127,7 +127,7 @@ class JeandleVMState : public JeandleCompilationResourceObj {
   size_t locks_size() const { return _locks.size(); }
   llvm::Value* lock_at(int index) { return _locks[index]; }
 
-  llvm::SmallVector<llvm::Value*> deopt_args(llvm::IRBuilder<> &builder);
+  llvm::SmallVector<llvm::Value*> deopt_args(llvm::IRBuilder<> &builder, int bci);
  private:
   llvm::SmallVector<TypedValue> _stack;
   llvm::SmallVector<TypedValue> _locals;
@@ -150,7 +150,7 @@ class JeandleBasicBlock : public JeandleCompilationResourceObj {
     is_compiled                   = 1 << 0,
     is_on_work_list               = 1 << 1,
     is_loop_header                = 1 << 2,
-    has_trap                      = 1 << 4,
+    always_uncommon_trap          = 1 << 3,
   };
 
   void set(Flag f)                               { _flags |= f; }
@@ -187,9 +187,6 @@ class JeandleBasicBlock : public JeandleCompilationResourceObj {
   bool is_exception_handler() { return _ci_block->is_handler(); }
   int exeption_range_start_bci() { return _ci_block->ex_start_bci(); }
   int exeption_range_limit_bci() { return _ci_block->ex_limit_bci(); }
-
-  bool has_uncommon_trap() const { return (_flags & has_trap) != 0;}
-  void set_has_uncommon_trap() { _flags |= has_trap; }
 
  private:
   int _block_id;
@@ -313,7 +310,7 @@ class JeandleAbstractInterpreter : public StackObj {
   llvm::CallInst*   create_call(llvm::FunctionCallee callee,
                                 llvm::ArrayRef<llvm::Value*> arg,
                                 llvm::CallingConv::ID calling_conv,
-                                llvm::ArrayRef<llvm::OperandBundleDef> deopt_bundle={});
+                                llvm::ArrayRef<llvm::OperandBundleDef> deopt_bundle = {});
   llvm::InvokeInst* create_call_ex(llvm::FunctionCallee callee,
                                    llvm::ArrayRef<llvm::Value*> arg,
                                    llvm::CallingConv::ID calling_conv);

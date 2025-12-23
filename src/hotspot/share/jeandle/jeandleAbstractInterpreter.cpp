@@ -196,10 +196,11 @@ void JeandleVMState::store(BasicType type, int index, llvm::Value* value) {
 }
 
 
-llvm::SmallVector<llvm::Value*> JeandleVMState::deopt_args(llvm::IRBuilder<>& builder) {
+llvm::SmallVector<llvm::Value*> JeandleVMState::deopt_args(llvm::IRBuilder<>& builder, int bci) {
   llvm::SmallVector<llvm::Value*> args;
-  // |--- loc ---|--- stk ---|--- arg ---|--- mon ---|--- scl ---|
+  // |--- bci ---|--- loc ---|--- stk ---|--- arg ---|--- mon ---|--- scl ---|
   /* TODO: monitor and scalar */
+  args.push_back(builder.getInt32(bci));
   for (size_t i = 0; i < _locals.size(); i++) {
     if (!_locals[i].is_null()) {
       uint64_t encode = DeoptValueEncoding(i, DeoptValueEncoding::LocalType, _locals[i].computational_type()).encode();
@@ -656,7 +657,7 @@ void JeandleAbstractInterpreter::interpret_block(JeandleBasicBlock* block) {
   while ((code = _bytecodes.next()) != ciBytecodeStream::EOBC() &&
           !JeandleCompilation::jeandle_error_occurred() &&
           bci2block()[_bytecodes.cur_bci()] == _block &&
-          !_block->has_uncommon_trap()) {
+          !_block->is_set(JeandleBasicBlock::always_uncommon_trap)) {
     // Handle by opcode, see: https://docs.oracle.com/javase/specs/jvms/se21/html/jvms-7.html
     switch (code) {
       case Bytecodes::_nop: break;
@@ -948,17 +949,18 @@ void JeandleAbstractInterpreter::interpret_block(JeandleBasicBlock* block) {
 
   RETURN_VOID_ON_JEANDLE_ERROR();
 
-  // All blocks should has their terminator.
-  if (block->tail_llvm_block()->getTerminator() == nullptr && !block->has_uncommon_trap()) {
+  // All blocks should have their terminator.
+  if (block->tail_llvm_block()->getTerminator() == nullptr) {
     _ir_builder.CreateBr(bci2block()[_bytecodes.cur_bci()]->header_llvm_block());
   }
 
   block->set(JeandleBasicBlock::is_compiled);
 
   // ignore successor blocks of uncommon trap
-  if (block->has_uncommon_trap()) {
+  if (block->is_set(JeandleBasicBlock::always_uncommon_trap)) {
     return;
   }
+
   // Add all successors to work list and set up their JeandleVMStates.
   for (JeandleBasicBlock* suc : block->successors()) {
     // Don't update handlers' VM state here. They are updated by exception throwers.
@@ -972,35 +974,20 @@ void JeandleAbstractInterpreter::interpret_block(JeandleBasicBlock* block) {
   }
 }
 
-void JeandleAbstractInterpreter::uncommon_trap(Deoptimization::DeoptReason reason, Deoptimization::DeoptAction action, llvm::BasicBlock *insert_point) {
+void JeandleAbstractInterpreter::uncommon_trap(Deoptimization::DeoptReason reason, Deoptimization::DeoptAction action, llvm::BasicBlock* insert_point) {
   llvm::BasicBlock* orig_block = _ir_builder.GetInsertBlock();
   assert(insert_point == nullptr || orig_block != insert_point, "sanity");
+
   if (insert_point != nullptr) {
     _ir_builder.SetInsertPoint(insert_point);
   }
+
   llvm::Value* request = _ir_builder.getInt32(Deoptimization::make_trap_request(reason, action));
   llvm::FunctionCallee callee = JeandleRuntimeRoutine::hotspot_uncommon_trap_callee(_module);
-  llvm::OperandBundleDef deopt_bundle("deopt", _jvm->deopt_args(_ir_builder));
+  llvm::OperandBundleDef deopt_bundle("deopt", _jvm->deopt_args(_ir_builder, _bytecodes.cur_bci()));
   llvm::CallInst* call = create_call(callee, {request}, llvm::CallingConv::Hotspot_JIT, {deopt_bundle});
   call->setDoesNotReturn();
 
-  // record stetepoint for oopmap generation
-  JeandleCompiledCall::Type call_type = JeandleCompiledCall::Type::ROUTINE_CALL;
-  uint32_t state_id = _compiled_code.next_statepoint_id();
-  _compiled_code.push_non_routine_call_site(new CallSiteInfo(call_type, SharedRuntime::uncommon_trap_blob()->entry_point(),
-                                            _bytecodes.cur_bci(), true, state_id));
-  llvm::Attribute id_attr = llvm::Attribute::get(*_context,
-                                                 llvm::jeandle::Attribute::StatepointID,
-                                                 std::to_string(state_id));
-  llvm::Attribute patch_bytes_attr = llvm::Attribute::get(*_context,
-                                                llvm::jeandle::Attribute::StatepointNumPatchBytes,
-                                                std::to_string(JeandleCompiledCall::call_site_patch_size(call_type)));
-  call->addFnAttr(id_attr);
-  call->addFnAttr(patch_bytes_attr);
-
-  if (insert_point == nullptr) {
-    _block->set_has_uncommon_trap();
-  }
   // mark unreachable
   _ir_builder.CreateUnreachable();
   if (insert_point != nullptr) {
@@ -1300,7 +1287,7 @@ void JeandleAbstractInterpreter::invoke() {
   RETURN_VOID_ON_JEANDLE_ERROR();
 
   // Create the invoke instruction with deopt operands.
-  llvm::OperandBundleDef deopt_bundle("deopt", _jvm->deopt_args(_ir_builder));
+  llvm::OperandBundleDef deopt_bundle("deopt", _jvm->deopt_args(_ir_builder, _bytecodes.cur_bci()));
   llvm::InvokeInst* invoke = _ir_builder.CreateInvoke(callee, dispatched._normal_dest, dispatched._unwind_dest, args, {deopt_bundle});
 
   // Continue to interpret the remaining bytecodes in the current JeandleBasicBlock at dispatched._normal_dest.
@@ -2018,6 +2005,7 @@ void JeandleAbstractInterpreter::do_new() {
       _bytecodes.is_unresolved_klass()) {
     uncommon_trap(Deoptimization::Reason_unhandled,
                   Deoptimization::Action_none);
+    _block->set(JeandleBasicBlock::always_uncommon_trap);
     return;
   }
   // TODO: cl init barrier
@@ -2293,7 +2281,6 @@ void JeandleAbstractInterpreter::monitorexit() {
   call_monitorexit->setCallingConv(llvm::CallingConv::C);
 }
 
-// TODO: Reimplement null_check_fail block with uncommon trap.
 void JeandleAbstractInterpreter::null_check(llvm::Value* obj) {
   assert(obj->getType() == llvm::PointerType::get(*_context, llvm::jeandle::AddrSpace::JavaHeapAddrSpace), "must be a java object");
 
@@ -2309,30 +2296,13 @@ void JeandleAbstractInterpreter::null_check(llvm::Value* obj) {
                                                 llvm::ConstantPointerNull::get(llvm::cast<llvm::PointerType>(obj->getType())));
   llvm::BranchInst* null_check_br = _ir_builder.CreateCondBr(if_null, null_check_fail, null_check_pass);
 
-  if (UseNewCode) {
-    uncommon_trap(Deoptimization::Reason_null_check, Deoptimization::Action_maybe_recompile, null_check_fail);
-  } else {
-    // Add make.implicit metadata, and the ImplicitNullChecksPass will transform it into an implicit check.
+  // Add make.implicit metadata, and the ImplicitNullChecksPass will transform it into an implicit check.
     llvm::MDNode* make_implicit = llvm::MDNode::get(*_context, {});
     null_check_br->setMetadata(llvm::LLVMContext::MD_make_implicit, make_implicit);
 
-    _ir_builder.SetInsertPoint(null_check_fail);
-    llvm::FunctionCallee null_check_fail_callee = JeandleRuntimeRoutine::hotspot_SharedRuntime_throw_NullPointerException_callee(_module);
-    llvm::CallInst* current_thread = call_java_op("jeandle.current_thread", {});
-    llvm::CallInst* call_null_check_fail = _ir_builder.CreateCall(null_check_fail_callee, {current_thread});
-    llvm::Type* ret_type = _llvm_func->getReturnType();
-    if (ret_type->isVoidTy()) {
-      _ir_builder.CreateRetVoid();;
-    } else if (ret_type->isIntegerTy()) {
-      _ir_builder.CreateRet(llvm::ConstantInt::get(ret_type, 0));
-    } else if (ret_type->isFloatTy() || ret_type->isDoubleTy()) {
-      _ir_builder.CreateRet(llvm::ConstantFP::get(ret_type, 0.0));
-    } else if (ret_type->isPointerTy()) {
-      _ir_builder.CreateRet(llvm::ConstantPointerNull::get(llvm::cast<llvm::PointerType>(ret_type)));
-    } else {
-      ShouldNotReachHere();
-    }
-  }
+  // Uncommon trap on null check fail.
+  uncommon_trap(Deoptimization::Reason_null_check, Deoptimization::Action_maybe_recompile, null_check_fail);
+
   _ir_builder.SetInsertPoint(null_check_pass);
   _block->set_tail_llvm_block(null_check_pass);
 }

@@ -116,16 +116,18 @@ class CallSiteInfo : public JeandleCompilationResourceObj {
     // We don't need to assign a unique statepoint id for each routine call site, only call type and target is used.
     bool use_default_statepoint_id = (statepoint_id == llvm::StatepointDirectives::DefaultStatepointID);
     bool is_routine_call = (type == JeandleCompiledCall::ROUTINE_CALL);
-    bool is_uncommon_trap = target == SharedRuntime::uncommon_trap_blob()->entry_point();
     bool is_external_call = (type == JeandleCompiledCall::EXTERNAL_CALL);
-    assert(is_uncommon_trap || (use_default_statepoint_id == (is_routine_call || is_external_call)), "routine calls and external calls should use the default statepoint id");
+    assert(use_default_statepoint_id == (is_routine_call || is_external_call), "routine calls and external calls should use the default statepoint id");
 #endif // ASSERT
   }
+
+
+  int bci() const { return _bci; }
+  void set_bci(int bci) { _bci = bci; }
 
   JeandleCompiledCall::Type type() const { return _type; }
   uint64_t statepoint_id() const { return _statepoint_id; }
   address target() const { return _target; }
-  int bci() const { return _bci; }
   bool has_deopt_operands() const { return _has_deopt_operands; }
 
  private:
@@ -269,12 +271,15 @@ public:
     return location.getKind() == StackMapParser::LocationKind::Constant
         || location.getKind() == StackMapParser::LocationKind::ConstantIndex;
   }
+
   static bool is_stack(const StackMapParser::LocationAccessor& location) {
     return location.getKind() == StackMapParser::LocationKind::Indirect;
   }
+
   static bool is_register(const StackMapParser::LocationAccessor& location) {
     return location.getKind() == StackMapParser::LocationKind::Register;
   }
+
   static int32_t stack_offset(const StackMapParser::LocationAccessor& location) {
     if (is_stack(location)) {
       return location.getOffset();
@@ -282,6 +287,7 @@ public:
       ShouldNotReachHere();
     }
   }
+  
   static uint32_t getConstantUint(const StackMapParser& parser, const StackMapParser::LocationAccessor& location);
   static uint64_t getConstantUlong(const StackMapParser& parser, const StackMapParser::LocationAccessor& location);
   static float    getConstantFloat(const StackMapParser& parser, const StackMapParser::LocationAccessor& location);
