@@ -24,10 +24,9 @@
 // Get the frame size from .stack_sizes section.
 void JeandleCompiledCode::setup_frame_size() {
   SectionInfo section_info(".stack_sizes");
-  if (!ReadELF::findSection(*_elf, section_info)) {
-    JeandleCompilation::report_jeandle_error(".stack_sizes section not found");
-    return;
-  }
+  bool found = ReadELF::findSection(*_elf, section_info);
+  JEANDLE_ERROR_ASSERT_AND_RET_VOID_ON_FAIL(found, ".stack_sizes section not found");
+
   llvm::DataExtractor data_extractor(llvm::StringRef(((char*)_obj->getBufferStart()) + section_info._offset, section_info._size),
                                      true/* IsLittleEndian */, BytesPerWord/* AddressSize */);
   uint64_t offset = 0;

@@ -617,13 +617,10 @@ void JeandleAbstractInterpreter::interpret() {
 
   initialize_VM_state();
 
-  if (!current->merge_VM_state_from(
-        _block_builder->entry_block()->VM_state(),
-        _block_builder->entry_block()->tail_llvm_block(),
-        _method)) {
-    JeandleCompilation::report_jeandle_error("failed to create initial VM state");
-    return;
-  }
+  bool merged = current->merge_VM_state_from(_block_builder->entry_block()->VM_state(),
+                                             _block_builder->entry_block()->tail_llvm_block(),
+                                             _method);
+  JEANDLE_ERROR_ASSERT_AND_RET_VOID_ON_FAIL(merged, "failed to create initial VM state");
 
   // Iterate all blocks
   while (_work_list.size() > 0) {
@@ -632,6 +629,7 @@ void JeandleAbstractInterpreter::interpret() {
     current->clear(JeandleBasicBlock::is_on_work_list);
 
     interpret_block(current);
+    RETURN_VOID_ON_JEANDLE_ERROR();
   }
 
   _block_builder->remove_dead_blocks();
@@ -948,7 +946,9 @@ void JeandleAbstractInterpreter::interpret_block(JeandleBasicBlock* block) {
     }
   }
 
-  // All blocks should has their terminator except block with uncommon trap.
+  RETURN_VOID_ON_JEANDLE_ERROR();
+
+  // All blocks should has their terminator.
   if (block->tail_llvm_block()->getTerminator() == nullptr && !block->has_uncommon_trap()) {
     _ir_builder.CreateBr(bci2block()[_bytecodes.cur_bci()]->header_llvm_block());
   }
@@ -963,8 +963,7 @@ void JeandleAbstractInterpreter::interpret_block(JeandleBasicBlock* block) {
   for (JeandleBasicBlock* suc : block->successors()) {
     // Don't update handlers' VM state here. They are updated by exception throwers.
     if (!suc->is_exception_handler() && !suc->merge_VM_state_from(block->VM_state(), block->tail_llvm_block(), _method)) {
-      JeandleCompilation::report_jeandle_error("failed to update VM state");
-      return;
+      JEANDLE_ERROR_ASSERT_AND_RET_VOID_ON_FAIL(false, "failed to merge VM state into successor block");
     }
 
     if (!suc->is_set(JeandleBasicBlock::is_compiled)) {
@@ -1298,6 +1297,7 @@ void JeandleAbstractInterpreter::invoke() {
 
   // Every invoke instruction may throw exceptions, handle them here.
   DispatchedDest dispatched = dispatch_exception_for_invoke();
+  RETURN_VOID_ON_JEANDLE_ERROR();
 
   // Create the invoke instruction with deopt operands.
   llvm::OperandBundleDef deopt_bundle("deopt", _jvm->deopt_args(_ir_builder));
@@ -1374,6 +1374,50 @@ bool JeandleAbstractInterpreter::inline_intrinsic(const ciMethod* target) {
       }
       break;
     }
+    case vmIntrinsicID::_dlog: {
+      if (JeandleUseHotspotIntrinsics) {
+        llvm::FunctionCallee callee = StubRoutines::dlog() != nullptr ? JeandleRuntimeRoutine::hotspot_StubRoutines_dlog_callee(_module) :
+                                                                        JeandleRuntimeRoutine::hotspot_SharedRuntime_dlog_callee(_module);
+        _jvm->dpush(create_call(callee, {_jvm->dpop()}, llvm::CallingConv::C));
+      } else {
+        _jvm->dpush(_ir_builder.CreateIntrinsic(JeandleType::java2llvm(BasicType::T_DOUBLE, *_context), llvm::Intrinsic::log, {_jvm->dpop()}));
+      }
+      break;
+    }
+    case vmIntrinsicID::_dlog10: {
+      if (JeandleUseHotspotIntrinsics) {
+        llvm::FunctionCallee callee = StubRoutines::dlog10() != nullptr ? JeandleRuntimeRoutine::hotspot_StubRoutines_dlog10_callee(_module) :
+                                                                        JeandleRuntimeRoutine::hotspot_SharedRuntime_dlog10_callee(_module);
+        _jvm->dpush(create_call(callee, {_jvm->dpop()}, llvm::CallingConv::C));
+      } else {
+        _jvm->dpush(_ir_builder.CreateIntrinsic(JeandleType::java2llvm(BasicType::T_DOUBLE, *_context), llvm::Intrinsic::log10, {_jvm->dpop()}));
+      }
+      break;
+    }
+    case vmIntrinsicID::_dexp: {
+      if (JeandleUseHotspotIntrinsics) {
+        llvm::FunctionCallee callee = StubRoutines::dexp() != nullptr ? JeandleRuntimeRoutine::hotspot_StubRoutines_dexp_callee(_module) :
+                                                                      JeandleRuntimeRoutine::hotspot_SharedRuntime_dexp_callee(_module);
+        _jvm->dpush(create_call(callee, {_jvm->dpop()}, llvm::CallingConv::C));
+      } else {
+        _jvm->dpush(_ir_builder.CreateIntrinsic(JeandleType::java2llvm(BasicType::T_DOUBLE, *_context), llvm::Intrinsic::exp, {_jvm->dpop()}));
+      }
+      break;
+    }
+    case vmIntrinsicID::_dpow: {
+      // push the base first, then the exponent
+      // the pop order is reversed
+      llvm::Value *component = _jvm->dpop();
+      llvm::Value *base = _jvm->dpop();
+      if (JeandleUseHotspotIntrinsics) {
+        llvm::FunctionCallee callee = StubRoutines::dpow() != nullptr ? JeandleRuntimeRoutine::hotspot_StubRoutines_dpow_callee(_module) : JeandleRuntimeRoutine::hotspot_SharedRuntime_dpow_callee(_module);
+        _jvm->dpush(create_call(callee, {base, component}, llvm::CallingConv::C));
+      }
+      else {
+        _jvm->dpush(_ir_builder.CreateIntrinsic(JeandleType::java2llvm(BasicType::T_DOUBLE, *_context), llvm::Intrinsic::pow, {base, component}));
+      }
+      break;
+    }
     default:
       return false;
   }
@@ -1392,6 +1436,7 @@ llvm::InvokeInst* JeandleAbstractInterpreter::create_call_ex(llvm::FunctionCalle
 
   // Handle exceptions for the routine.
   DispatchedDest dispatched = dispatch_exception_for_invoke();
+  RETURN_ON_JEANDLE_ERROR(nullptr);
 
   // Create the invoke instruction.
   llvm::InvokeInst* invoke = _ir_builder.CreateInvoke(callee, dispatched._normal_dest, dispatched._unwind_dest, args);
@@ -1554,6 +1599,7 @@ void JeandleAbstractInterpreter::checkcast() {
   store_inst->setAtomic(llvm::AtomicOrdering::Unordered);
 
   dispatch_exception_to_handler(exception_oop);
+  RETURN_VOID_ON_JEANDLE_ERROR();
 
   _ir_builder.SetInsertPoint(checkcast_pass);
   _block->set_tail_llvm_block(checkcast_pass);
@@ -2021,6 +2067,7 @@ JeandleAbstractInterpreter::DispatchedDest JeandleAbstractInterpreter::dispatch_
                           true /* is_volatile */);
 
   dispatch_exception_to_handler(exception_oop);
+  RETURN_ON_JEANDLE_ERROR(dispatched);
 
   // Recover insert point.
   _ir_builder.SetInsertPoint(saved_insert_block, saved_insert_point);
@@ -2048,10 +2095,10 @@ void JeandleAbstractInterpreter::dispatch_exception_to_handler(llvm::Value* exce
 
     // catch_all
     if (handler->is_catch_all()) {
-      if (!handler_block->merge_VM_state_from(_jvm->copy_for_exception_handler(exception_oop), _ir_builder.GetInsertBlock(), _method)) {
-        JeandleCompilation::report_jeandle_error("failed to update handler's VM state");
-        return;
-      }
+      bool merged = handler_block->merge_VM_state_from(_jvm->copy_for_exception_handler(exception_oop),
+                                                       _ir_builder.GetInsertBlock(),
+                                                       _method);
+      JEANDLE_ERROR_ASSERT_AND_RET_VOID_ON_FAIL(merged, "failed to update handler's VM state");
       _ir_builder.CreateBr(handler_block->header_llvm_block());
       return;
     }
@@ -2073,10 +2120,10 @@ void JeandleAbstractInterpreter::dispatch_exception_to_handler(llvm::Value* exce
                                                              "bci_" + std::to_string(_bytecodes.cur_bci()) + "_exception_dispatch_to_bci_" + std::to_string(handler_block->start_bci()),
                                                              _llvm_func);
 
-      if (!handler_block->merge_VM_state_from(_jvm->copy_for_exception_handler(exception_oop), _ir_builder.GetInsertBlock(), _method)) {
-        JeandleCompilation::report_jeandle_error("failed to update handler's VM state");
-        return;
-      }
+      bool merged = handler_block->merge_VM_state_from(_jvm->copy_for_exception_handler(exception_oop),
+                                                       _ir_builder.GetInsertBlock(),
+                                                       _method);
+      JEANDLE_ERROR_ASSERT_AND_RET_VOID_ON_FAIL(merged, "failed to update handler's VM state");
       llvm::Value* cond = _ir_builder.CreateICmpEQ(match, _ir_builder.getInt32(1));
       _ir_builder.CreateCondBr(cond, match_dest, next_dest);
       _ir_builder.SetInsertPoint(next_dest);
@@ -2191,6 +2238,7 @@ void JeandleAbstractInterpreter::multianewarray() {
     llvm::Value* dimensions_array_length = _ir_builder.getInt32(ndimensions);
 
     llvm::InvokeInst* dimensions_array_oop = call_java_op_ex("jeandle.newarray",{int_array_klass_ptr, dimensions_array_length});
+    RETURN_VOID_ON_JEANDLE_ERROR();
 
     llvm::Value* array_base_offset = _ir_builder.CreateLoad(llvm::Type::getInt32Ty(*_context),
                                                             _module.getGlobalVariable("arrayOopDesc.base_offset_in_bytes.int", true));

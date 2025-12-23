@@ -116,6 +116,7 @@ class JeandleCallReloc : public JeandleReloc {
     switch (_call->type()) {
       case JeandleCompiledCall::STATIC_CALL:
         assembler.emit_static_call_stub(offset(), _call);
+        RETURN_VOID_ON_JEANDLE_ERROR();
         assembler.patch_static_call_site(offset(), _call);
         break;
 
@@ -125,15 +126,18 @@ class JeandleCallReloc : public JeandleReloc {
 
       case JeandleCompiledCall::DYNAMIC_CALL:
         assembler.patch_ic_call_site(offset(), _call);
+        RETURN_VOID_ON_JEANDLE_ERROR();
         break;
 
       case JeandleCompiledCall::ROUTINE_CALL:
         assembler.patch_routine_call_site(offset(), _call->target());
+        RETURN_VOID_ON_JEANDLE_ERROR();
         break;
 
       case JeandleCompiledCall::EXTERNAL_CALL:
         assert(_oop_map == nullptr, "no oopmap in external call");
         assembler.patch_external_call_site(offset(), _call);
+        RETURN_VOID_ON_JEANDLE_ERROR();
         break;
       default:
         ShouldNotReachHere();
@@ -213,16 +217,11 @@ static bool need_stack_overflow_check(bool is_method_compilation,
 void JeandleCompiledCode::install_obj(std::unique_ptr<ObjectBuffer> obj) {
   _obj = std::move(obj);
   llvm::MemoryBufferRef memory_buffer = _obj->getMemBufferRef();
-  auto elf_on_error = llvm::object::ObjectFile::createELFObjectFile(memory_buffer);
-  if (!elf_on_error) {
-    JeandleCompilation::report_jeandle_error("bad ELF file");
-    return;
-  }
+  auto elf_or_error = llvm::object::ObjectFile::createELFObjectFile(memory_buffer);
+  JEANDLE_ERROR_ASSERT_AND_RET_VOID_ON_FAIL(elf_or_error, "bad ELF file");
 
-  _elf = llvm::dyn_cast<ELFObject>(*elf_on_error);
-  if (!_elf) {
-    JeandleCompilation::report_jeandle_error("bad ELF file");
-  }
+  _elf = llvm::dyn_cast<ELFObject>(*elf_or_error);
+  JEANDLE_ERROR_ASSERT_AND_RET_VOID_ON_FAIL(_elf, "bad ELF file");
 }
 
 void JeandleCompiledCode::finalize() {
@@ -230,12 +229,11 @@ void JeandleCompiledCode::finalize() {
   uint64_t align;
   uint64_t offset;
   uint64_t code_size;
-  if (!ReadELF::findFunc(*_elf, _func_name, align, offset, code_size)) {
-    JeandleCompilation::report_jeandle_error("compiled function is not found in the ELF file");
-    return;
-  }
+  bool found = ReadELF::findFunc(*_elf, _func_name, align, offset, code_size);
+  JEANDLE_ERROR_ASSERT_AND_RET_VOID_ON_FAIL(found, "compiled function is not found in the ELF file");
 
   setup_frame_size();
+  RETURN_VOID_ON_JEANDLE_ERROR();
   assert(_frame_size > 0, "frame size must be positive");
 
   // An estimated initial value.
@@ -281,20 +279,20 @@ void JeandleCompiledCode::finalize() {
   assembler.emit_insts(((address) _obj->getBufferStart()) + offset, code_size);
 
   resolve_reloc_info(assembler);
+  RETURN_VOID_ON_JEANDLE_ERROR();
 
   if (_method) {
     // For Java method compilation.
     build_exception_handler_table();
     _offsets.set_value(CodeOffsets::Exceptions, assembler.emit_exception_handler());
+    RETURN_VOID_ON_JEANDLE_ERROR();
   }
 
   build_implicit_exception_table();
 
   // generate shared trampoline stubs
-  if (!_code_buffer.finalize_stubs()) {
-    JeandleCompilation::report_jeandle_error("code cache full");
-    return;
-  }
+  bool success = _code_buffer.finalize_stubs();
+  JEANDLE_ERROR_ASSERT_AND_RET_VOID_ON_FAIL(success, "shared stub overflow");
 
   // No deopt support now.
   _offsets.set_value(CodeOffsets::Deopt, 0);
@@ -306,13 +304,10 @@ void JeandleCompiledCode::resolve_reloc_info(JeandleAssembler& assembler) {
   // Step 1: Resolve LinkGraph.
   auto ssp = std::make_shared<llvm::orc::SymbolStringPool>();
 
-  auto graph_on_err = llvm::jitlink::createLinkGraphFromObject(_elf->getMemoryBufferRef(), ssp);
-  if (!graph_on_err) {
-    JeandleCompilation::report_jeandle_error("failed to create LinkGraph");
-    return;
-  }
+  auto graph_or_err = llvm::jitlink::createLinkGraphFromObject(_elf->getMemoryBufferRef(), ssp);
+  JEANDLE_ERROR_ASSERT_AND_RET_VOID_ON_FAIL(graph_or_err, "failed to create LinkGraph");
 
-  auto link_graph = std::move(*graph_on_err);
+  auto link_graph = std::move(*graph_or_err);
 
   for (auto *block : link_graph->blocks()) {
     // Only resolve relocations for instructions in the compiled method.
@@ -337,10 +332,7 @@ void JeandleCompiledCode::resolve_reloc_info(JeandleAssembler& assembler) {
       } else if (JeandleAssembler::is_external_call_reloc(target, edge.getKind())) {
         // External call relocations.
         address target_addr = (address)DynamicLibrary::SearchForAddressOfSymbol(target_name.str().c_str());
-        if (target_addr == nullptr) {
-          JeandleCompilation::report_jeandle_error("failed to find external symbol");
-          return;
-        }
+        JEANDLE_ERROR_ASSERT_AND_RET_VOID_ON_FAIL(target_addr, "failed to find external symbol");
 
         int inst_end_offset = JeandleAssembler::fixup_call_inst_offset(static_cast<int>(block->getAddress().getValue() + edge.getOffset()));
 
@@ -400,6 +392,7 @@ void JeandleCompiledCode::resolve_reloc_info(JeandleAssembler& assembler) {
   for (JeandleReloc* reloc : relocs) {
     reloc->fixup_offset(_prolog_length);
     reloc->emit_reloc(assembler);
+    RETURN_VOID_ON_JEANDLE_ERROR();
   }
 }
 
@@ -408,10 +401,8 @@ address JeandleCompiledCode::lookup_const_section(llvm::StringRef name, JeandleA
   if (it == _const_sections.end()) {
     // Copy to CodeBuffer if const section is not found.
     SectionInfo section_info(name);
-    if (!ReadELF::findSection(*_elf, section_info)) {
-      JeandleCompilation::report_jeandle_error("const section not found, bad ELF file");
-      return nullptr;
-    }
+    bool found = ReadELF::findSection(*_elf, section_info);
+    JEANDLE_ERROR_ASSERT_AND_RET_ON_FAIL(found, "const section not found, bad ELF file", nullptr);
 
     address target_base = _code_buffer.consts()->end();
     _const_sections.insert({name, target_base});

@@ -24,7 +24,8 @@
 #include "nativeInst_aarch64.hpp"
 
 int JeandleCompiledCall::call_site_size(JeandleCompiledCall::Type call_type) {
-  if (call_type == JeandleCompiledCall::ROUTINE_CALL) {
+  if (call_type == JeandleCompiledCall::ROUTINE_CALL ||
+      call_type == JeandleCompiledCall::EXTERNAL_CALL) {
     return NativeInstruction::instruction_size;
   }
 

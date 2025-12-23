@@ -56,6 +56,39 @@
 #include "ci/ciUtilities.inline.hpp"
 #include "logging/log.hpp"
 #include "runtime/sharedRuntime.hpp"
+#include "runtime/timer.hpp"
+#include "runtime/timerTrace.hpp"
+#include "compiler/compiler_globals.hpp"
+
+enum JeandleTimerName : int {
+  compilation_timer = 0,
+    abstract_interpreter_timer,
+    llvm_optimizer_timer,
+    llvm_codegen_timer,
+    finalize_timer,
+  max_phase_timers
+};
+
+// Static timer array, corresponding to C1's Compilation::timers[]
+static elapsedTimer jeandle_timers[max_phase_timers];
+
+// Counts how many methods have been compiled by Jeandle (optional)
+static int jeandle_compilation_count = 0;
+
+class JeandleTraceTime : public TraceTime {
+ private:
+  JeandleTimerName _timer;
+
+ public:
+  JeandleTraceTime(const char* name, JeandleTimerName timer_name)
+  : TraceTime(name, &jeandle_timers[timer_name], CITime || CITimeEach, CITimeVerbose),
+    _timer(timer_name)
+  {
+      // If compile logging is needed in the future, add log->begin_head()/stamp()/end_head() here
+  }
+
+  ~JeandleTraceTime() = default;
+};
 
 JeandleCompilation::JeandleCompilation(llvm::TargetMachine* target_machine,
                                        llvm::DataLayout* data_layout,
@@ -68,6 +101,7 @@ JeandleCompilation::JeandleCompilation(llvm::TargetMachine* target_machine,
                                        _data_layout(data_layout),
                                        _env(env),
                                        _method(method),
+                                       _name(method->get_Method()->name_and_sig_as_C_string()),
                                        _entry_bci(entry_bci),
                                        _context(std::make_unique<llvm::LLVMContext>()),
                                        _code(env, method),
@@ -77,19 +111,21 @@ JeandleCompilation::JeandleCompilation(llvm::TargetMachine* target_machine,
     return;
   }
 
+  JeandleTraceTime tt_total("Jeandle Compile", compilation_timer);
+
   // Setup compilation.
   initialize();
   setup_llvm_module(template_buffer);
+
+  if (error_occurred()) {
+    _env->record_method_not_compilable(_error_msg);
+    return;
+  }
 
   // Let's compile.
   compile_java_method();
 
   if (error_occurred()) {
-#ifdef ASSERT
-    if (JeandleCrashOnError) {
-      fatal("Compilation failed in function '%s': %s", _method->name()->as_utf8(), _error_msg);
-    }
-#endif
     _env->record_method_not_compilable(_error_msg);
     return;
   }
@@ -112,6 +148,7 @@ JeandleCompilation::JeandleCompilation(llvm::TargetMachine* target_machine,
                                        _data_layout(data_layout),
                                        _env(env),
                                        _method(nullptr),
+                                       _name(name),
                                        _entry_bci(-1),
                                        _context(std::move(context)),
                                        _llvm_module(std::make_unique<llvm::Module>(name, *_context)),
@@ -211,10 +248,7 @@ void JeandleCompilation::setup_llvm_module(llvm::MemoryBuffer* template_buffer) 
   // Get template module from the global memory buffer.
   llvm::Expected<std::unique_ptr<llvm::Module>> module_or_error =
       parseBitcodeFile(template_buffer->getMemBufferRef(), *_context);
-  if (!module_or_error) {
-    report_jeandle_error("Failed to parse template bitcode");
-    return;
-  }
+  JEANDLE_ERROR_ASSERT_AND_RET_VOID_ON_FAIL(module_or_error, "Failed to parse template bitcode");
   _llvm_module = std::move(module_or_error.get());
   assert(_llvm_module != nullptr, "invalid llvm module");
 
@@ -228,6 +262,7 @@ void JeandleCompilation::setup_llvm_module(llvm::MemoryBuffer* template_buffer) 
 void JeandleCompilation::compile_java_method() {
   // Build basic blocks. Then fill basic blocks with LLVM IR.
   {
+    JeandleTraceTime tt_abstract_interpreter("Jeandle Abstract Interpret", abstract_interpreter_timer);
     JeandleAbstractInterpreter interpret(_method, _entry_bci, *_llvm_module, _code);
   }
 
@@ -235,9 +270,7 @@ void JeandleCompilation::compile_java_method() {
     dump_ir(false);
   }
 
-  if (error_occurred()) {
-    return;
-  }
+  RETURN_VOID_ON_JEANDLE_ERROR();
 
 #ifdef ASSERT
   // Verify.
@@ -248,25 +281,34 @@ void JeandleCompilation::compile_java_method() {
 #endif
 
   // Optimize.
-  llvm::jeandle::optimize(_llvm_module.get(), llvm::OptimizationLevel::O3);
+  {
+    JeandleTraceTime tt_optimize("Jeandle LLVM Optimize", llvm_optimizer_timer);
+    llvm::jeandle::optimize(_llvm_module.get(), llvm::OptimizationLevel::O3);
+  }
 
   if (JeandleDumpIR) {
     dump_ir(true);
   }
 
   // Compile the module to an object file.
-  compile_module();
+  {
+    JeandleTraceTime tt_codegen("Jeandle LLVM CodeGen", llvm_codegen_timer);
+    compile_module();
+  }
 
   if (JeandleDumpObjects) {
     dump_obj();
   }
 
-  if (error_occurred()) {
-    return;
-  }
+  RETURN_VOID_ON_JEANDLE_ERROR();
 
   // Unpack LLVM code information. Generate relocations, stubs and debug information.
-  _code.finalize();
+  {
+    JeandleTraceTime tt_finalize("Jeandle Finalize", finalize_timer);
+    _code.finalize();
+  }
+
+  jeandle_compilation_count++;
 }
 
 void JeandleCompilation::compile_module() {
@@ -279,10 +321,8 @@ void JeandleCompilation::compile_module() {
     llvm::legacy::PassManager pm;
     llvm::MCContext *ctx;
 
-    if (_target_machine->addPassesToEmitMC(pm, ctx, obj_stream)) {
-      JeandleCompilation::report_jeandle_error("target does not support MC emission");
-      return;
-    }
+    bool unsupported = _target_machine->addPassesToEmitMC(pm, ctx, obj_stream);
+    JEANDLE_ERROR_ASSERT_AND_RET_VOID_ON_FAIL(!unsupported, "target does not support MC emission");
 
     pm.run(*_llvm_module);
   }
@@ -333,4 +373,16 @@ void JeandleCompilation::dump_ir(bool optimized) {
   }
 
   _llvm_module->print(dump_stream, nullptr);
+}
+
+void JeandleCompilation::print_timers() {
+  if (!CITime) {
+    return;
+  }
+  tty->print_cr("    Jeandle Compile Time: %7.3f s", jeandle_timers[compilation_timer].seconds());
+  tty->print_cr("       Abstract Interpret:  %7.3f s", jeandle_timers[abstract_interpreter_timer].seconds());
+  tty->print_cr("       LLVM Optimize:       %7.3f s", jeandle_timers[llvm_optimizer_timer].seconds());
+  tty->print_cr("       LLVM CodeGen:        %7.3f s", jeandle_timers[llvm_codegen_timer].seconds());
+  tty->print_cr("       Finalize:            %7.3f s", jeandle_timers[finalize_timer].seconds());
+  tty->print_cr("    (Jeandle compilations: %d)", jeandle_compilation_count);
 }
