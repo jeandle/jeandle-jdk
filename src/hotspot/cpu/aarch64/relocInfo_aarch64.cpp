@@ -125,6 +125,7 @@ void Relocation::pd_set_jeandle_data_value(address x, bool verify_only) {
   } else {
     ShouldNotReachHere();
   }
+  ICache::invalidate_range(insn_addr, NativeInstruction::instruction_size);
 }
 
 void trampoline_stub_Relocation::pd_fix_owner_after_move() {
