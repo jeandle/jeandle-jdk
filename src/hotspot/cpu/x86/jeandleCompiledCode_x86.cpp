@@ -25,7 +25,7 @@
 void JeandleCompiledCode::setup_frame_size() {
   SectionInfo section_info(".stack_sizes");
   bool found = ReadELF::findSection(*_elf, section_info);
-  CHECK_AND_REPORT_JEANDLE_ERROR_VOID(found, ".stack_sizes section not found");
+  JEANDLE_ERROR_ASSERT_AND_RET_VOID_ON_FAIL(found, ".stack_sizes section not found");
 
   llvm::DataExtractor data_extractor(llvm::StringRef(((char*)_obj->getBufferStart()) + section_info._offset, section_info._size),
                                      true/* IsLittleEndian */, BytesPerWord/* AddressSize */);

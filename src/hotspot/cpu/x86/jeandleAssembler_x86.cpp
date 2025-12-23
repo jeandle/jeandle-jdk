@@ -38,7 +38,7 @@ void JeandleAssembler::emit_static_call_stub(int inst_offset, CallSiteInfo* call
 
   int stub_size = 28;
   address stub = __ start_a_stub(stub_size);
-  CHECK_AND_REPORT_JEANDLE_ERROR_VOID(stub != nullptr, "static call stub overflow");
+  JEANDLE_ERROR_ASSERT_AND_RET_VOID_ON_FAIL(stub != nullptr, "static call stub overflow");
 
   int start = __ offset();
 
@@ -121,7 +121,7 @@ void JeandleAssembler::patch_external_call_site(int inst_offset, CallSiteInfo* c
   // we need to confirm that stub code section has enough space before invoking `set_insts_end`.
   int required_space = __ max_trampoline_stub_size();
   if (__ code()->stubs()->maybe_expand_to_ensure_remaining(required_space)) {
-    CHECK_AND_REPORT_JEANDLE_ERROR_VOID(__ code()->blob() != nullptr, "trampoline stub overflow");
+    JEANDLE_ERROR_ASSERT_AND_RET_VOID_ON_FAIL(__ code()->blob() != nullptr, "trampoline stub overflow");
   }
 
   address call_address = __ addr_at(inst_offset);
@@ -136,7 +136,7 @@ void JeandleAssembler::patch_external_call_site(int inst_offset, CallSiteInfo* c
 
   // Patch.
   address tpc = __ trampoline_call(AddressLiteral(call->target(), relocInfo::none));
-  CHECK_AND_REPORT_JEANDLE_ERROR_VOID(tpc != nullptr, "trampoline stub overflow");
+  JEANDLE_ERROR_ASSERT_AND_RET_VOID_ON_FAIL(tpc != nullptr, "trampoline stub overflow");
 
   // Recover insts_end.
   __ code()->set_insts_end(__ code()->insts_begin() + insts_end_offset);
@@ -171,7 +171,7 @@ int JeandleAssembler::interior_entry_alignment() const {
 
 int JeandleAssembler::emit_exception_handler() {
   address base = __ start_a_stub(NativeJump::instruction_size);
-  CHECK_AND_REPORT_JEANDLE_ERROR_RETURNVAL(base != nullptr, "exception handler stub overflow", 0);
+  JEANDLE_ERROR_ASSERT_AND_RET_ON_FAIL(base != nullptr, "exception handler stub overflow", 0);
   int offset = __ offset();
   __ jump(RuntimeAddress(JeandleRuntimeRoutine::get_routine_entry(JeandleRuntimeRoutine::_exception_handler)));
   assert(__ offset() - offset <= (int)NativeJump::instruction_size, "overflow");

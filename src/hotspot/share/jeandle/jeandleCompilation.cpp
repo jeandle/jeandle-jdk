@@ -101,6 +101,7 @@ JeandleCompilation::JeandleCompilation(llvm::TargetMachine* target_machine,
                                        _data_layout(data_layout),
                                        _env(env),
                                        _method(method),
+                                       _name(method->get_Method()->name_and_sig_as_C_string()),
                                        _entry_bci(entry_bci),
                                        _context(std::make_unique<llvm::LLVMContext>()),
                                        _code(env, method),
@@ -147,6 +148,7 @@ JeandleCompilation::JeandleCompilation(llvm::TargetMachine* target_machine,
                                        _data_layout(data_layout),
                                        _env(env),
                                        _method(nullptr),
+                                       _name(name),
                                        _entry_bci(-1),
                                        _context(std::move(context)),
                                        _llvm_module(std::make_unique<llvm::Module>(name, *_context)),
@@ -246,7 +248,7 @@ void JeandleCompilation::setup_llvm_module(llvm::MemoryBuffer* template_buffer) 
   // Get template module from the global memory buffer.
   llvm::Expected<std::unique_ptr<llvm::Module>> module_or_error =
       parseBitcodeFile(template_buffer->getMemBufferRef(), *_context);
-  CHECK_AND_REPORT_JEANDLE_ERROR_VOID(module_or_error, "Failed to parse template bitcode");
+  JEANDLE_ERROR_ASSERT_AND_RET_VOID_ON_FAIL(module_or_error, "Failed to parse template bitcode");
   _llvm_module = std::move(module_or_error.get());
   assert(_llvm_module != nullptr, "invalid llvm module");
 
@@ -268,7 +270,7 @@ void JeandleCompilation::compile_java_method() {
     dump_ir(false);
   }
 
-  CHECK_JEANDLE_ERROR_AND_RETURN_VOID();
+  RETURN_VOID_ON_JEANDLE_ERROR();
 
 #ifdef ASSERT
   // Verify.
@@ -298,7 +300,7 @@ void JeandleCompilation::compile_java_method() {
     dump_obj();
   }
 
-  CHECK_JEANDLE_ERROR_AND_RETURN_VOID();
+  RETURN_VOID_ON_JEANDLE_ERROR();
 
   // Unpack LLVM code information. Generate relocations, stubs and debug information.
   {
@@ -320,7 +322,7 @@ void JeandleCompilation::compile_module() {
     llvm::MCContext *ctx;
 
     bool unsupported = _target_machine->addPassesToEmitMC(pm, ctx, obj_stream);
-    CHECK_AND_REPORT_JEANDLE_ERROR_VOID(!unsupported, "target does not support MC emission");
+    JEANDLE_ERROR_ASSERT_AND_RET_VOID_ON_FAIL(!unsupported, "target does not support MC emission");
 
     pm.run(*_llvm_module);
   }

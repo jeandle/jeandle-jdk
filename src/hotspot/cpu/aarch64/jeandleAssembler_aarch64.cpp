@@ -38,7 +38,7 @@ void JeandleAssembler::emit_static_call_stub(int inst_offset, CallSiteInfo* call
   // same as C1 call_stub_size()
   const int stub_size = 13 * NativeInstruction::instruction_size;
   address stub = __ start_a_stub(stub_size);
-  CHECK_AND_REPORT_JEANDLE_ERROR_VOID(stub != nullptr, "static call stub overflow");
+  JEANDLE_ERROR_ASSERT_AND_RET_VOID_ON_FAIL(stub != nullptr, "static call stub overflow");
 
   int start = __ offset();
 
@@ -60,7 +60,7 @@ void JeandleAssembler::patch_static_call_site(int inst_offset, CallSiteInfo* cal
   int required_space = __ max_trampoline_stub_size();
   if (MacroAssembler::far_branches() &&
       __ code()->stubs()->maybe_expand_to_ensure_remaining(required_space)) {
-    CHECK_AND_REPORT_JEANDLE_ERROR_VOID(__ code()->blob() != nullptr, "trampoline stub overflow");
+    JEANDLE_ERROR_ASSERT_AND_RET_VOID_ON_FAIL(__ code()->blob() != nullptr, "trampoline stub overflow");
   }
 
   address call_address = __ addr_at(inst_offset);
@@ -78,7 +78,7 @@ void JeandleAssembler::patch_static_call_site(int inst_offset, CallSiteInfo* cal
   Address call_addr = Address(call->target(), rtype);
   // emit trampoline call for patch
   address tpc = __ trampoline_call(call_addr);
-  CHECK_AND_REPORT_JEANDLE_ERROR_VOID(tpc != nullptr, "trampoline stub overflow");
+  JEANDLE_ERROR_ASSERT_AND_RET_VOID_ON_FAIL(tpc != nullptr, "trampoline stub overflow");
   __ code()->set_insts_end(__ code()->insts_begin() + insts_end_offset);
 }
 
@@ -108,7 +108,7 @@ void JeandleAssembler::patch_routine_call_site(int inst_offset, address target) 
   __ code()->set_insts_end(call_pc);
 
   address tpc = __ trampoline_call(Address(target, relocInfo::runtime_call_type));
-  CHECK_AND_REPORT_JEANDLE_ERROR_VOID(tpc != nullptr, "trampoline stub overflow");
+  JEANDLE_ERROR_ASSERT_AND_RET_VOID_ON_FAIL(tpc != nullptr, "trampoline stub overflow");
 
   // Recover insts_end
   __ code()->set_insts_end(__ code()->insts_begin() + insts_end_offset);
@@ -123,7 +123,7 @@ void JeandleAssembler::patch_ic_call_site(int inst_offset, CallSiteInfo* call) {
   int required_space = __ max_trampoline_stub_size();
   if (MacroAssembler::far_branches() &&
       __ code()->stubs()->maybe_expand_to_ensure_remaining(required_space)) {
-    CHECK_AND_REPORT_JEANDLE_ERROR_VOID(__ code()->blob() != nullptr, "trampoline stub overflow");
+    JEANDLE_ERROR_ASSERT_AND_RET_VOID_ON_FAIL(__ code()->blob() != nullptr, "trampoline stub overflow");
   }
 
   address call_address = __ addr_at(inst_offset);
@@ -134,7 +134,7 @@ void JeandleAssembler::patch_ic_call_site(int inst_offset, CallSiteInfo* call) {
 
   // Patch
   address tpc = __ ic_call(call->target());
-  CHECK_AND_REPORT_JEANDLE_ERROR_VOID(tpc != nullptr, "trampoline stub overflow");
+  JEANDLE_ERROR_ASSERT_AND_RET_VOID_ON_FAIL(tpc != nullptr, "trampoline stub overflow");
 
   // Restore insts_end
   __ code()->set_insts_end(__ code()->insts_begin() + insts_end_offset);
@@ -148,7 +148,7 @@ void JeandleAssembler::patch_external_call_site(int inst_offset, CallSiteInfo* c
   // we need to confirm that stub code section has enough space before invoking `set_insts_end`.
   int required_space = __ max_trampoline_stub_size();
   if (__ code()->stubs()->maybe_expand_to_ensure_remaining(required_space)) {
-    CHECK_AND_REPORT_JEANDLE_ERROR_VOID(__ code()->blob() != nullptr, "trampoline stub overflow");
+    JEANDLE_ERROR_ASSERT_AND_RET_VOID_ON_FAIL(__ code()->blob() != nullptr, "trampoline stub overflow");
   }
 
   address call_address = __ addr_at(inst_offset);
@@ -163,7 +163,7 @@ void JeandleAssembler::patch_external_call_site(int inst_offset, CallSiteInfo* c
 
   // Patch.
   address tpc = __ trampoline_call(Address(call->target(), relocInfo::runtime_call_type));
-  CHECK_AND_REPORT_JEANDLE_ERROR_VOID(tpc != nullptr, "trampoline stub overflow");
+  JEANDLE_ERROR_ASSERT_AND_RET_VOID_ON_FAIL(tpc != nullptr, "trampoline stub overflow");
 
   // Recover insts_end.
   __ code()->set_insts_end(__ code()->insts_begin() + insts_end_offset);
@@ -198,7 +198,7 @@ int JeandleAssembler::interior_entry_alignment() const {
 int JeandleAssembler::emit_exception_handler() {
   int stub_size = __ far_codestub_branch_size();
   address base = __ start_a_stub(stub_size);
-  CHECK_AND_REPORT_JEANDLE_ERROR_RETURNVAL(base != nullptr, "exception handler stub overflow", 0);
+  JEANDLE_ERROR_ASSERT_AND_RET_ON_FAIL(base != nullptr, "exception handler stub overflow", 0);
   int offset = __ offset();
   __ far_jump(RuntimeAddress(JeandleRuntimeRoutine::get_routine_entry(JeandleRuntimeRoutine::_exception_handler)));
   assert(__ offset() - offset <= stub_size, "overflow");
