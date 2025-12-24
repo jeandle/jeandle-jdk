@@ -990,6 +990,7 @@ void JeandleAbstractInterpreter::uncommon_trap(Deoptimization::DeoptReason reaso
 
   // mark unreachable
   _ir_builder.CreateUnreachable();
+
   if (insert_point != nullptr) {
     // restore insert point
     _ir_builder.SetInsertPoint(orig_block);
@@ -2297,8 +2298,8 @@ void JeandleAbstractInterpreter::null_check(llvm::Value* obj) {
   llvm::BranchInst* null_check_br = _ir_builder.CreateCondBr(if_null, null_check_fail, null_check_pass);
 
   // Add make.implicit metadata, and the ImplicitNullChecksPass will transform it into an implicit check.
-    llvm::MDNode* make_implicit = llvm::MDNode::get(*_context, {});
-    null_check_br->setMetadata(llvm::LLVMContext::MD_make_implicit, make_implicit);
+  llvm::MDNode* make_implicit = llvm::MDNode::get(*_context, {});
+  null_check_br->setMetadata(llvm::LLVMContext::MD_make_implicit, make_implicit);
 
   // Uncommon trap on null check fail.
   uncommon_trap(Deoptimization::Reason_null_check, Deoptimization::Action_maybe_recompile, null_check_fail);
