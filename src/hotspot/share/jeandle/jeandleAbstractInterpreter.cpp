@@ -975,6 +975,7 @@ void JeandleAbstractInterpreter::interpret_block(JeandleBasicBlock* block) {
 }
 
 void JeandleAbstractInterpreter::uncommon_trap(Deoptimization::DeoptReason reason, Deoptimization::DeoptAction action, llvm::BasicBlock* insert_block) {
+  auto saved_insert_block = _ir_builder.GetInsertBlock();
   auto saved_insert_point = _ir_builder.GetInsertPoint();
 
   if (insert_block != nullptr) {
@@ -992,7 +993,7 @@ void JeandleAbstractInterpreter::uncommon_trap(Deoptimization::DeoptReason reaso
 
   if (insert_block != nullptr) {
     // Recover insert point.
-    _ir_builder.SetInsertPoint(saved_insert_point);
+    _ir_builder.SetInsertPoint(saved_insert_block, saved_insert_point);
   }
 }
 
