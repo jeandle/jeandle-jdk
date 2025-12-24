@@ -974,12 +974,11 @@ void JeandleAbstractInterpreter::interpret_block(JeandleBasicBlock* block) {
   }
 }
 
-void JeandleAbstractInterpreter::uncommon_trap(Deoptimization::DeoptReason reason, Deoptimization::DeoptAction action, llvm::BasicBlock* insert_point) {
-  llvm::BasicBlock* orig_block = _ir_builder.GetInsertBlock();
-  assert(insert_point == nullptr || orig_block != insert_point, "sanity");
+void JeandleAbstractInterpreter::uncommon_trap(Deoptimization::DeoptReason reason, Deoptimization::DeoptAction action, llvm::BasicBlock* insert_block) {
+  auto saved_insert_point = _ir_builder.GetInsertPoint();
 
-  if (insert_point != nullptr) {
-    _ir_builder.SetInsertPoint(insert_point);
+  if (insert_block != nullptr) {
+    _ir_builder.SetInsertPoint(insert_block);
   }
 
   llvm::Value* request = _ir_builder.getInt32(Deoptimization::make_trap_request(reason, action));
@@ -991,9 +990,9 @@ void JeandleAbstractInterpreter::uncommon_trap(Deoptimization::DeoptReason reaso
   // mark unreachable
   _ir_builder.CreateUnreachable();
 
-  if (insert_point != nullptr) {
-    // restore insert point
-    _ir_builder.SetInsertPoint(orig_block);
+  if (insert_block != nullptr) {
+    // Recover insert point.
+    _ir_builder.SetInsertPoint(saved_insert_point);
   }
 }
 

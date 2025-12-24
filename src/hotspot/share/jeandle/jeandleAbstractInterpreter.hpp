@@ -378,7 +378,7 @@ class JeandleAbstractInterpreter : public StackObj {
 
   void boundary_check(llvm::Value* array_oop, llvm::Value* index);
 
-  void uncommon_trap(Deoptimization::DeoptReason, Deoptimization::DeoptAction, llvm::BasicBlock* insert_point = nullptr);
+  void uncommon_trap(Deoptimization::DeoptReason, Deoptimization::DeoptAction, llvm::BasicBlock* insert_block = nullptr);
 };
 
 #endif // SHARE_JEANDLE_ABSTRACT_INTERPRETER_HPP
