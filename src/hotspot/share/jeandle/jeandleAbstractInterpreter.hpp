@@ -127,7 +127,7 @@ class JeandleVMState : public JeandleCompilationResourceObj {
   size_t locks_size() const { return _locks.size(); }
   llvm::Value* lock_at(int index) { return _locks[index]; }
 
-  llvm::SmallVector<llvm::Value*> deopt_args(llvm::IRBuilder<> &builder);
+  llvm::SmallVector<llvm::Value*> deopt_args(llvm::IRBuilder<> &builder, int bci);
  private:
   llvm::SmallVector<TypedValue> _stack;
   llvm::SmallVector<TypedValue> _locals;
@@ -150,6 +150,7 @@ class JeandleBasicBlock : public JeandleCompilationResourceObj {
     is_compiled                   = 1 << 0,
     is_on_work_list               = 1 << 1,
     is_loop_header                = 1 << 2,
+    always_uncommon_trap          = 1 << 3,
   };
 
   void set(Flag f)                               { _flags |= f; }
@@ -308,7 +309,8 @@ class JeandleAbstractInterpreter : public StackObj {
   llvm::InvokeInst* call_java_op_ex(llvm::StringRef java_op, llvm::ArrayRef<llvm::Value*> args);
   llvm::CallInst*   create_call(llvm::FunctionCallee callee,
                                 llvm::ArrayRef<llvm::Value*> arg,
-                                llvm::CallingConv::ID calling_conv);
+                                llvm::CallingConv::ID calling_conv,
+                                llvm::ArrayRef<llvm::OperandBundleDef> deopt_bundle = {});
   llvm::InvokeInst* create_call_ex(llvm::FunctionCallee callee,
                                    llvm::ArrayRef<llvm::Value*> arg,
                                    llvm::CallingConv::ID calling_conv);
@@ -375,6 +377,8 @@ class JeandleAbstractInterpreter : public StackObj {
   void null_check(llvm::Value* obj);
 
   void boundary_check(llvm::Value* array_oop, llvm::Value* index);
+
+  void uncommon_trap(Deoptimization::DeoptReason, Deoptimization::DeoptAction, llvm::BasicBlock* insert_block = nullptr);
 };
 
 #endif // SHARE_JEANDLE_ABSTRACT_INTERPRETER_HPP

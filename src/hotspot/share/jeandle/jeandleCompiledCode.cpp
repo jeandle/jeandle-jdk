@@ -33,6 +33,7 @@
 #include "asm/macroAssembler.hpp"
 #include "ci/ciEnv.hpp"
 #include "code/vmreg.inline.hpp"
+#include "interpreter/interpreter.hpp"
 #include "logging/log.hpp"
 #include "runtime/os.hpp"
 
@@ -168,7 +169,7 @@ class JeandleCallReloc : public JeandleReloc {
                              methodHandle(),
                              _method,
                              _call->bci(),
-                             false,
+                             _oop_map->reexecute(),
                              false,
                              false,
                              false,
@@ -325,7 +326,8 @@ void JeandleCompiledCode::resolve_reloc_info(JeandleAssembler& assembler) {
         // JeandleCallReloc for a routine call site will be created during stackmaps resolving because an oopmap is required.
         _routine_call_sites[inst_end_offset] = new CallSiteInfo(JeandleCompiledCall::ROUTINE_CALL,
                                                                 target_addr,
-                                                                -1/* bci */);
+                                                                -1/* bci */,
+                                                                target_addr == JeandleRuntimeRoutine::get_routine_entry("uncommon_trap")/* has_deopt_operands */);
       } else if (JeandleAssembler::is_external_call_reloc(target, edge.getKind())) {
         // External call relocations.
         address target_addr = (address)DynamicLibrary::SearchForAddressOfSymbol(target_name.str().c_str());
@@ -551,12 +553,23 @@ JeandleOopMap* JeandleCompiledCode::build_oop_map(StackMapParser& stackmaps, Sta
   assert(first.getKind() == StackMapParser::LocationKind::Constant, "unexpected kind");
   assert(second.getKind() == StackMapParser::LocationKind::Constant, "unexpected kind");
   int num_deopts = 0;
+  bool reexecute = false;
   if (call_info->has_deopt_operands()) {
     assert(this->_method != nullptr, "must be method compilation");
     auto third = *(location++);
     assert(third.getKind() == StackMapParser::LocationKind::Constant, "unexpected kind");
     num_deopts = third.getSmallConstant();
     assert(num_deopts >= 0, "negative number");
+
+    // bci goes firt in deopt operands
+    int bci = (location++)->getSmallConstant();
+    num_deopts--;
+    call_info->set_bci(bci);
+
+    if (bci != InvocationEntryBci) {
+      Bytecodes::Code code = _method->java_code_at_bci(bci);
+      reexecute = Interpreter::bytecode_should_reexecute(code); /* TODO: special case of multianewarray, please check GraphKit::should_reexecute_implied_by_bytecode */
+    }
   }
 
   // build scope values
@@ -615,7 +628,7 @@ JeandleOopMap* JeandleCompiledCode::build_oop_map(StackMapParser& stackmaps, Sta
       Unimplemented();
     }
   }
-  return new JeandleOopMap(oop_map, locals, stack);
+  return new JeandleOopMap(oop_map, locals, stack, reexecute);
 }
 
 void JeandleCompiledCode::build_exception_handler_table() {

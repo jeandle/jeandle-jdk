@@ -121,9 +121,13 @@
                                                                                                                                                           \
   def(StubRoutines_dexp,                          StubRoutines::dexp(),    llvm::Type::getDoubleTy(context),    llvm::Type::getDoubleTy(context))         \
                                                                                                                                                           \
-  def(SharedRuntime_dpow,                         SharedRuntime::dpow,     llvm::Type::getDoubleTy(context),    llvm::Type::getDoubleTy(context),    llvm::Type::getDoubleTy(context)) \
+  def(SharedRuntime_dpow,                         SharedRuntime::dpow,     llvm::Type::getDoubleTy(context),    llvm::Type::getDoubleTy(context),         \
+                                                                                                                llvm::Type::getDoubleTy(context))         \
                                                                                                                                                           \
-  def(StubRoutines_dpow,                          StubRoutines::dpow(),    llvm::Type::getDoubleTy(context),    llvm::Type::getDoubleTy(context),    llvm::Type::getDoubleTy(context)) \
+  def(StubRoutines_dpow,                          StubRoutines::dpow(),    llvm::Type::getDoubleTy(context),    llvm::Type::getDoubleTy(context),         \
+                                                                                                                llvm::Type::getDoubleTy(context))         \
+                                                                                                                                                          \
+  def(uncommon_trap, SharedRuntime::uncommon_trap_blob()->entry_point(),   llvm::Type::getVoidTy(context),      llvm::Type::getInt32Ty(context))          \
                                                                                                                                                           \
   def(install_exceptional_return_for_call_vm,     JeandleRuntimeRoutine::install_exceptional_return_for_call_vm, llvm::Type::getVoidTy(context))          \
                                                                                                                                                           \

@@ -41,6 +41,7 @@
 #include "ci/ciEnv.hpp"
 #include "ci/ciMethod.hpp"
 #include "code/exceptionHandlerTable.hpp"
+#include "runtime/sharedRuntime.hpp"
 
 
 class DeoptValueEncoding {
@@ -120,10 +121,13 @@ class CallSiteInfo : public JeandleCompilationResourceObj {
 #endif // ASSERT
   }
 
+
+  int bci() const { return _bci; }
+  void set_bci(int bci) { _bci = bci; }
+
   JeandleCompiledCall::Type type() const { return _type; }
   uint64_t statepoint_id() const { return _statepoint_id; }
   address target() const { return _target; }
-  int bci() const { return _bci; }
   bool has_deopt_operands() const { return _has_deopt_operands; }
 
  private:
@@ -138,18 +142,20 @@ class CallSiteInfo : public JeandleCompilationResourceObj {
 
 class JeandleOopMap {
 public:
-  JeandleOopMap(OopMap* oop_map, GrowableArray<ScopeValue*>* locals, GrowableArray<ScopeValue*>* stack) :
-      _oop_map(oop_map), _locals(locals), _stack(stack) {
+  JeandleOopMap(OopMap* oop_map, GrowableArray<ScopeValue*>* locals, GrowableArray<ScopeValue*>* stack, bool reexecute) :
+      _oop_map(oop_map), _locals(locals), _stack(stack), _reexecute(reexecute) {
   }
 
   OopMap* oop_map() const { return _oop_map; }
   GrowableArray<ScopeValue*>* locals() const { return _locals; }
   GrowableArray<ScopeValue*>* stack() const { return _stack; }
+  bool reexecute() const { return _reexecute; }
 
 private:
   OopMap* _oop_map;
   GrowableArray<ScopeValue*>* _locals;
   GrowableArray<ScopeValue*>* _stack;
+  bool _reexecute;
 };
 
 using ObjectBuffer   = llvm::MemoryBuffer;
@@ -265,12 +271,15 @@ public:
     return location.getKind() == StackMapParser::LocationKind::Constant
         || location.getKind() == StackMapParser::LocationKind::ConstantIndex;
   }
+
   static bool is_stack(const StackMapParser::LocationAccessor& location) {
     return location.getKind() == StackMapParser::LocationKind::Indirect;
   }
+
   static bool is_register(const StackMapParser::LocationAccessor& location) {
     return location.getKind() == StackMapParser::LocationKind::Register;
   }
+
   static int32_t stack_offset(const StackMapParser::LocationAccessor& location) {
     if (is_stack(location)) {
       return location.getOffset();
@@ -278,6 +287,7 @@ public:
       ShouldNotReachHere();
     }
   }
+  
   static uint32_t getConstantUint(const StackMapParser& parser, const StackMapParser::LocationAccessor& location);
   static uint64_t getConstantUlong(const StackMapParser& parser, const StackMapParser::LocationAccessor& location);
   static float    getConstantFloat(const StackMapParser& parser, const StackMapParser::LocationAccessor& location);

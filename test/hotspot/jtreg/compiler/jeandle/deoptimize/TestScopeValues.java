@@ -37,7 +37,7 @@ import jdk.test.lib.process.ProcessTools;
 
 public class TestScopeValues {
     public static void main(String[] args) throws Exception {
-        String dump_path = System.getProperty("java.io.tmpdir");
+        String dump_path = System.getProperty("user.dir");
         ArrayList<String> command_args = new ArrayList<String>(List.of(
                 "-Xbatch", "-XX:-TieredCompilation", "-XX:+UseJeandleCompiler", "-Xcomp",
                 "-Xlog:jeandle=debug", "-XX:+JeandleDumpIR",
@@ -60,7 +60,7 @@ public class TestScopeValues {
         checker.checkNext("entry:");
         checker.checkNext("br label %bci_0");
         checker.checkNext("bci_0:");
-        checker.checkNextPattern("invoke hotspotcc .*compiler_jeandle_deoptimize_TestScopeValues\\$TestWrapper_empty.* \"deopt\"\\(i64 12, ptr addrspace\\(1\\) %0, i64 4294967306, i32 10, i64 8589934603, i64 12, i64 17179869190, float 1.300000e\\+01\\)");
+        checker.checkNextPattern("invoke hotspotcc .*compiler_jeandle_deoptimize_TestScopeValues\\$TestWrapper_empty.* \"deopt\"\\(i32 11, i64 12, ptr addrspace\\(1\\) %0, i64 4294967306, i32 10, i64 8589934603, i64 12, i64 17179869190, float 1.300000e\\+01\\)");
 
         // check DebugInfo in nmethods output
         /* example output of PcDesc

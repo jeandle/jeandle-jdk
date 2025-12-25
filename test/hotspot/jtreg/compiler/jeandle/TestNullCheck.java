@@ -22,6 +22,7 @@
  * @test TestNullCheck.java
  * @summary Support null check, which can be optimized into implicit checking.
  *  issue: https://github.com/jeandle/jeandle-jdk/issues/14
+ * @requires os.arch=="amd64" | os.arch=="x86_64"
  * @library /test/lib /
  * @build compiler.jeandle.fileCheck.FileCheck
  * @run driver TestNullCheck
@@ -95,8 +96,7 @@ public class TestNullCheck {
         output.shouldContain(NPE_STRING);
 
         output = runTestProcess("testThrowNull");
-        output.shouldHaveExitValue(1);
-        output.shouldContain(NPE_STRING);
+        output.shouldHaveExitValue(0);
     }
 
     private static OutputAnalyzer runTestProcess(String testType) throws Exception {
@@ -138,9 +138,7 @@ public class TestNullCheck {
     private static void testThrowNull() {
         try {
             justThrowNull();
-        } catch (Exception e) {
-            // Should not reach here.
-        }
+        } catch (Exception e) {}
     }
 
     private static void justThrowNull() throws Exception {
