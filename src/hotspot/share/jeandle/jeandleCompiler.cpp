@@ -22,6 +22,7 @@
 #include "llvm/Bitcode/BitcodeWriter.h"
 #include "llvm/IRReader/IRReader.h"
 #include "llvm/MC/TargetRegistry.h"
+#include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/SmallVectorMemoryBuffer.h"
 #include "llvm/Support/SourceMgr.h"
 #include "llvm/TargetParser/Host.h"
@@ -35,6 +36,23 @@
 #include "jeandle/__hotspotHeadersBegin__.hpp"
 #include "runtime/arguments.hpp"
 
+namespace {
+void jeandle_llvm_fatal_error_handler(void* user_data, const char* reason, bool gen_crash_diag) {
+  (void)user_data;
+  (void)gen_crash_diag;
+  const char* message = (reason != nullptr) ? reason : "unknown LLVM fatal error";
+  fatal("LLVM fatal error: %s", message);
+}
+
+void install_jeandle_llvm_fatal_error_handler() {
+  static bool installed = false;
+  if (!installed) {
+    llvm::install_fatal_error_handler(jeandle_llvm_fatal_error_handler, nullptr);
+    installed = true;
+  }
+}
+} // namespace
+
 JeandleCompiler::JeandleCompiler(llvm::TargetMachine* target_machine) :
                                  AbstractCompiler(compiler_jeandle),
                                  _target_machine(target_machine),
@@ -42,6 +60,8 @@ JeandleCompiler::JeandleCompiler(llvm::TargetMachine* target_machine) :
                                  _template_buffer(nullptr) {}
 
 JeandleCompiler* JeandleCompiler::create() {
+  install_jeandle_llvm_fatal_error_handler();
+
   llvm::Triple target_triple = llvm::Triple(llvm::sys::getProcessTriple());
 
   std::string err_msg;
