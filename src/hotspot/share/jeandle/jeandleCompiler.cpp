@@ -22,6 +22,7 @@
 #include "llvm/Bitcode/BitcodeWriter.h"
 #include "llvm/IRReader/IRReader.h"
 #include "llvm/MC/TargetRegistry.h"
+#include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/SmallVectorMemoryBuffer.h"
 #include "llvm/Support/SourceMgr.h"
 #include "llvm/TargetParser/Host.h"
@@ -34,6 +35,14 @@
 
 #include "jeandle/__hotspotHeadersBegin__.hpp"
 #include "runtime/arguments.hpp"
+#include "utilities/vmError.hpp"
+
+// LLVM fatal error handler that generates hs_err log
+static void llvm_fatal_error_handler(void* user_data, const char* reason, bool gen_crash_diag) {
+  // Report the LLVM error and generate hs_err log
+  VMError::report_and_die(Thread::current_or_null(), nullptr, __FILE__, __LINE__,
+                          "LLVM fatal error", "LLVM assertion or fatal error: %s", reason);
+}
 
 JeandleCompiler::JeandleCompiler(llvm::TargetMachine* target_machine) :
                                  AbstractCompiler(compiler_jeandle),
@@ -66,6 +75,8 @@ JeandleCompiler* JeandleCompiler::create() {
 
 void JeandleCompiler::initialize() {
   if (should_perform_init()) {
+    // Install LLVM fatal error handler to generate hs_err logs on LLVM assertions
+    llvm::install_fatal_error_handler(llvm_fatal_error_handler, nullptr);
     if (!initialize_commandline_options()) {
       set_state(failed);
       return;
