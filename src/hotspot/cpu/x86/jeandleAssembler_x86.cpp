@@ -167,18 +167,8 @@ void JeandleAssembler::emit_verified_entry() {
 void JeandleAssembler::emit_clinit_barrier_on_entry(Klass* klass) {
   Label fallthrough;
   __ mov_metadata(rscratch1, klass);
-
-  // Fast path check: class is fully initialized
-  __ cmpb(Address(rscratch1, InstanceKlass::init_state_offset()), InstanceKlass::fully_initialized);
-  __ jcc(Assembler::equal, fallthrough);
-
-  // Fast path check: current thread is initializer thread
-  __ cmpptr(r15_thread, Address(rscratch1, InstanceKlass::init_thread_offset()));
-  __ jcc(Assembler::equal, fallthrough);
-
-  // Slow path
+  __ clinit_barrier(rscratch1, r15_thread, &fallthrough);
   __ jump(RuntimeAddress(SharedRuntime::get_handle_wrong_method_stub()));
-
   __ bind(fallthrough);
 }
 
