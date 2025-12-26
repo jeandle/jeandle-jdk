@@ -29,6 +29,7 @@
 #include "jvm.h"
 #include "logging/log.hpp"
 #include "os_posix.hpp"
+#include "runtime/frame.hpp"
 #include "runtime/atomic.hpp"
 #include "runtime/globals.hpp"
 #include "runtime/interfaceSupport.inline.hpp"
@@ -36,6 +37,7 @@
 #include "runtime/javaThread.hpp"
 #include "runtime/os.hpp"
 #include "runtime/osThread.hpp"
+#include "runtime/registerMap.hpp"
 #include "runtime/safefetch.hpp"
 #include "runtime/semaphore.inline.hpp"
 #include "runtime/suspendedThreadTask.hpp"
@@ -47,6 +49,62 @@
 #include "utilities/vmError.hpp"
 
 #include <signal.h>
+
+#ifdef JEANDLE
+static bool is_llvm_pc(address pc) {
+  if (pc == nullptr) {
+    return false;
+  }
+  char libname[1024];
+  int offset = -1;
+  if (!os::dll_address_to_library_name(pc, libname, sizeof(libname), &offset)) {
+    return false;
+  }
+  if (libname[0] == '\0') {
+    return false;
+  }
+  return strstr(libname, "jeandle-llvm") != nullptr ||
+         strstr(libname, "libLLVM") != nullptr ||
+         strstr(libname, "LLVM") != nullptr ||
+         strstr(libname, "llvm") != nullptr;
+}
+
+static frame next_frame_for_signal(frame fr, Thread* t) {
+  frame invalid;
+  if (t != nullptr && t->is_Java_thread()) {
+    if (!t->is_in_full_stack((address)(fr.real_fp() + 1))) {
+      return invalid;
+    }
+    if (fr.is_interpreted_frame() || (fr.cb() != nullptr && fr.cb()->frame_size() > 0)) {
+      RegisterMap map(JavaThread::cast(t),
+                      RegisterMap::UpdateMap::skip,
+                      RegisterMap::ProcessFrames::include,
+                      RegisterMap::WalkContinuation::skip);
+      return fr.sender(&map);
+    }
+    if (os::is_first_C_frame(&fr)) {
+      return invalid;
+    }
+    return os::get_sender_for_C_frame(&fr);
+  }
+  if (os::is_first_C_frame(&fr)) {
+    return invalid;
+  }
+  return os::get_sender_for_C_frame(&fr);
+}
+
+static bool has_llvm_frame(ucontext_t* uc, Thread* t) {
+  const int max_frames = 32;
+  frame fr = os::fetch_frame_from_context(uc);
+  for (int count = 0; count < max_frames && fr.pc() != nullptr; count++) {
+    if (is_llvm_pc(fr.pc())) {
+      return true;
+    }
+    fr = next_frame_for_signal(fr, t);
+  }
+  return false;
+}
+#endif
 
 
 static const char* get_signal_name(int sig, char* out, size_t outlen);
@@ -600,6 +658,18 @@ int JVM_HANDLE_XXX_SIGNAL(int sig, siginfo_t* info,
       pc = os::Posix::ucontext_get_pc(uc);
     }
   }
+
+#ifdef JEANDLE
+  if (sig == SIGABRT && !has_llvm_frame(uc, t)) {
+    struct sigaction dfl;
+    ::memset(&dfl, 0, sizeof(dfl));
+    dfl.sa_handler = SIG_DFL;
+    sigemptyset(&dfl.sa_mask);
+    sigaction(SIGABRT, &dfl, nullptr);
+    ::raise(SIGABRT);
+    return true;
+  }
+#endif
 
   if (!signal_was_handled) {
     signal_was_handled = handle_safefetch(sig, pc, uc);
@@ -1315,6 +1385,9 @@ void install_signal_handlers() {
   set_signal_handler(SIGBUS);
   set_signal_handler(SIGILL);
   set_signal_handler(SIGFPE);
+#ifdef JEANDLE
+  set_signal_handler(SIGABRT);
+#endif
   PPC64_ONLY(set_signal_handler(SIGTRAP);)
   set_signal_handler(SIGXFSZ);
   if (!ReduceSignalUsage) {
