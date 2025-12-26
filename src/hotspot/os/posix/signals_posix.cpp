@@ -63,10 +63,7 @@ static bool is_llvm_pc(address pc) {
   if (libname[0] == '\0') {
     return false;
   }
-  return strstr(libname, "jeandle-llvm") != nullptr ||
-         strstr(libname, "libLLVM") != nullptr ||
-         strstr(libname, "LLVM") != nullptr ||
-         strstr(libname, "llvm") != nullptr;
+  return strstr(libname, "libLLVM") != nullptr;
 }
 
 static frame next_frame_for_signal(frame fr, Thread* t) {
