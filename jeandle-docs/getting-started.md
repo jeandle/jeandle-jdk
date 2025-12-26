@@ -98,23 +98,6 @@ The same debug level should be configured for both jeandle-llvm and jeandle-jdk.
 --with-debug-level=slowdebug
 ```
 
-### LLVM_ASSERTS_REPORT_FATAL_ERROR
-Use this when you want LLVM assertion failures to go through `llvm::report_fatal_error()` so jeandle-jdk can emit `hs_err` logs instead of aborting. Enable it in an assertion-enabled jeandle-llvm build:
-```
--DCMAKE_BUILD_TYPE="Debug"
--DLLVM_ASSERTS_REPORT_FATAL_ERROR=ON
-```
-or
-```
--DCMAKE_BUILD_TYPE="Release"
--DLLVM_ENABLE_ASSERTIONS=ON
--DLLVM_ASSERTS_REPORT_FATAL_ERROR=ON
-```
-Behavior:
-- Only takes effect in assertion-enabled builds (Debug or Release with `LLVM_ENABLE_ASSERTIONS=ON`).
-- In jeandle-jdk, LLVM fatal errors are forwarded to HotSpot `fatal()`, producing `hs_err_pid*.log`.
-- Opt-in build-time switch; requires linking against a jeandle-llvm build with this option enabled.
-
 ## Supported Platforms
 Jeandle currently supports X86 and AArch64 architectures. Support for RISC-V architecture is planned for the future. Moreover, by leveraging the powerful ecosystem and well-developed backends of LLVM, other backends may also be supported on demand.
 | OS | Arch | Status |
