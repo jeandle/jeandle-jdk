@@ -649,6 +649,18 @@ void JeandleAbstractInterpreter::interpret_block(JeandleBasicBlock* block) {
     return;
   }
 
+  if (_compiled_code.needs_clinit_barrier_on_entry()) {
+    assert(_method != nullptr, "only for normal compilations");
+    assert(!_method->holder()->is_not_initialized(), "initialization should have been started");
+
+    _bytecodes.force_bci(0); // to get cur_bci for uncommon trap
+    Klass* klass = (Klass*)_method->holder()->constant_encoding();
+    llvm::PointerType* klass_type = llvm::PointerType::get(*_context, llvm::jeandle::AddrSpace::CHeapAddrSpace);
+    llvm::Value* klass_addr = _ir_builder.getInt64((intptr_t)klass);
+    llvm::Value* klass_ptr = _ir_builder.CreateIntToPtr(klass_addr, klass_type);
+    guard_klass_being_initialized(klass_ptr);
+  }
+
   _bytecodes.reset_to_bci(block->start_bci());
 
   Bytecodes::Code code = Bytecodes::_illegal;
@@ -1708,7 +1720,6 @@ llvm::Value* JeandleAbstractInterpreter::find_or_insert_oop(ciObject* oop) {
   return global_oop_handle;
 }
 
-// TODO: clinit_barrier check.
 // TODO: Handle field attributions like final, stable.
 void JeandleAbstractInterpreter::do_field_access(bool is_get, bool is_static) {
   bool will_link;
@@ -1723,6 +1734,10 @@ void JeandleAbstractInterpreter::do_field_access(bool is_get, bool is_static) {
         // TODO: Uncommon trap.
         Unimplemented();
         return;
+  }
+
+  if (_compiled_code.needs_clinit_barrier(field, _method)) {
+    clinit_barrier(field_holder, _method);
   }
 
   if (!is_static) {
@@ -1999,7 +2014,7 @@ void JeandleAbstractInterpreter::do_array_store(BasicType basic_type) {
 
 void JeandleAbstractInterpreter::do_new() {
   bool will_link;
-  ciKlass* klass = _bytecodes.get_klass(will_link);
+  ciInstanceKlass* klass = _bytecodes.get_klass(will_link)->as_instance_klass();
 
   if (!will_link || klass->is_abstract() || klass->is_interface() ||
       klass->name() == ciSymbols::java_lang_Class() ||
@@ -2009,7 +2024,11 @@ void JeandleAbstractInterpreter::do_new() {
     _block->set(JeandleBasicBlock::always_uncommon_trap);
     return;
   }
-  // TODO: cl init barrier
+
+  if (_compiled_code.needs_clinit_barrier(klass, _method)) {
+    clinit_barrier(klass, _method);
+  }
+
   jint layout_helper = klass->layout_helper();
   assert(Klass::layout_helper_is_instance(layout_helper), "Unexpected klass");
   llvm::Value* size_in_bytes = _ir_builder.getInt32(Klass::layout_helper_size_in_bytes(layout_helper));
@@ -2343,4 +2362,57 @@ void JeandleAbstractInterpreter::boundary_check(llvm::Value* array_oop, llvm::Va
 
   _ir_builder.SetInsertPoint(boundary_check_pass);
   _block->set_tail_llvm_block(boundary_check_pass);
+}
+
+void JeandleAbstractInterpreter::guard_klass_being_initialized(llvm::Value* klass) {
+  llvm::BasicBlock* fallthrough_block = llvm::BasicBlock::Create(*_context, "state_fallthrough", _llvm_func);
+  llvm::BasicBlock* uncommon_block = llvm::BasicBlock::Create(*_context, "uncommon_trap_init_state", _llvm_func);
+
+  llvm::Value* init_state_offset = llvm::ConstantInt::get(_ir_builder.getInt32Ty(), (uint64_t)InstanceKlass::init_state_offset());
+  llvm::Value* klass_init_state_addr = _ir_builder.CreateInBoundsGEP(llvm::Type::getInt8Ty(*_context), klass, init_state_offset);
+  llvm::Value* init_state = _ir_builder.CreateLoad(_ir_builder.getInt8Ty(), klass_init_state_addr, true /* is_volatile */);
+  llvm::Value* being_initialized = llvm::ConstantInt::get(_ir_builder.getInt8Ty(), (uint64_t)InstanceKlass::being_initialized);
+  llvm::Value* if_being_initialized = _ir_builder.CreateICmpEQ(init_state, being_initialized);
+  _ir_builder.CreateCondBr(if_being_initialized, fallthrough_block, uncommon_block);
+
+  uncommon_trap(Deoptimization::Reason_initialized, Deoptimization::Action_reinterpret, uncommon_block);
+
+  _ir_builder.SetInsertPoint(fallthrough_block);
+  _block->set_tail_llvm_block(fallthrough_block);
+}
+
+void JeandleAbstractInterpreter::guard_init_thread(llvm::Value* klass) {
+  llvm::BasicBlock* fallthrough_block = llvm::BasicBlock::Create(*_context, "thread_fallthrough", _llvm_func);
+  llvm::BasicBlock* uncommon_block = llvm::BasicBlock::Create(*_context, "uncommon_trap_init_thread", _llvm_func);
+
+  llvm::Value* init_thread_offset = llvm::ConstantInt::get(_ir_builder.getInt32Ty(), (uint64_t)InstanceKlass::init_thread_offset());
+  llvm::Value* klass_init_thread_addr = _ir_builder.CreateInBoundsGEP(llvm::Type::getInt8Ty(*_context), klass, init_thread_offset);
+  llvm::Value* init_thread = _ir_builder.CreateLoad(_ir_builder.getPtrTy(), klass_init_thread_addr, true /* is_volatile */);
+
+  // get current thread
+  llvm::CallInst* current_thread = call_java_op("jeandle.current_thread", {});
+  llvm::Value* if_current_thread = _ir_builder.CreateICmpEQ(init_thread, current_thread);
+  _ir_builder.CreateCondBr(if_current_thread, fallthrough_block, uncommon_block);
+
+  uncommon_trap(Deoptimization::Reason_uninitialized, Deoptimization::Action_none, uncommon_block);
+
+  _ir_builder.SetInsertPoint(fallthrough_block);
+  _block->set_tail_llvm_block(fallthrough_block);
+}
+
+void JeandleAbstractInterpreter::clinit_barrier(ciInstanceKlass* ik, ciMethod* context) {
+  if (ik->is_being_initialized()) {
+    if (_compiled_code.needs_clinit_barrier(ik, context)) {
+      Klass* klass = (Klass*)ik->constant_encoding();
+      llvm::PointerType* klass_type = llvm::PointerType::get(*_context, llvm::jeandle::AddrSpace::CHeapAddrSpace);
+      llvm::Value* klass_addr = _ir_builder.getInt64((intptr_t)klass);
+      llvm::Value* klass_ptr = _ir_builder.CreateIntToPtr(klass_addr, klass_type);
+      guard_klass_being_initialized(klass_ptr);
+      guard_init_thread(klass_ptr);
+    }
+  } else if (ik->is_initialized()) {
+    return; // no barrier needed
+  } else {
+    uncommon_trap(Deoptimization::Reason_uninitialized, Deoptimization::Action_reinterpret);
+  }
 }

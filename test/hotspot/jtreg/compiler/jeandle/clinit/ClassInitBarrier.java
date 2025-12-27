@@ -28,8 +28,8 @@
  *
  * @requires !vm.graal.enabled
  *
- * @run main/othervm/native -Xbatch -XX:CompileCommand=dontinline,*::test* -XX:-TieredCompilation -XX:+UseJeandleCompiler -XX:CompileOnly=.testInvokeStatic -XX:CompileOnly=.staticM -DTHROW=false -XX:CompileCommand=dontinline,*::static* -Xcheck:jni ClassInitBarrier
- * @run main/othervm/native -Xbatch -XX:CompileCommand=dontinline,*::test* -XX:-TieredCompilation -XX:+UseJeandleCompiler -XX:CompileOnly=.testInvokeStatic -XX:CompileOnly=.staticM -DTHROW=true  -XX:CompileCommand=dontinline,*::static* -Xcheck:jni ClassInitBarrier
+ * @run main/othervm/native -Xbatch -XX:CompileCommand=dontinline,*::test* -XX:-TieredCompilation -XX:+UseJeandleCompiler -XX:CompileCommand=compileonly,*::test* -XX:CompileCommand=compileonly,*::static* -DTHROW=false -XX:CompileCommand=dontinline,*::static* -Xcheck:jni ClassInitBarrier
+ * @run main/othervm/native -Xbatch -XX:CompileCommand=dontinline,*::test* -XX:-TieredCompilation -XX:+UseJeandleCompiler -XX:CompileCommand=compileonly,*::test* -XX:CompileCommand=compileonly,*::static* -DTHROW=true  -XX:CompileCommand=dontinline,*::static* -Xcheck:jni ClassInitBarrier
  */
 
 import jdk.test.lib.Asserts;
@@ -72,6 +72,8 @@ public class ClassInitBarrier {
 
             static              void staticM(Runnable action) { action.run(); }
 
+            static int staticF;
+
             static native boolean init(Class<B> cls);
         }
 
@@ -79,13 +81,28 @@ public class ClassInitBarrier {
 
         static void testInvokeStatic(Runnable action)       { A.staticM(action); }
 
+        static int  testGetStatic(Runnable action)    { int v = A.staticF; action.run(); return v;   }
+        static void testPutStatic(Runnable action)    { A.staticF = 1;     action.run(); }
+        static A    testNewInstanceA(Runnable action) { A obj = new A();   action.run(); return obj; }
+        static B    testNewInstanceB(Runnable action) { B obj = new B();   action.run(); return obj; }
+
         static void runTests() {
             checkBlockingAction(Test::testInvokeStatic);       // invokestatic
+            checkBlockingAction(Test::testGetStatic);          // getstatic
+            checkBlockingAction(Test::testPutStatic);          // putstatic
+            checkBlockingAction(Test::testNewInstanceA);       // new
+
+            A recv = testNewInstanceB(NON_BLOCKING.get());  // trigger B initialization
+            checkNonBlockingAction(Test::testNewInstanceB); // new: NO BLOCKING: same thread: A being initialized, B fully initialized
         }
 
         static void warmup() {
             for (int i = 0; i < 20_000; i++) {
                 testInvokeStatic(      NON_BLOCKING_WARMUP);
+                testGetStatic(         NON_BLOCKING_WARMUP);
+                testPutStatic(         NON_BLOCKING_WARMUP);
+                testNewInstanceA(      NON_BLOCKING_WARMUP);
+                testNewInstanceB(      NON_BLOCKING_WARMUP);
             }
         }
 
@@ -282,6 +299,11 @@ public class ClassInitBarrier {
             }
             default: throw new Error("wrong phase: " + phase);
         }
+    }
+
+    static void checkNonBlockingAction(TestCase0 r) {
+        r.run(NON_BLOCKING.get()); // initializing thread
+        checkNotBlocked(r);        // different thread
     }
 
     static void triggerInitialization(Class<?> cls) {

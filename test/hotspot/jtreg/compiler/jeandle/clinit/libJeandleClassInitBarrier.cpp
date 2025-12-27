@@ -31,6 +31,8 @@ static jclass test_class_B;
 
 static jmethodID test_staticM_id;
 
+static jfieldID test_staticF_id;
+
 extern "C" {
     JNIEXPORT jboolean JNICALL Java_ClassInitBarrier_init(JNIEnv* env, jclass cls) {
         jclass runnable = env->FindClass("java/lang/Runnable");
@@ -51,6 +53,9 @@ extern "C" {
 
         test_staticM_id = env->GetStaticMethodID(test_class_A, "staticM", "(Ljava/lang/Runnable;)V");
         if (test_staticM_id == NULL)  return JNI_FALSE;
+
+        test_staticF_id = env->GetStaticFieldID(test_class_A, "staticF", "I");
+        if (test_staticF_id == NULL)  return JNI_FALSE;
 
         return JNI_TRUE;
     }
