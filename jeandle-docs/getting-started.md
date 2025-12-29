@@ -108,7 +108,7 @@ Jeandle currently supports X86 and AArch64 architectures. Support for RISC-V arc
 
 ## Cross-compiling
 
-The following steps show how to cross-compile jeandle-jdk for AArch64 architecture. Other platforms also has similar steps. Please refer to the cross-compilation documentation of [LLVM](https://llvm.org/docs/HowToCrossCompileLLVM.html) and [OpenJDK](../doc/building.md#cross-compiling) for detailed guidance.
+The following steps show how to cross-compile jeandle-jdk for AArch64 architecture. Other platforms also have similar steps. Please refer to the cross-compilation documentation of [LLVM](https://llvm.org/docs/HowToCrossCompileLLVM.html) and [OpenJDK](../doc/building.md#cross-compiling) for detailed guidance.
 
 1. Prepare the cross-compilation toolchain:
 ```
@@ -126,7 +126,7 @@ sudo debootstrap \
 http://httpredir.debian.org/debian/
 ```
 
-If you use ubuntu, you can use the following command:
+If you use Ubuntu, you can use the following command:
 ```
 sudo debootstrap \
 --arch=arm64 \
