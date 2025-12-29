@@ -66,7 +66,7 @@ void JeandleCallVM::generate_call_VM(const char* name, address c_func, llvm::Fun
   }
 
   // Call to the C function.
-  llvm::PointerType* c_func_ptr_type = llvm::PointerType::get(func_type, llvm::jeandle::AddrSpace::CHeapAddrSpace);
+  llvm::PointerType* c_func_ptr_type = llvm::PointerType::get(context, llvm::jeandle::AddrSpace::CHeapAddrSpace);
   llvm::Value* c_func_addr = ir_builder.getInt64((intptr_t)c_func);
   llvm::Value* c_func_ptr = ir_builder.CreateIntToPtr(c_func_addr, c_func_ptr_type);
   llvm::CallInst* call_c_func = ir_builder.CreateCall(func_type, c_func_ptr, args);
