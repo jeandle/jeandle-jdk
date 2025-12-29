@@ -302,7 +302,7 @@ void JeandleCompiledCode::finalize() {
   build_implicit_exception_table();
 
   // No deopt support now.
-  _offsets.set_value(CodeOffsets::Deopt, 0);
+  _offsets.set_value(CodeOffsets::Deopt, masm->offset());
 }
 
 void JeandleCompiledCode::resolve_reloc_info(JeandleAssembler& assembler) {
