@@ -212,6 +212,10 @@ static bool need_stack_overflow_check(bool is_method_compilation,
          frame_size_in_bytes > (int)(os::vm_page_size() >> 3) DEBUG_ONLY(|| true);
 }
 
+static bool need_clinit_barrier_on_entry(ciMethod* method) {
+  return VM_Version::supports_fast_class_init_checks() && method->needs_clinit_barrier();
+}
+
 void JeandleCompiledCode::install_obj(std::unique_ptr<ObjectBuffer> obj) {
   _obj = std::move(obj);
   llvm::MemoryBufferRef memory_buffer = _obj->getMemBufferRef();
@@ -258,6 +262,11 @@ void JeandleCompiledCode::finalize() {
 
   _offsets.set_value(CodeOffsets::Verified_Entry, masm->offset());
   assembler.emit_verified_entry();
+
+  if (_method && need_clinit_barrier_on_entry(_method)) {
+    Klass* klass = (Klass*)_method->holder()->constant_encoding();
+    assembler.emit_clinit_barrier_on_entry(klass);
+  }
 
   int frame_size_in_bytes = _frame_size * BytesPerWord;
   bool is_method_compilation = _method != nullptr;

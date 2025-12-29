@@ -164,6 +164,14 @@ void JeandleAssembler::emit_verified_entry() {
   __ addr_nop_5();
 }
 
+void JeandleAssembler::emit_clinit_barrier_on_entry(Klass* klass) {
+  Label fallthrough;
+  __ mov_metadata(rscratch1, klass);
+  __ clinit_barrier(rscratch1, r15_thread, &fallthrough);
+  __ jump(RuntimeAddress(SharedRuntime::get_handle_wrong_method_stub()));
+  __ bind(fallthrough);
+}
+
 int JeandleAssembler::interior_entry_alignment() const {
   // Keep interior entry 16-byte aligned (matches default HotSpot interior entry alignment).
   return 16;

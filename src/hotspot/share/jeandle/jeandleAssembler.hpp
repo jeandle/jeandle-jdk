@@ -44,6 +44,7 @@ class JeandleAssembler : public StackObj {
 
   void emit_ic_check();
   void emit_verified_entry();
+  void emit_clinit_barrier_on_entry(Klass* klass);
 
   int emit_exception_handler();
 
