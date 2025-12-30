@@ -30,6 +30,7 @@
 #include "ci/ciUtilities.hpp"
 #include "gc/shared/cardTable.hpp"
 #include "gc/shared/gc_globals.hpp"
+#include "gc/shared/tlab_globals.hpp"
 #include "oops/arrayOop.hpp"
 #include "oops/array.hpp"
 #include "oops/klass.hpp"
@@ -152,6 +153,7 @@ JAVA_OP_END
 DEF_JAVA_OP(new_instance, 1, llvm::PointerType::get(context, llvm::jeandle::AddrSpace::JavaHeapAddrSpace),
             llvm::PointerType::get(context, llvm::jeandle::AddrSpace::CHeapAddrSpace), // klass
             llvm::Type::getInt32Ty(context)) // size_in_bytes
+  // Entry
   llvm::Value* klass = func->getArg(0);
   llvm::Value* size = func->getArg(1);
   // Get current thread pointer using jeandle.current_thread JavaOp
@@ -163,11 +165,61 @@ DEF_JAVA_OP(new_instance, 1, llvm::PointerType::get(context, llvm::jeandle::Addr
   llvm::CallInst* current_thread = ir_builder.CreateCall(current_thread_func);
   current_thread->setCallingConv(llvm::CallingConv::Hotspot_JIT);
 
-  // slow path allocation, TODO: implement fast path allocation
-  llvm::CallInst* call_inst = ir_builder.CreateCall(JeandleRuntimeRoutine::new_instance_callee(template_module), {klass, current_thread});
-  call_inst->setCallingConv(llvm::CallingConv::Hotspot_JIT);
+  // TLAB check
+  llvm::BasicBlock* alloc_slow_path = llvm::BasicBlock::Create(context, "alloc_slow_path", func);
+  llvm::BasicBlock* alloc_fast_path = llvm::BasicBlock::Create(context, "alloc_fast_path", func);
+  llvm::BasicBlock* return_block = llvm::BasicBlock::Create(context, "return_block", func);
+  llvm::Type*  oop_type = llvm::PointerType::get(context, llvm::jeandle::JavaHeapAddrSpace);
+  llvm::Value* tlab_end_ptr = ir_builder.CreateIntToPtr(ir_builder.getInt64((uint64_t)JavaThread::tlab_end_offset()),
+                                                         llvm::PointerType::get(context, llvm::jeandle::AddrSpace::TLSAddrSpace));
+  llvm::Value* tlab_top_ptr = ir_builder.CreateIntToPtr(ir_builder.getInt64((uint64_t)JavaThread::tlab_top_offset()),
+                                                        llvm::PointerType::get(context, llvm::jeandle::AddrSpace::TLSAddrSpace));
+  llvm::Value* tlab_old_top = ir_builder.CreateLoad(oop_type, tlab_top_ptr);
+  llvm::Value* tlab_end = ir_builder.CreateLoad(oop_type, tlab_end_ptr);
+  llvm::Value* tlab_new_top = ir_builder.CreatePtrAdd(tlab_old_top, size);
 
-  ir_builder.CreateRet(call_inst);
+  llvm::Value* if_tlab_full = ir_builder.CreateICmp(llvm::CmpInst::ICMP_UGE, tlab_new_top, tlab_end);
+  ir_builder.CreateCondBr(if_tlab_full, alloc_slow_path, alloc_fast_path);
+
+  // Alloc Fast Path
+  ir_builder.SetInsertPoint(alloc_fast_path);
+  ir_builder.CreateStore(tlab_new_top, tlab_top_ptr);
+
+  // TODO: prefetch
+
+  // initialize object header
+  llvm::Value* alloc_oop = ir_builder.CreateIntToPtr(tlab_old_top, oop_type);
+  llvm::Value* mark_word = ir_builder.getInt64(markWord::prototype().value()); // TODO: uint32_t for CompactObjectHeaders, it' not available in JDK21
+  llvm::Value* mark_word_ptr = ir_builder.CreateIntToPtr(ir_builder.CreatePtrAdd(alloc_oop, ir_builder.getInt32(oopDesc::mark_offset_in_bytes())), oop_type);
+  llvm::Value* klass_ptr = ir_builder.CreateIntToPtr(ir_builder.CreatePtrAdd(alloc_oop, ir_builder.getInt32(oopDesc::klass_offset_in_bytes())), oop_type);
+  ir_builder.CreateStore(mark_word, mark_word_ptr);
+  ir_builder.CreateStore(klass, klass_ptr);
+
+  // clear memory
+  if (!(UseTLAB && ZeroTLAB)) {
+    int header_size = instanceOopDesc::base_offset_in_bytes();
+    llvm::Value *base_ptr = ir_builder.CreateIntToPtr(ir_builder.CreatePtrAdd(alloc_oop, ir_builder.getInt32(header_size)), oop_type);
+    int alignment = 8;  // TODO: maybe change with other runtime option
+    ir_builder.CreateMemSet(base_ptr, ir_builder.getInt8(0), size, llvm::MaybeAlign(alignment));
+  }
+
+  // storestore membar for initialzation
+  ir_builder.CreateFence(llvm::AtomicOrdering::Release);
+
+  ir_builder.CreateBr(return_block);
+
+  // Alloc Slow Path
+  ir_builder.SetInsertPoint(alloc_slow_path);
+  llvm::CallInst* call_result = ir_builder.CreateCall(JeandleRuntimeRoutine::new_instance_callee(template_module), {klass, current_thread});
+  call_result->setCallingConv(llvm::CallingConv::Hotspot_JIT);
+  ir_builder.CreateBr(return_block);
+
+  // Return
+  ir_builder.SetInsertPoint(return_block);
+  llvm::PHINode* phi = ir_builder.CreatePHI(oop_type, 2);
+  phi->addIncoming(alloc_oop, alloc_fast_path);
+  phi->addIncoming(call_result, alloc_slow_path);
+  ir_builder.CreateRet(phi);
 JAVA_OP_END
 
 } // anonymous namespace
