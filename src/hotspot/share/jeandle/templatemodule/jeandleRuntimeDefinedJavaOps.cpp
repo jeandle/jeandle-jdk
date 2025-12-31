@@ -171,7 +171,7 @@ DEF_JAVA_OP(new_instance, 1, llvm::PointerType::get(context, llvm::jeandle::Addr
   llvm::BasicBlock* return_block = llvm::BasicBlock::Create(context, "return_block", func);
   llvm::Type*  oop_type = llvm::PointerType::get(context, llvm::jeandle::JavaHeapAddrSpace);
   llvm::Value* tlab_end_ptr = ir_builder.CreateIntToPtr(ir_builder.getInt64((uint64_t)JavaThread::tlab_end_offset()),
-                                                         llvm::PointerType::get(context, llvm::jeandle::AddrSpace::TLSAddrSpace));
+                                                        llvm::PointerType::get(context, llvm::jeandle::AddrSpace::TLSAddrSpace));
   llvm::Value* tlab_top_ptr = ir_builder.CreateIntToPtr(ir_builder.getInt64((uint64_t)JavaThread::tlab_top_offset()),
                                                         llvm::PointerType::get(context, llvm::jeandle::AddrSpace::TLSAddrSpace));
   llvm::Value* tlab_old_top = ir_builder.CreateLoad(oop_type, tlab_top_ptr);
