@@ -62,10 +62,10 @@ JeandleCompiler::JeandleCompiler(llvm::TargetMachine* target_machine) :
 JeandleCompiler* JeandleCompiler::create() {
   install_jeandle_llvm_fatal_error_handler();
 
-  llvm::Triple target_triple(llvm::sys::getProcessTriple());
+  llvm::Triple target_triple = llvm::Triple(llvm::sys::getProcessTriple());
 
   std::string err_msg;
-  const llvm::Target* target = llvm::TargetRegistry::lookupTarget(target_triple.getTriple(), err_msg);
+  const llvm::Target* target = llvm::TargetRegistry::lookupTarget(target_triple, err_msg);
   if (!target) {
     fatal("Cannot create LLVM target machine: %s", err_msg.c_str());
   }
@@ -77,7 +77,7 @@ JeandleCompiler* JeandleCompiler::create() {
   llvm::SubtargetFeatures features;
   options.EmitStackSizeSection = true;
 
-  llvm::TargetMachine* target_machine = target->createTargetMachine(target_triple.getTriple(), ""/* CPU */, features.getString(), options,
+  llvm::TargetMachine* target_machine = target->createTargetMachine(target_triple, ""/* CPU */, features.getString(), options,
                                                                     llvm::Reloc::Model::PIC_, llvm::CodeModel::Model::Small,
                                                                     llvm::CodeGenOptLevel::Aggressive, true/* JIT */);
 
