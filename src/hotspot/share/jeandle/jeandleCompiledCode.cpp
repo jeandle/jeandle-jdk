@@ -570,7 +570,7 @@ JeandleOopMap* JeandleCompiledCode::build_oop_map(StackMapParser& stackmaps, Sta
     num_deopts = third.getSmallConstant();
     assert(num_deopts >= 0, "negative number");
 
-    // bci goes firt in deopt operands
+    // bci goes first in deopt operands
     int bci = (location++)->getSmallConstant();
     num_deopts--;
     call_info->set_bci(bci);
