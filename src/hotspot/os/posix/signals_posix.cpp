@@ -615,14 +615,16 @@ int JVM_HANDLE_XXX_SIGNAL(int sig, siginfo_t* info,
   }
 
 #ifdef JEANDLE
-  if (sig == SIGABRT && !is_jeandle_compiler_thread(t)) {
+  if (sig == SIGABRT) {
     struct sigaction dfl;
     ::memset(&dfl, 0, sizeof(dfl));
     dfl.sa_handler = SIG_DFL;
     sigemptyset(&dfl.sa_mask);
     sigaction(SIGABRT, &dfl, nullptr);
-    ::raise(SIGABRT);
-    return true;
+    if (!is_jeandle_compiler_thread(t)) {
+      ::raise(SIGABRT);
+      return true;
+    }
   }
 #endif // Jeandle
 
