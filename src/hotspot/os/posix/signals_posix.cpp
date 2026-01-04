@@ -666,7 +666,7 @@ int JVM_HANDLE_XXX_SIGNAL(int sig, siginfo_t* info,
     ::raise(SIGABRT);
     return true;
   }
-#endif
+#endif // Jeandle
 
   if (!signal_was_handled) {
     signal_was_handled = handle_safefetch(sig, pc, uc);
