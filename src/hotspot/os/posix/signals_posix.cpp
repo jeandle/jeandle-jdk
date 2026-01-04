@@ -101,7 +101,7 @@ static bool has_llvm_frame(ucontext_t* uc, Thread* t) {
   }
   return false;
 }
-#endif
+#endif // Jeandle
 
 
 static const char* get_signal_name(int sig, char* out, size_t outlen);
