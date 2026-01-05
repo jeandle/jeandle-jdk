@@ -105,10 +105,7 @@ public class TestHsErrFile {
         ProcessBuilder pb = ProcessTools.createLimitedTestJavaProcessBuilder(cmdLine);
         OutputAnalyzer output = new OutputAnalyzer(pb.start());
         output.shouldNotHaveExitValue(0);
-        // NOTE: When JVM is debug/fastdebug and LLVM is release, SIGABRT in the compiler thread
-        // triggers native stack walking into libLLVM; DWARF parsing can fail and cause a
-        // secondary abort, emitting "error occurred during error reporting".
-        // output.shouldNotContain(notExpectedString);
+        output.shouldNotContain(notExpectedString);
         return output.pid();
     }
 

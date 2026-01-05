@@ -93,15 +93,10 @@ The resulting JDK lives under `build/linux-x86_64-server-release/images/jdk/` in
 The same debug level should be configured for both jeandle-llvm and jeandle-jdk. To build a debug version of Jeandle, use the following build options:
 ```
 // For jeandle-llvm
--DCMAKE_BUILD_TYPE="Debug" \
--DCMAKE_C_FLAGS="-g1 -gdwarf-4 -fno-omit-frame-pointer" \
--DCMAKE_CXX_FLAGS="-g1 -gdwarf-4 -fno-omit-frame-pointer" \
-
+-DCMAKE_BUILD_TYPE="Debug"
 // For jeandle-jdk
 --with-debug-level=slowdebug
 ```
-
-The `-g1 -gdwarf-4 -fno-omit-frame-pointer` flags keep minimal DWARF line tables and frame pointers so native stack walks (for example, hs_err logs) can unwind into LLVM and resolve file/line info.
 
 ## Supported Platforms
 Jeandle currently supports X86 and AArch64 architectures. Support for RISC-V architecture is planned for the future. Moreover, by leveraging the powerful ecosystem and well-developed backends of LLVM, other backends may also be supported on demand.
