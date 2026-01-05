@@ -621,7 +621,7 @@ int JVM_HANDLE_XXX_SIGNAL(int sig, siginfo_t* info,
     dfl.sa_handler = SIG_DFL;
     sigemptyset(&dfl.sa_mask);
     sigaction(SIGABRT, &dfl, nullptr);
-    if (!is_jeandle_compiler_thread(t)) {
+    if (VMError::is_error_reported() || !is_jeandle_compiler_thread(t)) {
       ::raise(SIGABRT);
       return true;
     }
