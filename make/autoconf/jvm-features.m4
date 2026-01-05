@@ -572,7 +572,7 @@ AC_DEFUN([JVM_FEATURES_VERIFY],
       AC_MSG_ERROR([Cannot continue])
   fi
 
-  # If Jeandle is included, the installation directory of jeandl-llvm must be specified.
+  # If Jeandle is included, the installation directory of jeandle-llvm must be specified.
   if JVM_FEATURES_IS_ACTIVE(jeandle) && test "x${JEANDLE_LLVM_DIR}" = "x"; then
     AC_MSG_ERROR([The installation directory of jeandle-llvm is not specified. To include Jeandle, use --with-jeandle-llvm=PATH])
   fi

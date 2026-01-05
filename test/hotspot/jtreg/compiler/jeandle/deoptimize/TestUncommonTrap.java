@@ -21,7 +21,7 @@
 /*
  * @test
  * @summary Test uncommon_trap for uninitialzed class and null pointer check
- * @requires os.arch=="amd64" | os.arch=="x86_64"
+ * @requires os.arch=="amd64" | os.arch=="x86_64" | os.arch=="aarch64"
  * @library /test/lib
  * @run main/othervm -Xbatch -Xcomp -XX:-TieredCompilation -XX:+UseJeandleCompiler
  *      -XX:CompileCommand=compileonly,TestUncommonTrap::test_uncommon -XX:CompileCommand=compileonly,TestUncommonTrap::test_null_check_with_trap

@@ -329,6 +329,10 @@ void JeandleCompiledCode::finalize() {
   resolve_reloc_info(assembler);
   RETURN_VOID_ON_JEANDLE_ERROR();
 
+  // generate shared trampoline stubs
+  bool success = _code_buffer.finalize_stubs();
+  JEANDLE_ERROR_ASSERT_AND_RET_VOID_ON_FAIL(success, "shared stub overflow");
+
   if (_method) {
     // For Java method compilation.
     build_exception_handler_table();
@@ -338,12 +342,8 @@ void JeandleCompiledCode::finalize() {
 
   build_implicit_exception_table();
 
-  // generate shared trampoline stubs
-  bool success = _code_buffer.finalize_stubs();
-  JEANDLE_ERROR_ASSERT_AND_RET_VOID_ON_FAIL(success, "shared stub overflow");
-
-  // No deopt support now.
-  _offsets.set_value(CodeOffsets::Deopt, 0);
+  // TODO: generate code for deopt handler.
+  _offsets.set_value(CodeOffsets::Deopt, masm->offset());
 }
 
 void JeandleCompiledCode::resolve_reloc_info(JeandleAssembler& assembler) {
@@ -611,7 +611,7 @@ JeandleOopMap* JeandleCompiledCode::build_oop_map(StackMapParser& stackmaps, Sta
     num_deopts = third.getSmallConstant();
     assert(num_deopts >= 0, "negative number");
 
-    // bci goes firt in deopt operands
+    // bci goes first in deopt operands
     int bci = (location++)->getSmallConstant();
     num_deopts--;
     call_info->set_bci(bci);
