@@ -301,7 +301,7 @@ void JeandleCompiledCode::finalize() {
 
   build_implicit_exception_table();
 
-  // No deopt support now.
+  // TODO: generate code for deopt handler.
   _offsets.set_value(CodeOffsets::Deopt, masm->offset());
 }
 
