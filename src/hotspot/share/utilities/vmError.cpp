@@ -28,6 +28,9 @@
 #include "cds/metaspaceShared.hpp"
 #include "code/codeCache.hpp"
 #include "compiler/compileBroker.hpp"
+#ifdef JEANDLE
+#include "compiler/compilerThread.hpp"
+#endif
 #include "compiler/disassembler.hpp"
 #include "gc/shared/gcConfig.hpp"
 #include "gc/shared/gcLogPrecious.hpp"
@@ -73,6 +76,11 @@
 #endif
 #if INCLUDE_JVMCI
 #include "jvmci/jvmci.hpp"
+#endif
+
+#if defined(LINUX) && defined(JEANDLE) && defined(__GLIBC__)
+#include <execinfo.h>
+#include <signal.h>
 #endif
 
 #ifndef PRODUCT
@@ -457,6 +465,41 @@ static bool is_llvm_library_pc(address pc) {
   }
   return strstr(libname, "libLLVM") != nullptr;
 }
+
+#if defined(LINUX) && defined(JEANDLE) && defined(__GLIBC__)
+static bool is_jeandle_compiler_thread(Thread* t) {
+  if (t == nullptr || !t->is_Compiler_thread()) {
+    return false;
+  }
+  CompilerThread* ct = CompilerThread::cast(t);
+  AbstractCompiler* compiler = ct->compiler();
+  return compiler != nullptr && compiler->is_jeandle();
+}
+
+static bool should_print_jeandle_sigabrt_backtrace(int id, Thread* thread) {
+  return id == SIGABRT && is_jeandle_compiler_thread(thread);
+}
+
+static void print_jeandle_sigabrt_native_stack(outputStream* st, char* buf, int buf_size) {
+  const int max_backtrace_frames = MAX2(1, (int)StackPrintLimit);
+  void** frames = static_cast<void**>(alloca(sizeof(void*) * max_backtrace_frames));
+  int captured = ::backtrace(frames, max_backtrace_frames);
+  if (captured <= 0) {
+    return;
+  }
+
+  st->print_cr("Native frames: (J=compiled Java code, j=interpreted, Vv=VM code, C=native code)");
+  const int limit = MIN2(captured, (int)StackPrintLimit);
+  for (int i = 0; i < limit; ++i) {
+    address pc = reinterpret_cast<address>(frames[i]);
+    frame::print_C_frame(st, buf, buf_size, pc);
+    st->cr();
+  }
+  if (captured > limit) {
+    st->print_cr("...<more frames>...");
+  }
+}
+#endif // LINUX && JEANDLE && __GLIBC__
 
 void VMError::print_native_stack(outputStream* st, frame fr, Thread* t, bool print_source_info, int max_frames, char* buf, int buf_size) {
 
@@ -1011,25 +1054,38 @@ void VMError::report(outputStream* st, bool _verbose) {
     st->cr();
 
   STEP_IF("printing native stack (with source info)", _verbose)
-    if (os::platform_print_native_stack(st, _context, buf, sizeof(buf), lastpc)) {
-      // We have printed the native stack in platform-specific code
-      // Windows/x64 needs special handling.
-      // Stack walking may get stuck. Try to find the calling code.
-      if (lastpc != nullptr) {
-        const char* name = find_code_name(lastpc);
-        if (name != nullptr) {
-          st->print_cr("The last pc belongs to %s (printed below).", name);
+    {
+#if defined(LINUX) && defined(JEANDLE) && defined(__GLIBC__)
+      if (should_print_jeandle_sigabrt_backtrace(_id, _thread)) {
+        // Use DWARF-based unwinding to get native frames when FP-based walk is unreliable.
+        print_jeandle_sigabrt_native_stack(st, buf, sizeof(buf));
+      } else
+#endif
+      if (os::platform_print_native_stack(st, _context, buf, sizeof(buf), lastpc)) {
+        // We have printed the native stack in platform-specific code
+        // Windows/x64 needs special handling.
+        // Stack walking may get stuck. Try to find the calling code.
+        if (lastpc != nullptr) {
+          const char* name = find_code_name(lastpc);
+          if (name != nullptr) {
+            st->print_cr("The last pc belongs to %s (printed below).", name);
+          }
         }
-      }
-    } else {
-      frame fr = _context ? os::fetch_frame_from_context(_context)
-                          : os::current_frame();
+      } else {
+        frame fr = _context ? os::fetch_frame_from_context(_context)
+                            : os::current_frame();
 
-      print_native_stack(st, fr, _thread, true, -1, buf, sizeof(buf));
-      _print_native_stack_used = true;
+        print_native_stack(st, fr, _thread, true, -1, buf, sizeof(buf));
+        _print_native_stack_used = true;
+      }
     }
 
-  REATTEMPT_STEP_IF("retry printing native stack (no source info)", _verbose)
+  REATTEMPT_STEP_IF("retry printing native stack (no source info)",
+      _verbose
+#if defined(LINUX) && defined(JEANDLE) && defined(__GLIBC__)
+      && !should_print_jeandle_sigabrt_backtrace(_id, _thread)
+#endif
+  )
     st->cr();
     st->print_cr("Retrying call stack printing without source information...");
     frame fr = _context ? os::fetch_frame_from_context(_context) : os::current_frame();
