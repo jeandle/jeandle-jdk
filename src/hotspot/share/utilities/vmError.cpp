@@ -446,6 +446,18 @@ static frame next_frame(frame fr, Thread* t) {
   }
 }
 
+static bool is_llvm_library_pc(address pc) {
+  char libname[JVM_MAXPATHLEN];
+  int offset = -1;
+  if (!os::dll_address_to_library_name(pc, libname, sizeof(libname), &offset)) {
+    return false;
+  }
+  if (libname[0] == '\0') {
+    return false;
+  }
+  return strstr(libname, "libLLVM") != nullptr;
+}
+
 void VMError::print_native_stack(outputStream* st, frame fr, Thread* t, bool print_source_info, int max_frames, char* buf, int buf_size) {
 
   // see if it's a valid frame
@@ -462,6 +474,7 @@ void VMError::print_native_stack(outputStream* st, frame fr, Thread* t, bool pri
           // We have source information of the first frame for internal errors. There is no need to parse it from the symbols.
           st->print("  (%s:%d)", get_filename_only(), _lineno);
         } else if (print_source_info &&
+                   !is_llvm_library_pc(fr.pc()) &&
                    Decoder::get_source_info(fr.pc(), filename, sizeof(filename), &line_no, count != 1)) {
           st->print("  (%s:%d)", filename, line_no);
         }
