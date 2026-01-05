@@ -160,7 +160,7 @@ void JeandleAssembler::emit_ic_check() {
 }
 
 void JeandleAssembler::emit_verified_entry() {
-  // Emit a 5-bytes address nop for patching a jump instuction.
+  // Emit a 5-bytes address nop for patching a jump instruction.
   __ addr_nop_5();
 }
 

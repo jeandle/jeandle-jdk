@@ -105,7 +105,7 @@ bool JeandleCompiler::initialize_template_buffer() {
   llvm::SMDiagnostic error;
 
   std::unique_ptr<llvm::Module> template_module = llvm::parseIRFile(Arguments::get_jeandle_template_path(), error, tmp_context);
-#ifdef assert
+#ifdef ASSERT
   if (template_module == nullptr) {
     tty->print_cr("Error parsing template module from file '%s':", Arguments::get_jeandle_template_path());
     tty->print_cr("  Line: %d, Column: %d", error.getLineNo(), error.getColumnNo());
