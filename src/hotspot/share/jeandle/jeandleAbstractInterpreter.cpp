@@ -613,10 +613,25 @@ void JeandleAbstractInterpreter::interpret() {
   // Prepare work list. Push the first block.
   add_to_work_list(current);
 
+  initialize_VM_state();
+
+  if (_compiled_code.needs_clinit_barrier_on_entry()) {
+    assert(_method != nullptr, "only for Java method compilations");
+    assert(!_method->holder()->is_not_initialized(), "initialization should have been started");
+
+    _jvm = _block_builder->entry_block()->VM_state();
+    _block = _block_builder->entry_block();
+    _bytecodes.force_bci(0); // to get cur_bci for uncommon trap
+
+    Klass* klass = (Klass*)_method->holder()->constant_encoding();
+    llvm::PointerType* klass_type = llvm::PointerType::get(*_context, llvm::jeandle::AddrSpace::CHeapAddrSpace);
+    llvm::Value* klass_addr = _ir_builder.getInt64((intptr_t)klass);
+    llvm::Value* klass_ptr = _ir_builder.CreateIntToPtr(klass_addr, klass_type);
+    guard_klass_being_initialized(klass_ptr);
+  }
+
   // Create branch from the entry block.
   _ir_builder.CreateBr(current->header_llvm_block());
-
-  initialize_VM_state();
 
   bool merged = current->merge_VM_state_from(_block_builder->entry_block()->VM_state(),
                                              _block_builder->entry_block()->tail_llvm_block(),
@@ -647,18 +662,6 @@ void JeandleAbstractInterpreter::interpret_block(JeandleBasicBlock* block) {
   // Skip blocks that are unreachable.
   if (_jvm == nullptr) {
     return;
-  }
-
-  if (_compiled_code.needs_clinit_barrier_on_entry()) {
-    assert(_method != nullptr, "only for normal compilations");
-    assert(!_method->holder()->is_not_initialized(), "initialization should have been started");
-
-    _bytecodes.force_bci(0); // to get cur_bci for uncommon trap
-    Klass* klass = (Klass*)_method->holder()->constant_encoding();
-    llvm::PointerType* klass_type = llvm::PointerType::get(*_context, llvm::jeandle::AddrSpace::CHeapAddrSpace);
-    llvm::Value* klass_addr = _ir_builder.getInt64((intptr_t)klass);
-    llvm::Value* klass_ptr = _ir_builder.CreateIntToPtr(klass_addr, klass_type);
-    guard_klass_being_initialized(klass_ptr);
   }
 
   _bytecodes.reset_to_bci(block->start_bci());
@@ -2365,8 +2368,8 @@ void JeandleAbstractInterpreter::boundary_check(llvm::Value* array_oop, llvm::Va
 }
 
 void JeandleAbstractInterpreter::guard_klass_being_initialized(llvm::Value* klass) {
-  llvm::BasicBlock* fallthrough_block = llvm::BasicBlock::Create(*_context, "state_fallthrough", _llvm_func);
-  llvm::BasicBlock* uncommon_block = llvm::BasicBlock::Create(*_context, "uncommon_trap_init_state", _llvm_func);
+  llvm::BasicBlock* fallthrough_block = llvm::BasicBlock::Create(*_context, "guard_klass_being_initialized_fallthrough", _llvm_func);
+  llvm::BasicBlock* uncommon_block = llvm::BasicBlock::Create(*_context, "guard_klass_being_initialized_uncommon_trap", _llvm_func);
 
   llvm::Value* init_state_offset = llvm::ConstantInt::get(_ir_builder.getInt32Ty(), (uint64_t)InstanceKlass::init_state_offset());
   llvm::Value* klass_init_state_addr = _ir_builder.CreateInBoundsGEP(llvm::Type::getInt8Ty(*_context), klass, init_state_offset);
@@ -2382,8 +2385,8 @@ void JeandleAbstractInterpreter::guard_klass_being_initialized(llvm::Value* klas
 }
 
 void JeandleAbstractInterpreter::guard_init_thread(llvm::Value* klass) {
-  llvm::BasicBlock* fallthrough_block = llvm::BasicBlock::Create(*_context, "thread_fallthrough", _llvm_func);
-  llvm::BasicBlock* uncommon_block = llvm::BasicBlock::Create(*_context, "uncommon_trap_init_thread", _llvm_func);
+  llvm::BasicBlock* fallthrough_block = llvm::BasicBlock::Create(*_context, "guard_init_thread_fallthrough", _llvm_func);
+  llvm::BasicBlock* uncommon_block = llvm::BasicBlock::Create(*_context, "guard_init_thread_uncommon_trap", _llvm_func);
 
   llvm::Value* init_thread_offset = llvm::ConstantInt::get(_ir_builder.getInt32Ty(), (uint64_t)InstanceKlass::init_thread_offset());
   llvm::Value* klass_init_thread_addr = _ir_builder.CreateInBoundsGEP(llvm::Type::getInt8Ty(*_context), klass, init_thread_offset);
