@@ -22,7 +22,7 @@
  * @test TestNullCheck.java
  * @summary Support null check, which can be optimized into implicit checking.
  *  issue: https://github.com/jeandle/jeandle-jdk/issues/14
- * @requires os.arch=="amd64" | os.arch=="x86_64"
+ * @requires os.arch=="amd64" | os.arch=="x86_64" | os.arch=="aarch64"
  * @library /test/lib /
  * @build compiler.jeandle.fileCheck.FileCheck
  * @run driver TestNullCheck
