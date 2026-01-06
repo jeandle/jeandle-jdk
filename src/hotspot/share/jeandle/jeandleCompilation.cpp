@@ -111,6 +111,11 @@ JeandleCompilation::JeandleCompilation(llvm::TargetMachine* target_machine,
     return;
   }
 
+  const char* reason = check_can_parse(method);
+  if (reason != nullptr) {
+    report_error(reason);
+  }
+
   JeandleTraceTime tt_total("Jeandle Compile", compilation_timer);
 
   // Setup compilation.
@@ -207,6 +212,15 @@ JeandleCompilation::JeandleCompilation(llvm::TargetMachine* target_machine,
                                                   false);
   assert(rs != nullptr && rs->is_runtime_stub(), "sanity check");
   _code.set_routine_entry(rs->entry_point());
+}
+
+const char* JeandleCompilation::check_can_parse(ciMethod* method) {
+  // Certain method cannot be parsed at all:
+  if ( method->is_native())                   return "native method";
+  if ( method->is_abstract())                 return "abstract method";
+  if (!method->has_balanced_monitors())       return "not compilable (unbalanced monitors)";
+  if (!method->can_be_parsed())               return "cannot be parsed";
+  return nullptr;
 }
 
 void JeandleCompilation::install_code() {
