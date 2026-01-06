@@ -80,7 +80,6 @@ public class TestDeoptUnload {
             "-XX:+UseJeandleCompiler",
             "-Xlog:deoptimization=debug",
             "-XX:CompileCommand=compileonly,compiler.jeandle.deoptimize.TestDeoptUnload::test*",
-            "-XX:+JeandleDumpIR",  // TODO: delete it
             TestDeoptUnload.class.getName()
         ));
 
