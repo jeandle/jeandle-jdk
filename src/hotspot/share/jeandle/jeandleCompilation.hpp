@@ -93,6 +93,8 @@ class JeandleCompilation : public StackObj {
 
   const char* _error_msg;
 
+  const char* check_can_parse(ciMethod* method);
+
   void initialize();
   void setup_llvm_module(llvm::MemoryBuffer* template_buffer);
   void compile_java_method();
