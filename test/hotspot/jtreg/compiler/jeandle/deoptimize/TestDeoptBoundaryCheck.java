@@ -192,5 +192,4 @@ public class TestDeoptBoundaryCheck {
                 throw new IllegalArgumentException("Invalid array kind" + kind);
         }
     }
-
 }

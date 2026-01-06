@@ -1171,7 +1171,6 @@ void JeandleAbstractInterpreter::table_switch() {
 }
 
 // Generate call instructions.
-// TODO: Reciever's null check.
 void JeandleAbstractInterpreter::invoke() {
   bool will_link;
   ciSignature* declared_signature = nullptr;
@@ -1184,6 +1183,7 @@ void JeandleAbstractInterpreter::invoke() {
 
   if (!will_link) {
     if (bc ==Bytecodes::_invokedynamic) {
+      // TODO: Keep consistent with C2, no suitable test case for now.
       uncommon_trap(Deoptimization::Reason_uninitialized,
                     Deoptimization::Action_reinterpret);
     } else {
@@ -1217,6 +1217,20 @@ void JeandleAbstractInterpreter::invoke() {
     declared_signature = target->signature();
   }
 
+  const int receiver =
+    bc == Bytecodes::_invokespecial   ||
+    bc == Bytecodes::_invokevirtual   ||
+    bc == Bytecodes::_invokeinterface;
+
+  llvm::Value* receiver_value = nullptr;
+  if (receiver) {
+    int receiver_depth = target->arg_size() - 1; // Index of stack slots where receiver locates.
+    receiver_value = _jvm->raw_peek(receiver_depth).value();
+
+    assert(receiver_value != nullptr, "receiver must be present");
+    null_check(receiver_value);
+  }
+
   // Additional receiver subtype checks for interface calls via invokespecial or invokeinterface.
   ciKlass* receiver_constraint = nullptr;
   if (bc == Bytecodes::_invokespecial && !target->is_object_initializer()) {
@@ -1229,16 +1243,8 @@ void JeandleAbstractInterpreter::invoke() {
     receiver_constraint = holder;
   }
 
-  const int receiver =
-    bc == Bytecodes::_invokespecial   ||
-    bc == Bytecodes::_invokevirtual   ||
-    bc == Bytecodes::_invokeinterface;
-
   if (receiver_constraint != nullptr) {
     assert(receiver, "receiver must be present");
-
-    int receiver_depth = target->arg_size() - 1; // Index of stack slots where receiver locates.
-    llvm::Value* receiver_value = _jvm->raw_peek(receiver_depth).value();
 
     Klass* receiver_constraint_klass = (Klass*)(receiver_constraint->constant_encoding());
     llvm::PointerType* klass_type = llvm::PointerType::get(*_context, llvm::jeandle::AddrSpace::CHeapAddrSpace);
@@ -1257,6 +1263,7 @@ void JeandleAbstractInterpreter::invoke() {
 
     _ir_builder.CreateCondBr(checkcast, checkcast_pass, checkcast_fail);
 
+    // TODO: Keep consistent with C2, no suitable test case for now.
     uncommon_trap(Deoptimization::Reason_class_check, Deoptimization::Action_none, checkcast_fail);
 
     _ir_builder.SetInsertPoint(checkcast_pass);
@@ -1274,6 +1281,7 @@ void JeandleAbstractInterpreter::invoke() {
   }
   if (receiver) {
     args[0] = _jvm->pop(BasicType::T_OBJECT);
+    assert(args[0] == receiver_value, "receiver must be present");
     args_type[0] = JeandleType::java2llvm(BasicType::T_OBJECT, *_context);
   }
 
@@ -1303,8 +1311,6 @@ void JeandleAbstractInterpreter::invoke() {
     }
     case Bytecodes::_invokespecial: {
       call_type = JeandleCompiledCall::STATIC_CALL;
-      // TODO: Additional receiver subtype checks for interface calls via invokespecial.
-      // Since checkcast and uncommon_trap have not yet been implemented, leave this for later.
       dest = SharedRuntime::get_resolve_opt_virtual_call_stub();
       break;
     }
@@ -1773,8 +1779,9 @@ void JeandleAbstractInterpreter::do_field_access(bool is_get, bool is_static) {
   }
 
   ciInstanceKlass* field_holder = field->holder();
-  if (is_get && field->is_call_site_target() &&
+  if (!is_get && field->is_call_site_target() &&
       (!(_method->holder() == field_holder && _method->is_object_initializer()))) {
+    // TODO: Keep consistent with C2, no suitable test case for now.
     uncommon_trap(Deoptimization::Reason_unhandled,
                   Deoptimization::Action_reinterpret);
     _block->set(JeandleBasicBlock::always_uncommon_trap);
@@ -2076,6 +2083,7 @@ void JeandleAbstractInterpreter::do_new() {
   } else if (klass->is_abstract() || klass->is_interface() ||
       klass->name() == ciSymbols::java_lang_Class() ||
       _bytecodes.is_unresolved_klass()) {
+    // TODO: Keep consistent with C2, no suitable test case for now.
     uncommon_trap(Deoptimization::Reason_unhandled,
                   Deoptimization::Action_none);
     _block->set(JeandleBasicBlock::always_uncommon_trap);
@@ -2241,6 +2249,7 @@ void JeandleAbstractInterpreter::anewarray(int klass_index) {
     Klass* klass = (Klass*)(array_klass->constant_encoding());
     do_unified_newarray(klass);
   } else {
+    // TODO: Keep consistent with C2, no suitable test case for now.
     uncommon_trap(Deoptimization::Reason_unloaded,
                   Deoptimization::Action_reinterpret);
     _block->set(JeandleBasicBlock::always_uncommon_trap);
