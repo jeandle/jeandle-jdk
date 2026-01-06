@@ -173,20 +173,13 @@ public class TestHsErrFile {
 
         try (BufferedReader reader = new BufferedReader(new FileReader(filePath))) {
             String line;
-            boolean isSigabrt = false;
-            boolean isJeandleCompilerThread = false;
             boolean isAnchorFound = false;
             boolean isFrameMatched = false;
             boolean isRegistersInfoFound = false;
             boolean isStackInfoFound = false;
             System.out.println("Check " + filePath + ":");
             while ((line = reader.readLine()) != null) {
-                if (line.startsWith("#  SIGABRT")) {
-                    isSigabrt = true;
-                } else if (line.startsWith("Current thread") && line.contains("Jeandle CompilerThread")) {
-                    isJeandleCompilerThread = true;
-                }
-                if (isAnchorFound && !isFrameMatched && !(isSigabrt && isJeandleCompilerThread)) {
+                if (isAnchorFound && !isFrameMatched) {
                     // check frame type: J, j, V, v, C
                     char expected_type = expectedArray[index].charAt(0);
                     char frame_type = line.charAt(0);
@@ -215,7 +208,7 @@ public class TestHsErrFile {
                     isAnchorFound = true;
                 }
             }
-            if (!isFrameMatched && !(isSigabrt && isJeandleCompilerThread)) {
+            if (!isFrameMatched) {
                 throw new RuntimeException(filePath + " frame info match failed");
             }
             if (!isRegistersInfoFound) {

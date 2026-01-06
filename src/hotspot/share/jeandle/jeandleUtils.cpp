@@ -25,6 +25,11 @@
 #include "jeandle/jeandleType.hpp"
 #include "jeandle/jeandleUtils.hpp"
 
+#include "jeandle/__hotspotHeadersBegin__.hpp"
+#include "compiler/abstractCompiler.hpp"
+#include "compiler/compilerThread.hpp"
+#include "runtime/thread.hpp"
+
 llvm::Function* JeandleFuncSig::create_llvm_func(ciMethod* method, llvm::Module& target_module) {
   llvm::SmallVector<llvm::Type*> args;
   llvm::LLVMContext& context = target_module.getContext();
@@ -61,4 +66,13 @@ std::string JeandleFuncSig::method_name(ciMethod* method) {
   std::replace(method_name.begin(), method_name.end(), '/', '_');
 
   return class_name + "_" + method_name;
+}
+
+bool is_jeandle_compiler_thread(Thread* t) {
+  if (t == nullptr || !t->is_Compiler_thread()) {
+    return false;
+  }
+  CompilerThread* ct = CompilerThread::cast(t);
+  AbstractCompiler* compiler = ct->compiler();
+  return compiler != nullptr && compiler->is_jeandle();
 }

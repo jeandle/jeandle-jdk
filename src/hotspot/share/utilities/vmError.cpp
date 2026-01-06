@@ -75,7 +75,7 @@
 #include "jvmci/jvmci.hpp"
 #endif
 
-// Support Jeandle stack backtrace. This functionality depends on glibc.
+// Support Jeandle stack backtrace. This functionality relies on glibc.
 #if defined(LINUX) && defined(JEANDLE) && defined(__GLIBC__)
 
 #define JEANDLE_BACKTRACE
@@ -459,18 +459,6 @@ static frame next_frame(frame fr, Thread* t) {
   }
 }
 
-static bool is_llvm_library_pc(address pc) {
-  char libname[JVM_MAXPATHLEN];
-  int offset = -1;
-  if (!os::dll_address_to_library_name(pc, libname, sizeof(libname), &offset)) {
-    return false;
-  }
-  if (libname[0] == '\0') {
-    return false;
-  }
-  return strstr(libname, "libLLVM") != nullptr;
-}
-
 #ifdef JEANDLE_BACKTRACE
 
 static bool should_print_jeandle_backtrace(int id, Thread* thread) {
@@ -492,7 +480,7 @@ static void print_jeandle_native_stack(outputStream* st, char* buf, int buf_size
 
     char filename[128];
     int line_no;
-    Decoder::get_source_info(fr.pc(), filename, sizeof(filename), &line_no, true /*is_pc_after_call*/);
+    Decoder::get_source_info(pc, filename, sizeof(filename), &line_no, true /*is_pc_after_call*/);
     st->print("  (%s:%d)", filename, line_no);
 
     st->cr();
@@ -517,7 +505,6 @@ void VMError::print_native_stack(outputStream* st, frame fr, Thread* t, bool pri
           // We have source information of the first frame for internal errors. There is no need to parse it from the symbols.
           st->print("  (%s:%d)", get_filename_only(), _lineno);
         } else if (print_source_info &&
-                   !is_llvm_library_pc(fr.pc()) &&
                    Decoder::get_source_info(fr.pc(), filename, sizeof(filename), &line_no, count != 1)) {
           st->print("  (%s:%d)", filename, line_no);
         }
@@ -1054,7 +1041,7 @@ void VMError::report(outputStream* st, bool _verbose) {
     st->cr();
 
   STEP_IF("printing native stack (with source info)", _verbose)
-#if JEANDLE_BACKTRACE
+#ifdef JEANDLE_BACKTRACE
     if (should_print_jeandle_backtrace(_id, _thread)) {
       // Use DWARF-based unwinding to get native frames when FP-based walk is unreliable.
       print_jeandle_native_stack(st, buf, sizeof(buf));
@@ -1078,12 +1065,7 @@ void VMError::report(outputStream* st, bool _verbose) {
       _print_native_stack_used = true;
     }
 
-  REATTEMPT_STEP_IF("retry printing native stack (no source info)",
-      _verbose
-#if defined(LINUX) && defined(JEANDLE) && defined(__GLIBC__)
-      && !should_print_jeandle_sigabrt_backtrace(_id, _thread)
-#endif
-  )
+  REATTEMPT_STEP_IF("retry printing native stack (no source info)", _verbose)
     st->cr();
     st->print_cr("Retrying call stack printing without source information...");
     frame fr = _context ? os::fetch_frame_from_context(_context) : os::current_frame();
