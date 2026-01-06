@@ -86,14 +86,23 @@ public class TestNullCheck {
         output = runTestProcess("testInvoke");
         output.shouldHaveExitValue(1);
         output.shouldContain(NPE_STRING);
+        // The stack of NPE is output after the uncommon trap works.
+        output.shouldContain("at TestNullCheck.testInvoke");
+        output.shouldContain("at TestNullCheck.main");
 
         output = runTestProcess("testAccess");
         output.shouldHaveExitValue(1);
         output.shouldContain(NPE_STRING);
+        // Same as above.
+        output.shouldContain("at TestNullCheck.testAccess");
+        output.shouldContain("at TestNullCheck.main");
 
         output = runTestProcess("testMulti");
         output.shouldHaveExitValue(1);
         output.shouldContain(NPE_STRING);
+        // Same as above.
+        output.shouldContain("at TestNullCheck.testMulti");
+        output.shouldContain("at TestNullCheck.main");
 
         output = runTestProcess("testThrowNull");
         output.shouldHaveExitValue(0);
