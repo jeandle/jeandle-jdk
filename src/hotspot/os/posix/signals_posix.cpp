@@ -26,10 +26,6 @@
 #include "code/codeCache.hpp"
 #include "code/compiledMethod.hpp"
 #include "code/nativeInst.hpp"
-#ifdef JEANDLE
-#include "compiler/abstractCompiler.hpp"
-#include "compiler/compilerThread.hpp"
-#endif
 #include "jvm.h"
 #include "logging/log.hpp"
 #include "os_posix.hpp"
@@ -52,15 +48,10 @@
 
 #include <signal.h>
 
+
 #ifdef JEANDLE
-static bool is_jeandle_compiler_thread(Thread* t) {
-  if (t == nullptr || !t->is_Compiler_thread()) {
-    return false;
-  }
-  AbstractCompiler* compiler = CompilerThread::cast(t)->compiler();
-  return compiler != nullptr && compiler->is_jeandle();
-}
-#endif // Jeandle
+#include "jeandle/jeandleUtils.hpp"
+#endif // JEANDLE
 
 static const char* get_signal_name(int sig, char* out, size_t outlen);
 
@@ -616,17 +607,27 @@ int JVM_HANDLE_XXX_SIGNAL(int sig, siginfo_t* info,
 
 #ifdef JEANDLE
   if (sig == SIGABRT) {
+    // Here we have a SIGABRT. This may be an assertion failure from LLVM.
+    // Reset the signal handler for SIGABRT to default.
     struct sigaction dfl;
     ::memset(&dfl, 0, sizeof(dfl));
     dfl.sa_handler = SIG_DFL;
     sigemptyset(&dfl.sa_mask);
     sigaction(SIGABRT, &dfl, nullptr);
-    if (VMError::is_error_reported() || !is_jeandle_compiler_thread(t)) {
+    if (!is_jeandle_compiler_thread(t)) {
+      // If we are not in a jeandle compiler thread, the signal is not from LLVM.
+      // Raise SIGABRT again and let the default handler to handle it.
       ::raise(SIGABRT);
       return true;
     }
+
+    // If we are in a jeandle compiler thread, assume the signal is from an assertion
+    // failure from LLVM. Report the error and die.
+    VMError::report_and_die(t, sig, pc, info, ucVoid);
+    // VMError should not return.
+    ShouldNotReachHere();
   }
-#endif // Jeandle
+#endif // JEANDLE
 
   if (!signal_was_handled) {
     signal_was_handled = handle_safefetch(sig, pc, uc);
@@ -1343,8 +1344,9 @@ void install_signal_handlers() {
   set_signal_handler(SIGILL);
   set_signal_handler(SIGFPE);
 #ifdef JEANDLE
+  // Used to handle assertion failures in LLVM
   set_signal_handler(SIGABRT);
-#endif
+#endif // JEANDLE
   PPC64_ONLY(set_signal_handler(SIGTRAP);)
   set_signal_handler(SIGXFSZ);
   if (!ReduceSignalUsage) {
