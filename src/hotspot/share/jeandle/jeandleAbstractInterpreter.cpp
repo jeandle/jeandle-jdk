@@ -1586,7 +1586,6 @@ void JeandleAbstractInterpreter::shift_op(BasicType type, Bytecodes::Code code) 
 
 void JeandleAbstractInterpreter::checkcast() {
   llvm::Value* obj = _jvm->raw_peek().value();
-  null_check(obj);
 
   bool will_link;
   ciKlass* ci_super_klass = _bytecodes.get_klass(will_link);
@@ -1770,6 +1769,7 @@ void JeandleAbstractInterpreter::do_field_access(bool is_get, bool is_static) {
     uncommon_trap(Deoptimization::Reason_unloaded,
                   Deoptimization::Action_reinterpret);
     _block->set(JeandleBasicBlock::always_uncommon_trap);
+    return;
   }
 
   ciInstanceKlass* field_holder = field->holder();
@@ -2244,6 +2244,7 @@ void JeandleAbstractInterpreter::anewarray(int klass_index) {
     uncommon_trap(Deoptimization::Reason_unloaded,
                   Deoptimization::Action_reinterpret);
     _block->set(JeandleBasicBlock::always_uncommon_trap);
+    return;
   }
 }
 
