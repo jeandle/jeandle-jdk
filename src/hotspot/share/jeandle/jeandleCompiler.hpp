@@ -50,7 +50,7 @@ class JeandleCompiler : public AbstractCompiler {
   // Print compilation timers and statistics.
   virtual void print_timers();
 
-  void initialize_target_machine();
+  bool initialize_target_machine();
 
   static llvm::TargetMachine* target_machine() { return _target_machine; }
 

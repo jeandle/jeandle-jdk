@@ -37,7 +37,7 @@
 
 THREAD_LOCAL llvm::TargetMachine* JeandleCompiler::_target_machine = nullptr;
 
-void JeandleCompiler::initialize_target_machine() {
+bool JeandleCompiler::initialize_target_machine() {
   llvm::Triple target_triple = llvm::Triple(llvm::sys::getProcessTriple());
 
   std::string err_msg;
@@ -56,11 +56,15 @@ void JeandleCompiler::initialize_target_machine() {
   _target_machine = target->createTargetMachine(target_triple, ""/* CPU */, features.getString(), options,
                                                 llvm::Reloc::Model::PIC_, llvm::CodeModel::Model::Small,
                                                 llvm::CodeGenOptLevel::Aggressive, true/* JIT */);
+  return _target_machine != nullptr;
 }
 
 void JeandleCompiler::initialize() {
   // Per compiler thread initialization:
-  initialize_target_machine();
+  if (!initialize_target_machine()) {
+    set_state(failed);
+    return;
+  }
 
   // Per JeandleCompiler initialization:
   if (should_perform_init()) {
