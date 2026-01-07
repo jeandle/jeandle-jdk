@@ -1195,6 +1195,22 @@ void JeandleAbstractInterpreter::invoke() {
     return;
   }
 
+  const int receiver =
+  bc == Bytecodes::_invokespecial   ||
+  bc == Bytecodes::_invokevirtual   ||
+  bc == Bytecodes::_invokeinterface;
+
+  llvm::Value* receiver_value = nullptr;
+
+  // Null check for receiver.
+  if (receiver) {
+    int receiver_depth = target->arg_size() - 1; // Index of stack slots where receiver locates.
+    receiver_value = _jvm->raw_peek(receiver_depth).value();
+
+    assert(receiver_value != nullptr, "receiver must be present");
+    null_check(receiver_value);
+  }
+
   // try inline callee as intrinsic
   if (target->is_loaded()
     && target->check_intrinsic_candidate()
@@ -1217,20 +1233,6 @@ void JeandleAbstractInterpreter::invoke() {
     declared_signature = target->signature();
   }
 
-  const int receiver =
-    bc == Bytecodes::_invokespecial   ||
-    bc == Bytecodes::_invokevirtual   ||
-    bc == Bytecodes::_invokeinterface;
-
-  llvm::Value* receiver_value = nullptr;
-  if (receiver) {
-    int receiver_depth = target->arg_size() - 1; // Index of stack slots where receiver locates.
-    receiver_value = _jvm->raw_peek(receiver_depth).value();
-
-    assert(receiver_value != nullptr, "receiver must be present");
-    null_check(receiver_value);
-  }
-
   // Additional receiver subtype checks for interface calls via invokespecial or invokeinterface.
   ciKlass* receiver_constraint = nullptr;
   if (bc == Bytecodes::_invokespecial && !target->is_object_initializer()) {
@@ -1244,7 +1246,7 @@ void JeandleAbstractInterpreter::invoke() {
   }
 
   if (receiver_constraint != nullptr) {
-    assert(receiver, "receiver must be present");
+    assert(receiver_value, "receiver must be present");
 
     Klass* receiver_constraint_klass = (Klass*)(receiver_constraint->constant_encoding());
     llvm::PointerType* klass_type = llvm::PointerType::get(*_context, llvm::jeandle::AddrSpace::CHeapAddrSpace);
