@@ -216,17 +216,27 @@ int JeandleAssembler::emit_exception_handler() {
 
 using LinkKind_aarch64 = llvm::jitlink::aarch64::EdgeKind_aarch64;
 
-void JeandleAssembler::emit_const_reloc(int operand_offset, LinkKind kind, int64_t addend, address target) {
+void JeandleAssembler::emit_const_reloc(int operand_offset, LinkKind kind, int64_t addend, address target, int reloc_section) {
   assert(operand_offset >= 0, "invalid operand address");
   assert(kind == LinkKind_aarch64::Page21 ||
          kind == LinkKind_aarch64::PageOffset12,
          "unexpected link kind: %d", kind);
 
-  // only support adrp & ldr for now
-  address at_addr = __ code()->insts_begin() + operand_offset;
-  address reloc_target = target + addend;
-  RelocationHolder rspec = jeandle_section_word_Relocation::spec(reloc_target, CodeBuffer::SECT_CONSTS);
-  __ code_section()->relocate(at_addr, rspec);
+  if (reloc_section == CodeBuffer::SECT_INSTS) {
+    // only support adrp & ldr for now
+    address at_addr = __ code()->insts_begin() + operand_offset;
+    address reloc_target = target + addend;
+    RelocationHolder rspec = jeandle_section_word_Relocation::spec(reloc_target, CodeBuffer::SECT_CONSTS);
+
+    __ code()->insts()->relocate(at_addr, rspec);
+  } else {
+    assert(reloc_section == CodeBuffer::SECT_CONSTS, "unexpected code section");
+    address at_address = __ code()->consts()->start() + operand_offset;
+    address reloc_target = target + addend;
+    RelocationHolder rspec = jeandle_section_word_Relocation::spec(reloc_target, CodeBuffer::SECT_INSTS);
+
+    __ code()->consts()->relocate(at_address, rspec);
+  }
 }
 
 void JeandleAssembler::emit_oop_reloc(int offset, jobject oop_handle) {

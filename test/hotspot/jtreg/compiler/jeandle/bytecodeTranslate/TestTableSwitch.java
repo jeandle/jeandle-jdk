@@ -38,6 +38,7 @@ public class TestTableSwitch {
     public static void main(String[] args) throws Exception {
         testBasicBoundaryScenarios();
         testLargeRangeSwitch();
+        testCallMethodSwitch();
     }
 
     public static int minPositiveSwitch(int num) {
@@ -97,7 +98,7 @@ public class TestTableSwitch {
             case 5 -> returnFive();
             default -> throw new RuntimeException();
         };
-        int n = switch(a) {
+        int n = switch(b) {
             case 6 -> returnSix();
             case 7 -> returnSeven();
             case 8 -> returnEight();

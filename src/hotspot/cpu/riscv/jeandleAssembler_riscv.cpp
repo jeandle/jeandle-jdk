@@ -62,7 +62,7 @@ int JeandleAssembler::emit_exception_handler() {
   return 0;
 }
 
-void JeandleAssembler::emit_const_reloc(int operand_offset, LinkKind kind, int64_t addend, address target) {
+void JeandleAssembler::emit_const_reloc(int operand_offset, LinkKind kind, int64_t addend, address target, int reloc_section) {
   Unimplemented();
 }
 
