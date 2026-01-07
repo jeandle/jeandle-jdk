@@ -71,6 +71,8 @@ class JeandleCompilation : public StackObj {
   static bool jeandle_error_occurred() { return JeandleCompilation::current()->error_occurred(); }
   static void print_timers();
 
+  void set_has_monitors(bool v) { _has_monitors = v; }
+
   JeandleCompiledCode* compiled_code() { return &_code; }
 
   Arena* arena() { return _arena; }
@@ -92,6 +94,8 @@ class JeandleCompilation : public StackObj {
   JeandleCompiledCode _code; // Compiled code.
 
   const char* _error_msg;
+
+  bool _has_monitors;
 
   const char* check_can_parse(ciMethod* method);
 
