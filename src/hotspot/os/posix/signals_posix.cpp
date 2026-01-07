@@ -607,24 +607,17 @@ int JVM_HANDLE_XXX_SIGNAL(int sig, siginfo_t* info,
 
 #ifdef JEANDLE
   if (sig == SIGABRT) {
-    // Here we have a SIGABRT. This may be an assertion failure from LLVM.
-    // Reset the signal handler for SIGABRT to default.
-    struct sigaction dfl;
-    ::memset(&dfl, 0, sizeof(dfl));
-    dfl.sa_handler = SIG_DFL;
-    sigemptyset(&dfl.sa_mask);
-    sigaction(SIGABRT, &dfl, nullptr);
 
     if (!is_jeandle_compiler_thread(t)) {
       // If we are not in a jeandle compiler thread, the signal is not from LLVM.
       // Raise SIGABRT again and let the default handler to handle it.
-      ::raise(SIGABRT);
-      return true;
-    }
-
-    if (VMError::is_error_reported()) {
-      // If at least one thread reported a fatal error and fatal error handling is in
-      // process, do not interrupt it.
+      // Here we have a SIGABRT. This may be an assertion failure from LLVM.
+      // Reset the signal handler for SIGABRT to default.
+      struct sigaction dfl;
+      ::memset(&dfl, 0, sizeof(dfl));
+      dfl.sa_handler = SIG_DFL;
+      sigemptyset(&dfl.sa_mask);
+      sigaction(SIGABRT, &dfl, nullptr);
       ::raise(SIGABRT);
       return true;
     }
