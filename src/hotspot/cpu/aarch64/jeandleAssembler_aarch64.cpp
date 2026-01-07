@@ -222,21 +222,13 @@ void JeandleAssembler::emit_const_reloc(int operand_offset, LinkKind kind, int64
          kind == LinkKind_aarch64::PageOffset12,
          "unexpected link kind: %d", kind);
 
-  if (reloc_section == CodeBuffer::SECT_INSTS) {
-    // only support adrp & ldr for now
-    address at_addr = __ code()->insts_begin() + operand_offset;
-    address reloc_target = target + addend;
-    RelocationHolder rspec = jeandle_section_word_Relocation::spec(reloc_target, CodeBuffer::SECT_CONSTS);
+  JEANDLE_ERROR_ASSERT_AND_RET_VOID_ON_FAIL(reloc_section == CodeBuffer::SECT_INSTS, "no jump table relocations");
 
-    __ code()->insts()->relocate(at_addr, rspec);
-  } else {
-    assert(reloc_section == CodeBuffer::SECT_CONSTS, "unexpected code section");
-    address at_address = __ code()->consts()->start() + operand_offset;
-    address reloc_target = target + addend;
-    RelocationHolder rspec = jeandle_section_word_Relocation::spec(reloc_target, CodeBuffer::SECT_INSTS);
-
-    __ code()->consts()->relocate(at_address, rspec);
-  }
+  // only support adrp & ldr for now
+  address at_addr = __ code()->insts_begin() + operand_offset;
+  address reloc_target = target + addend;
+  RelocationHolder rspec = jeandle_section_word_Relocation::spec(reloc_target, CodeBuffer::SECT_CONSTS);
+  __ code_section()->relocate(at_addr, rspec);
 }
 
 void JeandleAssembler::emit_oop_reloc(int offset, jobject oop_handle) {
