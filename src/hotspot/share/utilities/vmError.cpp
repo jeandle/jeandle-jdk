@@ -1753,7 +1753,7 @@ void VMError::report_and_die(int id, const char* message, const char* detail_fmt
     } else {
 
 #ifdef JEANDLE
-      if (is_jeandle_compiler_thread(thread)) {
+      if (id == SIGABRT && is_jeandle_compiler_thread(thread)) {
         // We may meet an vm assertion failure in a Jeandle compiler thread.
         // The assertion failure handler has already dumped an error log and
         // raised a SIGABRT. Here we need to shut down the VM process.
