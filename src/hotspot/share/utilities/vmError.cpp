@@ -468,7 +468,7 @@ static bool should_print_jeandle_backtrace(int id, Thread* thread) {
 static void print_jeandle_native_stack(outputStream* st, char* buf, int buf_size) {
   const int max_backtrace_frames = MAX2(0, (int)StackPrintLimit);
   void** frames = static_cast<void**>(alloca(sizeof(void*) * max_backtrace_frames));
-  int captured = backtrace(frames, max_backtrace_frames);
+  int captured = ::backtrace(frames, max_backtrace_frames);
   if (captured <= 0) {
     return;
   }
@@ -1751,12 +1751,16 @@ void VMError::report_and_die(int id, const char* message, const char* detail_fmt
       os::infinite_sleep();
 
     } else {
+
 #ifdef JEANDLE
       if (is_jeandle_compiler_thread(thread)) {
-        // We may meet an vm assertion failure in Jeandle compiler thread.
+        // We may meet an vm assertion failure in a Jeandle compiler thread.
+        // The assertion failure handler has already dumped an error log and
+        // raised a SIGABRT. Here we need to shut down the VM process.
         os::die();
       }
 #endif // JEANDLE
+
       if (recursive_error_count++ > 30) {
         if (!SuppressFatalErrorMessage) {
           out.print_raw_cr("[Too many errors, abort]");

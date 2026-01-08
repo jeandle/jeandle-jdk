@@ -611,8 +611,6 @@ int JVM_HANDLE_XXX_SIGNAL(int sig, siginfo_t* info,
     if (!is_jeandle_compiler_thread(t)) {
       // If we are not in a jeandle compiler thread, the signal is not from LLVM.
       // Raise SIGABRT again and let the default handler to handle it.
-      // Here we have a SIGABRT. This may be an assertion failure from LLVM.
-      // Reset the signal handler for SIGABRT to default.
       struct sigaction dfl;
       ::memset(&dfl, 0, sizeof(dfl));
       dfl.sa_handler = SIG_DFL;
@@ -622,8 +620,8 @@ int JVM_HANDLE_XXX_SIGNAL(int sig, siginfo_t* info,
       return true;
     }
 
-    // If we are in a jeandle compiler thread, assume the signal is from an assertion
-    // failure from LLVM. Report the error and die.
+    // If we are in a jeandle compiler thread, maybe the signal is from an assertion
+    // failure from LLVM.
     VMError::report_and_die(t, sig, pc, info, ucVoid);
     // VMError should not return.
     ShouldNotReachHere();
