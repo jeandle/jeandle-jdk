@@ -23,7 +23,7 @@
  * @summary test deoptimization in boundary check and check deoptimization log
  * @requires vm.debug
  * @library /test/lib
-  * @run driver compiler.jeandle.deoptimize.TestDeoptBoundaryCheck
+ * @run driver compiler.jeandle.deoptimize.TestDeoptBoundaryCheck
  */
 
 package compiler.jeandle.deoptimize;
@@ -105,7 +105,7 @@ public class TestDeoptBoundaryCheck {
 
         output.shouldHaveExitValue(1);
         output.shouldMatch("java.lang.ArrayIndexOutOfBoundsException: Index [0-9]+ out of bounds for length " + getArrayLength(type));
-        output.shouldMatch("\\[debug\\]\\[deoptimization\\].*range_check none");
+        output.shouldMatch("\\[debug\\]\\[deoptimization\\].*range_check maybe_recompile");
     }
 
     public static void testLoadArray(String kind) {

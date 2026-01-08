@@ -1019,6 +1019,13 @@ void JeandleAbstractInterpreter::add_to_work_list(JeandleBasicBlock* block) {
 }
 
 void JeandleAbstractInterpreter::load_constant() {
+  if (_bytecodes.is_in_error()) {
+    uncommon_trap(Deoptimization::Reason_unhandled,
+                  Deoptimization::Action_none);
+    _block->set(JeandleBasicBlock::always_uncommon_trap);
+    return;
+  }
+
   ciConstant con = _bytecodes.get_constant();
   llvm::Value* value = nullptr;
 
@@ -1182,7 +1189,7 @@ void JeandleAbstractInterpreter::invoke() {
   const Bytecodes::Code bc = _bytecodes.cur_bc();
 
   if (!will_link) {
-    if (bc ==Bytecodes::_invokedynamic) {
+    if (bc == Bytecodes::_invokedynamic) {
       // TODO: Keep consistent with C2, no suitable test case for now.
       uncommon_trap(Deoptimization::Reason_uninitialized,
                     Deoptimization::Action_reinterpret);
@@ -1956,7 +1963,7 @@ void JeandleAbstractInterpreter::do_array_load(BasicType basic_type) {
 
   // TODO: C2 checks if the array klass and element klass are loaded; if not,
   // it inserts an uncommon_trap, which seems to be for some special corner case.
-  // It hasn't been encountered in the tier1 use case so far.
+  // We can't get array klass because of the lack of a mechanism like GVN.
   null_check(array_ref);
   boundary_check(array_ref, index);
 
@@ -2023,7 +2030,7 @@ void JeandleAbstractInterpreter::do_array_store(BasicType basic_type) {
 
   // TODO: C2 checks if the array klass and element klass are loaded; if not,
   // it inserts an uncommon_trap, which seems to be for some special corner case.
-  // It hasn't been encountered in the tier1 use case so far.
+  // We can't get array klass because of the lack of a mechanism like GVN.
   null_check(array_ref);
   boundary_check(array_ref, index);
 
@@ -2420,23 +2427,7 @@ void JeandleAbstractInterpreter::boundary_check(llvm::Value* array_oop, llvm::Va
   llvm::Value* if_out_of_bounds = _ir_builder.CreateICmp(llvm::CmpInst::ICMP_UGE, index, call);
   _ir_builder.CreateCondBr(if_out_of_bounds, boundary_check_fail, boundary_check_pass);
 
-  if (CURRENT_ENV->ArrayIndexOutOfBoundsException_instance() == nullptr) {
-    uncommon_trap(Deoptimization::Reason_range_check, Deoptimization::Action_none, boundary_check_fail);
-  } else {
-    _ir_builder.SetInsertPoint(boundary_check_fail);
-    llvm::Value* exception_oop_handle = find_or_insert_oop(CURRENT_ENV->ArrayIndexOutOfBoundsException_instance());
-    llvm::Value* exception_oop = _ir_builder.CreateLoad(JeandleType::java2llvm(BasicType::T_OBJECT, *_context), exception_oop_handle);
-
-    // Clear the detail message of the preallocated exception object.
-    // Weblogic sometimes mutates the detail message of exceptions using reflection.
-    int detailMessage_offset = java_lang_Throwable::get_detailMessage_offset();
-    llvm::Value* detailMessage_addr = compute_instance_field_address(exception_oop, detailMessage_offset);
-    llvm::StoreInst* store_inst = _ir_builder.CreateStore(llvm::ConstantPointerNull::get(llvm::cast<llvm::PointerType>(JeandleType::java2llvm(BasicType::T_OBJECT, *_context))),
-                                                          detailMessage_addr);
-    store_inst->setAtomic(llvm::AtomicOrdering::Unordered);
-
-    dispatch_exception_to_handler(exception_oop);
-  }
+  uncommon_trap(Deoptimization::Reason_range_check, Deoptimization::Action_maybe_recompile, boundary_check_fail);
 
   _ir_builder.SetInsertPoint(boundary_check_pass);
   _block->set_tail_llvm_block(boundary_check_pass);
