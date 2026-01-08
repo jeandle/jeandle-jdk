@@ -1019,16 +1019,24 @@ void JeandleAbstractInterpreter::add_to_work_list(JeandleBasicBlock* block) {
 }
 
 void JeandleAbstractInterpreter::load_constant() {
-  if (_bytecodes.is_in_error()) {
-    uncommon_trap(Deoptimization::Reason_unhandled,
-                  Deoptimization::Action_none);
+  ciConstant con = _bytecodes.get_constant();
+  if (!con.is_loaded()) {
+    // If the constant is unresolved or in error state, run this BC in the interpreter.
+    if (_bytecodes.is_in_error()) {
+      uncommon_trap(Deoptimization::Reason_unhandled,
+                    Deoptimization::Action_none);
+    } else {
+      int index = _bytecodes.get_constant_pool_index();
+      uncommon_trap(Deoptimization::Reason_unloaded,
+                    Deoptimization::Action_reinterpret);
+    }
+
     _block->set(JeandleBasicBlock::always_uncommon_trap);
+
     return;
   }
 
-  ciConstant con = _bytecodes.get_constant();
   llvm::Value* value = nullptr;
-
   switch (con.basic_type()) {
     case BasicType::T_BOOLEAN: value = JeandleType::int_const(_ir_builder, con.as_boolean()); break;
     case BasicType::T_BYTE: value = JeandleType::int_const(_ir_builder, con.as_byte()); break;
@@ -1199,7 +1207,20 @@ void JeandleAbstractInterpreter::invoke() {
     }
 
     _block->set(JeandleBasicBlock::always_uncommon_trap);
+
     return;
+  } else {
+    // TODO: Keep consistent with C2, no suitable test case for now.
+    ciInstanceKlass* holder_klass = target->holder();
+    if (!holder_klass->is_being_initialized() &&
+        !holder_klass->is_initialized() &&
+        !holder_klass->is_interface()) {
+      uncommon_trap(Deoptimization::Reason_uninitialized,
+                    Deoptimization::Action_reinterpret);
+      _block->set(JeandleBasicBlock::always_uncommon_trap);
+
+      return;
+    }
   }
 
   const int receiver =
@@ -1240,7 +1261,8 @@ void JeandleAbstractInterpreter::invoke() {
     declared_signature = target->signature();
   }
 
-  // Additional receiver subtype checks for interface calls via invokespecial or invokeinterface.
+  // TODO: Additional receiver subtype checks for interface calls via invokespecial or invokeinterface.
+  // Keep consistent with C2, no suitable test case for now.
   ciKlass* receiver_constraint = nullptr;
   if (bc == Bytecodes::_invokespecial && !target->is_object_initializer()) {
     ciInstanceKlass* sender_klass = _method->holder();
