@@ -27,11 +27,7 @@
 package compiler.jeandle;
 
 public class TestStackOverflowCheck {
-  // Volatile sink to keep the recursion side-effectful and prevent dead-code elimination.
-  private static volatile int sink;
-
   private static void recurse(int depth) {
-    sink = depth;
     recurse(depth + 1);
   }
 
