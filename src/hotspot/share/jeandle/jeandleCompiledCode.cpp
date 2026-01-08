@@ -634,7 +634,7 @@ JeandleOopMap* JeandleCompiledCode::build_oop_map(StackMapParser& stackmaps, Sta
       oop_map->set_oop(reg_base);
     } else {
       // Derived pointer.
-      Unimplemented();
+      oop_map->set_derived_oop(reg_derived, reg_base);
     }
   }
   return new JeandleOopMap(oop_map, locals, stack, reexecute);
