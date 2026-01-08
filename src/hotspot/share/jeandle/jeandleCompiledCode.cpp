@@ -623,7 +623,6 @@ JeandleOopMap* JeandleCompiledCode::build_oop_map(StackMapParser& stackmaps, Sta
     auto derived_location = *location;
     StackMapParser::LocationKind derived_kind = derived_location.getKind();
 
-    assert(base_kind == derived_kind, "locations must be in pairs");
     assert(base_kind != StackMapParser::LocationKind::Direct, "invalid location kind");
 
     VMReg reg_base = resolve_vmreg(base_location, base_kind);
