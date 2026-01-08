@@ -34,9 +34,9 @@
 class JeandleCompiler : public AbstractCompiler {
  public:
   // Creation.
-  JeandleCompiler(llvm::TargetMachine* target_machine);
-
-  static JeandleCompiler* create();
+  JeandleCompiler() : AbstractCompiler(compiler_jeandle),
+                      _data_layout(),
+                      _template_buffer(nullptr) {};
 
   // Name of this compiler.
   virtual const char* name() { return "Jeandle"; }
@@ -47,14 +47,21 @@ class JeandleCompiler : public AbstractCompiler {
   // Compilation entry point for methods.
   virtual void compile_method(ciEnv* env, ciMethod* target, int entry_bci, bool install_code, DirectiveSet* directive);
 
+  virtual void stopping_compiler_thread(CompilerThread* current) { delete _target_machine; }
+
   // Print compilation timers and statistics.
   virtual void print_timers();
 
-  llvm::TargetMachine* target_machine() { return _target_machine.get(); }
+  bool initialize_target_machine();
+
+  static llvm::TargetMachine* target_machine() { return _target_machine; }
+
   llvm::DataLayout* data_layout() { return &_data_layout; }
 
  private:
-  std::unique_ptr<llvm::TargetMachine> _target_machine;
+  // TargetMachine is not multi-thread safe, so make it thread local here.
+  static THREAD_LOCAL llvm::TargetMachine* _target_machine;
+
   llvm::DataLayout _data_layout;
 
   // Read the template file into a global read-only memory buffer to ensure thread safety.
