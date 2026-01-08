@@ -68,19 +68,17 @@ class JeandleReloc {
 
   void  operator delete(void* p) {} // nothing to do
 
-#ifdef ASSERT
  protected:
-  bool _fixed_up = false;
-#endif
-
- private:
   // Need fixing up with the prolog length.
   int _offset;
+#ifdef ASSERT
+  bool _fixed_up = false;
+#endif
 };
 
-class JeandleConstReloc : public JeandleReloc {
+class JeandleSectionWordReloc : public JeandleReloc {
  public:
-  JeandleConstReloc(int reloc_offset, LinkEdge& edge, address target, int reloc_section) :
+  JeandleSectionWordReloc(int reloc_offset, LinkEdge& edge, address target, int reloc_section) :
     JeandleReloc(reloc_offset),
     _kind(edge.getKind()),
     _addend(edge.getAddend()),
@@ -88,18 +86,19 @@ class JeandleConstReloc : public JeandleReloc {
     _reloc_section(reloc_section) {}
 
   void emit_reloc(JeandleAssembler& assembler) override {
-    assembler.emit_const_reloc(offset(), _kind, _addend, _target, _reloc_section);
+    assembler.emit_section_word_reloc(offset(), _kind, _addend, _target, _reloc_section);
   }
 
   virtual void fixup_offset(int prolog_length) {
     if (_reloc_section == CodeBuffer::SECT_INSTS) {
-      JeandleReloc::fixup_offset(prolog_length);
+      _offset += prolog_length;
     } else {
+      assert(_reloc_section == CodeBuffer::SECT_CONSTS, "unexpected code section");
       _target += prolog_length;
-#ifdef ASSERT
-      _fixed_up = true;
-#endif
     }
+#ifdef ASSERT
+    _fixed_up = true;
+#endif
   }
 
  private:
@@ -329,10 +328,22 @@ void JeandleCompiledCode::resolve_reloc_info(JeandleAssembler& assembler) {
 
   auto link_graph = std::move(*graph_or_err);
 
+  if (_method != nullptr) {
+    tty->print_cr("-----------------------------------------------");
+  }
+
   for (auto *block : link_graph->blocks()) {
+    if (_method != nullptr) {
+      tty->print_cr("%s", block->getSection().getName().data());
+      for (auto& edge : block->edges()) {
+        auto& target = edge.getTarget();
+        llvm::StringRef target_name = target.hasName() ? *(target.getName()) : "";
+        tty->print_cr("name = %s, isDefined = %d, edgeKind = %d", target_name.data(), target.isDefined(), edge.getKind());
+      }
+    }
     // Resolve relocations in the compiled code and constant pool.
     if (block->getSection().getName().compare(".text") != 0 &&
-        block->getSection().getName().compare(".rodata") != 0) {
+        !block->getSection().getName().starts_with(".rodata")) {
       continue;
     }
     for (auto& edge : block->edges()) {
@@ -370,20 +381,21 @@ void JeandleCompiledCode::resolve_reloc_info(JeandleAssembler& assembler) {
         int reloc_offset;
         int reloc_section;
         if (target.getSection().getName().starts_with(".rodata")) {
+          assert(block->getSection().getName().compare(".text") == 0, "invalid reloc section");
           target_addr = resolve_const_edge(*block, edge, assembler);
           RETURN_VOID_ON_JEANDLE_ERROR();
           reloc_offset = static_cast<int>(block->getAddress().getValue() + edge.getOffset());
           reloc_section = CodeBuffer::SECT_INSTS;
         } else {
           assert(target.getSection().getName().compare(".text") == 0, "invalid target section");
-          assert(block->getSection().getName().compare(".rodata") == 0, "invalid reloc section");
+          assert(block->getSection().getName().starts_with(".rodata"), "invalid reloc section");
           target_addr = _code_buffer.insts()->start();
           address reloc_base = lookup_const_section(block->getSection().getName(), assembler);
           RETURN_VOID_ON_JEANDLE_ERROR();
           reloc_offset = reloc_base + edge.getOffset() - _code_buffer.consts()->start();
           reloc_section = CodeBuffer::SECT_CONSTS;
         }
-        relocs.push_back(new JeandleConstReloc(reloc_offset, edge, target_addr, reloc_section));
+        relocs.push_back(new JeandleSectionWordReloc(reloc_offset, edge, target_addr, reloc_section));
       } else if (JeandleAssembler::is_oop_reloc(target, edge.getKind())) {
         // Oop relocations.
         assert((target_name).starts_with("oop_handle"), "invalid oop relocation name");

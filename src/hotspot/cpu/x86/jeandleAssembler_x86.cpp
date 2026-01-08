@@ -189,7 +189,7 @@ int JeandleAssembler::emit_exception_handler() {
 
 using LinkKind_x86_64 = llvm::jitlink::x86_64::EdgeKind_x86_64;
 
-void JeandleAssembler::emit_const_reloc(int operand_offset, LinkKind kind, int64_t addend, address target, int reloc_section) {
+void JeandleAssembler::emit_section_word_reloc(int operand_offset, LinkKind kind, int64_t addend, address target, int reloc_section) {
   assert(operand_offset >= 0, "invalid operand address");
   assert(kind == LinkKind_x86_64::Delta32, "invalid link kind");
 
