@@ -328,19 +328,7 @@ void JeandleCompiledCode::resolve_reloc_info(JeandleAssembler& assembler) {
 
   auto link_graph = std::move(*graph_or_err);
 
-  if (_method != nullptr) {
-    tty->print_cr("-----------------------------------------------");
-  }
-
   for (auto *block : link_graph->blocks()) {
-    if (_method != nullptr) {
-      tty->print_cr("%s", block->getSection().getName().data());
-      for (auto& edge : block->edges()) {
-        auto& target = edge.getTarget();
-        llvm::StringRef target_name = target.hasName() ? *(target.getName()) : "";
-        tty->print_cr("name = %s, isDefined = %d, edgeKind = %d", target_name.data(), target.isDefined(), edge.getKind());
-      }
-    }
     // Resolve relocations in the compiled code and constant pool.
     if (block->getSection().getName().compare(".text") != 0 &&
         !block->getSection().getName().starts_with(".rodata")) {
