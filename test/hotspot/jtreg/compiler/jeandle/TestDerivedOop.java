@@ -49,7 +49,7 @@ public class TestDerivedOop {
 
         String key = "ThisKey";
 
-        // java.util.concurrent.ConcurrentHashMap::putVal will trigger the Unimplemented error about derived oop.
+        // ConcurrentHashMap::putVal covers the scenario of derived OOP.
         putValMethod.invoke(map, key, "ThisValue", false);
 
         wb.fullGC();
