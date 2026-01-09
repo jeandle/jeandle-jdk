@@ -1021,19 +1021,21 @@ void JeandleAbstractInterpreter::add_to_work_list(JeandleBasicBlock* block) {
 void JeandleAbstractInterpreter::load_constant() {
   ciConstant con = _bytecodes.get_constant();
   if (!con.is_loaded()) {
+    // TODO: To keep consistent with C2, but no suitable test case for now.
     // If the constant is unresolved or in error state, run this BC in the interpreter.
-    if (_bytecodes.is_in_error()) {
-      uncommon_trap(Deoptimization::Reason_unhandled,
-                    Deoptimization::Action_none);
-    } else {
-      int index = _bytecodes.get_constant_pool_index();
-      uncommon_trap(Deoptimization::Reason_unloaded,
-                    Deoptimization::Action_reinterpret);
-    }
+    // if (_bytecodes.is_in_error()) {
+    //   uncommon_trap(Deoptimization::Reason_unhandled,
+    //                 Deoptimization::Action_none);
+    // } else {
+    //   int index = _bytecodes.get_constant_pool_index();
+    //   uncommon_trap(Deoptimization::Reason_unloaded,
+    //                 Deoptimization::Action_reinterpret);
+    // }
 
-    _block->set(JeandleBasicBlock::always_uncommon_trap);
+    // _block->set(JeandleBasicBlock::always_uncommon_trap);
 
-    return;
+    // return;
+    Unimplemented();
   }
 
   llvm::Value* value = nullptr;
@@ -1198,9 +1200,10 @@ void JeandleAbstractInterpreter::invoke() {
 
   if (!will_link) {
     if (bc == Bytecodes::_invokedynamic) {
-      // TODO: Keep consistent with C2, no suitable test case for now.
-      uncommon_trap(Deoptimization::Reason_uninitialized,
-                    Deoptimization::Action_reinterpret);
+      // TODO: To keep consistent with C2, but no suitable test case for now.
+      //   uncommon_trap(Deoptimization::Reason_uninitialized,
+      //                 Deoptimization::Action_reinterpret);
+      Unimplemented();
     } else {
       uncommon_trap(Deoptimization::Reason_unloaded,
                     Deoptimization::Action_reinterpret);
@@ -1210,17 +1213,18 @@ void JeandleAbstractInterpreter::invoke() {
 
     return;
   } else {
-    // TODO: Keep consistent with C2, no suitable test case for now.
-    ciInstanceKlass* holder_klass = target->holder();
-    if (!holder_klass->is_being_initialized() &&
-        !holder_klass->is_initialized() &&
-        !holder_klass->is_interface()) {
-      uncommon_trap(Deoptimization::Reason_uninitialized,
-                    Deoptimization::Action_reinterpret);
-      _block->set(JeandleBasicBlock::always_uncommon_trap);
+    // TODO: To keep consistent with C2, but no suitable test case for now.
+    // ciInstanceKlass* holder_klass = target->holder();
+    // if (!holder_klass->is_being_initialized() &&
+    //     !holder_klass->is_initialized() &&
+    //     !holder_klass->is_interface()) {
+    //   uncommon_trap(Deoptimization::Reason_uninitialized,
+    //                 Deoptimization::Action_reinterpret);
+    //   _block->set(JeandleBasicBlock::always_uncommon_trap);
 
-      return;
-    }
+    //   return;
+    // }
+    Unimplemented();
   }
 
   const int receiver =
@@ -1230,13 +1234,14 @@ void JeandleAbstractInterpreter::invoke() {
 
   llvm::Value* receiver_value = nullptr;
 
-  // Null check for receiver.
   if (receiver) {
-    int receiver_depth = target->arg_size() - 1; // Index of stack slots where receiver locates.
-    receiver_value = _jvm->raw_peek(receiver_depth).value();
+    // int receiver_depth = target->arg_size() - 1; // Index of stack slots where receiver locates.
+    // receiver_value = _jvm->raw_peek(receiver_depth).value();
 
-    assert(receiver_value != nullptr, "receiver must be present");
-    null_check(receiver_value);
+    // TODO: To keep consistent with C2, but no suitable test case for now.
+    // assert(receiver_value != nullptr, "receiver must be present");
+    // null_check(receiver_value);
+    Unimplemented();
   }
 
   // try inline callee as intrinsic
@@ -1262,7 +1267,7 @@ void JeandleAbstractInterpreter::invoke() {
   }
 
   // TODO: Additional receiver subtype checks for interface calls via invokespecial or invokeinterface.
-  // Keep consistent with C2, no suitable test case for now.
+  // To keep consistent with C2, but no suitable test case for now.
   ciKlass* receiver_constraint = nullptr;
   if (bc == Bytecodes::_invokespecial && !target->is_object_initializer()) {
     ciInstanceKlass* sender_klass = _method->holder();
@@ -1275,30 +1280,33 @@ void JeandleAbstractInterpreter::invoke() {
   }
 
   if (receiver_constraint != nullptr) {
-    assert(receiver_value, "receiver must be present");
+    Unimplemented();
+    // assert(receiver, "receiver must be present");
 
-    Klass* receiver_constraint_klass = (Klass*)(receiver_constraint->constant_encoding());
-    llvm::PointerType* klass_type = llvm::PointerType::get(*_context, llvm::jeandle::AddrSpace::CHeapAddrSpace);
-    llvm::Value* receiver_constraint_value = _ir_builder.CreateIntToPtr(_ir_builder.getInt64((intptr_t)receiver_constraint_klass),
-                                                                        klass_type);
+    // int receiver_depth = target->arg_size() - 1; // Index of stack slots where receiver locates.
+    // receiver_value = _jvm->raw_peek(receiver_depth).value();
 
-    llvm::CallInst* checkcast = call_java_op("jeandle.checkcast", {receiver_constraint_value, receiver_value});
+    // Klass* receiver_constraint_klass = (Klass*)(receiver_constraint->constant_encoding());
+    // llvm::PointerType* klass_type = llvm::PointerType::get(*_context, llvm::jeandle::AddrSpace::CHeapAddrSpace);
+    // llvm::Value* receiver_constraint_value = _ir_builder.CreateIntToPtr(_ir_builder.getInt64((intptr_t)receiver_constraint_klass),
+    //                                                                     klass_type);
 
-    int cur_bci = _bytecodes.cur_bci();
-    llvm::BasicBlock* checkcast_pass = llvm::BasicBlock::Create(*_context,
-                                                                "bci_" + std::to_string(cur_bci) + "_checkcast_pass",
-                                                                _llvm_func);
-    llvm::BasicBlock* checkcast_fail = llvm::BasicBlock::Create(*_context,
-                                                                "bci_" + std::to_string(cur_bci) + "_checkcast_fail",
-                                                                _llvm_func);
+    // llvm::CallInst* checkcast = call_java_op("jeandle.checkcast", {receiver_constraint_value, receiver_value});
 
-    _ir_builder.CreateCondBr(checkcast, checkcast_pass, checkcast_fail);
+    // int cur_bci = _bytecodes.cur_bci();
+    // llvm::BasicBlock* checkcast_pass = llvm::BasicBlock::Create(*_context,
+    //                                                             "bci_" + std::to_string(cur_bci) + "_checkcast_pass",
+    //                                                             _llvm_func);
+    // llvm::BasicBlock* checkcast_fail = llvm::BasicBlock::Create(*_context,
+    //                                                             "bci_" + std::to_string(cur_bci) + "_checkcast_fail",
+    //                                                             _llvm_func);
 
-    // TODO: Keep consistent with C2, no suitable test case for now.
-    uncommon_trap(Deoptimization::Reason_class_check, Deoptimization::Action_none, checkcast_fail);
+    // _ir_builder.CreateCondBr(checkcast, checkcast_pass, checkcast_fail);
 
-    _ir_builder.SetInsertPoint(checkcast_pass);
-    _block->set_tail_llvm_block(checkcast_pass);
+    // uncommon_trap(Deoptimization::Reason_class_check, Deoptimization::Action_none, checkcast_fail);
+
+    // _ir_builder.SetInsertPoint(checkcast_pass);
+    // _block->set_tail_llvm_block(checkcast_pass);
   }
 
   // Construct arguments.
@@ -1812,11 +1820,12 @@ void JeandleAbstractInterpreter::do_field_access(bool is_get, bool is_static) {
   ciInstanceKlass* field_holder = field->holder();
   if (!is_get && field->is_call_site_target() &&
       (!(_method->holder() == field_holder && _method->is_object_initializer()))) {
-    // TODO: Keep consistent with C2, no suitable test case for now.
-    uncommon_trap(Deoptimization::Reason_unhandled,
-                  Deoptimization::Action_reinterpret);
-    _block->set(JeandleBasicBlock::always_uncommon_trap);
-    return;
+    // TODO: To keep consistent with C2, but no suitable test case for now.
+    // uncommon_trap(Deoptimization::Reason_unhandled,
+    //               Deoptimization::Action_reinterpret);
+    // _block->set(JeandleBasicBlock::always_uncommon_trap);
+    // return;
+    Unimplemented();
   }
 
   if (!is_static) {
@@ -2114,11 +2123,12 @@ void JeandleAbstractInterpreter::do_new() {
   } else if (klass->is_abstract() || klass->is_interface() ||
       klass->name() == ciSymbols::java_lang_Class() ||
       _bytecodes.is_unresolved_klass()) {
-    // TODO: Keep consistent with C2, no suitable test case for now.
-    uncommon_trap(Deoptimization::Reason_unhandled,
-                  Deoptimization::Action_none);
-    _block->set(JeandleBasicBlock::always_uncommon_trap);
-    return;
+    // TODO: To keep consistent with C2, but no suitable test case for now.
+    // uncommon_trap(Deoptimization::Reason_unhandled,
+    //               Deoptimization::Action_none);
+    // _block->set(JeandleBasicBlock::always_uncommon_trap);
+    // return;
+    Unimplemented();
   }
   // TODO: cl init barrier
   jint layout_helper = klass->layout_helper();
@@ -2280,11 +2290,12 @@ void JeandleAbstractInterpreter::anewarray(int klass_index) {
     Klass* klass = (Klass*)(array_klass->constant_encoding());
     do_unified_newarray(klass);
   } else {
-    // TODO: Keep consistent with C2, no suitable test case for now.
-    uncommon_trap(Deoptimization::Reason_unloaded,
-                  Deoptimization::Action_reinterpret);
-    _block->set(JeandleBasicBlock::always_uncommon_trap);
-    return;
+    // TODO: To keep consistent with C2, but no suitable test case for now.
+    // uncommon_trap(Deoptimization::Reason_unloaded,
+    //               Deoptimization::Action_reinterpret);
+    // _block->set(JeandleBasicBlock::always_uncommon_trap);
+    // return;
+    Unimplemented();
   }
 }
 
