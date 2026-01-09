@@ -37,4 +37,6 @@ class JeandleFuncSig : public AllStatic {
   static void setup_description(llvm::Function* func, bool is_stub = false);
 };
 
+bool is_jeandle_compiler_thread(Thread* t);
+
 #endif // SHARE_JEANDLE_UTILS_HPP

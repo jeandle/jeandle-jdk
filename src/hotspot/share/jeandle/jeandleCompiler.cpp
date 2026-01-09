@@ -22,6 +22,7 @@
 #include "llvm/Bitcode/BitcodeWriter.h"
 #include "llvm/IRReader/IRReader.h"
 #include "llvm/MC/TargetRegistry.h"
+#include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/SmallVectorMemoryBuffer.h"
 #include "llvm/Support/SourceMgr.h"
 #include "llvm/TargetParser/Host.h"
@@ -35,13 +36,28 @@
 #include "jeandle/__hotspotHeadersBegin__.hpp"
 #include "runtime/arguments.hpp"
 
-JeandleCompiler::JeandleCompiler(llvm::TargetMachine* target_machine) :
-                                 AbstractCompiler(compiler_jeandle),
-                                 _target_machine(target_machine),
-                                 _data_layout(target_machine->createDataLayout()),
-                                 _template_buffer(nullptr) {}
+namespace {
 
-JeandleCompiler* JeandleCompiler::create() {
+void jeandle_llvm_fatal_error_handler(void* user_data, const char* reason, bool gen_crash_diag) {
+  (void)user_data;
+  (void)gen_crash_diag;
+  const char* message = (reason != nullptr) ? reason : "unknown LLVM fatal error";
+  fatal("LLVM fatal error: %s", message);
+}
+
+void install_jeandle_llvm_fatal_error_handler() {
+  static bool installed = false;
+  if (!installed) {
+    llvm::install_fatal_error_handler(jeandle_llvm_fatal_error_handler, nullptr);
+    installed = true;
+  }
+}
+
+} // anonymous namespace
+
+THREAD_LOCAL llvm::TargetMachine* JeandleCompiler::_target_machine = nullptr;
+
+bool JeandleCompiler::initialize_target_machine() {
   llvm::Triple target_triple = llvm::Triple(llvm::sys::getProcessTriple());
 
   std::string err_msg;
@@ -57,15 +73,25 @@ JeandleCompiler* JeandleCompiler::create() {
   llvm::SubtargetFeatures features;
   options.EmitStackSizeSection = true;
 
-  llvm::TargetMachine* target_machine = target->createTargetMachine(target_triple, ""/* CPU */, features.getString(), options,
-                                                                    llvm::Reloc::Model::PIC_, llvm::CodeModel::Model::Small,
-                                                                    llvm::CodeGenOptLevel::Aggressive, true/* JIT */);
-
-  return new JeandleCompiler(target_machine);
+  _target_machine = target->createTargetMachine(target_triple, ""/* CPU */, features.getString(), options,
+                                                llvm::Reloc::Model::PIC_, llvm::CodeModel::Model::Small,
+                                                llvm::CodeGenOptLevel::Aggressive, true/* JIT */);
+  return _target_machine != nullptr;
 }
 
 void JeandleCompiler::initialize() {
+  // Per compiler thread initialization:
+  if (!initialize_target_machine()) {
+    set_state(failed);
+    return;
+  }
+
+  // Per JeandleCompiler initialization:
   if (should_perform_init()) {
+    _data_layout = _target_machine->createDataLayout();
+
+    install_jeandle_llvm_fatal_error_handler();
+
     if (!initialize_commandline_options()) {
       set_state(failed);
       return;
