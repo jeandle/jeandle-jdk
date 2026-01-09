@@ -1200,31 +1200,28 @@ void JeandleAbstractInterpreter::invoke() {
 
   if (!will_link) {
     if (bc == Bytecodes::_invokedynamic) {
-      // TODO: To keep consistent with C2, but no suitable test case for now.
-      //   uncommon_trap(Deoptimization::Reason_uninitialized,
-      //                 Deoptimization::Action_reinterpret);
-      Unimplemented();
+      uncommon_trap(Deoptimization::Reason_uninitialized,
+                    Deoptimization::Action_reinterpret);
     } else {
       uncommon_trap(Deoptimization::Reason_unloaded,
                     Deoptimization::Action_reinterpret);
     }
-
     _block->set(JeandleBasicBlock::always_uncommon_trap);
 
     return;
   } else {
-    // TODO: To keep consistent with C2, but no suitable test case for now.
-    // ciInstanceKlass* holder_klass = target->holder();
-    // if (!holder_klass->is_being_initialized() &&
-    //     !holder_klass->is_initialized() &&
-    //     !holder_klass->is_interface()) {
-    //   uncommon_trap(Deoptimization::Reason_uninitialized,
-    //                 Deoptimization::Action_reinterpret);
-    //   _block->set(JeandleBasicBlock::always_uncommon_trap);
+    ciInstanceKlass* holder_klass = target->holder();
+    if (!holder_klass->is_being_initialized() &&
+        !holder_klass->is_initialized() &&
+        !holder_klass->is_interface()) {
+      // TODO: To keep consistent with C2, but no suitable test case for now.
+      // uncommon_trap(Deoptimization::Reason_uninitialized,
+      //               Deoptimization::Action_reinterpret);
+      // _block->set(JeandleBasicBlock::always_uncommon_trap);
 
-    //   return;
-    // }
-    Unimplemented();
+      // return;
+      Unimplemented();
+    }
   }
 
   const int receiver =
@@ -1234,15 +1231,14 @@ void JeandleAbstractInterpreter::invoke() {
 
   llvm::Value* receiver_value = nullptr;
 
-  if (receiver) {
+  // TODO: To keep consistent with C2, but no suitable test case for now.
+  // if (receiver) {
     // int receiver_depth = target->arg_size() - 1; // Index of stack slots where receiver locates.
     // receiver_value = _jvm->raw_peek(receiver_depth).value();
 
-    // TODO: To keep consistent with C2, but no suitable test case for now.
     // assert(receiver_value != nullptr, "receiver must be present");
     // null_check(receiver_value);
-    Unimplemented();
-  }
+  // }
 
   // try inline callee as intrinsic
   if (target->is_loaded()
@@ -1320,7 +1316,6 @@ void JeandleAbstractInterpreter::invoke() {
   }
   if (receiver) {
     args[0] = _jvm->pop(BasicType::T_OBJECT);
-    assert(args[0] == receiver_value, "receiver must be present");
     args_type[0] = JeandleType::java2llvm(BasicType::T_OBJECT, *_context);
   }
 
@@ -2123,12 +2118,10 @@ void JeandleAbstractInterpreter::do_new() {
   } else if (klass->is_abstract() || klass->is_interface() ||
       klass->name() == ciSymbols::java_lang_Class() ||
       _bytecodes.is_unresolved_klass()) {
-    // TODO: To keep consistent with C2, but no suitable test case for now.
-    // uncommon_trap(Deoptimization::Reason_unhandled,
-    //               Deoptimization::Action_none);
-    // _block->set(JeandleBasicBlock::always_uncommon_trap);
-    // return;
-    Unimplemented();
+    uncommon_trap(Deoptimization::Reason_unhandled,
+                  Deoptimization::Action_none);
+    _block->set(JeandleBasicBlock::always_uncommon_trap);
+    return;
   }
   // TODO: cl init barrier
   jint layout_helper = klass->layout_helper();
