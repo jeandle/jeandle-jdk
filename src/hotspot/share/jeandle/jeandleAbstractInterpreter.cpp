@@ -2096,6 +2096,10 @@ void JeandleAbstractInterpreter::dispatch_exception_to_handler(llvm::Value* exce
   for (ciExceptionHandlerStream handlers(_method, _bytecodes.cur_bci()); !handlers.is_done(); handlers.next()) {
     ciExceptionHandler* handler = handlers.handler();
     if (handler->is_rethrow()) {
+      // unlock before the exception is rethrown out of the synchronized method
+      if (_method && _method->is_synchronized()) {
+        shared_unlock(_sync_lock[0], _sync_lock[1]);
+      }
       throw_exception(exception_oop);
       return;
     }
