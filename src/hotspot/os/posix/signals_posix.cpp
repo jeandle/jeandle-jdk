@@ -49,6 +49,10 @@
 #include <signal.h>
 
 
+#ifdef JEANDLE
+#include "jeandle/jeandleUtils.hpp"
+#endif // JEANDLE
+
 static const char* get_signal_name(int sig, char* out, size_t outlen);
 
 // Returns address of a handler associated with the given sigaction
@@ -600,6 +604,29 @@ int JVM_HANDLE_XXX_SIGNAL(int sig, siginfo_t* info,
       pc = os::Posix::ucontext_get_pc(uc);
     }
   }
+
+#ifdef JEANDLE
+  if (sig == SIGABRT) {
+
+    if (!is_jeandle_compiler_thread(t)) {
+      // If we are not in a jeandle compiler thread, the signal is not from LLVM.
+      // Raise SIGABRT again and let the default handler to handle it.
+      struct sigaction dfl;
+      ::memset(&dfl, 0, sizeof(dfl));
+      dfl.sa_handler = SIG_DFL;
+      sigemptyset(&dfl.sa_mask);
+      sigaction(SIGABRT, &dfl, nullptr);
+      ::raise(SIGABRT);
+      return true;
+    }
+
+    // If we are in a jeandle compiler thread, maybe the signal is from an assertion
+    // failure from LLVM.
+    VMError::report_and_die(t, sig, pc, info, ucVoid);
+    // VMError should not return.
+    ShouldNotReachHere();
+  }
+#endif // JEANDLE
 
   if (!signal_was_handled) {
     signal_was_handled = handle_safefetch(sig, pc, uc);
@@ -1315,6 +1342,10 @@ void install_signal_handlers() {
   set_signal_handler(SIGBUS);
   set_signal_handler(SIGILL);
   set_signal_handler(SIGFPE);
+#ifdef JEANDLE
+  // Used to handle assertion failures in LLVM
+  set_signal_handler(SIGABRT);
+#endif // JEANDLE
   PPC64_ONLY(set_signal_handler(SIGTRAP);)
   set_signal_handler(SIGXFSZ);
   if (!ReduceSignalUsage) {

@@ -75,6 +75,19 @@
 #include "jvmci/jvmci.hpp"
 #endif
 
+// Support Jeandle stack backtrace. This functionality relies on glibc.
+#if defined(LINUX) && defined(JEANDLE) && defined(__GLIBC__)
+
+#define JEANDLE_BACKTRACE
+
+#include "compiler/compilerThread.hpp"
+#include "jeandle/jeandleUtils.hpp"
+
+#include <execinfo.h>
+#include <signal.h>
+
+#endif // LINUX && JEANDLE && __GLIBC__
+
 #ifndef PRODUCT
 #include <signal.h>
 #endif // PRODUCT
@@ -445,6 +458,36 @@ static frame next_frame(frame fr, Thread* t) {
     return os::get_sender_for_C_frame(&fr);
   }
 }
+
+#ifdef JEANDLE_BACKTRACE
+
+static bool should_print_jeandle_backtrace(int id, Thread* thread) {
+  return id == SIGABRT && is_jeandle_compiler_thread(thread);
+}
+
+static void print_jeandle_native_stack(outputStream* st, char* buf, int buf_size) {
+  const int max_backtrace_frames = MAX2(0, (int)StackPrintLimit);
+  void** frames = static_cast<void**>(alloca(sizeof(void*) * max_backtrace_frames));
+  int captured = ::backtrace(frames, max_backtrace_frames);
+  if (captured <= 0) {
+    return;
+  }
+
+  st->print_cr("Jeandle frames: (Vv=VM code, C=native code)");
+  for (int i = 0; i < captured; ++i) {
+    address pc = reinterpret_cast<address>(frames[i]);
+    frame::print_C_frame(st, buf, buf_size, pc);
+
+    char filename[128];
+    int line_no;
+    Decoder::get_source_info(pc, filename, sizeof(filename), &line_no, true /*is_pc_after_call*/);
+    st->print("  (%s:%d)", filename, line_no);
+
+    st->cr();
+  }
+}
+
+#endif // JEANDLE_BACKTRACE
 
 void VMError::print_native_stack(outputStream* st, frame fr, Thread* t, bool print_source_info, int max_frames, char* buf, int buf_size) {
 
@@ -998,6 +1041,12 @@ void VMError::report(outputStream* st, bool _verbose) {
     st->cr();
 
   STEP_IF("printing native stack (with source info)", _verbose)
+#ifdef JEANDLE_BACKTRACE
+    if (should_print_jeandle_backtrace(_id, _thread)) {
+      // Use DWARF-based unwinding to get native frames when FP-based walk is unreliable.
+      print_jeandle_native_stack(st, buf, sizeof(buf));
+    } else
+#endif // JEANDLE_BACKTRACE
     if (os::platform_print_native_stack(st, _context, buf, sizeof(buf), lastpc)) {
       // We have printed the native stack in platform-specific code
       // Windows/x64 needs special handling.
@@ -1702,6 +1751,16 @@ void VMError::report_and_die(int id, const char* message, const char* detail_fmt
       os::infinite_sleep();
 
     } else {
+
+#ifdef JEANDLE
+      if (id == SIGABRT && is_jeandle_compiler_thread(thread)) {
+        // We may meet an vm assertion failure in a Jeandle compiler thread.
+        // The assertion failure handler has already dumped an error log and
+        // raised a SIGABRT. Here we need to shut down the VM process.
+        os::die();
+      }
+#endif // JEANDLE
+
       if (recursive_error_count++ > 30) {
         if (!SuppressFatalErrorMessage) {
           out.print_raw_cr("[Too many errors, abort]");
