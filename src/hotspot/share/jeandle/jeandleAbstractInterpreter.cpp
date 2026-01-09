@@ -2277,11 +2277,12 @@ llvm::Value* JeandleAbstractInterpreter::shared_lock(llvm::Value* obj) {
   if (!GenerateSynchronizationCode) {
     return nullptr;
   }
+  assert(obj != nullptr, "sanity");
   // Allocate a BasicLock on stack.
   // Alloca insts should be in the entry block to be 'StaticAlloca'. Then they could be folded into prologue code.
   llvm::BasicBlock* header_block = _block_builder->entry_block()->header_llvm_block();
   llvm::Instruction* terminator = header_block->getTerminator();
-  llvm::IRBuilder<> entry_block_ir_builder(header_block->getContext());
+  llvm::IRBuilder<> entry_block_ir_builder(*_context);
   if (terminator) {
     entry_block_ir_builder.SetInsertPoint(terminator);
   } else {
@@ -2305,6 +2306,7 @@ void JeandleAbstractInterpreter::shared_unlock(llvm::Value* obj, llvm::Value* lo
     return;
   }
 
+  assert(obj != nullptr && lock != nullptr, "sanity");
   llvm::FunctionCallee monitorexit_callee = JeandleRuntimeRoutine::hotspot_SharedRuntime_complete_monitor_unlocking_C_callee(_module);
   llvm::CallInst* current_thread = call_java_op("jeandle.current_thread", {});
   llvm::CallInst* call_monitorexit = _ir_builder.CreateCall(monitorexit_callee, {obj, lock, current_thread});
@@ -2321,7 +2323,6 @@ void JeandleAbstractInterpreter::monitorenter() {
 
 void JeandleAbstractInterpreter::monitorexit() {
   JeandleCompilation::current()->set_has_monitors(true);
-  // TODO: need to check if the monitor is balanced.
   llvm::Value* obj = _jvm->apop();
 
   llvm::Value* lock = _jvm->pop_lock();
