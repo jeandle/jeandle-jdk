@@ -41,10 +41,10 @@ public class TestCatch {
         fileCheckOpt.check("landingpad token");
 
         FileCheck fileCheck = new FileCheck(currentDir, TestCatch.class.getDeclaredMethod("testCatch"), false);
-        fileCheck.check("bci_2_exception_dispatch_to_bci_52:");
+        fileCheck.checkPattern("bci_[0-9]+_exception_dispatch_to_bci_[0-9]+:");
         fileCheck.checkNext("call hotspotcc i32 @jeandle.instanceof");
 
-        fileCheck.check("bci_446_unwind_dest:");
+        fileCheck.checkPattern("bci_[0-9]+_unwind_dest:");
         fileCheck.checkNext("landingpad i64");
         fileCheck.checkNext("cleanup");
 

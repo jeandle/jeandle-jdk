@@ -52,6 +52,10 @@ void JeandleAssembler::emit_verified_entry() {
   Unimplemented();
 }
 
+void JeandleAssembler::emit_clinit_barrier_on_entry(Klass* klass) {
+  Unimplemented();
+}
+
 int JeandleAssembler::interior_entry_alignment() const {
   Unimplemented();
   return 0;
@@ -62,7 +66,7 @@ int JeandleAssembler::emit_exception_handler() {
   return 0;
 }
 
-void JeandleAssembler::emit_const_reloc(int operand_offset, LinkKind kind, int64_t addend, address target) {
+void JeandleAssembler::emit_section_word_reloc(int operand_offset, LinkKind kind, int64_t addend, address target, int reloc_section) {
   Unimplemented();
 }
 

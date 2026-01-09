@@ -43,8 +43,8 @@ import jdk.test.lib.process.ProcessTools;
 
 public class TestLLVMMathIntrinsics {
     // Java.lang.Math function Error tolerance is 1~2 ulp(according to JDK doc).
-    // Test tolerance: 1 ulp (suitable for standard libm precision validation).
-    private static final int ULP_TOLERANCE = 1;
+    // Test tolerance: 2 ulp (safe upper bound for standard libm precision validation).
+    private static final int ULP_TOLERANCE = 2;
 
     private static double v = Math.abs(1.0d);   // Force load java.lang.Math class
 

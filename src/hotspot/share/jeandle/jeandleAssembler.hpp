@@ -52,7 +52,7 @@ class JeandleAssembler : public StackObj {
 
   void emit_consts(address consts_start, uint64_t consts_size);
 
-  void emit_const_reloc(int offset, LinkKind kind, int64_t addend, address target);
+  void emit_section_word_reloc(int offset, LinkKind kind, int64_t addend, address target, int reloc_section);
 
   void emit_oop_reloc(int offset, jobject oop_handle);
 
