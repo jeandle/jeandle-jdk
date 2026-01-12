@@ -625,15 +625,17 @@ void JeandleAbstractInterpreter::interpret() {
       llvm::Value* oop_handle = find_or_insert_oop(_method->holder()->java_mirror());
       lock_obj = _ir_builder.CreateLoad(JeandleType::java2llvm(BasicType::T_OBJECT, *_context), oop_handle);
     } else {
-      // pass the "this" pointer, which is Param0 from StartNode
+      // Lock the "this" pointer, which is the first parameter
       lock_obj = _jvm->locals_at(0);
     }
 
-    llvm::Value* lock = shared_lock(lock_obj);
-    if (lock != nullptr) {
-      _sync_lock[0] = lock_obj;
-      _sync_lock[1] = lock;
-    }
+    llvm::Value* lock = _ir_builder.CreateAlloca(_ir_builder.getIntPtrTy(_module.getDataLayout()),
+                                                 llvm::jeandle::AddrSpace::CHeapAddrSpace, nullptr, "BasicLock");
+    // record object and lock for synchronized method
+    _sync_lock[0] = lock_obj;
+    _sync_lock[1] = lock;
+
+    shared_lock(lock_obj, lock);
   }
 
   // Create branch from the entry block.
@@ -2408,23 +2410,15 @@ void JeandleAbstractInterpreter::multianewarray() {
   _jvm->apush(create_call_ex(callee, args, llvm::CallingConv::Hotspot_JIT));
 }
 
-llvm::Value* JeandleAbstractInterpreter::shared_lock(llvm::Value* obj) {
-  if (!GenerateSynchronizationCode) {
-    return nullptr;
-  }
+void JeandleAbstractInterpreter::shared_lock(llvm::Value* obj, llvm::Value* lock) {
   assert(obj != nullptr, "sanity");
-  // Allocate a BasicLock on stack.
-  // Alloca insts should be in the entry block to be 'StaticAlloca'. Then they could be folded into prologue code.
-  llvm::BasicBlock* header_block = _block_builder->entry_block()->header_llvm_block();
-  llvm::Instruction* terminator = header_block->getTerminator();
-  llvm::IRBuilder<> entry_block_ir_builder(*_context);
-  if (terminator) {
-    entry_block_ir_builder.SetInsertPoint(terminator);
-  } else {
-    // if terminator is nullptr, we are at empty block
-    entry_block_ir_builder.SetInsertPoint(header_block);
+
+  if (lock == nullptr) {
+    // Allocate a BasicLock on stack.
+    // Alloca insts should be in the entry block to be 'StaticAlloca'. Then they could be folded into prologue code.
+    llvm::IRBuilder entry_block_ir_builder(_block_builder->entry_block()->header_llvm_block()->getTerminator());
+    lock = entry_block_ir_builder.CreateAlloca(_ir_builder.getIntPtrTy(_module.getDataLayout()), llvm::jeandle::AddrSpace::CHeapAddrSpace, nullptr, "BasicLock");
   }
-  llvm::Value* lock = entry_block_ir_builder.CreateAlloca(_ir_builder.getIntPtrTy(_module.getDataLayout()), llvm::jeandle::AddrSpace::CHeapAddrSpace, nullptr, "BasicLock");
 
   _jvm->push_lock(lock);
 
@@ -2432,15 +2426,9 @@ llvm::Value* JeandleAbstractInterpreter::shared_lock(llvm::Value* obj) {
   llvm::CallInst* current_thread = call_java_op("jeandle.current_thread", {});
   llvm::CallInst* call_monitorenter = _ir_builder.CreateCall(monitorenter_callee, {obj, lock, current_thread});
   call_monitorenter->setCallingConv(llvm::CallingConv::C);
-
-  return lock;
 }
 
 void JeandleAbstractInterpreter::shared_unlock(llvm::Value* obj, llvm::Value* lock) {
-  if (!GenerateSynchronizationCode) {
-    return;
-  }
-
   assert(obj != nullptr && lock != nullptr, "sanity");
   llvm::FunctionCallee monitorexit_callee = JeandleRuntimeRoutine::hotspot_SharedRuntime_complete_monitor_unlocking_C_callee(_module);
   llvm::CallInst* current_thread = call_java_op("jeandle.current_thread", {});

@@ -374,7 +374,7 @@ class JeandleAbstractInterpreter : public StackObj {
   // Implementation of _new
   void do_new();
 
-  llvm::Value* shared_lock(llvm::Value* obj);
+  void shared_lock(llvm::Value* obj, llvm::Value* lock = nullptr);
   void shared_unlock(llvm::Value* obj, llvm::Value* lock);
   void monitorenter();
   void monitorexit();
