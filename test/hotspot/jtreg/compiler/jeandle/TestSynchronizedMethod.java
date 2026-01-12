@@ -22,9 +22,10 @@
  * @test test synchronized method compilation for jeandle compiler
  * @library /test/lib /
  * @build jdk.test.lib.Asserts
- * @run main/othervm -Xcomp -XX:-TieredCompilation
+ * @run main/othervm -Xcomp -Xbatch -XX:-TieredCompilation
  *                   -XX:CompileCommand=compileonly,compiler.jeandle.TestSynchronizedMethod::incI
  *                   -XX:CompileCommand=compileonly,compiler.jeandle.TestSynchronizedMethod::incS
+ *                   -XX:CompileCommand=compileonly,compiler.jeandle.TestSynchronizedMethod::incEx
  *                   -XX:+UseJeandleCompiler compiler.jeandle.TestSynchronizedMethod
  */
 
@@ -39,6 +40,22 @@ public class TestSynchronizedMethod {
 
     public synchronized void incI() { ++i; }
     public static synchronized void incS() { ++s; }
+
+    public static void preInit() {
+        try {
+            throw new RuntimeException("preInit");
+        } catch (Exception e) {
+            // do nothing
+        }
+    }
+
+    public static synchronized int incEx(int i) {
+        if (i < 0) {
+            throw new RuntimeException("unexpected input");
+        }
+
+        return  i + 1;
+    }
 
     public static void main(String[] args) throws Exception {
         TestSynchronizedMethod o = new TestSynchronizedMethod();
@@ -62,5 +79,8 @@ public class TestSynchronizedMethod {
 
         Asserts.assertEquals(s, 1000000, "s is not 1000000");
         Asserts.assertEquals(o.i, 1000000, "o.i is not 1000000");
+
+        preInit();
+        Asserts.assertThrows(RuntimeException.class, () -> incEx(-1));
     }
 }
