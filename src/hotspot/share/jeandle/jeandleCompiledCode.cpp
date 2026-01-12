@@ -649,7 +649,6 @@ JeandleOopMap* JeandleCompiledCode::build_oop_map(StackMapParser& stackmaps, Sta
     auto derived_location = *location;
     StackMapParser::LocationKind derived_kind = derived_location.getKind();
 
-    assert(base_kind == derived_kind, "locations must be in pairs");
     assert(base_kind != StackMapParser::LocationKind::Direct, "invalid location kind");
 
     VMReg reg_base = resolve_vmreg(base_location, base_kind);
@@ -660,7 +659,7 @@ JeandleOopMap* JeandleCompiledCode::build_oop_map(StackMapParser& stackmaps, Sta
       oop_map->set_oop(reg_base);
     } else {
       // Derived pointer.
-      Unimplemented();
+      oop_map->set_derived_oop(reg_derived, reg_base);
     }
   }
   return new JeandleOopMap(oop_map, locals, stack, reexecute);
