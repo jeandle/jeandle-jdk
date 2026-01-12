@@ -80,7 +80,11 @@ public class TestSynchronizedMethod {
         Asserts.assertEquals(s, 1000000, "s is not 1000000");
         Asserts.assertEquals(o.i, 1000000, "o.i is not 1000000");
 
+        // Load RuntimeException to avoid unloaded class in compilation. Thus the "throw" will not be an uncommon trap and a real unlock logic will be generated for the "throw".
         preInit();
+        Asserts.assertThrows(RuntimeException.class, () -> incEx(-1));
+
+        // Invoke it again to make sure the monitor has been unlocked.
         Asserts.assertThrows(RuntimeException.class, () -> incEx(-1));
     }
 }
