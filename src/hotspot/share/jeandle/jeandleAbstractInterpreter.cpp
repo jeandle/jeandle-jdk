@@ -100,7 +100,7 @@ bool JeandleVMState::match(JeandleVMState* to_match) {
   }
 
   for (size_t i = 0; i < _locks.size(); i++) {
-    if (_locks[i] != to_match->_locks[i]) {
+    if (_locks[i].lock() != to_match->_locks[i].lock()) {
       return false;
     }
   }
@@ -307,8 +307,8 @@ void JeandleBasicBlock::initialize_VM_state_from(JeandleVMState* incoming_state,
   _jvm = new JeandleVMState(incoming_state->max_stack(), incoming_state->max_locals(), &ir_builder.getContext());
 
   for (size_t i = 0; i < incoming_state->locks_size(); i++) {
-    llvm::Value* lock = incoming_state->lock_at(i);
-    assert(lock != nullptr, "null lock");
+    LockValue lock = incoming_state->lock_at(i);
+    assert(!lock.is_null(), "null lock");
     _jvm->push_lock(lock);
   }
 
@@ -579,7 +579,7 @@ JeandleAbstractInterpreter::JeandleAbstractInterpreter(ciMethod* method,
                                                        _block(nullptr),
                                                        _jvm(nullptr),
                                                        _work_list(),
-                                                       _sync_lock(2),
+                                                       _sync_lock(LockValue()),
                                                        _oop_idx(0) {
   // Fill basic blocks with LLVM IR.
   interpret();
@@ -632,10 +632,11 @@ void JeandleAbstractInterpreter::interpret() {
     llvm::Value* lock = _ir_builder.CreateAlloca(_ir_builder.getIntPtrTy(_module.getDataLayout()),
                                                  llvm::jeandle::AddrSpace::CHeapAddrSpace, nullptr, "BasicLock");
     // record object and lock for synchronized method
-    _sync_lock[0] = lock_obj;
-    _sync_lock[1] = lock;
+    TypedValue obj(BasicType::T_OBJECT, lock_obj);
+    _sync_lock.set_value(obj);
+    _sync_lock.set_lock(lock);
 
-    shared_lock(lock_obj, lock);
+    shared_lock(LockValue(obj, lock));
   }
 
   // Create branch from the entry block.
@@ -2240,7 +2241,7 @@ void JeandleAbstractInterpreter::dispatch_exception_to_handler(llvm::Value* exce
     if (handler->is_rethrow()) {
       // unlock before the exception is rethrown out of the synchronized method
       if (_method && _method->is_synchronized()) {
-        shared_unlock(_sync_lock[0], _sync_lock[1]);
+        shared_unlock(_sync_lock);
       }
       throw_exception(exception_oop);
       return;
@@ -2436,29 +2437,30 @@ void JeandleAbstractInterpreter::multianewarray() {
   _jvm->apush(create_call_ex(callee, args, llvm::CallingConv::Hotspot_JIT));
 }
 
-void JeandleAbstractInterpreter::shared_lock(llvm::Value* obj, llvm::Value* lock) {
-  assert(obj != nullptr, "sanity");
+void JeandleAbstractInterpreter::shared_lock(LockValue value) {
+  assert(value.value() != nullptr, "sanity");
 
-  if (lock == nullptr) {
+  if (value.lock() == nullptr) {
     // Allocate a BasicLock on stack.
     // Alloca insts should be in the entry block to be 'StaticAlloca'. Then they could be folded into prologue code.
     llvm::IRBuilder entry_block_ir_builder(_block_builder->entry_block()->header_llvm_block()->getTerminator());
-    lock = entry_block_ir_builder.CreateAlloca(_ir_builder.getIntPtrTy(_module.getDataLayout()), llvm::jeandle::AddrSpace::CHeapAddrSpace, nullptr, "BasicLock");
+    llvm::Value* lock = entry_block_ir_builder.CreateAlloca(_ir_builder.getIntPtrTy(_module.getDataLayout()), llvm::jeandle::AddrSpace::CHeapAddrSpace, nullptr, "BasicLock");
+    value.set_lock(lock);
   }
 
-  _jvm->push_lock(lock);
+  _jvm->push_lock(value);
 
   llvm::FunctionCallee monitorenter_callee = JeandleRuntimeRoutine::hotspot_SharedRuntime_complete_monitor_locking_C_callee(_module);
   llvm::CallInst* current_thread = call_java_op("jeandle.current_thread", {});
-  llvm::CallInst* call_monitorenter = _ir_builder.CreateCall(monitorenter_callee, {obj, lock, current_thread});
+  llvm::CallInst* call_monitorenter = _ir_builder.CreateCall(monitorenter_callee, {value.value(), value.lock(), current_thread});
   call_monitorenter->setCallingConv(llvm::CallingConv::C);
 }
 
-void JeandleAbstractInterpreter::shared_unlock(llvm::Value* obj, llvm::Value* lock) {
-  assert(obj != nullptr && lock != nullptr, "sanity");
+void JeandleAbstractInterpreter::shared_unlock(LockValue lv) {
+  assert(!lv.is_null(), "sanity");
   llvm::FunctionCallee monitorexit_callee = JeandleRuntimeRoutine::hotspot_SharedRuntime_complete_monitor_unlocking_C_callee(_module);
   llvm::CallInst* current_thread = call_java_op("jeandle.current_thread", {});
-  llvm::CallInst* call_monitorexit = _ir_builder.CreateCall(monitorexit_callee, {obj, lock, current_thread});
+  llvm::CallInst* call_monitorexit = _ir_builder.CreateCall(monitorexit_callee, {lv.value(), lv.lock(), current_thread});
   call_monitorexit->setCallingConv(llvm::CallingConv::C);
 }
 
@@ -2467,15 +2469,15 @@ void JeandleAbstractInterpreter::monitorenter() {
   null_check(_jvm->raw_peek().value());
 
   llvm::Value* obj = _jvm->apop();
-  shared_lock(obj);
+  shared_lock(LockValue(BasicType::T_OBJECT, obj, nullptr));
 }
 
 void JeandleAbstractInterpreter::monitorexit() {
   JeandleCompilation::current()->set_has_monitors(true);
   llvm::Value* obj = _jvm->apop();
 
-  llvm::Value* lock = _jvm->pop_lock();
-  shared_unlock(obj, lock);
+  LockValue lock = _jvm->pop_lock();
+  shared_unlock(lock);
 }
 
 void JeandleAbstractInterpreter::null_check(llvm::Value* obj) {
@@ -2526,9 +2528,9 @@ void JeandleAbstractInterpreter::boundary_check(llvm::Value* array_oop, llvm::Va
 
 void JeandleAbstractInterpreter::return_current(llvm::Value* value) {
   if (_method && _method->is_synchronized()) {
-    llvm::Value* lock = _jvm->pop_lock();
-    assert(lock == _sync_lock[1], "sanity");
-    shared_unlock(_sync_lock[0], _sync_lock[1]);
+    LockValue lock = _jvm->pop_lock();
+    assert(lock.lock() == _sync_lock.lock(), "sanity");
+    shared_unlock(lock);
   }
 
   if (value == nullptr) {

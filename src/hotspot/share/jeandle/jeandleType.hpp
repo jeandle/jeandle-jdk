@@ -106,4 +106,25 @@ public:
   llvm::Value*           value() const { return _value; }
 };
 
+/* A pair of TypedValue and corresponding lock (llvm::Value*) used by monitors */
+class LockValue {
+private:
+  TypedValue _value;
+  llvm::Value* _lock;
+
+public:
+  LockValue(TypedValue tv, llvm::Value* lock) : _value(tv), _lock(lock) { }
+  LockValue(BasicType type, llvm::Value* obj, llvm::Value* lock)
+    : _value(TypedValue(type, obj)), _lock(lock) { }
+  LockValue() : _value(TypedValue()), _lock(nullptr) { }
+
+  TypedValue typed_value() const { return _value; }
+  llvm::Value*     value() const { return _value.value(); }
+  llvm::Value*      lock() const { return _lock; }
+  bool           is_null() const { return _value.is_null() && _lock == nullptr; }
+
+  void set_value(TypedValue tv) { _value = tv; }
+  void set_lock(llvm::Value* lock) { _lock = lock; }
+};
+
 #endif // SHARE_JEANDLE_TYPE_HPP
