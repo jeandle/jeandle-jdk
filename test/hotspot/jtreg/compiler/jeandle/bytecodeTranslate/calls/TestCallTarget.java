@@ -26,7 +26,7 @@ import java.math.MathContext;
 
 /**
  * @test
- * @summary https://github.com/jeandle/jeandle-jdk/issues/290
+ * @summary https://github.com/jeandle/jeandle-jdk/issues/290 https://github.com/jeandle/jeandle-jdk/issues/285
  * @run main/othervm -Xcomp -XX:-TieredCompilation -Xbatch
  *      -XX:CompileCommand=compileonly,compiler.jeandle.bytecodeTranslate.calls.TestCallTarget::getString
  *      -XX:CompileCommand=compileonly,java.math.BigDecimal::add
