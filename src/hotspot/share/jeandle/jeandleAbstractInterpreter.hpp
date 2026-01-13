@@ -355,6 +355,7 @@ class JeandleAbstractInterpreter : public StackObj {
   void do_array_store(BasicType basic_type);
   llvm::Value* do_array_load_inner(BasicType basic_type, llvm::Type* load_type);
   void do_array_store_inner(BasicType basic_type, llvm::Type* store_type, llvm::Value* value);
+  void array_store_check(llvm::Value* value, llvm::Value* array_ref);
   llvm::Value* compute_array_element_address(BasicType basic_type, llvm::Type* type);
 
   typedef struct {

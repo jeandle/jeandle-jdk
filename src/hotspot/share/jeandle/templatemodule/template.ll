@@ -41,6 +41,7 @@
 @Klass.secondary_super_cache_offset = external global i32
 @Klass.secondary_supers_offset = external global i32
 @Klass.super_check_offset_offset = external global i32
+@ObjArrayKlass.element_klass_offset = external global i32
 
 ; Byte offsets for oopDesc structure fields.
 @oopDesc.klass_offset_in_bytes = external global i32
@@ -193,6 +194,26 @@ return_true:
 check_subtype:
   %sub_klass = call hotspotcc ptr addrspace(0) @jeandle.load_klass(ptr addrspace(1) %oop)
   %is_subtype = call hotspotcc i1 @jeandle.check_klass_subtype(ptr addrspace(0) %sub_klass, ptr addrspace(0) %super_klass)
+
+  ret i1 %is_subtype
+}
+
+; Implementation of array store check operation
+define hotspotcc i1 @jeandle.array_store_check(ptr addrspace(1) nocapture %oop, ptr addrspace(1) nocapture %array_oop) noinline "lower-phase"="0" {
+entry:
+  %is_null = icmp eq ptr addrspace(1) %oop, null
+  br i1 %is_null, label %return_true, label %check_subtype
+
+return_true:
+  ret i1 true
+
+check_subtype:
+  %array_klass = call hotspotcc ptr addrspace(0) @jeandle.load_klass(ptr addrspace(1) %array_oop)
+  %element_klass_offset = load i32, ptr @ObjArrayKlass.element_klass_offset;
+  %element_klass_addr = getelementptr inbounds i8, ptr addrspace(0) %array_klass, i32 %element_klass_offset
+  %element_klass = load atomic ptr addrspace(0), ptr addrspace(0) %element_klass_addr unordered, align 8
+  %sub_klass = call hotspotcc ptr addrspace(0) @jeandle.load_klass(ptr addrspace(1) %oop)
+  %is_subtype = call hotspotcc i1 @jeandle.check_klass_subtype(ptr addrspace(0) %sub_klass, ptr addrspace(0) %element_klass)
 
   ret i1 %is_subtype
 }
