@@ -1345,7 +1345,7 @@ void JeandleAbstractInterpreter::invoke() {
   // Declare callee function type.
   BasicType return_type = declared_signature->return_type()->basic_type();
   llvm::FunctionType* func_type = llvm::FunctionType::get(JeandleType::java2llvm(return_type, *_context), args_type, false);
-  llvm::FunctionCallee callee = _module.getOrInsertFunction(JeandleFuncSig::method_name(target), func_type);
+  llvm::FunctionCallee callee = _module.getOrInsertFunction(JeandleFuncSig::method_name_with_signature(target), func_type);
   llvm::Function* func = llvm::cast<llvm::Function>(callee.getCallee());
   func->setCallingConv(llvm::CallingConv::Hotspot_JIT);
   func->setGC(llvm::jeandle::JeandleGC);
