@@ -180,7 +180,7 @@ class JeandleCompiledCode : public StackObj {
                       _env(env),
                       _method(method),
                       _routine_entry(nullptr),
-                      _func_name(JeandleFuncSig::method_name(_method)) {}
+                      _func_name(JeandleFuncSig::method_name_with_signature(_method)) {}
 
   // For compiled Jeandle runtime stubs.
   JeandleCompiledCode(ciEnv* env, const char* func_name) :
@@ -287,7 +287,7 @@ public:
       ShouldNotReachHere();
     }
   }
-  
+
   static uint32_t getConstantUint(const StackMapParser& parser, const StackMapParser::LocationAccessor& location);
   static uint64_t getConstantUlong(const StackMapParser& parser, const StackMapParser::LocationAccessor& location);
   static float    getConstantFloat(const StackMapParser& parser, const StackMapParser::LocationAccessor& location);
