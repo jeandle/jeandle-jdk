@@ -236,7 +236,7 @@ void JeandleCompilation::install_code() {
                         CompilerThread::current()->compiler(),
                         false, // temporary value
                         false, // temporary value
-                        false, // temporary value
+                        _has_monitors,
                         0); // temporary value
 }
 
@@ -251,6 +251,8 @@ void JeandleCompilation::initialize() {
   _env->set_debug_info(new DebugInformationRecorder(ooprec));
   _env->debug_info()->set_oopmaps(new OopMapSet());
   _env->set_dependencies(new Dependencies(_env));
+
+  set_has_monitors(false);
 
   // Get timestamp to mark dump files.
   auto now = std::chrono::system_clock::now();
