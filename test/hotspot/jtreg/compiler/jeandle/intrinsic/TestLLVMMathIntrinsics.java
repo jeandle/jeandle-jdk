@@ -89,7 +89,7 @@ public class TestLLVMMathIntrinsics {
 
         String testDumpPath = System.getProperty("java.io.tmpdir") + "/test_sin";
         FileCheck checker = new FileCheck(testDumpPath, TestLLVMMathIntrinsics.class.getDeclaredMethod("double_sin", double.class), false);
-        checker.check("define hotspotcc double @TestLLVMMathIntrinsics_double_sin");
+        checker.checkPattern("define hotspotcc double .*TestLLVMMathIntrinsics_double_sin.*");
         checker.check("call double @llvm.sin.f64");
 
         // Test cos function with LLVM intrinsic
@@ -98,7 +98,7 @@ public class TestLLVMMathIntrinsics {
 
         testDumpPath = System.getProperty("java.io.tmpdir") + "/test_cos";
         checker = new FileCheck(testDumpPath, TestLLVMMathIntrinsics.class.getDeclaredMethod("double_cos", double.class), false);
-        checker.check("define hotspotcc double @TestLLVMMathIntrinsics_double_cos");
+        checker.checkPattern("define hotspotcc double .*TestLLVMMathIntrinsics_double_cos.*");
         checker.check("call double @llvm.cos.f64");
 
         // Test tan function with LLVM intrinsic
@@ -107,7 +107,7 @@ public class TestLLVMMathIntrinsics {
 
         testDumpPath = System.getProperty("java.io.tmpdir") + "/test_tan";
         checker = new FileCheck(testDumpPath, TestLLVMMathIntrinsics.class.getDeclaredMethod("double_tan", double.class), false);
-        checker.check("define hotspotcc double @TestLLVMMathIntrinsics_double_tan");
+        checker.checkPattern("define hotspotcc double .*TestLLVMMathIntrinsics_double_tan.*");
         checker.check("call double @llvm.tan.f64");
 
         // Test log function with LLVM intrinsic
@@ -116,7 +116,7 @@ public class TestLLVMMathIntrinsics {
 
         testDumpPath = System.getProperty("java.io.tmpdir") + "/test_log";
         checker = new FileCheck(testDumpPath, TestLLVMMathIntrinsics.class.getDeclaredMethod("double_log", double.class), false);
-        checker.check("define hotspotcc double @TestLLVMMathIntrinsics_double_log");
+        checker.checkPattern("define hotspotcc double .*TestLLVMMathIntrinsics_double_log.*");
         checker.check("call double @llvm.log.f64");
 
         // Test log10 function with LLVM intrinsic
@@ -125,7 +125,7 @@ public class TestLLVMMathIntrinsics {
 
         testDumpPath = System.getProperty("java.io.tmpdir") + "/test_log10";
         checker = new FileCheck(testDumpPath, TestLLVMMathIntrinsics.class.getDeclaredMethod("double_log10", double.class), false);
-        checker.check("define hotspotcc double @TestLLVMMathIntrinsics_double_log10");
+        checker.checkPattern("define hotspotcc double .*TestLLVMMathIntrinsics_double_log10.*");
         checker.check("call double @llvm.log10.f64");
 
         // Test exp function with LLVM intrinsic
@@ -134,7 +134,7 @@ public class TestLLVMMathIntrinsics {
 
         testDumpPath = System.getProperty("java.io.tmpdir") + "/test_exp";
         checker = new FileCheck(testDumpPath, TestLLVMMathIntrinsics.class.getDeclaredMethod("double_exp", double.class), false);
-        checker.check("define hotspotcc double @TestLLVMMathIntrinsics_double_exp");
+        checker.checkPattern("define hotspotcc double .*TestLLVMMathIntrinsics_double_exp.*");
         checker.check("call double @llvm.exp.f64");
 
         // Test pow function with LLVM intrinsic
@@ -143,7 +143,7 @@ public class TestLLVMMathIntrinsics {
 
         testDumpPath = System.getProperty("java.io.tmpdir") + "/test_pow";
         checker = new FileCheck(testDumpPath, TestLLVMMathIntrinsics.class.getDeclaredMethod("double_pow", double.class, double.class), false);
-        checker.check("define hotspotcc double @TestLLVMMathIntrinsics_double_pow");
+        checker.checkPattern("define hotspotcc double .*TestLLVMMathIntrinsics_double_pow.*");
         checker.check("call double @llvm.pow.f64");
     }
 
