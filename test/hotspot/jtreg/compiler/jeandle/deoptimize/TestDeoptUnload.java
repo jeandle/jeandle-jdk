@@ -94,7 +94,7 @@ public class TestDeoptUnload {
 
         ArrayList<String> commandForConstantUnload = new ArrayList<>();
         commandForConstantUnload.addAll(commandPrefix.subList(0, commandPrefix.size() - 1));
-        // The method getJavaLangModuleAccess will trigger the deoptimization of constant unload. 
+        // Compiling `getJavaLangModuleAccess` method will trigger the deoptimization of unloaded constant. 
         commandForConstantUnload.add("-XX:CompileCommand=compileonly,jdk.internal.access.SharedSecrets::getJavaLangModuleAccess");
         commandForConstantUnload.add(commandPrefix.get(commandPrefix.size() - 1));
         runTestHelper(commandForConstantUnload, "testConstantUnload", "getJavaLangModuleAccess");
@@ -155,10 +155,12 @@ public class TestDeoptUnload {
         MyClass[][][][][][] array = new MyClass[3][4][5][6][7][8];
     }
 
+    // The following can be any Java method, just to start the JVM. During JVM startup,
+    // even a simple `java -version` command will reach the `getJavaLangModuleAccess` 
+    // method in the core library, and compiling this method will trigger an uncommon trap
+    // about unloaded constant.
     private static void testConstantUnload() {
         double var_11 = 0;
-        do {
-            var_11++;
-        } while (var_11 < 100);
+        var_11++;
     }
 }
