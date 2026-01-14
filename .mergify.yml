@@ -37,7 +37,7 @@ queue_rules:
   - queue_branch_prefix: jeandle-jdk/merge-queue/
     merge_method: squash
     autoqueue: true
-    update_method: rebase
+    update_method: merge
     name: jeandle-jdk
     draft_bot_account: ""
     merge_bot_account: ""
