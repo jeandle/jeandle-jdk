@@ -150,7 +150,8 @@ class JeandleBasicBlock : public JeandleCompilationResourceObj {
     is_compiled                   = 1 << 0,
     is_on_work_list               = 1 << 1,
     is_loop_header                = 1 << 2,
-    always_uncommon_trap          = 1 << 3,
+    is_exception_handler_in_use   = 1 << 3,
+    always_uncommon_trap          = 1 << 4,
   };
 
   void set(Flag f)                               { _flags |= f; }
