@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2025, the Jeandle-JDK Authors. All Rights Reserved.
+ * Copyright (c) 2025, 2026, the Jeandle-JDK Authors. All Rights Reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -170,12 +170,9 @@ class JeandleCallReloc : public JeandleReloc {
     DebugInformationRecorder* recorder = _env->debug_info();
     recorder->add_safepoint(inst_end_offset(), _oop_map->oop_map());
 
-    // No monitor support now.
-    GrowableArray<MonitorValue*> *monarray = new GrowableArray<MonitorValue*>(0);
-
     DebugToken *locvals = recorder->create_scope_values(_oop_map->locals());
     DebugToken *expvals = recorder->create_scope_values(_oop_map->stack());
-    DebugToken *monvals = recorder->create_monitor_values(monarray);
+    DebugToken *monvals = recorder->create_monitor_values(_oop_map->monitors());
 
     recorder->describe_scope(inst_end_offset(),
                              methodHandle(),
@@ -574,6 +571,48 @@ void JeandleCompiledCode::fill_one_scope_value(const StackMapParser& stackmaps,
   }
 }
 
+void JeandleCompiledCode::fill_one_monitor_value(const StackMapParser& stackmaps,
+                                                 const DeoptValueEncoding& encode,
+                                                 const StackMapParser::LocationAccessor& object,
+                                                 const StackMapParser::LocationAccessor& lock,
+                                                 GrowableArray<MonitorValue*>* array,
+                                                 int& index) {
+  assert(array != nullptr, "sanity");
+  bool is_constant = StackMapUtil::is_constant(object);
+  assert(encode._basic_type == T_OBJECT || encode._basic_type == T_ILLEGAL, "should be");
+  switch (encode._basic_type) {
+  case T_OBJECT: {
+    if (is_constant) {
+      uint64_t v = StackMapUtil::getConstantUlong(stackmaps, object);
+      Location basic_lock = Location::new_stk_loc(Location::normal, StackMapUtil::stack_offset(lock));
+      if (v == 0L) {
+        array->at_put_grow(index++, new MonitorValue(new ConstantOopWriteValue(nullptr), basic_lock, false));
+      } else {
+        /* No constant oop is embedding into code */
+        ShouldNotReachHere();
+      }
+    } else {
+      ScopeValue* scval = StackMapUtil::is_stack(object)
+        ? new LocationValue(Location::new_stk_loc(Location::oop, StackMapUtil::stack_offset(object)))
+        : new LocationValue(Location::new_reg_loc(Location::oop, resolve_vmreg(object, object.getKind())));
+
+      Location basic_lock = Location::new_stk_loc(Location::normal, StackMapUtil::stack_offset(lock));
+      array->at_put_grow(index++, new MonitorValue(scval, basic_lock, false /* FIXME */));
+    }
+    break;
+  }
+  case T_ILLEGAL: {
+    uint32_t val = StackMapUtil::getConstantUint(stackmaps, object);
+    assert(val == 0, "must be zero for T_ILLEGAL");
+    // put an illegal value
+    array->at_put_grow(index++, new MonitorValue(new LocationValue(Location()), Location(), false));
+    break;
+  }
+  default:
+    Unimplemented();
+  }
+}
+
 JeandleOopMap* JeandleCompiledCode::build_oop_map(StackMapParser& stackmaps, StackMapParser::record_iterator& record, CallSiteInfo* call_info) {
   assert(_frame_size > 0, "frame size must be greater than zero");
   OopMap* oop_map = new OopMap(frame_size_in_slots(), 0);
@@ -610,27 +649,48 @@ JeandleOopMap* JeandleCompiledCode::build_oop_map(StackMapParser& stackmaps, Sta
   // build scope values
   GrowableArray<ScopeValue*>* locals = num_deopts > 0 ? new GrowableArray<ScopeValue*>(_method->max_locals()) : nullptr;
   GrowableArray<ScopeValue*>* stack  = num_deopts > 0 ? new GrowableArray<ScopeValue*>(_method->max_stack()) : nullptr;
+  GrowableArray<MonitorValue*>* monitors = num_deopts > 0 ? new GrowableArray<MonitorValue*>() : nullptr;
   int local_index = 0;
   int stack_index = 0;
+  int monitor_index = 0;
   while (num_deopts > 0) {
-    // deopt arguments are passed as a pair, 1st is encode, 2nd is real value
+    // local and stack deopt arguments are passed as a pair: <encode, value>
+    // monitor deopt arguments are passed as a tuple: <encode, object, lock>
     assert(location != record->location_end(), "must be in range");
     auto encode_location = *(location++);
-    assert(location != record->location_end(), "must be in range");
-    auto value_location = *(location++);
+    // check the encoding type first
     uint64_t encode = StackMapUtil::getConstantUlong(stackmaps, encode_location);
     DeoptValueEncoding enc = DeoptValueEncoding::decode(encode);
+    int type = enc._value_type;
+    assert(type == DeoptValueEncoding::LocalType || type == DeoptValueEncoding::StackType ||
+           type == DeoptValueEncoding::MonitorType, "Unsupported type");
+
 #ifdef ASSERT
     if (log_is_enabled(Trace, jeandle)) {
       enc.print();
     }
 #endif
-    assert(enc._value_type == DeoptValueEncoding::LocalType || enc._value_type == DeoptValueEncoding::StackType, "Unsupported type");
-    bool is_local = enc._value_type == DeoptValueEncoding::LocalType;
-    fill_one_scope_value(stackmaps, enc, value_location,
-                         is_local ? locals : stack,
-                         is_local ? local_index : stack_index);
-    num_deopts -= 2;
+
+    if (type == DeoptValueEncoding::LocalType || type == DeoptValueEncoding::StackType) {
+      // fill scope value
+      assert(location != record->location_end(), "must be in range");
+      auto value_location = *(location++);
+      bool is_local = type == DeoptValueEncoding::LocalType;
+      fill_one_scope_value(stackmaps, enc, value_location,
+                           is_local ? locals : stack,
+                           is_local ? local_index : stack_index);
+      num_deopts -= 2;
+    } else if (type == DeoptValueEncoding::MonitorType) {
+      // fill monitor value
+      assert(location != record->location_end(), "must be in range");
+      auto obj_location = *(location++);
+      assert(location != record->location_end(), "must be in range");
+      auto lock_location = *(location++);
+      fill_one_monitor_value(stackmaps, enc, obj_location, lock_location, monitors, monitor_index);
+      num_deopts -= 3;
+    } else {
+      Unimplemented();
+    }
   }
 
   // build oop map
@@ -662,7 +722,7 @@ JeandleOopMap* JeandleCompiledCode::build_oop_map(StackMapParser& stackmaps, Sta
       oop_map->set_derived_oop(reg_derived, reg_base);
     }
   }
-  return new JeandleOopMap(oop_map, locals, stack, reexecute);
+  return new JeandleOopMap(oop_map, locals, stack, monitors, reexecute);
 }
 
 void JeandleCompiledCode::build_exception_handler_table() {

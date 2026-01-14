@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2025, the Jeandle-JDK Authors. All Rights Reserved.
+ * Copyright (c) 2025, 2026, the Jeandle-JDK Authors. All Rights Reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -238,6 +238,23 @@ llvm::SmallVector<llvm::Value*> JeandleVMState::deopt_args(llvm::IRBuilder<>& bu
       // replace with {T_ILLEGAL, 0}
       uint64_t encode = DeoptValueEncoding(i, DeoptValueEncoding::StackType, T_ILLEGAL).encode();
       args.push_back(builder.getInt64(encode));
+      args.push_back(builder.getInt32(0));
+    }
+  }
+  for (size_t i = 0; i < _locks.size(); i++) {
+    if (!_locks[i].is_null()) {
+      TypedValue obj = _locks[i].typed_value();
+      llvm::Value* lock = _locks[i].lock();
+      uint64_t encode = DeoptValueEncoding(i, DeoptValueEncoding::MonitorType, obj.computational_type()).encode();
+      args.push_back(builder.getInt64(encode));
+      args.push_back(obj.value());
+      args.push_back(lock);
+      assert(!is_double_word_type(obj.computational_type()), "should be object type");
+    } else {
+      // replace with {T_ILLEGAL, 0, 0}
+      uint64_t encode = DeoptValueEncoding(i, DeoptValueEncoding::MonitorType, T_ILLEGAL).encode();
+      args.push_back(builder.getInt64(encode));
+      args.push_back(builder.getInt32(0));
       args.push_back(builder.getInt32(0));
     }
   }
