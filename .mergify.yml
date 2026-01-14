@@ -44,3 +44,5 @@ queue_rules:
     update_bot_account: jeandle-bot
 merge_queue:
   max_parallel_checks: 1
+  queued_label: ""
+  dequeued_label: ""

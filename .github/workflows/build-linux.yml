@@ -79,9 +79,9 @@ jobs:
           - debug-level: debug
             flags: --with-debug-level=fastdebug
             suffix: -debug
-            llvm-flags: '-DCMAKE_BUILD_TYPE=Release -DLLVM_ENABLE_ASSERTIONS=ON'
+            llvm-flags: '-DCMAKE_BUILD_TYPE=MinSizeRel -DLLVM_ENABLE_ASSERTIONS=ON'
           - debug-level: release
-            llvm-flags: '-DCMAKE_BUILD_TYPE=Release'
+            llvm-flags: '-DCMAKE_BUILD_TYPE=MinSizeRel'
 
     steps:
       - name: 'Checkout the JDK source'
