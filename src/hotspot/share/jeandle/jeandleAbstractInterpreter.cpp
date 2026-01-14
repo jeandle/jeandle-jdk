@@ -979,12 +979,12 @@ void JeandleAbstractInterpreter::interpret_block(JeandleBasicBlock* block) {
 
   block->set(JeandleBasicBlock::is_compiled);
 
-  // If the block is marked as always_uncommon_trap, only process its in-use exception handler successors.
+  // If the block is marked as always_uncommon_trap, only process its initialized exception handler successors.
   if (block->is_set(JeandleBasicBlock::always_uncommon_trap)) {
     for (JeandleBasicBlock* suc : block->successors()) {
-      if (suc->is_set(JeandleBasicBlock::is_exception_handler_in_use) &&
+      if (suc->is_exception_handler() &&
+          suc->VM_state() != nullptr &&
           !suc->is_set(JeandleBasicBlock::is_compiled)) {
-        assert(suc->is_exception_handler(), "must be exception handler");
         add_to_work_list(suc);
       }
     }
@@ -2229,8 +2229,6 @@ void JeandleAbstractInterpreter::dispatch_exception_to_handler(llvm::Value* exce
     int handler_bci = handler->handler_bci();
     JeandleBasicBlock* handler_block = bci2block()[handler_bci];
     assert(handler_block != nullptr, "invalid handler block");
-
-    handler_block->set(JeandleBasicBlock::is_exception_handler_in_use);
 
     // catch_all
     if (handler->is_catch_all()) {
