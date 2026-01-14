@@ -127,9 +127,8 @@ jobs:
 
       - name: 'Build LLVM'
         run: |
-          echo "github workspace: ${GITHUB_WORKSPACE}"
+
           # set CO_REPO and CO_BRANCH
-          JDK_DIR=`pwd`
           TARGET_REPO=`git log -n 1 | grep "CO_REPO" | sed -E 's/^[[:space:]]*CO_REPO[[:space:]]*:[[:space:]]*(.*)$/\1/'`
           TARGET_BRANCH=`git log -n 1 | grep "CO_BRANCH" | sed -E 's/^[[:space:]]*CO_BRANCH[[:space:]]*:[[:space:]]*(.*)$/\1/'`
 
@@ -144,28 +143,25 @@ jobs:
           echo "target branch of llvm: $TARGET_BRANCH"
 
           # clone llvm
-          pushd ../
+          cd $GITHUB_WORKSPACE/..
           echo "Cloning jeandle-llvm: git clone -b ${TARGET_BRANCH} --depth=1 ${TARGET_REPO} jeandle-llvm..."
           git clone -b ${TARGET_BRANCH} --depth=1 ${TARGET_REPO} jeandle-llvm
-          LLVM_DIR=`pwd`/jeandle-llvm
 
           if [[ "${{ inputs.platform }}" == "linux-aarch64" ]]; then
             LLVM_TARGET="AArch64"
           else
             LLVM_TARGET="X86"
           fi
+
           #build llvm
-          pushd ${LLVM_DIR}
-          mkdir build
-          pushd build
-          cmake -G "Unix Makefiles" -DLLVM_TARGETS_TO_BUILD=$LLVM_TARGET ${{ matrix.llvm-flags }} -DCMAKE_INSTALL_PREFIX="$GITHUB_WORKSPACE/install_llvm${{ matrix.suffix }}" -DLLVM_BUILD_LLVM_DYLIB=ON -DLLVM_DYLIB_COMPONENTS=all ../llvm
+          cd jeandle-llvm
+          mkdir build && cd build
+          cmake -G "Unix Makefiles" -DLLVM_TARGETS_TO_BUILD=$LLVM_TARGET ${{ matrix.llvm-flags }} -DCMAKE_INSTALL_PREFIX="$GITHUB_WORKSPACE/../install_llvm${{ matrix.suffix }}" -DLLVM_BUILD_LLVM_DYLIB=ON -DLLVM_DYLIB_COMPONENTS=all ../llvm
           cmake --build . --target install -j $[$(nproc)/2]
-          popd
-          popd # enter to root dir of jeandle
+
           # delete llvm repo to spare space for building jdk.
+          cd $GITHUB_WORKSPACE/..
           rm -rf jeandle-llvm/
-          pushd $GITHUB_WORKSPACE
-          tar czf install_llvm${{ matrix.suffix }}.tar.gz install_llvm${{ matrix.suffix }}/
 
       - name: 'Configure JDK'
         run: >
@@ -179,7 +175,7 @@ jobs:
           --with-gtest=${{ steps.gtest.outputs.path }}
           --with-zlib=system
           --with-jmod-compress=zip-1
-          --with-jeandle-llvm=$GITHUB_WORKSPACE/install_llvm${{ matrix.suffix }}
+          --with-jeandle-llvm=$GITHUB_WORKSPACE/../install_llvm${{ matrix.suffix }}
           ${{ inputs.extra-conf-options }} ${{ inputs.configure-arguments }} || (
           echo "Dumping config.log:" &&
           cat config.log &&
