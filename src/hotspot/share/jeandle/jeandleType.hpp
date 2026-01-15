@@ -118,18 +118,13 @@ public:
     : _object(TypedValue(type, object)), _basic_lock(lock) { }
   LockValue() : _object(TypedValue()), _basic_lock(nullptr) { }
 
-  bool operator==(const LockValue& rhs) {
-    return object() == rhs.object() && _basic_lock == rhs._basic_lock;
+  bool equals(const LockValue& rhs) {
+    return _object.value() == rhs._object.value() && _basic_lock == rhs._basic_lock;
   }
 
-  bool operator!=(const LockValue& rhs) {
-    return !(*this == rhs);
-  }
-
-  TypedValue typed_object() const { return _object; }
-  llvm::Value*     object() const { return _object.value(); }
-  llvm::Value*       lock() const { return _basic_lock; }
-  bool            is_null() const { return _object.is_null() || _basic_lock == nullptr; }
+  TypedValue    object() const { return _object; }
+  llvm::Value*    lock() const { return _basic_lock; }
+  bool         is_null() const { return _object.is_null() || _basic_lock == nullptr; }
 
   void set_object(TypedValue object) { _object = object; }
   void set_lock(llvm::Value* lock) { _basic_lock = lock; }

@@ -100,7 +100,7 @@ bool JeandleVMState::match(JeandleVMState* to_match) {
   }
 
   for (size_t i = 0; i < _locks.size(); i++) {
-    if (_locks[i] != to_match->_locks[i]) {
+    if (!_locks[i].equals(to_match->_locks[i])) {
       return false;
     }
   }
@@ -198,8 +198,8 @@ void JeandleVMState::store(BasicType type, int index, llvm::Value* value) {
 
 llvm::SmallVector<llvm::Value*> JeandleVMState::deopt_args(llvm::IRBuilder<>& builder, int bci) {
   llvm::SmallVector<llvm::Value*> args;
-  // |--- bci ---|--- loc ---|--- stk ---|--- arg ---|--- mon ---|--- scl ---|
-  /* TODO: monitor and scalar */
+  // |--- bci ---|--- locals ---|--- stack ---|--- monitor ---|
+  /* TODO: scalar */
   args.push_back(builder.getInt32(bci));
   for (size_t i = 0; i < _locals.size(); i++) {
     if (!_locals[i].is_null()) {
@@ -243,7 +243,7 @@ llvm::SmallVector<llvm::Value*> JeandleVMState::deopt_args(llvm::IRBuilder<>& bu
   }
   for (size_t i = 0; i < _locks.size(); i++) {
     assert(!_locks[i].is_null(), "sanity");
-    TypedValue obj = _locks[i].typed_object();
+    TypedValue obj = _locks[i].object();
     assert(obj.computational_type() == T_OBJECT, "should be object type");
     llvm::Value* lock = _locks[i].lock();
     uint64_t encode = DeoptValueEncoding(i, DeoptValueEncoding::MonitorType, obj.computational_type()).encode();
@@ -2453,7 +2453,7 @@ void JeandleAbstractInterpreter::multianewarray() {
 }
 
 void JeandleAbstractInterpreter::shared_lock(LockValue lock) {
-  assert(lock.object() != nullptr, "sanity");
+  assert(lock.object().value() != nullptr, "sanity");
 
   if (lock.lock() == nullptr) {
     // Allocate a BasicLock on stack.
@@ -2467,7 +2467,7 @@ void JeandleAbstractInterpreter::shared_lock(LockValue lock) {
 
   llvm::FunctionCallee monitorenter_callee = JeandleRuntimeRoutine::hotspot_SharedRuntime_complete_monitor_locking_C_callee(_module);
   llvm::CallInst* current_thread = call_java_op("jeandle.current_thread", {});
-  llvm::CallInst* call_monitorenter = _ir_builder.CreateCall(monitorenter_callee, {lock.object(), lock.lock(), current_thread});
+  llvm::CallInst* call_monitorenter = _ir_builder.CreateCall(monitorenter_callee, {lock.object().value(), lock.lock(), current_thread});
   call_monitorenter->setCallingConv(llvm::CallingConv::C);
 }
 
@@ -2475,7 +2475,7 @@ void JeandleAbstractInterpreter::shared_unlock(LockValue lock) {
   assert(!lock.is_null(), "sanity");
   llvm::FunctionCallee monitorexit_callee = JeandleRuntimeRoutine::hotspot_SharedRuntime_complete_monitor_unlocking_C_callee(_module);
   llvm::CallInst* current_thread = call_java_op("jeandle.current_thread", {});
-  llvm::CallInst* call_monitorexit = _ir_builder.CreateCall(monitorexit_callee, {lock.object(), lock.lock(), current_thread});
+  llvm::CallInst* call_monitorexit = _ir_builder.CreateCall(monitorexit_callee, {lock.object().value(), lock.lock(), current_thread});
   call_monitorexit->setCallingConv(llvm::CallingConv::C);
 }
 

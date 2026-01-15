@@ -579,22 +579,22 @@ void JeandleCompiledCode::fill_one_monitor_value(const StackMapParser& stackmaps
   assert(array != nullptr, "sanity");
   bool is_constant = StackMapUtil::is_constant(object);
   assert(encode._basic_type == T_OBJECT, "should be");
-  ScopeValue* scval = nullptr;
+  ScopeValue* locked_object = nullptr;
   if (is_constant) {
     uint64_t v = StackMapUtil::getConstantUlong(stackmaps, object);
     if (v == 0L) {
-      scval = new ConstantOopWriteValue(nullptr);
+      locked_object = new ConstantOopWriteValue(nullptr);
     } else {
       /* No constant oop is embedding into code */
       ShouldNotReachHere();
     }
   } else {
-    scval = StackMapUtil::is_stack(object)
+    locked_object = StackMapUtil::is_stack(object)
       ? new LocationValue(Location::new_stk_loc(Location::oop, StackMapUtil::stack_offset(object)))
       : new LocationValue(Location::new_reg_loc(Location::oop, resolve_vmreg(object, object.getKind())));
   }
   Location basic_lock = Location::new_stk_loc(Location::normal, StackMapUtil::stack_offset(lock));
-  array->append(new MonitorValue(scval, basic_lock, false /* FIXME */));
+  array->append(new MonitorValue(locked_object, basic_lock, false /* FIXME */));
 }
 
 JeandleOopMap* JeandleCompiledCode::build_oop_map(StackMapParser& stackmaps, StackMapParser::record_iterator& record, CallSiteInfo* call_info) {
