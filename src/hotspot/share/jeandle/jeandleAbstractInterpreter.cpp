@@ -997,8 +997,15 @@ void JeandleAbstractInterpreter::interpret_block(JeandleBasicBlock* block) {
 
   block->set(JeandleBasicBlock::is_compiled);
 
-  // ignore successor blocks of uncommon trap
+  // If the block is marked as always_uncommon_trap, only process its initialized exception handler successors.
   if (block->is_set(JeandleBasicBlock::always_uncommon_trap)) {
+    for (JeandleBasicBlock* suc : block->successors()) {
+      if (suc->is_exception_handler() &&
+          suc->VM_state() != nullptr &&
+          !suc->is_set(JeandleBasicBlock::is_compiled)) {
+        add_to_work_list(suc);
+      }
+    }
     return;
   }
 
