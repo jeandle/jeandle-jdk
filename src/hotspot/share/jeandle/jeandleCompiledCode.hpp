@@ -260,7 +260,7 @@ class JeandleCompiledCode : public StackObj {
   void fill_one_scope_value(const StackMapParser& stackmaps, const DeoptValueEncoding& encode, const StackMapParser::LocationAccessor& location,
                             GrowableArray<ScopeValue*>* array, int& current_index);
   void fill_one_monitor_value(const StackMapParser& stackmaps, const DeoptValueEncoding& encode, const StackMapParser::LocationAccessor& object,
-                              const StackMapParser::LocationAccessor& lock, GrowableArray<MonitorValue*>* array, int& current_index);
+                              const StackMapParser::LocationAccessor& lock, GrowableArray<MonitorValue*>* array);
 
   void build_exception_handler_table();
   void build_implicit_exception_table();

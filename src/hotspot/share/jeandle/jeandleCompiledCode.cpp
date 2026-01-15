@@ -575,42 +575,26 @@ void JeandleCompiledCode::fill_one_monitor_value(const StackMapParser& stackmaps
                                                  const DeoptValueEncoding& encode,
                                                  const StackMapParser::LocationAccessor& object,
                                                  const StackMapParser::LocationAccessor& lock,
-                                                 GrowableArray<MonitorValue*>* array,
-                                                 int& index) {
+                                                 GrowableArray<MonitorValue*>* array) {
   assert(array != nullptr, "sanity");
   bool is_constant = StackMapUtil::is_constant(object);
-  assert(encode._basic_type == T_OBJECT || encode._basic_type == T_ILLEGAL, "should be");
-  switch (encode._basic_type) {
-  case T_OBJECT: {
-    if (is_constant) {
-      uint64_t v = StackMapUtil::getConstantUlong(stackmaps, object);
-      Location basic_lock = Location::new_stk_loc(Location::normal, StackMapUtil::stack_offset(lock));
-      if (v == 0L) {
-        array->at_put_grow(index++, new MonitorValue(new ConstantOopWriteValue(nullptr), basic_lock, false));
-      } else {
-        /* No constant oop is embedding into code */
-        ShouldNotReachHere();
-      }
+  assert(encode._basic_type == T_OBJECT, "should be");
+  ScopeValue* scval = nullptr;
+  if (is_constant) {
+    uint64_t v = StackMapUtil::getConstantUlong(stackmaps, object);
+    if (v == 0L) {
+      scval = new ConstantOopWriteValue(nullptr);
     } else {
-      ScopeValue* scval = StackMapUtil::is_stack(object)
-        ? new LocationValue(Location::new_stk_loc(Location::oop, StackMapUtil::stack_offset(object)))
-        : new LocationValue(Location::new_reg_loc(Location::oop, resolve_vmreg(object, object.getKind())));
-
-      Location basic_lock = Location::new_stk_loc(Location::normal, StackMapUtil::stack_offset(lock));
-      array->at_put_grow(index++, new MonitorValue(scval, basic_lock, false /* FIXME */));
+      /* No constant oop is embedding into code */
+      ShouldNotReachHere();
     }
-    break;
+  } else {
+    scval = StackMapUtil::is_stack(object)
+      ? new LocationValue(Location::new_stk_loc(Location::oop, StackMapUtil::stack_offset(object)))
+      : new LocationValue(Location::new_reg_loc(Location::oop, resolve_vmreg(object, object.getKind())));
   }
-  case T_ILLEGAL: {
-    uint32_t val = StackMapUtil::getConstantUint(stackmaps, object);
-    assert(val == 0, "must be zero for T_ILLEGAL");
-    // put an illegal value
-    array->at_put_grow(index++, new MonitorValue(new LocationValue(Location()), Location(), false));
-    break;
-  }
-  default:
-    Unimplemented();
-  }
+  Location basic_lock = Location::new_stk_loc(Location::normal, StackMapUtil::stack_offset(lock));
+  array->append(new MonitorValue(scval, basic_lock, false /* FIXME */));
 }
 
 JeandleOopMap* JeandleCompiledCode::build_oop_map(StackMapParser& stackmaps, StackMapParser::record_iterator& record, CallSiteInfo* call_info) {
@@ -652,7 +636,6 @@ JeandleOopMap* JeandleCompiledCode::build_oop_map(StackMapParser& stackmaps, Sta
   GrowableArray<MonitorValue*>* monitors = num_deopts > 0 ? new GrowableArray<MonitorValue*>() : nullptr;
   int local_index = 0;
   int stack_index = 0;
-  int monitor_index = 0;
   while (num_deopts > 0) {
     // local and stack deopt arguments are passed as a pair: <encode, value>
     // monitor deopt arguments are passed as a tuple: <encode, object, lock>
@@ -686,7 +669,7 @@ JeandleOopMap* JeandleCompiledCode::build_oop_map(StackMapParser& stackmaps, Sta
       auto obj_location = *(location++);
       assert(location != record->location_end(), "must be in range");
       auto lock_location = *(location++);
-      fill_one_monitor_value(stackmaps, enc, obj_location, lock_location, monitors, monitor_index);
+      fill_one_monitor_value(stackmaps, enc, obj_location, lock_location, monitors);
       num_deopts -= 3;
     } else {
       Unimplemented();
