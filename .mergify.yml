@@ -47,7 +47,7 @@ queue_rules:
 
       {{ body }}
 
-      {% for author in {{ co-authors }} %}
+      {% for author in co_authors %}
       Co-authored-by: {{ author.name }} <{{ author.email }}>
       {% endfor %}
 merge_queue:
