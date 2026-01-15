@@ -2544,7 +2544,7 @@ void JeandleAbstractInterpreter::boundary_check(llvm::Value* array_oop, llvm::Va
 void JeandleAbstractInterpreter::return_current(llvm::Value* value) {
   if (_method && _method->is_synchronized()) {
     LockValue lock = _jvm->pop_lock();
-    assert(lock == _sync_lock, "sanity");
+    assert(lock.equals(_sync_lock), "sanity");
     shared_unlock(lock);
   }
 
