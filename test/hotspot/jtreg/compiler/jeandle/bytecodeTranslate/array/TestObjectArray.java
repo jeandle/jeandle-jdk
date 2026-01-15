@@ -34,6 +34,7 @@ import jdk.test.whitebox.WhiteBox;
  * @run main/othervm -Xbootclasspath/a:. -XX:+UnlockDiagnosticVMOptions -XX:+WhiteBoxAPI
  *      -XX:-TieredCompilation -Xcomp -XX:+UseJeandleCompiler
  *      -XX:CompileCommand=compileonly,compiler.jeandle.bytecodeTranslate.array.TestObjectArray::testLoadStore
+ *      -XX:CompileCommand=compileonly,compiler.jeandle.bytecodeTranslate.array.TestObjectArray::testStoreIncompatibleType
  *      compiler.jeandle.bytecodeTranslate.array.TestObjectArray
  */
 
@@ -42,6 +43,7 @@ public class TestObjectArray {
     private static Object obj = new Object();
     private static Object newObj = new Object();
     private static Object[] objArr = new Object[]{obj, obj, obj};
+    private static TestObjectArray[] testArr = new TestObjectArray[3];
 
     public static void main(String[] args) throws Exception {
         var objVal = testLoadStore();
@@ -53,11 +55,18 @@ public class TestObjectArray {
         if (!wb.isMethodCompiled(loadMethod)) {
             throw new Exception("Method testLoadStore should be compiled");
         }
+
+        Asserts.assertThrows(ArrayStoreException.class, () -> testStoreIncompatibleType());
     }
 
     public static Object testLoadStore() {
         objArr[1] = newObj;
         var objVal = objArr[1];
         return objVal;
+    }
+
+    public static void testStoreIncompatibleType() {
+        Object[] array = (Object[])testArr;
+        array[0] = "Hello";
     }
 }

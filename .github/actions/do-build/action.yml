@@ -39,6 +39,10 @@ inputs:
 runs:
   using: composite
   steps:
+    - name: 'Clean for more disk space'
+      id: clean
+      run: rm -rf .git
+      shell: bash
     - name: 'Build'
       id: build
       run: >
