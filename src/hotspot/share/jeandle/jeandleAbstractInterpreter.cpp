@@ -979,8 +979,15 @@ void JeandleAbstractInterpreter::interpret_block(JeandleBasicBlock* block) {
 
   block->set(JeandleBasicBlock::is_compiled);
 
-  // ignore successor blocks of uncommon trap
+  // If the block is marked as always_uncommon_trap, only process its initialized exception handler successors.
   if (block->is_set(JeandleBasicBlock::always_uncommon_trap)) {
+    for (JeandleBasicBlock* suc : block->successors()) {
+      if (suc->is_exception_handler() &&
+          suc->VM_state() != nullptr &&
+          !suc->is_set(JeandleBasicBlock::is_compiled)) {
+        add_to_work_list(suc);
+      }
+    }
     return;
   }
 
@@ -2083,6 +2090,10 @@ void JeandleAbstractInterpreter::do_array_store(BasicType basic_type) {
   null_check(array_ref);
   boundary_check(array_ref, index);
 
+  if (basic_type == T_OBJECT) {
+    array_store_check(_jvm->raw_peek().value(), array_ref);
+  }
+
   llvm::Value* value = nullptr;
   switch (basic_type) {
     case T_INT: {
@@ -2127,6 +2138,28 @@ void JeandleAbstractInterpreter::do_array_store(BasicType basic_type) {
     }
     default: ShouldNotReachHere();
   }
+}
+
+void JeandleAbstractInterpreter::array_store_check(llvm::Value* value, llvm::Value* array_ref) {
+  assert(value != nullptr, "value should not be null");
+  assert(value->getType() == JeandleType::java2llvm(T_OBJECT, *_context), "non-object types do not require array store type checking");
+
+  llvm::CallInst* call = call_java_op("jeandle.array_store_check", {value, array_ref});
+
+  int cur_bci = _bytecodes.cur_bci();
+  llvm::BasicBlock* array_store_check_pass = llvm::BasicBlock::Create(*_context,
+                                                                      "bci_" + std::to_string(cur_bci) + "_array_store_check_pass",
+                                                                      _llvm_func);
+  llvm::BasicBlock* array_store_check_fail = llvm::BasicBlock::Create(*_context,
+                                                                      "bci_" + std::to_string(cur_bci) + "_array_store_check_fail",
+                                                                      _llvm_func);
+
+  _ir_builder.CreateCondBr(call, array_store_check_pass, array_store_check_fail);
+
+  uncommon_trap(Deoptimization::Reason_array_check, Deoptimization::Action_maybe_recompile, array_store_check_fail);
+
+  _ir_builder.SetInsertPoint(array_store_check_pass);
+  _block->set_tail_llvm_block(array_store_check_pass);
 }
 
 void JeandleAbstractInterpreter::do_new() {

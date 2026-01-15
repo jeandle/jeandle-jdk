@@ -41,12 +41,13 @@ runs:
     - name: 'Determine bundle names'
       id: bundles
       run: |
+        cd $GITHUB_WORKSPACE/..
+
         # Rename bundles to consistent names
-        jdk_bundle_zip="$(ls build/*/bundles/jdk-*_bin${{ inputs.debug-suffix }}.zip 2> /dev/null || true)"
-        jdk_bundle_tar_gz="$(ls build/*/bundles/jdk-*_bin${{ inputs.debug-suffix }}.tar.gz 2> /dev/null || true)"
-        symbols_bundle="$(ls build/*/bundles/jdk-*_bin${{ inputs.debug-suffix }}-symbols.tar.gz 2> /dev/null || true)"
-        tests_bundle="$(ls build/*/bundles/jdk-*_bin-tests${{ inputs.debug-suffix }}.tar.gz 2> /dev/null || true)"
-        llvm_bundle_tar_gz="$(ls $GITHUB_WORKSPACE/install_llvm${{ inputs.debug-suffix }}.tar.gz 2> /dev/null || true)"
+        jdk_bundle_zip="$(ls $GITHUB_WORKSPACE/build/*/bundles/jdk-*_bin${{ inputs.debug-suffix }}.zip 2> /dev/null || true)"
+        jdk_bundle_tar_gz="$(ls $GITHUB_WORKSPACE/build/*/bundles/jdk-*_bin${{ inputs.debug-suffix }}.tar.gz 2> /dev/null || true)"
+        symbols_bundle="$(ls $GITHUB_WORKSPACE/build/*/bundles/jdk-*_bin${{ inputs.debug-suffix }}-symbols.tar.gz 2> /dev/null || true)"
+        tests_bundle="$(ls $GITHUB_WORKSPACE/build/*/bundles/jdk-*_bin-tests${{ inputs.debug-suffix }}.tar.gz 2> /dev/null || true)"
 
         mkdir bundles
 
@@ -62,11 +63,17 @@ runs:
         if [[ "$tests_bundle" != "" ]]; then
           mv "$tests_bundle" "bundles/tests-${{ inputs.platform }}${{ inputs.debug-suffix }}.tar.gz"
         fi
+
+        # Here we have moved all jdk bundles. Delete the jeandle-jdk directory to leave more space for the jeandle-llvm bundle
+        rm -rf $GITHUB_WORKSPACE/*
+
+        tar czf install_llvm${{ inputs.debug-suffix }}.tar.gz install_llvm${{ inputs.debug-suffix }}/
+        llvm_bundle_tar_gz="$(ls install_llvm${{ inputs.debug-suffix }}.tar.gz 2> /dev/null || true)"
         if [[ "$llvm_bundle_tar_gz" != "" ]]; then
           mv "$llvm_bundle_tar_gz" "bundles/install_llvm${{ inputs.debug-suffix }}.tar.gz"
         fi
 
-        if [[ "$jdk_bundle_zip$jdk_bundle_tar_gz$symbols_bundle$tests_bundle" != "" ]]; then
+        if [[ "$jdk_bundle_zip$jdk_bundle_tar_gz$symbols_bundle$tests_bundle$llvm_bundle_tar_gz" != "" ]]; then
           echo 'bundles-found=true' >> $GITHUB_OUTPUT
         else
           echo 'bundles-found=false' >> $GITHUB_OUTPUT
@@ -77,6 +84,6 @@ runs:
       uses: actions/upload-artifact@v4
       with:
         name: bundles-${{ inputs.platform }}${{ inputs.debug-suffix }}
-        path: bundles
+        path: /home/runner/work/jeandle-jdk/bundles
         retention-days: 3
       if: steps.bundles.outputs.bundles-found == 'true'
