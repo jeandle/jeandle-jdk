@@ -42,6 +42,14 @@ queue_rules:
     draft_bot_account: ""
     merge_bot_account: ""
     update_bot_account: jeandle-bot
+    commit_message_template: |
+      {{ title }} (#{{ number }})
+
+      {{ body }}
+
+      {% for author in co-authors %}
+      Co-authored-by: {{ author.name }} <{{ author.email }}>
+      {% endfor %}
 merge_queue:
   max_parallel_checks: 1
   queued_label: ""
