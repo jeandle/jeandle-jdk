@@ -375,8 +375,8 @@ class JeandleAbstractInterpreter : public StackObj {
   // Implementation of _new
   void do_new();
 
-  void shared_lock(LockValue lv);
-  void shared_unlock(LockValue lv);
+  void shared_lock(LockValue lock);
+  void shared_unlock(LockValue lock);
   void monitorenter();
   void monitorexit();
 

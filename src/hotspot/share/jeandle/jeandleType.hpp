@@ -109,22 +109,30 @@ public:
 /* A pair of TypedValue and corresponding lock (llvm::Value*) used by monitors */
 class LockValue {
 private:
-  TypedValue _value;
-  llvm::Value* _lock;
+  TypedValue _object;
+  llvm::Value* _basic_lock;
 
 public:
-  LockValue(TypedValue tv, llvm::Value* lock) : _value(tv), _lock(lock) { }
-  LockValue(BasicType type, llvm::Value* obj, llvm::Value* lock)
-    : _value(TypedValue(type, obj)), _lock(lock) { }
-  LockValue() : _value(TypedValue()), _lock(nullptr) { }
+  LockValue(TypedValue object, llvm::Value* lock) : _object(object), _basic_lock(lock) { }
+  LockValue(BasicType type, llvm::Value* object, llvm::Value* lock)
+    : _object(TypedValue(type, object)), _basic_lock(lock) { }
+  LockValue() : _object(TypedValue()), _basic_lock(nullptr) { }
 
-  TypedValue typed_value() const { return _value; }
-  llvm::Value*     value() const { return _value.value(); }
-  llvm::Value*      lock() const { return _lock; }
-  bool           is_null() const { return _value.is_null() && _lock == nullptr; }
+  bool operator==(const LockValue& rhs) {
+    return object() == rhs.object() && _basic_lock == rhs._basic_lock;
+  }
 
-  void set_value(TypedValue tv) { _value = tv; }
-  void set_lock(llvm::Value* lock) { _lock = lock; }
+  bool operator!=(const LockValue& rhs) {
+    return !(*this == rhs);
+  }
+
+  TypedValue typed_object() const { return _object; }
+  llvm::Value*     object() const { return _object.value(); }
+  llvm::Value*       lock() const { return _basic_lock; }
+  bool            is_null() const { return _object.is_null() || _basic_lock == nullptr; }
+
+  void set_object(TypedValue object) { _object = object; }
+  void set_lock(llvm::Value* lock) { _basic_lock = lock; }
 };
 
 #endif // SHARE_JEANDLE_TYPE_HPP
