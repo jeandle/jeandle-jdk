@@ -33,6 +33,7 @@
 #include "oops/arrayOop.hpp"
 #include "oops/array.hpp"
 #include "oops/klass.hpp"
+#include "oops/objArrayKlass.hpp"
 #include "runtime/javaThread.hpp"
 #include "runtime/safepointMechanism.hpp"
 
@@ -232,5 +233,6 @@ void RuntimeDefinedJavaOps::define_global_variables(llvm::Module& template_modul
   define_global("Klass.secondary_super_cache_offset",  int32_type, static_cast<uint64_t>(Klass::secondary_super_cache_offset()));
   define_global("Klass.secondary_supers_offset",       int32_type, static_cast<uint64_t>(Klass::secondary_supers_offset()));
   define_global("Klass.super_check_offset_offset",     int32_type, static_cast<uint64_t>(Klass::super_check_offset_offset()));
+  define_global("ObjArrayKlass.element_klass_offset",  int32_type, static_cast<uint64_t>(ObjArrayKlass::element_klass_offset()));
   define_global("oopDesc.klass_offset_in_bytes",       int32_type, static_cast<uint64_t>(oopDesc::klass_offset_in_bytes()));
 }
