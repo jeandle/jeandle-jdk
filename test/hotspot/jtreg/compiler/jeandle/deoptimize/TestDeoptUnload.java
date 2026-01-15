@@ -91,9 +91,20 @@ public class TestDeoptUnload {
         runTestHelper(commandPrefix, "testNewInstance");
         runTestHelper(commandPrefix, "testANewArray");
         runTestHelper(commandPrefix, "testMultiANewArray");
+
+        ArrayList<String> commandForConstantUnload = new ArrayList<>();
+        commandForConstantUnload.addAll(commandPrefix.subList(0, commandPrefix.size() - 1));
+        // Compiling `getJavaLangModuleAccess` method will trigger the deoptimization of unloaded constant. 
+        commandForConstantUnload.add("-XX:CompileCommand=compileonly,jdk.internal.access.SharedSecrets::getJavaLangModuleAccess");
+        commandForConstantUnload.add(commandPrefix.get(commandPrefix.size() - 1));
+        runTestHelper(commandForConstantUnload, "testConstantUnload", "getJavaLangModuleAccess");
     }
 
     public static void runTestHelper(ArrayList<String> commandPrefix, String testMethod) throws Exception {
+        runTestHelper(commandPrefix, testMethod, testMethod);
+    }
+
+    public static void runTestHelper(ArrayList<String> commandPrefix, String testMethod, String deoptMethod) throws Exception {
         ArrayList<String> commandArgs = new ArrayList<>(commandPrefix);
         commandArgs.add(testMethod);
 
@@ -101,7 +112,7 @@ public class TestDeoptUnload {
         OutputAnalyzer output = ProcessTools.executeCommand(pb);
 
         output.shouldHaveExitValue(0);
-        output.shouldMatch("\\[debug\\]\\[deoptimization\\].*" + testMethod + ".*unloaded reinterpret");
+        output.shouldMatch("\\[debug\\]\\[deoptimization\\].*" + deoptMethod + ".*unloaded reinterpret");
     }
 
     private static void testInvoke() {
@@ -142,5 +153,14 @@ public class TestDeoptUnload {
 
     private static void testMultiANewArray() {
         MyClass[][][][][][] array = new MyClass[3][4][5][6][7][8];
+    }
+
+    // The following can be any Java method, just to start the JVM. During JVM startup,
+    // even a simple `java -version` command will reach the `getJavaLangModuleAccess` 
+    // method in the core library, and compiling this method will trigger an uncommon trap
+    // about unloaded constant.
+    private static void testConstantUnload() {
+        double var_11 = 0;
+        var_11++;
     }
 }
