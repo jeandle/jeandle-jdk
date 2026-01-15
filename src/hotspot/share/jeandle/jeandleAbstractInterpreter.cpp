@@ -1244,13 +1244,11 @@ void JeandleAbstractInterpreter::invoke() {
     if (!holder_klass->is_being_initialized() &&
         !holder_klass->is_initialized() &&
         !holder_klass->is_interface()) {
-      // TODO: To keep consistent with C2, but no suitable test case for now.
-      // uncommon_trap(Deoptimization::Reason_uninitialized,
-      //               Deoptimization::Action_reinterpret);
-      // _block->set(JeandleBasicBlock::always_uncommon_trap);
+      uncommon_trap(Deoptimization::Reason_uninitialized,
+                    Deoptimization::Action_reinterpret);
+      _block->set(JeandleBasicBlock::always_uncommon_trap);
 
-      // return;
-      Unimplemented();
+      return;
     }
   }
 
