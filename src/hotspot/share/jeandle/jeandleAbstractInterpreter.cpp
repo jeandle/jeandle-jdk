@@ -1237,7 +1237,7 @@ void JeandleAbstractInterpreter::invoke() {
   assert(declared_signature != nullptr, "cannot be null");
   assert(will_link == target->is_loaded(), "");
 
-  const Bytecodes::Code bc = _bytecodes.cur_bc();
+  const Bytecodes::Code bc = _bytecodes.cur_bc_raw();
 
   if (!will_link) {
     if (bc == Bytecodes::_invokedynamic) {
@@ -1292,13 +1292,23 @@ void JeandleAbstractInterpreter::invoke() {
     return;
   }
 
-  if (bc == Bytecodes::_invokedynamic) {
-    if (_bytecodes.has_appendix()) {
-      llvm::Value* appendix_oop_handle = find_or_insert_oop(_bytecodes.get_appendix());
-      llvm::Value* appendix_oop = _ir_builder.CreateLoad(JeandleType::java2llvm(BasicType::T_OBJECT, *_context), appendix_oop_handle);
-      _jvm->push(T_OBJECT, appendix_oop);
-    }
+  // Push appendix argument (MethodType, CallSite, etc.), if one.
+  if (_bytecodes.has_appendix()) {
+    assert(bc == Bytecodes::_invokedynamic || bc == Bytecodes::_invokehandle,
+           "appendix only valid for invokedynamic or invokehandle");
+    llvm::Value* appendix_oop_handle = find_or_insert_oop(_bytecodes.get_appendix());
+    llvm::Value* appendix_oop = _ir_builder.CreateLoad(JeandleType::java2llvm(BasicType::T_OBJECT, *_context), appendix_oop_handle);
+    _jvm->push(T_OBJECT, appendix_oop);
+  }
+
+  // Special handling for signature-polymorphic methods
+  if (bc == Bytecodes::_invokedynamic ||
+      bc == Bytecodes::_invokehandle) {
+    assert(target->is_static(), "invokedynamic/invokehandle targets must be static");
+    assert(target->is_method_handle_intrinsic() || target->is_compiled_lambda_form(), "no a target for methodhandle invoke");
     declared_signature = target->signature();
+  } else {
+    assert(declared_signature == target->signature(), "method signature unmatched");
   }
 
   // TODO: Additional receiver subtype checks for interface calls via invokespecial or invokeinterface.
@@ -1376,7 +1386,8 @@ void JeandleAbstractInterpreter::invoke() {
       dest = SharedRuntime::get_resolve_virtual_call_stub();
       break;
     }
-    case Bytecodes::_invokedynamic:
+    case Bytecodes::_invokedynamic: // fall through
+    case Bytecodes::_invokehandle:  // fall through
     case Bytecodes::_invokestatic: {
       call_type = JeandleCompiledCall::STATIC_CALL;
       dest = SharedRuntime::get_resolve_static_call_stub();
