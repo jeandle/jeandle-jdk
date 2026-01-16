@@ -2082,6 +2082,13 @@ void JeandleAbstractInterpreter::do_array_store_inner(BasicType basic_type, llvm
   llvm::Value* element_address = compute_array_element_address(basic_type, store_type);
   llvm::StoreInst* store_inst = _ir_builder.CreateStore(value, element_address);
   store_inst->setAtomic(llvm::AtomicOrdering::Unordered);
+
+  // TODO: A workaround for card table barrier of array element, not to block the development progress.
+  // Currently, we can't get array type in LLVM pass. Once a clearer design is available, the barrier
+  // insertion operation will be moved to the LLVM pass.
+  if (basic_type == T_OBJECT) {
+    call_java_op("jeandle.card_table_barrier", {element_address});
+  }
 }
 
 void JeandleAbstractInterpreter::do_array_store(BasicType basic_type) {
