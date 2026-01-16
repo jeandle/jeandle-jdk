@@ -37,19 +37,11 @@ queue_rules:
   - queue_branch_prefix: jeandle-jdk/merge-queue/
     merge_method: squash
     autoqueue: true
-    update_method: merge
+    update_method: rebase
     name: jeandle-jdk
     draft_bot_account: ""
     merge_bot_account: ""
     update_bot_account: jeandle-bot
-    commit_message_template: |
-      {{ title }} (#{{ number }})
-
-      {{ body }}
-
-      {% for author in co_authors %}
-      Co-authored-by: {{ author.name }} <{{ author.email }}>
-      {% endfor %}
 merge_queue:
   max_parallel_checks: 1
   queued_label: ""
