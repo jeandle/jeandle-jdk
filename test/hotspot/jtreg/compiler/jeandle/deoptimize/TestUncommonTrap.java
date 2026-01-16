@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2025, the Jeandle-JDK Authors. All Rights Reserved.
+ * Copyright (c) 2025, 2026, the Jeandle-JDK Authors. All Rights Reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -27,6 +27,7 @@
  *      -XX:CompileCommand=compileonly,TestUncommonTrap::test_uncommon
  *      -XX:CompileCommand=compileonly,TestUncommonTrap::test_null_check_with_trap
  *      -XX:CompileCommand=compileonly,TestUncommonTrap::test_trap_in_try_block
+ *      -XX:CompileCommand=compileonly,TestUncommonTrap::test_uncommon_sync
  *      TestUncommonTrap
  */
 
@@ -38,6 +39,8 @@ public class TestUncommonTrap {
 
   public static void main(String[] args) {
     Asserts.assertEquals(test_uncommon(5) , 15);
+    Asserts.assertEquals(test_uncommon_sync(5), 25);
+    Asserts.assertEquals(test_uncommon_sync(10), 30);
     Asserts.assertThrows(NullPointerException.class, () -> test_null_check_with_trap(null));
 
     test_trap_in_try_block();
@@ -64,6 +67,11 @@ public class TestUncommonTrap {
     return new UninitClass().val() + i;
   }
 
+  private static synchronized int test_uncommon_sync(int i) {
+    /* trigger uncommon_trap for uninitialzed class */
+    return new UninitClassB().val() + i;
+  }
+
   static class UninitClass extends TestUncommonTrap {
     public int val() { return 10; }
   }
@@ -72,5 +80,9 @@ public class TestUncommonTrap {
     public static Object handle(Object obj) {
       return obj;
     }
+  }
+
+  static class UninitClassB extends TestUncommonTrap {
+    public int val() { return 20; }
   }
 }

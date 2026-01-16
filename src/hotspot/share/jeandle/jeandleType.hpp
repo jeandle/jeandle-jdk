@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2025, the Jeandle-JDK Authors. All Rights Reserved.
+ * Copyright (c) 2025, 2026, the Jeandle-JDK Authors. All Rights Reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -104,6 +104,30 @@ public:
   BasicType computational_type() const { return JeandleType::actual2computational(_basic_type); }
   BasicType        actual_type() const { return _basic_type; }
   llvm::Value*           value() const { return _value; }
+};
+
+/* A pair of TypedValue and corresponding lock (llvm::Value*) used by monitors */
+class LockValue {
+private:
+  TypedValue _object;
+  llvm::Value* _basic_lock;
+
+public:
+  LockValue(TypedValue object, llvm::Value* lock) : _object(object), _basic_lock(lock) { }
+  LockValue(BasicType type, llvm::Value* object, llvm::Value* lock)
+    : _object(TypedValue(type, object)), _basic_lock(lock) { }
+  LockValue() : _object(TypedValue()), _basic_lock(nullptr) { }
+
+  bool equals(const LockValue& rhs) {
+    return _object.value() == rhs._object.value() && _basic_lock == rhs._basic_lock;
+  }
+
+  TypedValue    object() const { return _object; }
+  llvm::Value*    lock() const { return _basic_lock; }
+  bool         is_null() const { return _object.is_null() || _basic_lock == nullptr; }
+
+  void set_object(TypedValue object) { _object = object; }
+  void set_lock(llvm::Value* lock) { _basic_lock = lock; }
 };
 
 #endif // SHARE_JEANDLE_TYPE_HPP

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2025, the Jeandle-JDK Authors. All Rights Reserved.
+ * Copyright (c) 2025, 2026, the Jeandle-JDK Authors. All Rights Reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -122,16 +122,16 @@ class JeandleVMState : public JeandleCompilationResourceObj {
   void dstore(int index, llvm::Value* value) { store(BasicType::T_DOUBLE, index, value); }
 
   // Locks operations:
-  void push_lock(llvm::Value* lock) { assert(lock != nullptr, "null lock"); _locks.push_back(lock); }
-  llvm::Value* pop_lock() { llvm::Value* v = _locks.back(); _locks.pop_back(); return v; }
+  void push_lock(LockValue lock) { assert(!lock.is_null(), "null lock"); _locks.push_back(lock); }
+  LockValue pop_lock() { LockValue v = _locks.back(); _locks.pop_back(); return v; }
   size_t locks_size() const { return _locks.size(); }
-  llvm::Value* lock_at(int index) { return _locks[index]; }
+  LockValue lock_at(int index) { return _locks[index]; }
 
   llvm::SmallVector<llvm::Value*> deopt_args(llvm::IRBuilder<> &builder, int bci);
  private:
   llvm::SmallVector<TypedValue> _stack;
   llvm::SmallVector<TypedValue> _locals;
-  llvm::SmallVector<llvm::Value*> _locks;
+  llvm::SmallVector<LockValue> _locks;
 
   llvm::LLVMContext* _context;
 
@@ -280,7 +280,7 @@ class JeandleAbstractInterpreter : public StackObj {
   llvm::SmallVector<JeandleBasicBlock*> _work_list;
 
   // Object & Lock for synchronized method
-  llvm::SmallVector<llvm::Value*, 2> _sync_lock; // 0: object 1: lock
+  LockValue _sync_lock;
 
   void initialize_VM_state();
   void interpret();
@@ -375,8 +375,8 @@ class JeandleAbstractInterpreter : public StackObj {
   // Implementation of _new
   void do_new();
 
-  void shared_lock(llvm::Value* obj, llvm::Value* lock = nullptr);
-  void shared_unlock(llvm::Value* obj, llvm::Value* lock);
+  void shared_lock(LockValue lock);
+  void shared_unlock(LockValue lock);
   void monitorenter();
   void monitorexit();
 

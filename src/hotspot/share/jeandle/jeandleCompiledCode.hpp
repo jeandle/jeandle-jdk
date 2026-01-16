@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2025, the Jeandle-JDK Authors. All Rights Reserved.
+ * Copyright (c) 2025, 2026, the Jeandle-JDK Authors. All Rights Reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -57,7 +57,7 @@ public:
   };
   DeoptValueEncoding(int index, DeoptValueType value_type, BasicType basic_type):
     _index(index), _value_type(value_type), _basic_type(basic_type) {
-    assert(_value_type == LocalType || _value_type == StackType, "Unsupported value type");
+    assert(_value_type == LocalType || _value_type == StackType || _value_type == MonitorType, "Unsupported value type");
   }
 
   uint64_t encode() {
@@ -142,19 +142,21 @@ class CallSiteInfo : public JeandleCompilationResourceObj {
 
 class JeandleOopMap {
 public:
-  JeandleOopMap(OopMap* oop_map, GrowableArray<ScopeValue*>* locals, GrowableArray<ScopeValue*>* stack, bool reexecute) :
-      _oop_map(oop_map), _locals(locals), _stack(stack), _reexecute(reexecute) {
+  JeandleOopMap(OopMap* oop_map, GrowableArray<ScopeValue*>* locals, GrowableArray<ScopeValue*>* stack, GrowableArray<MonitorValue*>* monitors, bool reexecute) :
+      _oop_map(oop_map), _locals(locals), _stack(stack), _monitors(monitors), _reexecute(reexecute) {
   }
 
   OopMap* oop_map() const { return _oop_map; }
   GrowableArray<ScopeValue*>* locals() const { return _locals; }
   GrowableArray<ScopeValue*>* stack() const { return _stack; }
+  GrowableArray<MonitorValue*>* monitors() const { return _monitors; }
   bool reexecute() const { return _reexecute; }
 
 private:
   OopMap* _oop_map;
   GrowableArray<ScopeValue*>* _locals;
   GrowableArray<ScopeValue*>* _stack;
+  GrowableArray<MonitorValue*>* _monitors;
   bool _reexecute;
 };
 
@@ -180,7 +182,7 @@ class JeandleCompiledCode : public StackObj {
                       _env(env),
                       _method(method),
                       _routine_entry(nullptr),
-                      _func_name(JeandleFuncSig::method_name(_method)) {}
+                      _func_name(JeandleFuncSig::method_name_with_signature(_method)) {}
 
   // For compiled Jeandle runtime stubs.
   JeandleCompiledCode(ciEnv* env, const char* func_name) :
@@ -255,8 +257,11 @@ class JeandleCompiledCode : public StackObj {
   address resolve_const_edge(LinkBlock& block, LinkEdge& edge, JeandleAssembler& assembler);
 
   JeandleOopMap* build_oop_map(StackMapParser& stackmaps, StackMapParser::record_iterator& record, CallSiteInfo* call_info);
+  LocationValue* new_loc_value(const StackMapParser::LocationAccessor& location, Location::Type type);
   void fill_one_scope_value(const StackMapParser& stackmaps, const DeoptValueEncoding& encode, const StackMapParser::LocationAccessor& location,
                             GrowableArray<ScopeValue*>* array, int& current_index);
+  void fill_one_monitor_value(const StackMapParser& stackmaps, const DeoptValueEncoding& encode, const StackMapParser::LocationAccessor& object,
+                              const StackMapParser::LocationAccessor& lock, GrowableArray<MonitorValue*>* array);
 
   void build_exception_handler_table();
   void build_implicit_exception_table();
@@ -273,7 +278,8 @@ public:
   }
 
   static bool is_stack(const StackMapParser::LocationAccessor& location) {
-    return location.getKind() == StackMapParser::LocationKind::Indirect;
+    return location.getKind() == StackMapParser::LocationKind::Indirect
+        || location.getKind() == StackMapParser::LocationKind::Direct;
   }
 
   static bool is_register(const StackMapParser::LocationAccessor& location) {
@@ -287,7 +293,7 @@ public:
       ShouldNotReachHere();
     }
   }
-  
+
   static uint32_t getConstantUint(const StackMapParser& parser, const StackMapParser::LocationAccessor& location);
   static uint64_t getConstantUlong(const StackMapParser& parser, const StackMapParser::LocationAccessor& location);
   static float    getConstantFloat(const StackMapParser& parser, const StackMapParser::LocationAccessor& location);
