@@ -654,6 +654,14 @@ void CompilerConfig::ergo_initialize() {
     if (FLAG_IS_CMDLINE(UseCompressedClassPointers) && UseCompressedClassPointers) {
       warning("UseCompressedClassPointers is disabled until jeandle supports compressed class pointers.");
     }
+
+#ifndef PRODUCT
+    if (FLAG_IS_CMDLINE(StackPrintLimit) && StackPrintLimit >= 200) {
+      StackPrintLimit = 200;
+      warning("StackPrintLimit is set to 200 due to avoid allocating too much stack memory during LLVM's assertion failure handling.");
+    }
+#endif // PRODUCT
+
     UseCompressedClassPointers = false;
   }
 #endif // JEANDLE

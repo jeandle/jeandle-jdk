@@ -25,6 +25,11 @@
 #include "jeandle/jeandleType.hpp"
 #include "jeandle/jeandleUtils.hpp"
 
+#include "jeandle/__hotspotHeadersBegin__.hpp"
+#include "compiler/abstractCompiler.hpp"
+#include "compiler/compilerThread.hpp"
+#include "runtime/thread.hpp"
+
 llvm::Function* JeandleFuncSig::create_llvm_func(ciMethod* method, llvm::Module& target_module) {
   llvm::SmallVector<llvm::Type*> args;
   llvm::LLVMContext& context = target_module.getContext();
@@ -45,7 +50,7 @@ llvm::Function* JeandleFuncSig::create_llvm_func(ciMethod* method, llvm::Module&
                               false);
   llvm::Function* func = llvm::Function::Create(func_type,
                                                 llvm::Function::ExternalLinkage,
-                                                method_name(method),
+                                                method_name_with_signature(method),
                                                 target_module);
 
   setup_description(func);
@@ -61,4 +66,18 @@ std::string JeandleFuncSig::method_name(ciMethod* method) {
   std::replace(method_name.begin(), method_name.end(), '/', '_');
 
   return class_name + "_" + method_name;
+}
+
+std::string JeandleFuncSig::method_name_with_signature(ciMethod* method) {
+  std::string signature = std::string(method->signature()->as_symbol()->as_utf8());
+  return method_name(method) + signature;
+}
+
+bool is_jeandle_compiler_thread(Thread* t) {
+  if (t == nullptr || !t->is_Compiler_thread()) {
+    return false;
+  }
+  CompilerThread* ct = CompilerThread::cast(t);
+  AbstractCompiler* compiler = ct->compiler();
+  return compiler != nullptr && compiler->is_jeandle();
 }

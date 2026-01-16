@@ -216,11 +216,13 @@ int JeandleAssembler::emit_exception_handler() {
 
 using LinkKind_aarch64 = llvm::jitlink::aarch64::EdgeKind_aarch64;
 
-void JeandleAssembler::emit_const_reloc(int operand_offset, LinkKind kind, int64_t addend, address target) {
+void JeandleAssembler::emit_section_word_reloc(int operand_offset, LinkKind kind, int64_t addend, address target, int reloc_section) {
   assert(operand_offset >= 0, "invalid operand address");
   assert(kind == LinkKind_aarch64::Page21 ||
          kind == LinkKind_aarch64::PageOffset12,
          "unexpected link kind: %d", kind);
+
+  JEANDLE_ERROR_ASSERT_AND_RET_VOID_ON_FAIL(reloc_section == CodeBuffer::SECT_INSTS, "have not met this kind of relocation up now");
 
   // only support adrp & ldr for now
   address at_addr = __ code()->insts_begin() + operand_offset;

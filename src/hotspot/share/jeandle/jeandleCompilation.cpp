@@ -111,6 +111,11 @@ JeandleCompilation::JeandleCompilation(llvm::TargetMachine* target_machine,
     return;
   }
 
+  const char* reason = check_can_parse(method);
+  if (reason != nullptr) {
+    report_error(reason);
+  }
+
   JeandleTraceTime tt_total("Jeandle Compile", compilation_timer);
 
   // Setup compilation.
@@ -209,6 +214,15 @@ JeandleCompilation::JeandleCompilation(llvm::TargetMachine* target_machine,
   _code.set_routine_entry(rs->entry_point());
 }
 
+const char* JeandleCompilation::check_can_parse(ciMethod* method) {
+  // Certain method cannot be parsed at all:
+  if ( method->is_native())                   return "native method";
+  if ( method->is_abstract())                 return "abstract method";
+  if (!method->has_balanced_monitors())       return "not compilable (unbalanced monitors)";
+  if (!method->can_be_parsed())               return "cannot be parsed";
+  return nullptr;
+}
+
 void JeandleCompilation::install_code() {
   _env->register_method(_method,
                         _entry_bci,
@@ -222,7 +236,7 @@ void JeandleCompilation::install_code() {
                         CompilerThread::current()->compiler(),
                         false, // temporary value
                         false, // temporary value
-                        false, // temporary value
+                        _has_monitors,
                         0); // temporary value
 }
 
@@ -237,6 +251,8 @@ void JeandleCompilation::initialize() {
   _env->set_debug_info(new DebugInformationRecorder(ooprec));
   _env->debug_info()->set_oopmaps(new OopMapSet());
   _env->set_dependencies(new Dependencies(_env));
+
+  set_has_monitors(false);
 
   // Get timestamp to mark dump files.
   auto now = std::chrono::system_clock::now();
