@@ -54,8 +54,8 @@ public class TestScopeValues {
         // Verify llvm IR
         FileCheck checker = new FileCheck(dump_path, TestWrapper.class.getMethod("test_invoke", TestWrapper.class), false);
         // find compiled method
-        checker.check(
-            "define hotspotcc i32 @\"compiler_jeandle_deoptimize_TestScopeValues$TestWrapper_test_invoke\"(ptr addrspace(1) %0)");
+        checker.checkPattern(
+            "define hotspotcc i32 .*compiler_jeandle_deoptimize_TestScopeValues\\$TestWrapper_test_invoke.*");
         // check IR
         checker.checkNext("entry:");
         checker.checkNext("br label %bci_0");

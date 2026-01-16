@@ -182,7 +182,7 @@ class JeandleCompiledCode : public StackObj {
                       _env(env),
                       _method(method),
                       _routine_entry(nullptr),
-                      _func_name(JeandleFuncSig::method_name(_method)) {}
+                      _func_name(JeandleFuncSig::method_name_with_signature(_method)) {}
 
   // For compiled Jeandle runtime stubs.
   JeandleCompiledCode(ciEnv* env, const char* func_name) :

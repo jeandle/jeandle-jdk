@@ -64,7 +64,7 @@ public class TestLogDouble {
         // Verify llvm IR
         FileCheck checker = new FileCheck(dump_path, TestWrapper.class.getMethod("log_double", double.class), false);
         // find compiled method
-        checker.check("define hotspotcc double @\"compiler_jeandle_intrinsic_TestLogDouble$TestWrapper_log_double\"(double %0)");
+        checker.checkPattern("define hotspotcc double .*compiler_jeandle_intrinsic_TestLogDouble\\$TestWrapper_log_double.*(double %0)");
         // check IR
         checker.checkNext("entry:");
         checker.checkNext("br label %bci_0");
@@ -98,7 +98,7 @@ public class TestLogDouble {
             // Verify llvm IR
             checker = new FileCheck(dump_path, TestWrapper.class.getMethod("log_double", double.class), false);
             // find compiled method
-            checker.check("define hotspotcc double @\"compiler_jeandle_intrinsic_TestLogDouble$TestWrapper_log_double\"(double %0)");
+            checker.checkPattern("define hotspotcc double .*compiler_jeandle_intrinsic_TestLogDouble\\$TestWrapper_log_double.*(double %0)");
             // check IR
             checker.checkNext("entry:");
             checker.checkNext("br label %bci_0");

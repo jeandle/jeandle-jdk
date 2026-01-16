@@ -1062,21 +1062,21 @@ void JeandleAbstractInterpreter::add_to_work_list(JeandleBasicBlock* block) {
 void JeandleAbstractInterpreter::load_constant() {
   ciConstant con = _bytecodes.get_constant();
   if (!con.is_loaded()) {
-    // TODO: To keep consistent with C2, but no suitable test case for now.
     // If the constant is unresolved or in error state, run this BC in the interpreter.
-    // if (_bytecodes.is_in_error()) {
-    //   uncommon_trap(Deoptimization::Reason_unhandled,
-    //                 Deoptimization::Action_none);
-    // } else {
-    //   int index = _bytecodes.get_constant_pool_index();
-    //   uncommon_trap(Deoptimization::Reason_unloaded,
-    //                 Deoptimization::Action_reinterpret);
-    // }
+    if (_bytecodes.is_in_error()) {
+      // TODO: To keep consistent with C2, but no suitable test case for now.
+      Unimplemented();
+      // uncommon_trap(Deoptimization::Reason_unhandled,
+      //               Deoptimization::Action_none);
+    } else {
+      int index = _bytecodes.get_constant_pool_index();
+      uncommon_trap(Deoptimization::Reason_unloaded,
+                    Deoptimization::Action_reinterpret);
+    }
 
-    // _block->set(JeandleBasicBlock::always_uncommon_trap);
+    _block->set(JeandleBasicBlock::always_uncommon_trap);
 
-    // return;
-    Unimplemented();
+    return;
   }
 
   llvm::Value* value = nullptr;
@@ -1361,7 +1361,7 @@ void JeandleAbstractInterpreter::invoke() {
   // Declare callee function type.
   BasicType return_type = declared_signature->return_type()->basic_type();
   llvm::FunctionType* func_type = llvm::FunctionType::get(JeandleType::java2llvm(return_type, *_context), args_type, false);
-  llvm::FunctionCallee callee = _module.getOrInsertFunction(JeandleFuncSig::method_name(target), func_type);
+  llvm::FunctionCallee callee = _module.getOrInsertFunction(JeandleFuncSig::method_name_with_signature(target), func_type);
   llvm::Function* func = llvm::cast<llvm::Function>(callee.getCallee());
   func->setCallingConv(llvm::CallingConv::Hotspot_JIT);
   func->setGC(llvm::jeandle::JeandleGC);
