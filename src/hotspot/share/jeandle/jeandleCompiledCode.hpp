@@ -257,7 +257,7 @@ class JeandleCompiledCode : public StackObj {
   address resolve_const_edge(LinkBlock& block, LinkEdge& edge, JeandleAssembler& assembler);
 
   JeandleOopMap* build_oop_map(StackMapParser& stackmaps, StackMapParser::record_iterator& record, CallSiteInfo* call_info);
-  LocationValue* new_loc_value(const StackMapParser::LocationAccessor& location, Locaiton::Type type);
+  LocationValue* new_loc_value(const StackMapParser::LocationAccessor& location, Location::Type type);
   void fill_one_scope_value(const StackMapParser& stackmaps, const DeoptValueEncoding& encode, const StackMapParser::LocationAccessor& location,
                             GrowableArray<ScopeValue*>* array, int& current_index);
   void fill_one_monitor_value(const StackMapParser& stackmaps, const DeoptValueEncoding& encode, const StackMapParser::LocationAccessor& object,

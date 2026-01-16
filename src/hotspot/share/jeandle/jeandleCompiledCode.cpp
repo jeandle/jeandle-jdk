@@ -481,7 +481,7 @@ static VMReg resolve_vmreg(const StackMapParser::LocationAccessor& location, Sta
   return nullptr;
 }
 
-LocationValue* JeandleCompiledCode::new_loc_value(const StackMapParser::LocationAccessor& location, Locaiton::Type type) {
+LocationValue* JeandleCompiledCode::new_loc_value(const StackMapParser::LocationAccessor& location, Location::Type type) {
   return StackMapUtil::is_stack(location)
     ? new LocationValue(Location::new_stk_loc(type, StackMapUtil::stack_offset(location)))
     : new LocationValue(Location::new_reg_loc(type, resolve_vmreg(location, location.getKind())));
