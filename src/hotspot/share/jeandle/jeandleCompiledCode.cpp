@@ -481,6 +481,12 @@ static VMReg resolve_vmreg(const StackMapParser::LocationAccessor& location, Sta
   return nullptr;
 }
 
+LocationValue* JeandleCompiledCode::new_loc_value(const StackMapParser::LocationAccessor& location, Locaiton::Type type) {
+  return StackMapUtil::is_stack(location)
+    ? new LocationValue(Location::new_stk_loc(type, StackMapUtil::stack_offset(location)))
+    : new LocationValue(Location::new_reg_loc(type, resolve_vmreg(location, location.getKind())));
+}
+
 void JeandleCompiledCode::fill_one_scope_value(const StackMapParser& stackmaps,
                                                const DeoptValueEncoding& encode,
                                                const StackMapParser::LocationAccessor& location,
@@ -493,11 +499,7 @@ void JeandleCompiledCode::fill_one_scope_value(const StackMapParser& stackmaps,
     if (is_constant) {
       array->at_put_grow(index++, new ConstantIntValue(StackMapUtil::getConstantUint(stackmaps, location)));
     } else {
-      array->at_put_grow(index++,
-        StackMapUtil::is_stack(location)
-        ? new LocationValue(Location::new_stk_loc(Location::Type::normal, StackMapUtil::stack_offset(location)))
-        : new LocationValue(Location::new_reg_loc(Location::Type::normal, resolve_vmreg(location, location.getKind())))
-      );
+      array->at_put_grow(index++, new_loc_value(location, Location::normal));
     }
     break;
   }
@@ -507,11 +509,7 @@ void JeandleCompiledCode::fill_one_scope_value(const StackMapParser& stackmaps,
     if (is_constant) {
       array->at_put_grow(index++, new ConstantLongValue(StackMapUtil::getConstantUlong(stackmaps, location)));
     } else {
-      array->at_put_grow(index++,
-        StackMapUtil::is_stack(location)
-        ? new LocationValue(Location::new_stk_loc(Location::Type::lng, StackMapUtil::stack_offset(location)))
-        : new LocationValue(Location::new_reg_loc(Location::Type::lng, resolve_vmreg(location, location.getKind())))
-      );
+      array->at_put_grow(index++, new_loc_value(location, Location::lng));
     }
     break;
   }
@@ -519,11 +517,7 @@ void JeandleCompiledCode::fill_one_scope_value(const StackMapParser& stackmaps,
     if (is_constant) {
       array->at_put_grow(index++, new ConstantIntValue(jint_cast(StackMapUtil::getConstantFloat(stackmaps, location))));
     } else {
-      array->at_put_grow(index++,
-        StackMapUtil::is_stack(location)
-        ? new LocationValue(Location::new_stk_loc(Location::Type::normal, StackMapUtil::stack_offset(location)))
-        : new LocationValue(Location::new_reg_loc(Location::Type::normal, resolve_vmreg(location, location.getKind())))
-      );
+      array->at_put_grow(index++, new_loc_value(location, Location::normal));
     }
     break;
   }
@@ -533,11 +527,7 @@ void JeandleCompiledCode::fill_one_scope_value(const StackMapParser& stackmaps,
     if (is_constant) {
       array->at_put_grow(index++, new ConstantDoubleValue(StackMapUtil::getConstantDouble(stackmaps, location)));
     } else {
-      array->at_put_grow(index++,
-        StackMapUtil::is_stack(location)
-        ? new LocationValue(Location::new_stk_loc(Location::Type::dbl, StackMapUtil::stack_offset(location)))
-        : new LocationValue(Location::new_reg_loc(Location::Type::dbl, resolve_vmreg(location, location.getKind())))
-      );
+      array->at_put_grow(index++, new_loc_value(location, Location::dbl));
     }
     break;
   }
@@ -551,11 +541,7 @@ void JeandleCompiledCode::fill_one_scope_value(const StackMapParser& stackmaps,
         ShouldNotReachHere();
       }
     } else {
-      array->at_put_grow(index++,
-        StackMapUtil::is_stack(location)
-        ? new LocationValue(Location::new_stk_loc(Location::Type::oop, StackMapUtil::stack_offset(location)))
-        : new LocationValue(Location::new_reg_loc(Location::Type::oop, resolve_vmreg(location, location.getKind())))
-      );
+      array->at_put_grow(index++, new_loc_value(location, Location::oop));
     }
     break;
   }
@@ -589,9 +575,7 @@ void JeandleCompiledCode::fill_one_monitor_value(const StackMapParser& stackmaps
       ShouldNotReachHere();
     }
   } else {
-    locked_object = StackMapUtil::is_stack(object)
-      ? new LocationValue(Location::new_stk_loc(Location::oop, StackMapUtil::stack_offset(object)))
-      : new LocationValue(Location::new_reg_loc(Location::oop, resolve_vmreg(object, object.getKind())));
+    locked_object = new_loc_value(object, Location::oop);
   }
   Location basic_lock = Location::new_stk_loc(Location::normal, StackMapUtil::stack_offset(lock));
   array->append(new MonitorValue(locked_object, basic_lock, false /* FIXME */));
