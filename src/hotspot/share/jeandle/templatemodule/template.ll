@@ -217,3 +217,79 @@ check_subtype:
 
   ret i1 %is_subtype
 }
+
+; Implementation of Java idiv operation
+define hotspotcc i32 @jeandle.idiv(i32 %dividend, i32 %divisor) noinline "lower-phase"="0" {
+entry:
+  ; Check if dividend == Integer.MIN_VALUE (-2147483648)
+  %is_min_int = icmp eq i32 %dividend, -2147483648
+  br i1 %is_min_int, label %check_divisor, label %normal_idiv
+
+check_divisor:
+  %is_minus_one = icmp eq i32 %divisor, -1
+  br i1 %is_minus_one, label %return_min_int, label %normal_idiv
+
+return_min_int:
+  ret i32 -2147483648
+
+normal_idiv:
+  %result = sdiv i32 %dividend, %divisor
+  ret i32 %result
+}
+
+; Implementation of Java irem operation
+define hotspotcc i32 @jeandle.irem(i32 %dividend, i32 %divisor) noinline "lower-phase"="0" {
+entry:
+  ; Check if dividend == Integer.MIN_VALUE (-2147483648)
+  %is_min_int = icmp eq i32 %dividend, -2147483648
+  br i1 %is_min_int, label %check_divisor, label %normal_irem
+
+check_divisor:
+  %is_minus_one = icmp eq i32 %divisor, -1
+  br i1 %is_minus_one, label %return_zero, label %normal_irem
+
+return_zero:
+  ret i32 0
+
+normal_irem:
+  %result = srem i32 %dividend, %divisor
+  ret i32 %result
+}
+
+; Implementation of Java ldiv operation
+define hotspotcc i64 @jeandle.ldiv(i64 %dividend, i64 %divisor) noinline "lower-phase"="0" {
+entry:
+  ; Check if dividend == Long.MIN_VALUE (-9223372036854775808)
+  %is_min_long = icmp eq i64 %dividend, -9223372036854775808
+  br i1 %is_min_long, label %check_divisor, label %normal_ldiv
+
+check_divisor:
+  %is_minus_one = icmp eq i64 %divisor, -1
+  br i1 %is_minus_one, label %return_min_long, label %normal_ldiv
+
+return_min_long:
+  ret i64 -9223372036854775808
+
+normal_ldiv:
+  %result = sdiv i64 %dividend, %divisor
+  ret i64 %result
+}
+
+; Implementation of Java lrem operation
+define hotspotcc i64 @jeandle.lrem(i64 %dividend, i64 %divisor) noinline "lower-phase"="0" {
+entry:
+  ; Check if dividend == Long.MIN_VALUE (-9223372036854775808)
+  %is_min_long = icmp eq i64 %dividend, -9223372036854775808
+  br i1 %is_min_long, label %check_divisor, label %normal_lrem
+
+check_divisor:
+  %is_minus_one = icmp eq i64 %divisor, -1
+  br i1 %is_minus_one, label %return_zero, label %normal_lrem
+
+return_zero:
+  ret i64 0
+
+normal_lrem:
+  %result = srem i64 %dividend, %divisor
+  ret i64 %result
+}
