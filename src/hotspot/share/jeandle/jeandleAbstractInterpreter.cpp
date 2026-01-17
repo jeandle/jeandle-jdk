@@ -1878,6 +1878,9 @@ void JeandleAbstractInterpreter::do_field_access(bool is_get, bool is_static) {
 
   if (_compiled_code.needs_clinit_barrier(field, _method)) {
     clinit_barrier(field_holder, _method);
+    if (_block->is_set(JeandleBasicBlock::always_uncommon_trap)) {
+      return;
+    }
   }
 
   if (!is_static) {
@@ -2209,6 +2212,9 @@ void JeandleAbstractInterpreter::do_new() {
 
   if (_compiled_code.needs_clinit_barrier(klass, _method)) {
     clinit_barrier(klass, _method);
+    if (_block->is_set(JeandleBasicBlock::always_uncommon_trap)) {
+      return;
+    }
   }
 
   jint layout_helper = klass->layout_helper();
@@ -2627,5 +2633,6 @@ void JeandleAbstractInterpreter::clinit_barrier(ciInstanceKlass* ik, ciMethod* c
     return; // no barrier needed
   } else {
     uncommon_trap(Deoptimization::Reason_uninitialized, Deoptimization::Action_reinterpret);
+    _block->set(JeandleBasicBlock::always_uncommon_trap);
   }
 }
