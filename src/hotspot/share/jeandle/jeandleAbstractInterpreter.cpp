@@ -1748,6 +1748,12 @@ void JeandleAbstractInterpreter::arith_op(BasicType type, Bytecodes::Code code) 
   assert(type == BasicType::T_INT || type == BasicType::T_LONG ||
          type == BasicType::T_FLOAT || type == BasicType::T_DOUBLE, "unexpected type");
 
+  if (code == Bytecodes::_idiv || code == Bytecodes::_irem ||
+      code == Bytecodes::_ldiv || code == Bytecodes::_lrem) {
+    size_t depth = is_double_word_type(type) ? 1 : 0;
+    zero_check(_jvm->raw_peek(depth).value());
+  }
+
   llvm::Value* r = _jvm->pop(type);
   llvm::Value* l = nullptr;
 
@@ -1764,10 +1770,10 @@ void JeandleAbstractInterpreter::arith_op(BasicType type, Bytecodes::Code code) 
     case Bytecodes::_lsub: _jvm->push(type, _ir_builder.CreateSub(l, r)); break;
     case Bytecodes::_imul: // fall through
     case Bytecodes::_lmul: _jvm->push(type, _ir_builder.CreateMul(l, r)); break;
-    case Bytecodes::_idiv: // fall through
-    case Bytecodes::_ldiv: _jvm->push(type, _ir_builder.CreateSDiv(l, r)); break;
-    case Bytecodes::_irem: // fall through
-    case Bytecodes::_lrem: _jvm->push(type, _ir_builder.CreateSRem(l, r)); break;
+    case Bytecodes::_idiv: _jvm->push(type, call_java_op("jeandle.idiv", {l, r})); break;
+    case Bytecodes::_ldiv: _jvm->push(type, call_java_op("jeandle.ldiv", {l, r})); break;
+    case Bytecodes::_irem: _jvm->push(type, call_java_op("jeandle.irem", {l, r})); break;
+    case Bytecodes::_lrem: _jvm->push(type, call_java_op("jeandle.lrem", {l, r})); break;
     case Bytecodes::_iand: // fall through
     case Bytecodes::_land: _jvm->push(type, _ir_builder.CreateAnd(l, r)); break;
     case Bytecodes::_ior:  // fall through
@@ -2526,6 +2532,30 @@ void JeandleAbstractInterpreter::null_check(llvm::Value* obj) {
 
   _ir_builder.SetInsertPoint(null_check_pass);
   _block->set_tail_llvm_block(null_check_pass);
+}
+
+void JeandleAbstractInterpreter::zero_check(llvm::Value* divisor) {
+  llvm::Type* divisor_type = divisor->getType();
+  assert(divisor_type == llvm::Type::getInt32Ty(*_context) ||
+         divisor_type == llvm::Type::getInt64Ty(*_context), "should be non subword integral type");
+
+  int cur_bci = _bytecodes.cur_bci();
+  llvm::BasicBlock* zero_check_pass = llvm::BasicBlock::Create(*_context,
+                                                               "bci_" + std::to_string(cur_bci) + "_zero_check_pass",
+                                                               _llvm_func);
+  llvm::BasicBlock* zero_check_fail = llvm::BasicBlock::Create(*_context,
+                                                               "bci_" + std::to_string(cur_bci) + "_zero_check_fail",
+                                                               _llvm_func);
+  llvm::Value* if_zero = _ir_builder.CreateICmp(llvm::CmpInst::ICMP_EQ,
+                                                divisor,
+                                                llvm::ConstantInt::get(divisor_type, 0));
+  _ir_builder.CreateCondBr(if_zero, zero_check_fail, zero_check_pass);
+
+  // Uncommon trap on zero check fail.
+  uncommon_trap(Deoptimization::Reason_div0_check, Deoptimization::Action_maybe_recompile, zero_check_fail);
+
+  _ir_builder.SetInsertPoint(zero_check_pass);
+  _block->set_tail_llvm_block(zero_check_pass);
 }
 
 void JeandleAbstractInterpreter::boundary_check(llvm::Value* array_oop, llvm::Value* index) {
