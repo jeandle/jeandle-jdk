@@ -39,8 +39,8 @@ queue_rules:
     autoqueue: true
     update_method: rebase
     name: jeandle-jdk
-    draft_bot_account: ""
-    merge_bot_account: ""
+    draft_bot_account: jeandle-bot
+    merge_bot_account: jeandle-bot
     update_bot_account: jeandle-bot
 merge_queue:
   max_parallel_checks: 1
