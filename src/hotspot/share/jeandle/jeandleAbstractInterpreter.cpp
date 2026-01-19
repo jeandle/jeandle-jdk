@@ -1266,7 +1266,8 @@ void JeandleAbstractInterpreter::invoke() {
   const int receiver =
   bc == Bytecodes::_invokespecial   ||
   bc == Bytecodes::_invokevirtual   ||
-  bc == Bytecodes::_invokeinterface;
+  bc == Bytecodes::_invokeinterface ||
+  (bc == Bytecodes::_invokehandle && !target->is_static());
 
   llvm::Value* receiver_value = nullptr;
 
@@ -1302,9 +1303,7 @@ void JeandleAbstractInterpreter::invoke() {
   }
 
   // Special handling for signature-polymorphic methods
-  if (bc == Bytecodes::_invokedynamic ||
-      bc == Bytecodes::_invokehandle) {
-    assert(target->is_static(), "invokedynamic/invokehandle targets must be static");
+  if (Bytecodes::has_optional_appendix(bc)) {
     assert(target->is_method_handle_intrinsic() || target->is_compiled_lambda_form(), "no a target for methodhandle invoke");
     declared_signature = target->signature();
   } else {
@@ -1386,12 +1385,20 @@ void JeandleAbstractInterpreter::invoke() {
       dest = SharedRuntime::get_resolve_virtual_call_stub();
       break;
     }
-    case Bytecodes::_invokedynamic: // fall through
-    case Bytecodes::_invokehandle:  // fall through
+    case Bytecodes::_invokedynamic:
     case Bytecodes::_invokestatic: {
       call_type = JeandleCompiledCall::STATIC_CALL;
       dest = SharedRuntime::get_resolve_static_call_stub();
       break;
+    }
+    case Bytecodes::_invokehandle: {
+      if (target->is_static()) {
+        call_type = JeandleCompiledCall::STATIC_CALL;
+        dest = SharedRuntime::get_resolve_static_call_stub();
+      } else {
+        call_type = JeandleCompiledCall::DYNAMIC_CALL;
+        dest = SharedRuntime::get_resolve_virtual_call_stub();
+      }
     }
     case Bytecodes::_invokespecial: {
       call_type = JeandleCompiledCall::STATIC_CALL;
