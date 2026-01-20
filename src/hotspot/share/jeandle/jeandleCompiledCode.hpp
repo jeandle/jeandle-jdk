@@ -39,6 +39,7 @@
 #include "jeandle/__hotspotHeadersBegin__.hpp"
 #include "asm/codeBuffer.hpp"
 #include "ci/ciEnv.hpp"
+#include "ci/ciField.hpp"
 #include "ci/ciMethod.hpp"
 #include "code/exceptionHandlerTable.hpp"
 #include "runtime/sharedRuntime.hpp"
@@ -221,6 +222,11 @@ class JeandleCompiledCode : public StackObj {
 
   // Generate relocations, stubs and debug information.
   void finalize();
+
+  bool needs_clinit_barrier(ciField* ik,         ciMethod* accessing_method);
+  bool needs_clinit_barrier(ciMethod* ik,        ciMethod* accessing_method);
+  bool needs_clinit_barrier(ciInstanceKlass* ik, ciMethod* accessing_method);
+  bool needs_clinit_barrier_on_entry();
 
  private:
   std::unique_ptr<ObjectBuffer> _obj; // Compiled instructions.

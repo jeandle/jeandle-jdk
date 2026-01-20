@@ -382,11 +382,17 @@ class JeandleAbstractInterpreter : public StackObj {
 
   void null_check(llvm::Value* obj);
 
+  void zero_check(llvm::Value* divisor);
+
   void boundary_check(llvm::Value* array_oop, llvm::Value* index);
 
   void uncommon_trap(Deoptimization::DeoptReason, Deoptimization::DeoptAction, llvm::BasicBlock* insert_block = nullptr);
 
   void return_current(llvm::Value* value);
+
+  void clinit_barrier(ciInstanceKlass* ik, ciMethod* context);
+  void guard_klass_being_initialized(llvm::Value* klass);
+  void guard_init_thread(llvm::Value* klass);
 };
 
 #endif // SHARE_JEANDLE_ABSTRACT_INTERPRETER_HPP

@@ -221,8 +221,49 @@ static bool need_stack_overflow_check(bool is_method_compilation,
          frame_size_in_bytes > (int)(os::vm_page_size() >> 3) DEBUG_ONLY(|| true);
 }
 
-static bool need_clinit_barrier_on_entry(ciMethod* method) {
-  return VM_Version::supports_fast_class_init_checks() && method->needs_clinit_barrier();
+bool JeandleCompiledCode::needs_clinit_barrier_on_entry() {
+  if (_method == nullptr) {
+    return false;
+  }
+  return VM_Version::supports_fast_class_init_checks() && _method->needs_clinit_barrier();
+}
+
+bool JeandleCompiledCode::needs_clinit_barrier(ciField* field, ciMethod* accessing_method) {
+  return field->is_static() && needs_clinit_barrier(field->holder(), accessing_method);
+}
+
+bool JeandleCompiledCode::needs_clinit_barrier(ciMethod* method, ciMethod* accessing_method) {
+  return method->is_static() && needs_clinit_barrier(method->holder(), accessing_method);
+}
+
+bool JeandleCompiledCode::needs_clinit_barrier(ciInstanceKlass* holder, ciMethod* accessing_method) {
+  if (holder->is_initialized()) {
+    return false;
+  }
+  if (holder->is_being_initialized()) {
+    if (accessing_method->holder() == holder) {
+      // Access inside a class. The barrier can be elided when access happens in <clinit>,
+      // <init>, or a static method. In all those cases, there was an initialization
+      // barrier on the holder klass passed.
+      if (accessing_method->is_static_initializer() ||
+          accessing_method->is_object_initializer() ||
+          accessing_method->is_static()) {
+        return false;
+      }
+    } else if (accessing_method->holder()->is_subclass_of(holder)) {
+      // Access from a subclass. The barrier can be elided only when access happens in <clinit>.
+      // In case of <init> or a static method, the barrier is on the subclass is not enough:
+      // child class can become fully initialized while its parent class is still being initialized.
+      if (accessing_method->is_static_initializer()) {
+        return false;
+      }
+    }
+    ciMethod* root = _method; // the root method of compilation
+    if (root != accessing_method) {
+      return needs_clinit_barrier(holder, root); // check access in the context of compilation root
+    }
+  }
+  return true;
 }
 
 void JeandleCompiledCode::install_obj(std::unique_ptr<ObjectBuffer> obj) {
@@ -272,7 +313,7 @@ void JeandleCompiledCode::finalize() {
   _offsets.set_value(CodeOffsets::Verified_Entry, masm->offset());
   assembler.emit_verified_entry();
 
-  if (_method && need_clinit_barrier_on_entry(_method)) {
+  if (needs_clinit_barrier_on_entry()) {
     Klass* klass = (Klass*)_method->holder()->constant_encoding();
     assembler.emit_clinit_barrier_on_entry(klass);
   }
