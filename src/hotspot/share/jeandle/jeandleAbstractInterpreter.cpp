@@ -408,7 +408,14 @@ void BasicBlockBuilder::setup_exception_handlers() {
     if (block->is_exception_handler()) {
       int covered_bci = block->exeption_range_start_bci();
       while (covered_bci < block->exeption_range_limit_bci()) {
-        connect_block(block, _bci2block[covered_bci]);
+        JeandleBasicBlock* covered_block = _bci2block[covered_bci];
+
+        // Connect each exception handler block only once.
+        if (!llvm::is_contained(block->predecessors(), covered_block)) {
+          assert(!llvm::is_contained(covered_block->successors(), block), "sanity");
+          connect_block(block, covered_block);
+        }
+
         covered_bci = _bci2block[covered_bci]->limit_bci(); // Jump to the next block.
       }
     }

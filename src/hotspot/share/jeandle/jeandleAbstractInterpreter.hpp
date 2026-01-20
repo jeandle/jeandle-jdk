@@ -24,7 +24,6 @@
 #include "jeandle/__llvmHeadersBegin__.hpp"
 #include "llvm/IR/BasicBlock.h"
 #include "llvm/ADT/DenseMap.h"
-#include "llvm/ADT/SmallPtrSet.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/IR/BasicBlock.h"
 #include "llvm/IR/IRBuilder.h"
@@ -157,16 +156,16 @@ class JeandleBasicBlock : public JeandleCompilationResourceObj {
   void clear(Flag f)                             { _flags &= ~f; }
   bool is_set(Flag f) const                      { return (_flags & f) != 0; }
 
-  llvm::SmallPtrSet<JeandleBasicBlock*, 8>& successors() { return _successors; }
+  llvm::SmallVector<JeandleBasicBlock*, 8>& successors() { return _successors; }
   void add_successor(JeandleBasicBlock* successor) {
     assert(successor != nullptr, "successor can not be null");
-    _successors.insert(successor);
+    _successors.push_back(successor);
   }
 
-  llvm::SmallPtrSet<JeandleBasicBlock*, 8>& predecessors() { return _predecessors; }
+  llvm::SmallVector<JeandleBasicBlock*, 8>& predecessors() { return _predecessors; }
   void add_predecessor(JeandleBasicBlock* predecessor) {
     assert(predecessor != nullptr, "predecessor can not be null");
-    _predecessors.insert(predecessor);
+    _predecessors.push_back(predecessor);
   }
 
   int reverse_post_order() const { return _reverse_post_order; }
@@ -197,8 +196,9 @@ class JeandleBasicBlock : public JeandleCompilationResourceObj {
 
   JeandleVMState* _jvm;
 
-  llvm::SmallPtrSet<JeandleBasicBlock*, 8> _predecessors;
-  llvm::SmallPtrSet<JeandleBasicBlock*, 8> _successors;
+  // Use vector to allow duplicate predecessors/successors, except for exception handlers.
+  llvm::SmallVector<JeandleBasicBlock*, 8> _predecessors;
+  llvm::SmallVector<JeandleBasicBlock*, 8> _successors;
 
   llvm::BasicBlock* _header_llvm_block;
   llvm::BasicBlock* _tail_llvm_block;
