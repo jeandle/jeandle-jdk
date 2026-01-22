@@ -1253,10 +1253,10 @@ void JeandleAbstractInterpreter::table_switch() {
 // Generate call instructions.
 void JeandleAbstractInterpreter::invoke() {
   bool will_link;
-  ciSignature* declared_signature = nullptr;
-  ciMethod* target = _bytecodes.get_method(will_link, &declared_signature);
+  ciSignature* method_signature = nullptr;
+  ciMethod* target = _bytecodes.get_method(will_link, &method_signature);
   ciKlass*  holder = _bytecodes.get_declared_method_holder();
-  assert(declared_signature != nullptr, "cannot be null");
+  assert(method_signature != nullptr, "cannot be null");
   assert(will_link == target->is_loaded(), "");
 
   const Bytecodes::Code bc = _bytecodes.cur_bc_raw();
@@ -1317,8 +1317,7 @@ void JeandleAbstractInterpreter::invoke() {
 
   // Push appendix argument (MethodType, CallSite, etc.), if one.
   if (_bytecodes.has_appendix()) {
-    assert(bc == Bytecodes::_invokedynamic || bc == Bytecodes::_invokehandle,
-           "appendix only valid for invokedynamic or invokehandle");
+    assert(Bytecodes::has_optional_appendix(bc), "appendix only valid for invokedynamic or invokehandle");
     llvm::Value* appendix_oop_handle = find_or_insert_oop(_bytecodes.get_appendix());
     llvm::Value* appendix_oop = _ir_builder.CreateLoad(JeandleType::java2llvm(BasicType::T_OBJECT, *_context), appendix_oop_handle);
     _jvm->push(T_OBJECT, appendix_oop);
@@ -1327,9 +1326,9 @@ void JeandleAbstractInterpreter::invoke() {
   // Special handling for signature-polymorphic methods
   if (Bytecodes::has_optional_appendix(bc)) {
     assert(target->is_method_handle_intrinsic() || target->is_compiled_lambda_form(), "no a target for methodhandle invoke");
-    declared_signature = target->signature();
+    method_signature = target->signature();
   } else {
-    assert(declared_signature == target->signature(), "method signature unmatched");
+    assert(method_signature == target->signature(), "method signature unmatched");
   }
 
   // TODO: Additional receiver subtype checks for interface calls via invokespecial or invokeinterface.
@@ -1376,11 +1375,11 @@ void JeandleAbstractInterpreter::invoke() {
   }
 
   // Construct arguments.
-  const int arg_size = declared_signature->count() + receiver;
+  const int arg_size = method_signature->count() + receiver;
   llvm::SmallVector<llvm::Value*> args(arg_size);
   llvm::SmallVector<llvm::Type*> args_type(arg_size);
-  for (int i = declared_signature->count() - 1; i >= 0; --i) {
-    BasicType type = declared_signature->type_at(i)->basic_type();
+  for (int i = method_signature->count() - 1; i >= 0; --i) {
+    BasicType type = method_signature->type_at(i)->basic_type();
     args[i + receiver] = _jvm->pop(type);
     args_type[i + receiver] = JeandleType::java2llvm(type, *_context);
   }
@@ -1390,7 +1389,7 @@ void JeandleAbstractInterpreter::invoke() {
   }
 
   // Declare callee function type.
-  BasicType return_type = declared_signature->return_type()->basic_type();
+  BasicType return_type = method_signature->return_type()->basic_type();
   llvm::FunctionType* func_type = llvm::FunctionType::get(JeandleType::java2llvm(return_type, *_context), args_type, false);
   llvm::FunctionCallee callee = _module.getOrInsertFunction(JeandleFuncSig::method_name_with_signature(target), func_type);
   llvm::Function* func = llvm::cast<llvm::Function>(callee.getCallee());
