@@ -164,15 +164,9 @@ JeandleCompilation::JeandleCompilation(llvm::TargetMachine* target_machine,
   _llvm_module->setDataLayout(*_data_layout);
   JeandleCallVM::generate_call_VM(name, c_func, func_type, *_llvm_module, _code);
 
-#ifdef ASSERT
-  // Verify.
-  if (llvm::verifyModule(*_llvm_module, &llvm::errs())) {
-    if (JeandleCrashOnError) {
-      fatal("module verify failed in Jeandle stub compilation");
-    }
-    return;
-  }
-#endif
+  // Verify module, if failes, crashes in debug builds and only reports compilation error in release builds.
+  bool is_failed = llvm::verifyModule(*_llvm_module, &llvm::errs());
+  JEANDLE_ERROR_ASSERT_AND_RET_VOID_ON_FAIL(!is_failed, "module verify failed in Jeandle stub compilation");
 
   if (JeandleDumpRuntimeStubs) {
     dump_ir(false);
@@ -288,13 +282,9 @@ void JeandleCompilation::compile_java_method() {
 
   RETURN_VOID_ON_JEANDLE_ERROR();
 
-#ifdef ASSERT
-  // Verify.
-  if (llvm::verifyModule(*_llvm_module, &llvm::errs())) {
-    report_error("module verify failed in Jeandle compilation");
-    return;
-  }
-#endif
+  // Verify module, if failes, crashes in debug builds and only reports compilation error in release builds.
+  bool is_failed = llvm::verifyModule(*_llvm_module, &llvm::errs());
+  JEANDLE_ERROR_ASSERT_AND_RET_VOID_ON_FAIL(!is_failed, "module verify failed in Jeandle compilation");
 
   // Optimize.
   {

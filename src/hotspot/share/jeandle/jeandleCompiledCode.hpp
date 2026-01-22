@@ -39,6 +39,7 @@
 #include "jeandle/__hotspotHeadersBegin__.hpp"
 #include "asm/codeBuffer.hpp"
 #include "ci/ciEnv.hpp"
+#include "ci/ciField.hpp"
 #include "ci/ciMethod.hpp"
 #include "code/exceptionHandlerTable.hpp"
 #include "runtime/sharedRuntime.hpp"
@@ -140,9 +141,9 @@ class CallSiteInfo : public JeandleCompilationResourceObj {
   uint64_t _statepoint_id;
 };
 
-class JeandleOopMap {
+class JeandleStackMap {
 public:
-  JeandleOopMap(OopMap* oop_map, GrowableArray<ScopeValue*>* locals, GrowableArray<ScopeValue*>* stack, GrowableArray<MonitorValue*>* monitors, bool reexecute) :
+  JeandleStackMap(OopMap* oop_map, GrowableArray<ScopeValue*>* locals, GrowableArray<ScopeValue*>* stack, GrowableArray<MonitorValue*>* monitors, bool reexecute) :
       _oop_map(oop_map), _locals(locals), _stack(stack), _monitors(monitors), _reexecute(reexecute) {
   }
 
@@ -222,6 +223,11 @@ class JeandleCompiledCode : public StackObj {
   // Generate relocations, stubs and debug information.
   void finalize();
 
+  bool needs_clinit_barrier(ciField* ik,         ciMethod* accessing_method);
+  bool needs_clinit_barrier(ciMethod* ik,        ciMethod* accessing_method);
+  bool needs_clinit_barrier(ciInstanceKlass* ik, ciMethod* accessing_method);
+  bool needs_clinit_barrier_on_entry();
+
  private:
   std::unique_ptr<ObjectBuffer> _obj; // Compiled instructions.
   std::unique_ptr<ELFObject> _elf;
@@ -256,10 +262,10 @@ class JeandleCompiledCode : public StackObj {
   address lookup_const_section(llvm::StringRef name, JeandleAssembler& assembler);
   address resolve_const_edge(LinkBlock& block, LinkEdge& edge, JeandleAssembler& assembler);
 
-  JeandleOopMap* build_oop_map(StackMapParser& stackmaps, StackMapParser::record_iterator& record, CallSiteInfo* call_info);
-  LocationValue* new_loc_value(const StackMapParser::LocationAccessor& location, Location::Type type);
-  void fill_one_scope_value(const StackMapParser& stackmaps, const DeoptValueEncoding& encode, const StackMapParser::LocationAccessor& location,
-                            GrowableArray<ScopeValue*>* array, int& current_index);
+  JeandleStackMap* parse_stackmap(StackMapParser& stackmaps, StackMapParser::record_iterator& record, CallSiteInfo* call_info);
+  LocationValue* new_location_value(const StackMapParser::LocationAccessor& location, Location::Type type);
+  void fill_one_scope_value(const StackMapParser& stackmaps, const DeoptValueEncoding& encode,
+                            const StackMapParser::LocationAccessor& location, GrowableArray<ScopeValue*>* array);
   void fill_one_monitor_value(const StackMapParser& stackmaps, const DeoptValueEncoding& encode, const StackMapParser::LocationAccessor& object,
                               const StackMapParser::LocationAccessor& lock, GrowableArray<MonitorValue*>* array);
 

@@ -408,7 +408,14 @@ void BasicBlockBuilder::setup_exception_handlers() {
     if (block->is_exception_handler()) {
       int covered_bci = block->exeption_range_start_bci();
       while (covered_bci < block->exeption_range_limit_bci()) {
-        connect_block(block, _bci2block[covered_bci]);
+        JeandleBasicBlock* covered_block = _bci2block[covered_bci];
+
+        // Connect each exception handler block only once.
+        if (!llvm::is_contained(block->predecessors(), covered_block)) {
+          assert(!llvm::is_contained(covered_block->successors(), block), "sanity");
+          connect_block(block, covered_block);
+        }
+
         covered_bci = _bci2block[covered_bci]->limit_bci(); // Jump to the next block.
       }
     }
@@ -647,6 +654,21 @@ void JeandleAbstractInterpreter::interpret() {
     _sync_lock.set_lock(lock);
 
     shared_lock(LockValue(obj, lock));
+  }
+
+  if (_compiled_code.needs_clinit_barrier_on_entry()) {
+    assert(_method != nullptr, "only for Java method compilations");
+    assert(!_method->holder()->is_not_initialized(), "initialization should have been started");
+
+    _jvm = _block_builder->entry_block()->VM_state();
+    _block = _block_builder->entry_block();
+    _bytecodes.force_bci(0); // to get cur_bci for uncommon trap
+
+    Klass* klass = (Klass*)_method->holder()->constant_encoding();
+    llvm::PointerType* klass_type = llvm::PointerType::get(*_context, llvm::jeandle::AddrSpace::CHeapAddrSpace);
+    llvm::Value* klass_addr = _ir_builder.getInt64((intptr_t)klass);
+    llvm::Value* klass_ptr = _ir_builder.CreateIntToPtr(klass_addr, klass_type);
+    guard_klass_being_initialized(klass_ptr);
   }
 
   // Create branch from the entry block.
@@ -1766,6 +1788,12 @@ void JeandleAbstractInterpreter::arith_op(BasicType type, Bytecodes::Code code) 
   assert(type == BasicType::T_INT || type == BasicType::T_LONG ||
          type == BasicType::T_FLOAT || type == BasicType::T_DOUBLE, "unexpected type");
 
+  if (code == Bytecodes::_idiv || code == Bytecodes::_irem ||
+      code == Bytecodes::_ldiv || code == Bytecodes::_lrem) {
+    size_t depth = is_double_word_type(type) ? 1 : 0;
+    zero_check(_jvm->raw_peek(depth).value());
+  }
+
   llvm::Value* r = _jvm->pop(type);
   llvm::Value* l = nullptr;
 
@@ -1782,10 +1810,10 @@ void JeandleAbstractInterpreter::arith_op(BasicType type, Bytecodes::Code code) 
     case Bytecodes::_lsub: _jvm->push(type, _ir_builder.CreateSub(l, r)); break;
     case Bytecodes::_imul: // fall through
     case Bytecodes::_lmul: _jvm->push(type, _ir_builder.CreateMul(l, r)); break;
-    case Bytecodes::_idiv: // fall through
-    case Bytecodes::_ldiv: _jvm->push(type, _ir_builder.CreateSDiv(l, r)); break;
-    case Bytecodes::_irem: // fall through
-    case Bytecodes::_lrem: _jvm->push(type, _ir_builder.CreateSRem(l, r)); break;
+    case Bytecodes::_idiv: _jvm->push(type, call_java_op("jeandle.idiv", {l, r})); break;
+    case Bytecodes::_ldiv: _jvm->push(type, call_java_op("jeandle.ldiv", {l, r})); break;
+    case Bytecodes::_irem: _jvm->push(type, call_java_op("jeandle.irem", {l, r})); break;
+    case Bytecodes::_lrem: _jvm->push(type, call_java_op("jeandle.lrem", {l, r})); break;
     case Bytecodes::_iand: // fall through
     case Bytecodes::_land: _jvm->push(type, _ir_builder.CreateAnd(l, r)); break;
     case Bytecodes::_ior:  // fall through
@@ -1857,7 +1885,6 @@ llvm::Value* JeandleAbstractInterpreter::find_or_insert_oop(ciObject* oop) {
   return global_oop_handle;
 }
 
-// TODO: clinit_barrier check.
 // TODO: Handle field attributions like final, stable.
 void JeandleAbstractInterpreter::do_field_access(bool is_get, bool is_static) {
   bool will_link;
@@ -1878,6 +1905,13 @@ void JeandleAbstractInterpreter::do_field_access(bool is_get, bool is_static) {
     // _block->set(JeandleBasicBlock::always_uncommon_trap);
     // return;
     Unimplemented();
+  }
+
+  if (_compiled_code.needs_clinit_barrier(field, _method)) {
+    clinit_barrier(field_holder, _method);
+    if (_block->is_set(JeandleBasicBlock::always_uncommon_trap)) {
+      return;
+    }
   }
 
   if (!is_static) {
@@ -2100,6 +2134,13 @@ void JeandleAbstractInterpreter::do_array_store_inner(BasicType basic_type, llvm
   llvm::Value* element_address = compute_array_element_address(basic_type, store_type);
   llvm::StoreInst* store_inst = _ir_builder.CreateStore(value, element_address);
   store_inst->setAtomic(llvm::AtomicOrdering::Unordered);
+
+  // TODO: A workaround for card table barrier of array element, not to block the development progress.
+  // Currently, we can't get array type in LLVM pass. Once a clearer design is available, the barrier
+  // insertion operation will be moved to the LLVM pass.
+  if (basic_type == T_OBJECT) {
+    call_java_op("jeandle.card_table_barrier", {element_address});
+  }
 }
 
 void JeandleAbstractInterpreter::do_array_store(BasicType basic_type) {
@@ -2191,7 +2232,7 @@ void JeandleAbstractInterpreter::array_store_check(llvm::Value* value, llvm::Val
 
 void JeandleAbstractInterpreter::do_new() {
   bool will_link;
-  ciKlass* klass = _bytecodes.get_klass(will_link);
+  ciInstanceKlass* klass = _bytecodes.get_klass(will_link)->as_instance_klass();
 
   if (!will_link) {
     uncommon_trap(Deoptimization::Reason_unloaded,
@@ -2206,7 +2247,14 @@ void JeandleAbstractInterpreter::do_new() {
     _block->set(JeandleBasicBlock::always_uncommon_trap);
     return;
   }
-  // TODO: cl init barrier
+
+  if (_compiled_code.needs_clinit_barrier(klass, _method)) {
+    clinit_barrier(klass, _method);
+    if (_block->is_set(JeandleBasicBlock::always_uncommon_trap)) {
+      return;
+    }
+  }
+
   jint layout_helper = klass->layout_helper();
   assert(Klass::layout_helper_is_instance(layout_helper), "Unexpected klass");
   llvm::Value* size_in_bytes = _ir_builder.getInt32(Klass::layout_helper_size_in_bytes(layout_helper));
@@ -2539,6 +2587,30 @@ void JeandleAbstractInterpreter::null_check(llvm::Value* obj) {
   _block->set_tail_llvm_block(null_check_pass);
 }
 
+void JeandleAbstractInterpreter::zero_check(llvm::Value* divisor) {
+  llvm::Type* divisor_type = divisor->getType();
+  assert(divisor_type == llvm::Type::getInt32Ty(*_context) ||
+         divisor_type == llvm::Type::getInt64Ty(*_context), "should be non subword integral type");
+
+  int cur_bci = _bytecodes.cur_bci();
+  llvm::BasicBlock* zero_check_pass = llvm::BasicBlock::Create(*_context,
+                                                               "bci_" + std::to_string(cur_bci) + "_zero_check_pass",
+                                                               _llvm_func);
+  llvm::BasicBlock* zero_check_fail = llvm::BasicBlock::Create(*_context,
+                                                               "bci_" + std::to_string(cur_bci) + "_zero_check_fail",
+                                                               _llvm_func);
+  llvm::Value* if_zero = _ir_builder.CreateICmp(llvm::CmpInst::ICMP_EQ,
+                                                divisor,
+                                                llvm::ConstantInt::get(divisor_type, 0));
+  _ir_builder.CreateCondBr(if_zero, zero_check_fail, zero_check_pass);
+
+  // Uncommon trap on zero check fail.
+  uncommon_trap(Deoptimization::Reason_div0_check, Deoptimization::Action_maybe_recompile, zero_check_fail);
+
+  _ir_builder.SetInsertPoint(zero_check_pass);
+  _block->set_tail_llvm_block(zero_check_pass);
+}
+
 void JeandleAbstractInterpreter::boundary_check(llvm::Value* array_oop, llvm::Value* index) {
   assert(array_oop->getType() == llvm::PointerType::get(*_context, llvm::jeandle::AddrSpace::JavaHeapAddrSpace), "must be a java object");
 
@@ -2570,5 +2642,59 @@ void JeandleAbstractInterpreter::return_current(llvm::Value* value) {
     _ir_builder.CreateRetVoid();
   } else {
     _ir_builder.CreateRet(value);
+  }
+}
+
+void JeandleAbstractInterpreter::guard_klass_being_initialized(llvm::Value* klass) {
+  llvm::BasicBlock* fallthrough_block = llvm::BasicBlock::Create(*_context, "guard_klass_being_initialized_fallthrough", _llvm_func);
+  llvm::BasicBlock* uncommon_block = llvm::BasicBlock::Create(*_context, "guard_klass_being_initialized_uncommon_trap", _llvm_func);
+
+  llvm::Value* init_state_offset = llvm::ConstantInt::get(_ir_builder.getInt32Ty(), (uint64_t)InstanceKlass::init_state_offset());
+  llvm::Value* klass_init_state_addr = _ir_builder.CreateInBoundsGEP(llvm::Type::getInt8Ty(*_context), klass, init_state_offset);
+  llvm::Value* init_state = _ir_builder.CreateLoad(_ir_builder.getInt8Ty(), klass_init_state_addr, true /* is_volatile */);
+  llvm::Value* being_initialized = llvm::ConstantInt::get(_ir_builder.getInt8Ty(), (uint64_t)InstanceKlass::being_initialized);
+  llvm::Value* if_being_initialized = _ir_builder.CreateICmpEQ(init_state, being_initialized);
+  _ir_builder.CreateCondBr(if_being_initialized, fallthrough_block, uncommon_block);
+
+  uncommon_trap(Deoptimization::Reason_initialized, Deoptimization::Action_reinterpret, uncommon_block);
+
+  _ir_builder.SetInsertPoint(fallthrough_block);
+  _block->set_tail_llvm_block(fallthrough_block);
+}
+
+void JeandleAbstractInterpreter::guard_init_thread(llvm::Value* klass) {
+  llvm::BasicBlock* fallthrough_block = llvm::BasicBlock::Create(*_context, "guard_init_thread_fallthrough", _llvm_func);
+  llvm::BasicBlock* uncommon_block = llvm::BasicBlock::Create(*_context, "guard_init_thread_uncommon_trap", _llvm_func);
+
+  llvm::Value* init_thread_offset = llvm::ConstantInt::get(_ir_builder.getInt32Ty(), (uint64_t)InstanceKlass::init_thread_offset());
+  llvm::Value* klass_init_thread_addr = _ir_builder.CreateInBoundsGEP(llvm::Type::getInt8Ty(*_context), klass, init_thread_offset);
+  llvm::Value* init_thread = _ir_builder.CreateLoad(_ir_builder.getPtrTy(), klass_init_thread_addr, true /* is_volatile */);
+
+  // get current thread
+  llvm::CallInst* current_thread = call_java_op("jeandle.current_thread", {});
+  llvm::Value* if_current_thread = _ir_builder.CreateICmpEQ(init_thread, current_thread);
+  _ir_builder.CreateCondBr(if_current_thread, fallthrough_block, uncommon_block);
+
+  uncommon_trap(Deoptimization::Reason_uninitialized, Deoptimization::Action_none, uncommon_block);
+
+  _ir_builder.SetInsertPoint(fallthrough_block);
+  _block->set_tail_llvm_block(fallthrough_block);
+}
+
+void JeandleAbstractInterpreter::clinit_barrier(ciInstanceKlass* ik, ciMethod* context) {
+  if (ik->is_being_initialized()) {
+    if (_compiled_code.needs_clinit_barrier(ik, context)) {
+      Klass* klass = (Klass*)ik->constant_encoding();
+      llvm::PointerType* klass_type = llvm::PointerType::get(*_context, llvm::jeandle::AddrSpace::CHeapAddrSpace);
+      llvm::Value* klass_addr = _ir_builder.getInt64((intptr_t)klass);
+      llvm::Value* klass_ptr = _ir_builder.CreateIntToPtr(klass_addr, klass_type);
+      guard_klass_being_initialized(klass_ptr);
+      guard_init_thread(klass_ptr);
+    }
+  } else if (ik->is_initialized()) {
+    return; // no barrier needed
+  } else {
+    uncommon_trap(Deoptimization::Reason_uninitialized, Deoptimization::Action_reinterpret);
+    _block->set(JeandleBasicBlock::always_uncommon_trap);
   }
 }
