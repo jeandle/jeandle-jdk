@@ -28,8 +28,20 @@
 #include "memory/resourceArea.hpp"
 #include "runtime/vm_version.hpp"
 
+#ifdef JEANDLE
+#include "compiler/compiler_globals.hpp"
+#include "runtime/globals_extension.hpp"
+#endif // JEANDLE
+
 void VM_Version_init() {
   VM_Version::initialize();
+
+#ifdef JEANDLE
+  if (UseJeandleCompiler && VMContinuations) {
+    warning("VMContinuations is not supported with Jeandle Compiler.");
+    VMContinuations = false;
+  }
+#endif // JEANDLE
 
   if (log_is_enabled(Info, os, cpu)) {
     char buf[1024];
