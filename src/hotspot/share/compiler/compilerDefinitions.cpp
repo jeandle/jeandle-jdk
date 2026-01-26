@@ -647,7 +647,6 @@ void CompilerConfig::ergo_initialize() {
   if (UseJeandleCompiler) {
     // TODO: Support compressed oops.
     if (FLAG_IS_CMDLINE(UseCompressedOops) && UseCompressedOops) {
-      tty->print_cr("UseCompressedOops %d", (int)JVMFlag::flag_from_enum(FLAG_MEMBER_ENUM(UseCompressedOops))->get_origin());
       warning("UseCompressedOops is disabled until jeandle supports compressed oops.");
     }
     UseCompressedOops = false;
