@@ -663,6 +663,15 @@ void CompilerConfig::ergo_initialize() {
 #endif // PRODUCT
 
     UseCompressedClassPointers = false;
+
+    if (FLAG_IS_DEFAULT(VMContinuations)) {
+      FLAG_SET_DEFAULT(VMContinuations, false);
+    }
+
+    if (FLAG_IS_CMDLINE(VMContinuations) && VMContinuations) {
+      warning("VMContinuations is disabled until jeandle supports virtual threads.");
+      VMContinuations = false;
+    }
   }
 #endif // JEANDLE
 }
