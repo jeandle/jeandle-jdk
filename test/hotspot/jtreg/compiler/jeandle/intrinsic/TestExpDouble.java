@@ -71,7 +71,7 @@ public class TestExpDouble {
         if (is_x86) {
             checker.checkNext("call double @StubRoutines_dexp");
         } else {
-            checker.checkNext("call double @SharedRuntime_dexp");
+            checker.checkNextPattern("call double inttoptr \\(i64 (\\d+) to ptr\\)");
         }
         checker.checkNext("ret double");
 
