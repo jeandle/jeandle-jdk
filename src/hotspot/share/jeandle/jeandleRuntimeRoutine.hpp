@@ -22,6 +22,7 @@
 #define SHARE_JEANDLE_RUNTIME_ROUTINE_HPP
 
 #include "jeandle/__llvmHeadersBegin__.hpp"
+#include "llvm/IR/Constants.h"
 #include "llvm/IR/Jeandle/Metadata.h"
 #include "llvm/IR/Module.h"
 #include "llvm/Target/TargetMachine.h"
@@ -29,6 +30,7 @@
 #include "jeandle/__hotspotHeadersBegin__.hpp"
 #include "memory/allStatic.hpp"
 #include "runtime/javaThread.hpp"
+#include "runtime/sharedRuntime.hpp"
 #include "utilities/globalDefinitions.hpp"
 
 //------------------------------------------------------------------------------------------------------------
@@ -92,44 +94,22 @@
 //    name                                       | func_entry             | return_type                        | arg_types
 //-----------------------------------------------------------------------------------------------------------------------------------
 #define ALL_HOTSPOT_ROUTINES(def)                                                                                                                         \
-  def(SharedRuntime_dsin,                         SharedRuntime::dsin,     llvm::Type::getDoubleTy(context),    llvm::Type::getDoubleTy(context))         \
-                                                                                                                                                          \
   def(StubRoutines_dsin,                          StubRoutines::dsin(),    llvm::Type::getDoubleTy(context),    llvm::Type::getDoubleTy(context))         \
-                                                                                                                                                          \
-  def(SharedRuntime_dcos,                         SharedRuntime::dcos,     llvm::Type::getDoubleTy(context),    llvm::Type::getDoubleTy(context))         \
                                                                                                                                                           \
   def(StubRoutines_dcos,                          StubRoutines::dcos(),    llvm::Type::getDoubleTy(context),    llvm::Type::getDoubleTy(context))         \
                                                                                                                                                           \
-  def(SharedRuntime_dtan,                         SharedRuntime::dtan,     llvm::Type::getDoubleTy(context),    llvm::Type::getDoubleTy(context))         \
-                                                                                                                                                          \
   def(StubRoutines_dtan,                          StubRoutines::dtan(),    llvm::Type::getDoubleTy(context),    llvm::Type::getDoubleTy(context))         \
-                                                                                                                                                          \
-  def(SharedRuntime_drem,                         SharedRuntime::drem,     llvm::Type::getDoubleTy(context),    llvm::Type::getDoubleTy(context),         \
-                                                                                                                llvm::Type::getDoubleTy(context))         \
-                                                                                                                                                          \
-  def(SharedRuntime_frem,                         SharedRuntime::frem,     llvm::Type::getFloatTy(context),     llvm::Type::getFloatTy(context),          \
-                                                                                                                llvm::Type::getFloatTy(context))          \
-  def(SharedRuntime_dlog,                         SharedRuntime::dlog,     llvm::Type::getDoubleTy(context),    llvm::Type::getDoubleTy(context))         \
                                                                                                                                                           \
   def(StubRoutines_dlog,                          StubRoutines::dlog(),    llvm::Type::getDoubleTy(context),    llvm::Type::getDoubleTy(context))         \
                                                                                                                                                           \
-  def(SharedRuntime_dlog10,                       SharedRuntime::dlog10,     llvm::Type::getDoubleTy(context),  llvm::Type::getDoubleTy(context))         \
-                                                                                                                                                          \
   def(StubRoutines_dlog10,                        StubRoutines::dlog10(),    llvm::Type::getDoubleTy(context),  llvm::Type::getDoubleTy(context))         \
                                                                                                                                                           \
-  def(SharedRuntime_dexp,                         SharedRuntime::dexp,     llvm::Type::getDoubleTy(context),    llvm::Type::getDoubleTy(context))         \
-                                                                                                                                                          \
   def(StubRoutines_dexp,                          StubRoutines::dexp(),    llvm::Type::getDoubleTy(context),    llvm::Type::getDoubleTy(context))         \
-                                                                                                                                                          \
-  def(SharedRuntime_dpow,                         SharedRuntime::dpow,     llvm::Type::getDoubleTy(context),    llvm::Type::getDoubleTy(context),         \
-                                                                                                                llvm::Type::getDoubleTy(context))         \
                                                                                                                                                           \
   def(StubRoutines_dpow,                          StubRoutines::dpow(),    llvm::Type::getDoubleTy(context),    llvm::Type::getDoubleTy(context),         \
                                                                                                                 llvm::Type::getDoubleTy(context))         \
                                                                                                                                                           \
   def(uncommon_trap, SharedRuntime::uncommon_trap_blob()->entry_point(),   llvm::Type::getVoidTy(context),      llvm::Type::getInt32Ty(context))          \
-                                                                                                                                                          \
-  def(install_exceptional_return_for_call_vm,     JeandleRuntimeRoutine::install_exceptional_return_for_call_vm, llvm::Type::getVoidTy(context))          \
                                                                                                                                                           \
   def(SharedRuntime_complete_monitor_locking_C,   SharedRuntime::complete_monitor_locking_C, llvm::Type::getVoidTy(context),                                             \
                                                                                            llvm::PointerType::get(context, llvm::jeandle::AddrSpace::JavaHeapAddrSpace), \
@@ -143,6 +123,34 @@
                                                                                                                                                                          \
  def(SharedRuntime_throw_NullPointerException,    SharedRuntime::throw_NullPointerException, llvm::Type::getVoidTy(context),                                             \
                                                                                            llvm::PointerType::get(context, llvm::jeandle::AddrSpace::CHeapAddrSpace))    \
+
+
+//-----------------------------------------------------------------------------------------------------------------------------------
+//    name                                       | func_entry             | return_type                        | arg_types
+//-----------------------------------------------------------------------------------------------------------------------------------
+#define ALL_HOTSPOT_C_FUNCTIONS(def)                                                                                                                      \
+  def(SharedRuntime_dsin,                         SharedRuntime::dsin,     llvm::Type::getDoubleTy(context),    llvm::Type::getDoubleTy(context))         \
+                                                                                                                                                          \
+  def(SharedRuntime_dcos,                         SharedRuntime::dcos,     llvm::Type::getDoubleTy(context),    llvm::Type::getDoubleTy(context))         \
+                                                                                                                                                          \
+  def(SharedRuntime_dtan,                         SharedRuntime::dtan,     llvm::Type::getDoubleTy(context),    llvm::Type::getDoubleTy(context))         \
+                                                                                                                                                          \
+  def(SharedRuntime_drem,                         SharedRuntime::drem,     llvm::Type::getDoubleTy(context),    llvm::Type::getDoubleTy(context),         \
+                                                                                                                llvm::Type::getDoubleTy(context))         \
+                                                                                                                                                          \
+  def(SharedRuntime_frem,                         SharedRuntime::frem,     llvm::Type::getFloatTy(context),     llvm::Type::getFloatTy(context),          \
+                                                                                                                llvm::Type::getFloatTy(context))          \
+                                                                                                                                                          \
+  def(SharedRuntime_dlog,                         SharedRuntime::dlog,     llvm::Type::getDoubleTy(context),    llvm::Type::getDoubleTy(context))         \
+                                                                                                                                                          \
+  def(SharedRuntime_dlog10,                       SharedRuntime::dlog10,     llvm::Type::getDoubleTy(context),  llvm::Type::getDoubleTy(context))         \
+                                                                                                                                                          \
+  def(SharedRuntime_dexp,                         SharedRuntime::dexp,     llvm::Type::getDoubleTy(context),    llvm::Type::getDoubleTy(context))         \
+                                                                                                                                                          \
+  def(SharedRuntime_dpow,                         SharedRuntime::dpow,     llvm::Type::getDoubleTy(context),    llvm::Type::getDoubleTy(context),         \
+                                                                                                                llvm::Type::getDoubleTy(context))         \
+                                                                                                                                                          \
+  def(install_exceptional_return_for_call_vm,     JeandleRuntimeRoutine::install_exceptional_return_for_call_vm, llvm::Type::getVoidTy(context))          \
 
 
 // JeandleRuntimeRoutine contains C/C++/Assembly routines and Hotspot routines that can be called from Jeandle compiled code.
@@ -202,6 +210,28 @@ class JeandleRuntimeRoutine : public AllStatic {
   }
 
   ALL_HOTSPOT_ROUTINES(DEF_HOTSPOT_ROUTINE_CALLEE);
+
+#define DEF_HOTSPOT_C_FUNCTION_CALLEE(name, func_entry, return_type, ...)                                             \
+  static llvm::FunctionCallee hotspot_##name##_callee(llvm::Module& target_module) {                                  \
+    llvm::LLVMContext& context = target_module.getContext();                                                          \
+    llvm::FunctionType* func_type = llvm::FunctionType::get(return_type, {__VA_ARGS__}, false);                       \
+    llvm::GlobalValue* global_value = target_module.getNamedValue(#name);                                             \
+    llvm::Constant* callee = nullptr;                                                                                 \
+    if (global_value == nullptr) {                                                                                    \
+      llvm::PointerType* c_func_ptr_type = llvm::PointerType::get(context, llvm::jeandle::AddrSpace::CHeapAddrSpace); \
+      llvm::Constant* c_func_addr = llvm::ConstantInt::get(llvm::Type::getInt64Ty(context), (uint64_t)func_entry);    \
+      callee = llvm::ConstantExpr::getIntToPtr(c_func_addr, c_func_ptr_type);                                         \
+      llvm::GlobalAlias::create(c_func_ptr_type, llvm::jeandle::AddrSpace::CHeapAddrSpace,                            \
+                                llvm::GlobalValue::ExternalLinkage, #name,                                            \
+                                callee, &target_module);                                                              \
+    } else if (llvm::GlobalAlias* global_alias = llvm::dyn_cast<llvm::GlobalAlias>(global_value)) {                   \
+      callee = global_alias->getAliasee();                                                                            \
+    }                                                                                                                 \
+    assert(callee != nullptr, "callee should not be null");                                                           \
+    return {func_type, callee};                                                                                       \
+  }
+
+  ALL_HOTSPOT_C_FUNCTIONS(DEF_HOTSPOT_C_FUNCTION_CALLEE);
 
  private:
   static llvm::StringMap<address> _routine_entry; // All the routines.

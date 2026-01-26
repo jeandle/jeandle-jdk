@@ -82,6 +82,17 @@ public class TestSinDouble {
 
             command_args = new ArrayList<String>(List.of(
                 "-Xbatch", "-XX:-TieredCompilation", "-XX:+UseJeandleCompiler", "-Xcomp",
+                "-Xlog:jeandle=debug", "-XX:+ForceUnreachable",
+                "-XX:CompileCommand=compileonly,"+TestWrapper.class.getName()+"::sin_double",
+                "-XX:+UnlockDiagnosticVMOptions", "-XX:-UseLibmIntrinsic", "-XX:+JeandleUseHotspotIntrinsics",
+                TestWrapper.class.getName()));
+            pb = ProcessTools.createLimitedTestJavaProcessBuilder(command_args);
+            output = ProcessTools.executeCommand(pb);
+            output.shouldHaveExitValue(0)
+                .shouldContain("Method `static jdouble java.lang.Math.sin(jdouble)` is parsed as intrinsic");
+
+            command_args = new ArrayList<String>(List.of(
+                "-Xbatch", "-XX:-TieredCompilation", "-XX:+UseJeandleCompiler", "-Xcomp",
                 "-Xlog:jeandle=debug", "-XX:+JeandleDumpIR",
                 "-XX:JeandleDumpDirectory="+dump_path,
                 "-XX:CompileCommand=compileonly,"+TestWrapper.class.getName()+"::sin_double",
@@ -99,7 +110,7 @@ public class TestSinDouble {
             checker.checkNext("entry:");
             checker.checkNext("br label %bci_0");
             checker.checkNext("bci_0:");
-            checker.checkNext("call double @SharedRuntime_dsin");
+            checker.checkNextPattern("call double inttoptr \\(i64 (\\d+) to ptr\\)");
             checker.checkNext("ret double");
         }
     }

@@ -71,7 +71,7 @@ public class TestLog10Double {
         if (is_x86) {
             checker.checkNext("call double @StubRoutines_dlog10");
         } else {
-            checker.checkNext("call double @SharedRuntime_dlog10");
+            checker.checkNextPattern("call double inttoptr \\(i64 (\\d+) to ptr\\)");
         }
         checker.checkNext("ret double");
 
@@ -82,6 +82,17 @@ public class TestLog10Double {
             if (!Files.exists(tmp2)) {
                 Files.createDirectory(tmp2);
             }
+
+            command_args = new ArrayList<String>(List.of(
+                "-Xbatch", "-XX:-TieredCompilation", "-XX:+UseJeandleCompiler", "-Xcomp",
+                "-Xlog:jeandle=debug", "-XX:+ForceUnreachable",
+                "-XX:CompileCommand=compileonly,"+TestWrapper.class.getName()+"::log10_double",
+                "-XX:+UnlockDiagnosticVMOptions", "-XX:-UseLibmIntrinsic", "-XX:+JeandleUseHotspotIntrinsics",
+                TestWrapper.class.getName()));
+            pb = ProcessTools.createLimitedTestJavaProcessBuilder(command_args);
+            output = ProcessTools.executeCommand(pb);
+            output.shouldHaveExitValue(0)
+                .shouldContain("Method `static jdouble java.lang.Math.log10(jdouble)` is parsed as intrinsic");
 
             command_args = new ArrayList<String>(List.of(
                 "-Xbatch", "-XX:-TieredCompilation", "-XX:+UseJeandleCompiler", "-Xcomp",
@@ -102,7 +113,7 @@ public class TestLog10Double {
             checker.checkNext("entry:");
             checker.checkNext("br label %bci_0");
             checker.checkNext("bci_0:");
-            checker.checkNext("call double @SharedRuntime_dlog10");
+            checker.checkNextPattern("call double inttoptr \\(i64 (\\d+) to ptr\\)");
             checker.checkNext("ret double");
         }
     }
