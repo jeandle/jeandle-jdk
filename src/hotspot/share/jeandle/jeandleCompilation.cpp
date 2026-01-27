@@ -147,7 +147,7 @@ JeandleCompilation::JeandleCompilation(llvm::TargetMachine* target_machine,
                                        ciEnv* env,
                                        std::unique_ptr<llvm::LLVMContext> context,
                                        const char* name,
-                                       address c_func,
+                                       address routine_address,
                                        llvm::FunctionType* func_type) :
                                        _target_machine(target_machine),
                                        _data_layout(data_layout),
@@ -162,7 +162,7 @@ JeandleCompilation::JeandleCompilation(llvm::TargetMachine* target_machine,
   initialize();
 
   _llvm_module->setDataLayout(*_data_layout);
-  JeandleCallVM::generate_call_VM(name, c_func, func_type, *_llvm_module, _code);
+  JeandleCallVM::generate_call_VM(name, routine_address, func_type, *_llvm_module, _code);
 
   // Verify module, if failes, crashes in debug builds and only reports compilation error in release builds.
   bool is_failed = llvm::verifyModule(*_llvm_module, &llvm::errs());
