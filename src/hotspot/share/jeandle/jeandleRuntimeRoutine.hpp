@@ -296,7 +296,7 @@ class JeandleRuntimeRoutine : public AllStatic {
       llvm::cast<llvm::Function>(callee.getCallee())->setCallingConv(llvm::CallingConv::C);                            \
       return callee;                                                                                                   \
     }                                                                                                                  \
-    llvm::GlobalValue* address_value = target_module.getNamedValue(#name);          \
+    llvm::GlobalValue* address_value = target_module.getNamedValue(#name);                                             \
     llvm::Constant* callee_address = nullptr;                                                                          \
     if (address_value == nullptr) {                                                                                    \
       llvm::PointerType* func_ptr_type = llvm::PointerType::get(context, llvm::jeandle::AddrSpace::CHeapAddrSpace);    \
