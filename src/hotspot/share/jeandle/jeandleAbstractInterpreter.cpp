@@ -1116,7 +1116,7 @@ void JeandleAbstractInterpreter::load_constant() {
       if (con_obj->is_null_object()) {
         value = llvm::ConstantPointerNull::get(llvm::cast<llvm::PointerType>(JeandleType::java2llvm(BasicType::T_OBJECT, *_context)));
       } else {
-        llvm::Value* oop_handle = find_or_insert_oop(con.as_object());
+        llvm::Value* oop_handle = find_or_insert_oop(con_obj);
         value = _ir_builder.CreateLoad(JeandleType::java2llvm(BasicType::T_OBJECT, *_context), oop_handle);
       }
 
