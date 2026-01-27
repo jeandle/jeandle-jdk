@@ -96,7 +96,7 @@ void JeandleCallVM::generate_call_VM(const char* name, address c_func, llvm::Fun
   ir_builder.CreateCondBr(if_not_null, forward_exception_block, no_exception_block);
   ir_builder.SetInsertPoint(forward_exception_block);
 
-  llvm::CallInst* call_inst = ir_builder.CreateCall(JeandleRuntimeRoutine::hotspot_install_exceptional_return_for_call_vm_callee(target_module), {});
+  llvm::CallInst* call_inst = ir_builder.CreateCall(JeandleRuntimeRoutine::install_exceptional_return_for_call_vm_callee(target_module), {});
   call_inst->setCallingConv(llvm::CallingConv::C);
 
   // Return
