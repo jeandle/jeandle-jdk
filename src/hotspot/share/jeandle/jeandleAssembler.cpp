@@ -28,8 +28,18 @@ void JeandleAssembler::emit_insts(address code_start, uint64_t code_size) {
   __ code()->set_insts_end(__ code()->insts_end() + code_size);
 }
 
-void JeandleAssembler::emit_consts(address consts_start, uint64_t consts_size) {
+int JeandleAssembler::emit_consts(address consts_start, uint64_t consts_size, uint64_t alignment) {
+  // Alignment
+  assert(alignment <= (uint64_t)CodeEntryAlignment, "alignment must not exceed CodeEntryAlignment");
+  int padding = 0;
+  int size = __ code()->consts()->size();
+  if (!is_aligned(size, alignment)) {
+    padding = align_up(size, alignment) - size;
+    __ code()->consts()->set_end(__ code()->consts()->end() + padding);
+  }
+
   // Copy constants.
   llvm::copy(llvm::ArrayRef(consts_start, consts_size), __ code()->consts()->end());
   __ code()->consts()->set_end(__ code()->consts()->end() + consts_size);
+  return padding;
 }

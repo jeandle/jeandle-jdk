@@ -78,6 +78,7 @@ bool ReadELF::findSection(ELFObject& elf, SectionInfo& section_info) {
       // Found here.
       section_info._offset = elf.getSection(sec->getRawDataRefImpl())->sh_offset;
       section_info._size = sec->getSize();
+      section_info._alignment = sec->getAlignment().value();
       return true;
     }
   }

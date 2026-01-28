@@ -35,8 +35,9 @@ struct SectionInfo {
   llvm::StringRef _name;
   uint64_t _offset; // Offset from the start of ELF file.
   uint64_t _size;
+  uint64_t _alignment;
 
-  SectionInfo(const llvm::StringRef name) : _name(name), _offset(0), _size(0) { }
+  SectionInfo(const llvm::StringRef name) : _name(name), _offset(0), _size(0), _alignment(1) { }
 };
 
 class ReadELF : public AllStatic {

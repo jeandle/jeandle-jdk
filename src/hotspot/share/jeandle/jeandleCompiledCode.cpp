@@ -477,8 +477,11 @@ address JeandleCompiledCode::lookup_const_section(llvm::StringRef name, JeandleA
     JEANDLE_ERROR_ASSERT_AND_RET_ON_FAIL(found, "const section not found, bad ELF file", nullptr);
 
     address target_base = _code_buffer.consts()->end();
+    int padding = assembler.emit_consts(((address) _obj->getBufferStart()) + section_info._offset,
+                                         section_info._size,
+                                         section_info._alignment);
+    target_base += padding;
     _const_sections.insert({name, target_base});
-    assembler.emit_consts(((address) _obj->getBufferStart()) + section_info._offset, section_info._size);
     return target_base;
   }
 
