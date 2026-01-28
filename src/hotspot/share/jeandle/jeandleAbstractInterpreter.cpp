@@ -1086,10 +1086,8 @@ void JeandleAbstractInterpreter::load_constant() {
   if (!con.is_loaded()) {
     // If the constant is unresolved or in error state, run this BC in the interpreter.
     if (_bytecodes.is_in_error()) {
-      // TODO: To keep consistent with C2, but no suitable test case for now.
-      Unimplemented();
-      // uncommon_trap(Deoptimization::Reason_unhandled,
-      //               Deoptimization::Action_none);
+      uncommon_trap(Deoptimization::Reason_unhandled,
+                    Deoptimization::Action_none);
     } else {
       int index = _bytecodes.get_constant_pool_index();
       uncommon_trap(Deoptimization::Reason_unloaded,
@@ -1113,8 +1111,15 @@ void JeandleAbstractInterpreter::load_constant() {
     case BasicType::T_DOUBLE: value = JeandleType::double_const(_ir_builder, con.as_double()); break;
     case BasicType::T_ARRAY: // fall-through
     case BasicType::T_OBJECT: {
-      llvm::Value* oop_handle = find_or_insert_oop(con.as_object());
-      value = _ir_builder.CreateLoad(JeandleType::java2llvm(BasicType::T_OBJECT, *_context), oop_handle);
+      ciObject* con_obj = con.as_object();
+
+      if (con_obj->is_null_object()) {
+        value = llvm::ConstantPointerNull::get(llvm::cast<llvm::PointerType>(JeandleType::java2llvm(BasicType::T_OBJECT, *_context)));
+      } else {
+        llvm::Value* oop_handle = find_or_insert_oop(con_obj);
+        value = _ir_builder.CreateLoad(JeandleType::java2llvm(BasicType::T_OBJECT, *_context), oop_handle);
+      }
+
       break;
     }
     default: Unimplemented(); break;
