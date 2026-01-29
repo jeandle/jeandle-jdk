@@ -53,7 +53,7 @@ class JeandleCompilation : public StackObj {
                      ciEnv* env,
                      std::unique_ptr<llvm::LLVMContext> context,
                      const char* name,
-                     address c_func,
+                     address routine_address,
                      llvm::FunctionType* func_type);
 
   ~JeandleCompilation() = default;

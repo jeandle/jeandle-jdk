@@ -32,7 +32,7 @@
 #include "jeandle/jeandleRuntimeRoutine.hpp"
 #include "jeandle/jeandleType.hpp"
 
-void JeandleCallVM::generate_call_VM(const char* name, address c_func, llvm::FunctionType* func_type, llvm::Module& target_module, JeandleCompiledCode& code) {
+void JeandleCallVM::generate_call_VM(const char* name, address routine_address, llvm::FunctionType* func_type, llvm::Module& target_module, JeandleCompiledCode& code) {
   llvm::Function* llvm_func = llvm::Function::Create(func_type,
                                                      llvm::Function::ExternalLinkage,
                                                      name,
@@ -66,22 +66,22 @@ void JeandleCallVM::generate_call_VM(const char* name, address c_func, llvm::Fun
   }
 
   // Call to the C function.
-  llvm::PointerType* c_func_ptr_type = llvm::PointerType::get(context, llvm::jeandle::AddrSpace::CHeapAddrSpace);
-  llvm::Value* c_func_addr = ir_builder.getInt64((intptr_t)c_func);
-  llvm::Value* c_func_ptr = ir_builder.CreateIntToPtr(c_func_addr, c_func_ptr_type);
-  llvm::CallInst* call_c_func = ir_builder.CreateCall(func_type, c_func_ptr, args);
-  call_c_func->setCallingConv(llvm::CallingConv::C);
+  llvm::PointerType* routine_address_ptr_type = llvm::PointerType::get(context, llvm::jeandle::AddrSpace::CHeapAddrSpace);
+  llvm::Value* routine_address_addr = ir_builder.getInt64((intptr_t)routine_address);
+  llvm::Value* routine_address_ptr = ir_builder.CreateIntToPtr(routine_address_addr, routine_address_ptr_type);
+  llvm::CallInst* call_routine_address = ir_builder.CreateCall(func_type, routine_address_ptr, args);
+  call_routine_address->setCallingConv(llvm::CallingConv::C);
   JeandleCompiledCall::Type call_type = JeandleCompiledCall::STUB_C_CALL;
   uint64_t statepoint_id = code.next_statepoint_id();
-  code.push_non_routine_call_site(new CallSiteInfo(call_type, c_func, -1 /* bci */, false /* _has_deopt_operands */, statepoint_id));
+  code.push_non_routine_call_site(new CallSiteInfo(call_type, routine_address, -1 /* bci */, false /* _has_deopt_operands */, statepoint_id));
   llvm::Attribute id_attr = llvm::Attribute::get(context,
                                                  llvm::jeandle::Attribute::StatepointID,
                                                  std::to_string(statepoint_id));
   llvm::Attribute patch_bytes_attr = llvm::Attribute::get(context,
                                                           llvm::jeandle::Attribute::StatepointNumPatchBytes,
                                                           std::to_string(JeandleCompiledCall::call_site_patch_size(call_type)));
-  call_c_func->addFnAttr(id_attr);
-  call_c_func->addFnAttr(patch_bytes_attr);
+  call_routine_address->addFnAttr(id_attr);
+  call_routine_address->addFnAttr(patch_bytes_attr);
 
   // Check exceptions.
   llvm::Value* pending_exception_addr = ir_builder.CreateIntToPtr(ir_builder.getInt64((uint64_t)Thread::pending_exception_offset()),
@@ -96,7 +96,7 @@ void JeandleCallVM::generate_call_VM(const char* name, address c_func, llvm::Fun
   ir_builder.CreateCondBr(if_not_null, forward_exception_block, no_exception_block);
   ir_builder.SetInsertPoint(forward_exception_block);
 
-  llvm::CallInst* call_inst = ir_builder.CreateCall(JeandleRuntimeRoutine::hotspot_install_exceptional_return_for_call_vm_callee(target_module), {});
+  llvm::CallInst* call_inst = ir_builder.CreateCall(JeandleRuntimeRoutine::install_exceptional_return_for_call_vm_callee(target_module), {});
   call_inst->setCallingConv(llvm::CallingConv::C);
 
   // Return
@@ -129,7 +129,7 @@ void JeandleCallVM::generate_call_VM(const char* name, address c_func, llvm::Fun
     return;
   }
 
-  llvm::Value* ret_val = call_c_func;
+  llvm::Value* ret_val = call_routine_address;
 
   // If the return type is a Java object, we need to load it from vm_result of JavaThread.
   llvm::PointerType* pointer_type = llvm::dyn_cast<llvm::PointerType>(func_type->getReturnType());

@@ -1046,7 +1046,7 @@ void JeandleAbstractInterpreter::uncommon_trap(Deoptimization::DeoptReason reaso
   }
 
   llvm::Value* request = _ir_builder.getInt32(Deoptimization::make_trap_request(reason, action));
-  llvm::FunctionCallee callee = JeandleRuntimeRoutine::hotspot_uncommon_trap_callee(_module);
+  llvm::FunctionCallee callee = JeandleRuntimeRoutine::uncommon_trap_callee(_module);
   llvm::OperandBundleDef deopt_bundle("deopt", _jvm->deopt_args(_ir_builder, _bytecodes.cur_bci()));
   llvm::CallInst* call = create_call(callee, {request}, llvm::CallingConv::Hotspot_JIT, {deopt_bundle});
   call->setDoesNotReturn();
@@ -1490,8 +1490,8 @@ bool JeandleAbstractInterpreter::inline_intrinsic(const ciMethod* target) {
     }
     case vmIntrinsicID::_dsin: {
       if (JeandleUseHotspotIntrinsics) {
-        llvm::FunctionCallee callee = StubRoutines::dsin() != nullptr ? JeandleRuntimeRoutine::hotspot_StubRoutines_dsin_callee(_module) :
-                                                                        JeandleRuntimeRoutine::hotspot_SharedRuntime_dsin_callee(_module);
+        llvm::FunctionCallee callee = StubRoutines::dsin() != nullptr ? JeandleRuntimeRoutine::StubRoutines_dsin_callee(_module) :
+                                                                        JeandleRuntimeRoutine::SharedRuntime_dsin_callee(_module);
         _jvm->dpush(create_call(callee, {_jvm->dpop()}, llvm::CallingConv::C));
       } else {
         _jvm->dpush(_ir_builder.CreateIntrinsic(JeandleType::java2llvm(BasicType::T_DOUBLE, *_context), llvm::Intrinsic::sin, {_jvm->dpop()}));
@@ -1500,8 +1500,8 @@ bool JeandleAbstractInterpreter::inline_intrinsic(const ciMethod* target) {
     }
     case vmIntrinsicID::_dcos: {
       if (JeandleUseHotspotIntrinsics) {
-        llvm::FunctionCallee callee = StubRoutines::dcos() != nullptr ? JeandleRuntimeRoutine::hotspot_StubRoutines_dcos_callee(_module) :
-                                                                        JeandleRuntimeRoutine::hotspot_SharedRuntime_dcos_callee(_module);
+        llvm::FunctionCallee callee = StubRoutines::dcos() != nullptr ? JeandleRuntimeRoutine::StubRoutines_dcos_callee(_module) :
+                                                                        JeandleRuntimeRoutine::SharedRuntime_dcos_callee(_module);
         _jvm->dpush(create_call(callee, {_jvm->dpop()}, llvm::CallingConv::C));
       } else {
         _jvm->dpush(_ir_builder.CreateIntrinsic(JeandleType::java2llvm(BasicType::T_DOUBLE, *_context), llvm::Intrinsic::cos, {_jvm->dpop()}));
@@ -1511,8 +1511,8 @@ bool JeandleAbstractInterpreter::inline_intrinsic(const ciMethod* target) {
     }
     case vmIntrinsicID::_dtan: {
       if (JeandleUseHotspotIntrinsics) {
-        llvm::FunctionCallee callee = StubRoutines::dtan() != nullptr ? JeandleRuntimeRoutine::hotspot_StubRoutines_dtan_callee(_module) :
-                                                                        JeandleRuntimeRoutine::hotspot_SharedRuntime_dtan_callee(_module);
+        llvm::FunctionCallee callee = StubRoutines::dtan() != nullptr ? JeandleRuntimeRoutine::StubRoutines_dtan_callee(_module) :
+                                                                        JeandleRuntimeRoutine::SharedRuntime_dtan_callee(_module);
         _jvm->dpush(create_call(callee, {_jvm->dpop()}, llvm::CallingConv::C));
       } else {
         _jvm->dpush(_ir_builder.CreateIntrinsic(JeandleType::java2llvm(BasicType::T_DOUBLE, *_context), llvm::Intrinsic::tan, {_jvm->dpop()}));
@@ -1521,8 +1521,8 @@ bool JeandleAbstractInterpreter::inline_intrinsic(const ciMethod* target) {
     }
     case vmIntrinsicID::_dlog: {
       if (JeandleUseHotspotIntrinsics) {
-        llvm::FunctionCallee callee = StubRoutines::dlog() != nullptr ? JeandleRuntimeRoutine::hotspot_StubRoutines_dlog_callee(_module) :
-                                                                        JeandleRuntimeRoutine::hotspot_SharedRuntime_dlog_callee(_module);
+        llvm::FunctionCallee callee = StubRoutines::dlog() != nullptr ? JeandleRuntimeRoutine::StubRoutines_dlog_callee(_module) :
+                                                                        JeandleRuntimeRoutine::SharedRuntime_dlog_callee(_module);
         _jvm->dpush(create_call(callee, {_jvm->dpop()}, llvm::CallingConv::C));
       } else {
         _jvm->dpush(_ir_builder.CreateIntrinsic(JeandleType::java2llvm(BasicType::T_DOUBLE, *_context), llvm::Intrinsic::log, {_jvm->dpop()}));
@@ -1531,8 +1531,8 @@ bool JeandleAbstractInterpreter::inline_intrinsic(const ciMethod* target) {
     }
     case vmIntrinsicID::_dlog10: {
       if (JeandleUseHotspotIntrinsics) {
-        llvm::FunctionCallee callee = StubRoutines::dlog10() != nullptr ? JeandleRuntimeRoutine::hotspot_StubRoutines_dlog10_callee(_module) :
-                                                                        JeandleRuntimeRoutine::hotspot_SharedRuntime_dlog10_callee(_module);
+        llvm::FunctionCallee callee = StubRoutines::dlog10() != nullptr ? JeandleRuntimeRoutine::StubRoutines_dlog10_callee(_module) :
+                                                                        JeandleRuntimeRoutine::SharedRuntime_dlog10_callee(_module);
         _jvm->dpush(create_call(callee, {_jvm->dpop()}, llvm::CallingConv::C));
       } else {
         _jvm->dpush(_ir_builder.CreateIntrinsic(JeandleType::java2llvm(BasicType::T_DOUBLE, *_context), llvm::Intrinsic::log10, {_jvm->dpop()}));
@@ -1541,8 +1541,8 @@ bool JeandleAbstractInterpreter::inline_intrinsic(const ciMethod* target) {
     }
     case vmIntrinsicID::_dexp: {
       if (JeandleUseHotspotIntrinsics) {
-        llvm::FunctionCallee callee = StubRoutines::dexp() != nullptr ? JeandleRuntimeRoutine::hotspot_StubRoutines_dexp_callee(_module) :
-                                                                      JeandleRuntimeRoutine::hotspot_SharedRuntime_dexp_callee(_module);
+        llvm::FunctionCallee callee = StubRoutines::dexp() != nullptr ? JeandleRuntimeRoutine::StubRoutines_dexp_callee(_module) :
+                                                                      JeandleRuntimeRoutine::SharedRuntime_dexp_callee(_module);
         _jvm->dpush(create_call(callee, {_jvm->dpop()}, llvm::CallingConv::C));
       } else {
         _jvm->dpush(_ir_builder.CreateIntrinsic(JeandleType::java2llvm(BasicType::T_DOUBLE, *_context), llvm::Intrinsic::exp, {_jvm->dpop()}));
@@ -1555,7 +1555,7 @@ bool JeandleAbstractInterpreter::inline_intrinsic(const ciMethod* target) {
       llvm::Value *component = _jvm->dpop();
       llvm::Value *base = _jvm->dpop();
       if (JeandleUseHotspotIntrinsics) {
-        llvm::FunctionCallee callee = StubRoutines::dpow() != nullptr ? JeandleRuntimeRoutine::hotspot_StubRoutines_dpow_callee(_module) : JeandleRuntimeRoutine::hotspot_SharedRuntime_dpow_callee(_module);
+        llvm::FunctionCallee callee = StubRoutines::dpow() != nullptr ? JeandleRuntimeRoutine::StubRoutines_dpow_callee(_module) : JeandleRuntimeRoutine::SharedRuntime_dpow_callee(_module);
         _jvm->dpush(create_call(callee, {base, component}, llvm::CallingConv::C));
       }
       else {
@@ -1839,11 +1839,11 @@ void JeandleAbstractInterpreter::arith_op(BasicType type, Bytecodes::Code code) 
     case Bytecodes::_fdiv: // fall through
     case Bytecodes::_ddiv: _jvm->push(type, _ir_builder.CreateFDiv(l, r)); break;
     case Bytecodes::_frem: {
-      _jvm->fpush(create_call(JeandleRuntimeRoutine::hotspot_SharedRuntime_frem_callee(_module), {l, r}, llvm::CallingConv::C));
+      _jvm->fpush(create_call(JeandleRuntimeRoutine::SharedRuntime_frem_callee(_module), {l, r}, llvm::CallingConv::C));
       break;
     }
     case Bytecodes::_drem: {
-      _jvm->dpush(create_call(JeandleRuntimeRoutine::hotspot_SharedRuntime_drem_callee(_module), {l, r}, llvm::CallingConv::C));
+      _jvm->dpush(create_call(JeandleRuntimeRoutine::SharedRuntime_drem_callee(_module), {l, r}, llvm::CallingConv::C));
       break;
     }
     case Bytecodes::_fneg: // fall through
@@ -2534,18 +2534,18 @@ void JeandleAbstractInterpreter::shared_lock(LockValue lock) {
 
   _jvm->push_lock(lock);
 
-  llvm::FunctionCallee monitorenter_callee = JeandleRuntimeRoutine::hotspot_SharedRuntime_complete_monitor_locking_C_callee(_module);
+  llvm::FunctionCallee monitorenter_callee = JeandleRuntimeRoutine::SharedRuntime_complete_monitor_locking_C_callee(_module);
   llvm::CallInst* current_thread = call_java_op("jeandle.current_thread", {});
   llvm::CallInst* call_monitorenter = _ir_builder.CreateCall(monitorenter_callee, {lock.object().value(), lock.lock(), current_thread});
-  call_monitorenter->setCallingConv(llvm::CallingConv::C);
+  call_monitorenter->setCallingConv(llvm::CallingConv::Hotspot_JIT);
 }
 
 void JeandleAbstractInterpreter::shared_unlock(LockValue lock) {
   assert(!lock.is_null(), "sanity");
-  llvm::FunctionCallee monitorexit_callee = JeandleRuntimeRoutine::hotspot_SharedRuntime_complete_monitor_unlocking_C_callee(_module);
+  llvm::FunctionCallee monitorexit_callee = JeandleRuntimeRoutine::SharedRuntime_complete_monitor_unlocking_C_callee(_module);
   llvm::CallInst* current_thread = call_java_op("jeandle.current_thread", {});
   llvm::CallInst* call_monitorexit = _ir_builder.CreateCall(monitorexit_callee, {lock.object().value(), lock.lock(), current_thread});
-  call_monitorexit->setCallingConv(llvm::CallingConv::C);
+  call_monitorexit->setCallingConv(llvm::CallingConv::Hotspot_JIT);
 }
 
 void JeandleAbstractInterpreter::monitorenter() {
