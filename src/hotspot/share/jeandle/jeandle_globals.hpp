@@ -44,7 +44,7 @@
   product(ccstr, JeandleDumpDirectory, nullptr,                             \
           "Dump destination for all Jeandle items")                         \
                                                                             \
-  develop(bool, JeandleCrashOnError, DEBUG_ONLY(true) NOT_DEBUG(false),     \
+  develop(bool, JeandleCrashOnError, false,                                 \
           "Crash JVM on Jeandle errors")                                    \
                                                                             \
   product(bool, JeandleDumpRuntimeStubs, false,                             \

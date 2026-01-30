@@ -2267,7 +2267,9 @@ void JeandleAbstractInterpreter::do_new() {
   llvm::Value* klass_addr = _ir_builder.getInt64((int64_t)klass_enc);
   llvm::Value* klass_ptr = _ir_builder.CreateIntToPtr(klass_addr, klass_type);
 
-  _jvm->apush(call_java_op_ex("jeandle.new_instance", {klass_ptr, size_in_bytes}));
+  llvm::Value* oop = call_java_op_ex("jeandle.new_instance", {klass_ptr, size_in_bytes});
+  RETURN_VOID_ON_JEANDLE_ERROR();
+  _jvm->apush(oop);
 }
 
 JeandleAbstractInterpreter::DispatchedDest JeandleAbstractInterpreter::dispatch_exception_for_invoke() {
@@ -2368,6 +2370,8 @@ void JeandleAbstractInterpreter::dispatch_exception_to_handler(llvm::Value* exce
       llvm::Value* cond = _ir_builder.CreateICmpEQ(match, _ir_builder.getInt32(1));
       _ir_builder.CreateCondBr(cond, match_dest, next_dest);
       _ir_builder.SetInsertPoint(next_dest);
+    } else {
+      JEANDLE_ERROR_ASSERT_AND_RET_VOID_ON_FAIL(false, "catch_klass not loaded");
     }
   }
 
@@ -2436,6 +2440,7 @@ void JeandleAbstractInterpreter::do_unified_newarray(Klass* array_klass) {
   llvm::Value* array_klass_addr = _ir_builder.getInt64((intptr_t)array_klass);
   llvm::Value* array_klass_ptr =  _ir_builder.CreateIntToPtr(array_klass_addr, klass_type);
   llvm::InvokeInst* result = call_java_op_ex("jeandle.newarray", {array_klass_ptr, length});
+  RETURN_VOID_ON_JEANDLE_ERROR();
   _jvm->apush(result);
 }
 
@@ -2518,7 +2523,9 @@ void JeandleAbstractInterpreter::multianewarray() {
 
   args.push_back(call_java_op("jeandle.current_thread", {}));
 
-  _jvm->apush(create_call_ex(callee, args, llvm::CallingConv::Hotspot_JIT));
+  llvm::Value* oop = create_call_ex(callee, args, llvm::CallingConv::Hotspot_JIT);
+  RETURN_VOID_ON_JEANDLE_ERROR();
+  _jvm->apush(oop);
 }
 
 void JeandleAbstractInterpreter::shared_lock(LockValue lock) {
