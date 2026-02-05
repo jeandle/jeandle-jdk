@@ -86,7 +86,7 @@ bool JeandleAssembler::is_oop_reloc(LinkSymbol& target, LinkKind kind) {
   Unimplemented();
 }
 
-bool JeandleAssembler::is_oop_reloc(LinkSymbol& target, LinkKind kind) {
+bool JeandleAssembler::is_oop_addr_reloc(LinkSymbol& target, LinkKind kind) {
   Unimplemented();
 }
 
