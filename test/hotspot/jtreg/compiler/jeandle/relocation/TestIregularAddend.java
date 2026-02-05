@@ -28,7 +28,7 @@
  *  issue: https://github.com/jeandle/jeandle-jdk/issues/326
  *
  * @library /test/lib
- * @run main/othervm -Xbatch -Xcomp -XX:-TieredCompilation -XX:-UseJeandleCompiler compiler.jeandle.relocation.TestIregularAddend
+ * @run main/othervm -Xbatch -Xcomp -XX:-TieredCompilation -XX:+UseJeandleCompiler compiler.jeandle.relocation.TestIregularAddend
  */
 
 /*

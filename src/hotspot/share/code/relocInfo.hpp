@@ -1483,7 +1483,6 @@ class jeandle_section_word_Relocation : public section_word_Relocation {
 
   void copy_into(RelocationHolder& holder) const override;
 
-  // TODO: aarch64 and rv
   jeandle_section_word_Relocation(address target, int section, int offset)
     : section_word_Relocation(target, section, relocInfo::jeandle_section_word_type), _offset(offset) { }
 
