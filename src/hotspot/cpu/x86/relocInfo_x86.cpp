@@ -143,7 +143,7 @@ void Relocation::pd_set_call_destination(address x) {
   }
 }
 
-void Relocation::pd_set_jeandle_data_value(address x, int offset, bool verify_only) {
+void Relocation::pd_set_jeandle_data_value(address x, int addend, bool verify_only) {
 #ifdef AMD64
   typedef Assembler::WhichOperand WhichOperand;
   WhichOperand which = (WhichOperand) format();
@@ -151,13 +151,13 @@ void Relocation::pd_set_jeandle_data_value(address x, int offset, bool verify_on
   // The address resolved from the jeandle-generated ELF file corresponds to the address of an operand.
   address disp = addr();
   if (verify_only) {
-    guarantee(*(int32_t*) disp == (x - disp + offset), "instructions must match");
+    guarantee(*(int32_t*) disp == (x - disp + addend), "instructions must match");
   } else {
     // Quoted from llvm::jitlink::x86_64::EdgeKind_x86_64::Delta32:  "Fixup <- Target - Fixup + Addend"
     // disp:   Fixup
     // x:      Target
-    // offset: Addend
-    *(int32_t*) disp = x - disp + offset;
+    // addend: Addend
+    *(int32_t*) disp = x - disp + addend;
   }
 #else
   Unimplemented();

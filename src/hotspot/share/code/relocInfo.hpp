@@ -797,8 +797,8 @@ class Relocation {
   void       pd_verify_data_value         (address x, intptr_t off) { pd_set_data_value(x, off, true); }
   address    pd_call_destination          (address orig_addr = nullptr);
   void       pd_set_call_destination      (address x);
-  void       pd_set_jeandle_data_value    (address x, int offset, bool verify_only = false);
-  void       pd_verify_jeandle_data_value (address x, int offset) { pd_set_jeandle_data_value(x, offset, true); }
+  void       pd_set_jeandle_data_value    (address x, int addend, bool verify_only = false);
+  void       pd_verify_jeandle_data_value (address x, int addend) { pd_set_jeandle_data_value(x, addend, true); }
 
   // this extracts the address of an address in the code stream instead of the reloc data
   address* pd_address_in_code       ();
