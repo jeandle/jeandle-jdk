@@ -89,7 +89,7 @@ void Relocation::pd_set_call_destination(address x) {
   assert(pd_call_destination(addr()) == x, "fail in reloc");
 }
 
-void Relocation::pd_set_jeandle_data_value(address x, bool verify_only) {
+void Relocation::pd_set_jeandle_data_value(address x, size_t offset, bool verify_only) {
   assert(type() == relocInfo::jeandle_section_word_type ||
          type() == relocInfo::jeandle_oop_type,
          "unexpected reloc type: %d", type());

@@ -817,6 +817,43 @@ address internal_word_Relocation::target() {
   return target;
 }
 
+void jeandle_section_word_Relocation::pack_data_to(CodeSection* dest) {
+  // Pack _target.
+  short* p = (short*) dest->locs_end();
+  normalize_address(_target, dest, true);
+
+  int sindex = _section;
+  assert(sindex != CodeBuffer::SECT_NONE, "sanity");
+  assert(_target != nullptr, "sanity");
+
+  // compress target address
+  CodeSection* sect = dest->outer()->code_section(sindex);
+  guarantee(sect->allocates2(_target), "must be in correct section");
+  address base = sect->start();
+  jint encoding = scaled_offset(_target, base);
+  assert((uint)sindex < (uint)CodeBuffer::SECT_LIMIT, "sanity");
+  assert(CodeBuffer::SECT_LIMIT <= (1 << section_width), "section_width++");
+
+  // pack compressed target and _offset
+  p = pack_2_ints_to(p, ((encoding << section_width) | sindex), _offset);
+
+  dest->set_locs_end((relocInfo*) p);
+}
+
+void jeandle_section_word_Relocation::unpack_data() {
+  // unpack compressed target and _offset
+  int compressed_target;
+  unpack_2_ints(compressed_target, _offset);
+
+  // decode to target and section
+  jint    encoding = (compressed_target >> section_width);
+  int     sindex = (compressed_target & ((1<<section_width)-1));
+  address base   = binding()->section_start(sindex);
+
+  _section = sindex;
+  _target  = address_from_scaled_offset(encoding, base);
+}
+
 //---------------------------------------------------------------------------------
 // Non-product code
 

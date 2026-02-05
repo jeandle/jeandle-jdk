@@ -797,8 +797,8 @@ class Relocation {
   void       pd_verify_data_value         (address x, intptr_t off) { pd_set_data_value(x, off, true); }
   address    pd_call_destination          (address orig_addr = nullptr);
   void       pd_set_call_destination      (address x);
-  void       pd_set_jeandle_data_value    (address x, bool verify_only = false);
-  void       pd_verify_jeandle_data_value (address x) { pd_set_jeandle_data_value(x, true); }
+  void       pd_set_jeandle_data_value    (address x, int offset, bool verify_only = false);
+  void       pd_verify_jeandle_data_value (address x, int offset) { pd_set_jeandle_data_value(x, offset, true); }
 
   // this extracts the address of an address in the code stream instead of the reloc data
   address* pd_address_in_code       ();
@@ -916,23 +916,20 @@ class DataRelocation : public Relocation {
   // both target and offset must be computed somehow from relocation data
   virtual int    offset()                      { return 0; }
   address         value() override             = 0;
-  void        set_value(address x) override    {
-    if (is_jeandle_reloc())
-      pd_set_jeandle_data_value(x);
-    else
-      set_value(x, offset());
-  }
+  void        set_value(address x) override    { set_value(x, (intptr_t)offset()); }
   void        set_value(address x, intptr_t o) {
-    if (addr_in_const())
+    if (is_jeandle_reloc())
+      pd_set_jeandle_data_value(x, o);
+    else if (addr_in_const())
       const_set_data_value(x);
     else
       pd_set_data_value(x, o);
   }
   void        verify_value(address x) {
-    if (addr_in_const())
+    if (is_jeandle_reloc())
+      pd_verify_jeandle_data_value(x, offset());
+    else if (addr_in_const())
       const_verify_data_value(x);
-    else if (is_jeandle_reloc())
-      pd_verify_jeandle_data_value(x);
     else
       pd_verify_data_value(x, offset());
   }
@@ -1046,9 +1043,9 @@ class oop_Relocation : public DataRelocation {
 
 class jeandle_oop_Relocation : public oop_Relocation {
  public:
-  static RelocationHolder spec(int oop_index) {
+  static RelocationHolder spec(int oop_index, int offset) {
     assert(oop_index > 0, "must be a pool-resident oop");
-    return RelocationHolder::construct<jeandle_oop_Relocation>(oop_index);
+    return RelocationHolder::construct<jeandle_oop_Relocation>(oop_index, offset);
   }
 
   void copy_into(RelocationHolder& holder) const override;
@@ -1062,8 +1059,8 @@ class jeandle_oop_Relocation : public oop_Relocation {
   }
 
  private:
-  jeandle_oop_Relocation(int oop_index)
-    : oop_Relocation(oop_index, 0, relocInfo::jeandle_oop_type) {}
+  jeandle_oop_Relocation(int oop_index, int offset)
+    : oop_Relocation(oop_index, offset, relocInfo::jeandle_oop_type) {}
 
   friend class RelocationHolder;
   jeandle_oop_Relocation() : oop_Relocation(relocInfo::jeandle_oop_type) { }
@@ -1480,18 +1477,27 @@ class section_word_Relocation : public internal_word_Relocation {
 
 class jeandle_section_word_Relocation : public section_word_Relocation {
  public:
-  static RelocationHolder spec(address target, int section) {
-    return RelocationHolder::construct<jeandle_section_word_Relocation>(target, section);
+  static RelocationHolder spec(address target, int section, int offset) {
+    return RelocationHolder::construct<jeandle_section_word_Relocation>(target, section, offset);
   }
 
   void copy_into(RelocationHolder& holder) const override;
 
-  jeandle_section_word_Relocation(address target, int section)
-    : section_word_Relocation(target, section, relocInfo::jeandle_section_word_type) { }
+  // TODO: aarch64 and rv
+  jeandle_section_word_Relocation(address target, int section, int offset)
+    : section_word_Relocation(target, section, relocInfo::jeandle_section_word_type), _offset(offset) { }
+
+  // Inherited. Additionally pack/unpack _offset field.
+  void pack_data_to(CodeSection* dest) override;
+  void unpack_data() override;
+
+  int offset() override { return _offset; }
 
  private:
   friend class RelocationHolder;
   jeandle_section_word_Relocation() : section_word_Relocation(relocInfo::jeandle_section_word_type) { }
+
+  int _offset;
 };
 
 class poll_Relocation : public Relocation {

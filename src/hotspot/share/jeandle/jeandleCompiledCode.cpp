@@ -194,16 +194,18 @@ class JeandleCallReloc : public JeandleReloc {
 
 class JeandleOopReloc : public JeandleReloc {
  public:
-  JeandleOopReloc(int offset, jobject oop_handle) :
+  JeandleOopReloc(int offset, jobject oop_handle, int64_t addend) :
     JeandleReloc(offset),
-    _oop_handle(oop_handle) {}
+    _oop_handle(oop_handle),
+    _addend(addend) {}
 
   void emit_reloc(JeandleAssembler& assembler) override {
-    assembler.emit_oop_reloc(offset(), _oop_handle);
+    assembler.emit_oop_reloc(offset(), _oop_handle, _addend);
   }
 
  private:
   jobject _oop_handle;
+  int64_t _addend;
 };
 
 } // anonymous namespace
@@ -401,7 +403,7 @@ void JeandleCompiledCode::resolve_reloc_info(JeandleAssembler& assembler) {
                                                    -1/* bci */);
         // LLVM doesn't rewrite intrinsic calls to statepoints, so we don't need oopmaps for external calls.
         relocs.push_back(new JeandleCallReloc(inst_end_offset, _env, _method, nullptr /* no oopmap */, call_info));
-      } else if (JeandleAssembler::is_const_reloc(target, edge.getKind())) {
+      } else if (JeandleAssembler::is_section_word_reloc(target, edge.getKind())) {
         // Const relocations.
         address target_addr;
         int reloc_offset;
@@ -425,7 +427,9 @@ void JeandleCompiledCode::resolve_reloc_info(JeandleAssembler& assembler) {
       } else if (JeandleAssembler::is_oop_reloc(target, edge.getKind())) {
         // Oop relocations.
         assert((target_name).starts_with("oop_handle"), "invalid oop relocation name");
-        relocs.push_back(new JeandleOopReloc(static_cast<int>(block->getAddress().getValue() + edge.getOffset()), _oop_handles[(target_name)]));
+        relocs.push_back(new JeandleOopReloc(static_cast<int>(block->getAddress().getValue() + edge.getOffset()),
+                                             _oop_handles[(target_name)],
+                                             edge.getAddend()));
       } else {
         // Unhandled relocations
         ShouldNotReachHere();

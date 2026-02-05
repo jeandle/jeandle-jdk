@@ -226,15 +226,14 @@ void JeandleAssembler::emit_section_word_reloc(int operand_offset, LinkKind kind
 
   // only support adrp & ldr for now
   address at_addr = __ code()->insts_begin() + operand_offset;
-  address reloc_target = target + addend;
-  RelocationHolder rspec = jeandle_section_word_Relocation::spec(reloc_target, CodeBuffer::SECT_CONSTS);
+  RelocationHolder rspec = jeandle_section_word_Relocation::spec(target, CodeBuffer::SECT_CONSTS, addend);
   __ code_section()->relocate(at_addr, rspec);
 }
 
-void JeandleAssembler::emit_oop_reloc(int offset, jobject oop_handle) {
+void JeandleAssembler::emit_oop_reloc(int offset, jobject oop_handle, int64_t addend) {
   address at_addr = __ code()->insts_begin() + offset;
   int index = __ oop_recorder()->find_index(oop_handle);
-  RelocationHolder rspec = jeandle_oop_Relocation::spec(index);
+  RelocationHolder rspec = jeandle_oop_Relocation::spec(index, addend);
   __ code_section()->relocate(at_addr, rspec);
 }
 
@@ -263,7 +262,7 @@ bool JeandleAssembler::is_external_call_reloc(LinkSymbol& target, LinkKind kind)
          kind == LinkKind_aarch64::Branch26PCRel;
 }
 
-bool JeandleAssembler::is_const_reloc(LinkSymbol& target, LinkKind kind) {
+bool JeandleAssembler::is_section_word_reloc(LinkSymbol& target, LinkKind kind) {
   return target.isDefined() &&
          (kind == LinkKind_aarch64::Page21 || kind == LinkKind_aarch64::PageOffset12);
 }

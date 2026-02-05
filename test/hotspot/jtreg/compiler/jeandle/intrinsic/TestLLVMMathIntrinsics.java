@@ -49,9 +49,9 @@ public class TestLLVMMathIntrinsics {
     private static double v = Math.abs(1.0d);   // Force load java.lang.Math class
 
     private static void assertWithinUlp(double computed, double reference, double maxUlp) {
-            double error = Math.abs(computed - reference);
-            double tolerance = maxUlp * StrictMath.ulp(reference);
-            Asserts.assertLTE(error, tolerance);
+        double error = Math.abs(computed - reference);
+        double tolerance = maxUlp * StrictMath.ulp(reference);
+        Asserts.assertLTE(error, tolerance);
     }
 
     private static final String[] baseProcArgs = new String[] {

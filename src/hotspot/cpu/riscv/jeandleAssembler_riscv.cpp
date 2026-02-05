@@ -70,7 +70,7 @@ void JeandleAssembler::emit_section_word_reloc(int operand_offset, LinkKind kind
   Unimplemented();
 }
 
-void JeandleAssembler::emit_oop_reloc(int offset, jobject oop_handle) {
+void JeandleAssembler::emit_oop_reloc(int offset, jobject oop_handle, int64_t addend) {
   Unimplemented();
 }
 
@@ -90,6 +90,6 @@ bool JeandleAssembler::is_external_call_reloc(LinkSymbol& target, LinkKind kind)
   Unimplemented();
 }
 
-bool JeandleAssembler::is_const_reloc(LinkSymbol& target, LinkKind kind) {
+bool JeandleAssembler::is_section_word_reloc(LinkSymbol& target, LinkKind kind) {
   Unimplemented();
 }

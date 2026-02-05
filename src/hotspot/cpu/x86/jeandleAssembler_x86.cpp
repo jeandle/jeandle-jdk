@@ -195,23 +195,22 @@ void JeandleAssembler::emit_section_word_reloc(int operand_offset, LinkKind kind
 
   if (reloc_section == CodeBuffer::SECT_INSTS) {
     address at_address = __ code()->insts_begin() + operand_offset;
-    address reloc_target = target + addend + sizeof(int32_t);
-    RelocationHolder rspec = jeandle_section_word_Relocation::spec(reloc_target, CodeBuffer::SECT_CONSTS);
+
+    RelocationHolder rspec = jeandle_section_word_Relocation::spec(target, CodeBuffer::SECT_CONSTS, addend);
 
     __ code()->insts()->relocate(at_address, rspec, __ disp32_operand);
   } else {
     assert(reloc_section == CodeBuffer::SECT_CONSTS, "unexpected code section");
     address at_address = __ code()->consts()->start() + operand_offset;
-    address reloc_target = target + addend + sizeof(int32_t);
-    RelocationHolder rspec = jeandle_section_word_Relocation::spec(reloc_target, CodeBuffer::SECT_INSTS);
+    RelocationHolder rspec = jeandle_section_word_Relocation::spec(target, CodeBuffer::SECT_INSTS, addend);
 
     __ code()->consts()->relocate(at_address, rspec, __ disp32_operand);
   }
 }
 
-void JeandleAssembler::emit_oop_reloc(int offset, jobject oop_handle) {
+void JeandleAssembler::emit_oop_reloc(int offset, jobject oop_handle, int64_t addend) {
   int index = __ oop_recorder()->find_index(oop_handle);
-  RelocationHolder rspec = jeandle_oop_Relocation::spec(index);
+  RelocationHolder rspec = jeandle_oop_Relocation::spec(index, addend);
   address at_address = __ code()->insts_begin() + offset;
   __ code_section()->relocate(at_address, rspec, __ disp32_operand);
 }
@@ -239,6 +238,6 @@ bool JeandleAssembler::is_external_call_reloc(LinkSymbol& target, LinkKind kind)
          kind == LinkKind_x86_64::BranchPCRel32;
 }
 
-bool JeandleAssembler::is_const_reloc(LinkSymbol& target, LinkKind kind) {
+bool JeandleAssembler::is_section_word_reloc(LinkSymbol& target, LinkKind kind) {
   return target.isDefined() && kind == LinkKind_x86_64::Delta32;
 }
