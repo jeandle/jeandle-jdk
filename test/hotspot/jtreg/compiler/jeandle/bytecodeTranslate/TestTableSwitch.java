@@ -27,6 +27,7 @@
  *      -XX:CompileCommand=compileonly,compiler.jeandle.bytecodeTranslate.TestTableSwitch::zeroCrossSwitch
  *      -XX:CompileCommand=compileonly,compiler.jeandle.bytecodeTranslate.TestTableSwitch::largeRangeSwitch
  *      -XX:CompileCommand=compileonly,compiler.jeandle.bytecodeTranslate.TestTableSwitch::callMethodSwitch
+ *      -XX:CompileCommand=compileonly,compiler.jeandle.bytecodeTranslate.TestTableSwitch::returnStringSwitch
  *      -XX:+UseJeandleCompiler compiler.jeandle.bytecodeTranslate.TestTableSwitch
  */
 
@@ -39,6 +40,7 @@ public class TestTableSwitch {
         testBasicBoundaryScenarios();
         testLargeRangeSwitch();
         testCallMethodSwitch();
+        testReturnStringSwitch();
     }
 
     public static int minPositiveSwitch(int num) {
@@ -127,4 +129,45 @@ public class TestTableSwitch {
     public static int returnEight() { return 8; }
     public static int returnNine()  { return 9; }
     public static int returnTen()   { return 10; }
+
+    private static void testReturnStringSwitch() {
+        Asserts.assertEquals(returnStringSwitch(0), "Zero");
+        Asserts.assertEquals(returnStringSwitch(1), "One");
+        Asserts.assertEquals(returnStringSwitch(2), "Two");
+        Asserts.assertEquals(returnStringSwitch(3), "Three");
+        Asserts.assertEquals(returnStringSwitch(4), "Four");
+        Asserts.assertEquals(returnStringSwitch(5), "Five");
+        Asserts.assertEquals(returnStringSwitch(6), "Six");
+        Asserts.assertEquals(returnStringSwitch(7), "Seven");
+        Asserts.assertEquals(returnStringSwitch(8), "Eight");
+        Asserts.assertEquals(returnStringSwitch(9), "Nine");
+        Asserts.assertEquals(returnStringSwitch(10), "default");
+    }
+
+    public static String returnStringSwitch(int number) {
+        switch (number) {
+            case 0:
+                return "Zero";
+            case 1:
+                return "One";
+            case 2:
+                return "Two";
+            case 3:
+                return "Three";
+            case 4:
+                return "Four";
+            case 5:
+                return "Five";
+            case 6:
+                return "Six";
+            case 7:
+                return "Seven";
+            case 8:
+                return "Eight";
+            case 9:
+                return "Nine";
+            default:
+                return "default";
+        }
+    }
 }

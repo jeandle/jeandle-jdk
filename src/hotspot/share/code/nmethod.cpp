@@ -1146,6 +1146,9 @@ void nmethod::fix_oop_relocations(address begin, address end, bool initialize_im
     } else if (iter.type() == relocInfo::jeandle_oop_type) {
       jeandle_oop_Relocation* reloc = iter.jeandle_oop_reloc();
       reloc->fix_oop_relocation();
+    } else if (iter.type() == relocInfo::jeandle_oop_addr_type) {
+      jeandle_oop_addr_Relocation* reloc = iter.jeandle_oop_addr_reloc();
+      reloc->fix_oop_relocation();
     }
   }
 }

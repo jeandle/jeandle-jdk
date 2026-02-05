@@ -238,6 +238,13 @@ void JeandleAssembler::emit_oop_reloc(int offset, jobject oop_handle) {
   __ code_section()->relocate(at_addr, rspec);
 }
 
+void JeandleAssembler::emit_oop_addr_reloc(int offset, jobject oop_handle) {
+  address at_addr = __ code()->consts()->start() + offset;
+  int index = __ oop_recorder()->find_index(oop_handle);
+  RelocationHolder rspec = jeandle_oop_addr_Relocation::spec(index);
+  __ code()->consts()->relocate(at_addr, rspec);
+}
+
 int JeandleAssembler::fixup_call_inst_offset(int offset) {
   assert(offset >= 0, "invalid offset");
   // point to the end of call instruction
@@ -247,6 +254,10 @@ int JeandleAssembler::fixup_call_inst_offset(int offset) {
 bool JeandleAssembler::is_oop_reloc(LinkSymbol& target, LinkKind kind) {
   return !target.isDefined() &&
          (kind == LinkKind_aarch64::Page21 || kind == LinkKind_aarch64::PageOffset12);
+}
+
+bool JeandleAssembler::is_oop_addr_reloc(LinkSymbol& target, LinkKind kind) {
+  return !target.isDefined() && (kind == LinkKind_aarch64::Pointer64);
 }
 
 bool JeandleAssembler::is_routine_call_reloc(LinkSymbol& target, LinkKind kind) {

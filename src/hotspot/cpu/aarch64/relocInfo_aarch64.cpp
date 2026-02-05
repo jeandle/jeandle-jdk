@@ -90,10 +90,15 @@ void Relocation::pd_set_call_destination(address x) {
 }
 
 void Relocation::pd_set_jeandle_data_value(address x, bool verify_only) {
-  assert(type() == relocInfo::jeandle_section_word_type ||
-         type() == relocInfo::jeandle_oop_type,
-         "unexpected reloc type: %d", type());
+  assert(is_jeandle_reloc(), "unexpected reloc type: %d", type());
+
   if (verify_only) {
+    return;
+  }
+
+  if (addr_in_const()) {
+    assert(type() == relocInfo::jeandle_oop_addr_type, "must be in const section");
+    *(oop**)addr() = (oop*)x;
     return;
   }
 

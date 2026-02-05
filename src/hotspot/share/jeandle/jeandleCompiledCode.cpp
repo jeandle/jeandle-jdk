@@ -206,6 +206,26 @@ class JeandleOopReloc : public JeandleReloc {
   jobject _oop_handle;
 };
 
+class JeandleOopAddrReloc : public JeandleReloc {
+ public:
+  JeandleOopAddrReloc(int offset, jobject oop_handle) :
+    JeandleReloc(offset),
+    _oop_handle(oop_handle) {}
+
+  void emit_reloc(JeandleAssembler& assembler) override {
+    assembler.emit_oop_addr_reloc(offset(), _oop_handle);
+  }
+
+  void fixup_offset(int prolog_length) override {
+#ifdef ASSERT
+    _fixed_up = true;
+#endif
+  }
+
+ private:
+  jobject _oop_handle;
+};
+
 } // anonymous namespace
 
 // Decide whether to emit a stack overflow check for the compiled entry based on
@@ -369,6 +389,7 @@ void JeandleCompiledCode::resolve_reloc_info(JeandleAssembler& assembler) {
   for (auto *block : link_graph->blocks()) {
     // Resolve relocations in the compiled code and constant pool.
     if (block->getSection().getName().compare(".text") != 0 &&
+        block->getSection().getName().compare(".data.rel.ro") != 0 &&
         !block->getSection().getName().starts_with(".rodata")) {
       continue;
     }
@@ -406,7 +427,8 @@ void JeandleCompiledCode::resolve_reloc_info(JeandleAssembler& assembler) {
         address target_addr;
         int reloc_offset;
         int reloc_section;
-        if (target.getSection().getName().starts_with(".rodata")) {
+        if (target.getSection().getName().starts_with(".rodata") ||
+            target.getSection().getName().starts_with(".data.rel.ro")) {
           assert(block->getSection().getName().compare(".text") == 0, "invalid reloc section");
           target_addr = resolve_const_edge(*block, edge, assembler);
           RETURN_VOID_ON_JEANDLE_ERROR();
@@ -426,6 +448,10 @@ void JeandleCompiledCode::resolve_reloc_info(JeandleAssembler& assembler) {
         // Oop relocations.
         assert((target_name).starts_with("oop_handle"), "invalid oop relocation name");
         relocs.push_back(new JeandleOopReloc(static_cast<int>(block->getAddress().getValue() + edge.getOffset()), _oop_handles[(target_name)]));
+      } else if (JeandleAssembler::is_oop_addr_reloc(target, edge.getKind())) {
+        // Oop addr relocations.
+        assert((target_name).starts_with("oop_handle"), "invalid oop relocation name");
+        relocs.push_back(new JeandleOopAddrReloc(static_cast<int>(block->getAddress().getValue() + edge.getOffset()), _oop_handles[(target_name)]));
       } else {
         // Unhandled relocations
         ShouldNotReachHere();

@@ -279,6 +279,7 @@ class relocInfo {
     barrier_type               = 18, // GC barrier data
     jeandle_section_word_type  = 19, // internal, but a cross-section reference specific for jeandle
     jeandle_oop_type           = 20, // embedded oop for jeandle
+    jeandle_oop_addr_type      = 21, // embedded oop address for jeandle
     type_mask                  = 31  // A mask which selects only the above values
   };
 
@@ -323,6 +324,7 @@ class relocInfo {
     visitor(barrier) \
     visitor(jeandle_section_word) \
     visitor(jeandle_oop) \
+    visitor(jeandle_oop_addr) \
 
 
  public:
@@ -876,7 +878,9 @@ class Relocation {
   virtual void fix_relocation_after_move(const CodeBuffer* src, CodeBuffer* dest) { }
 
   bool is_jeandle_reloc() {
-    return _rtype == relocInfo::jeandle_oop_type || _rtype == relocInfo::jeandle_section_word_type;
+    return _rtype == relocInfo::jeandle_oop_type ||
+           _rtype == relocInfo::jeandle_oop_addr_type ||
+           _rtype == relocInfo::jeandle_section_word_type;
   }
 };
 
@@ -1069,6 +1073,32 @@ class jeandle_oop_Relocation : public oop_Relocation {
   jeandle_oop_Relocation() : oop_Relocation(relocInfo::jeandle_oop_type) { }
 };
 
+class jeandle_oop_addr_Relocation : public oop_Relocation {
+ public:
+  static RelocationHolder spec(int oop_index) {
+    assert(oop_index > 0, "must be a pool-resident oop");
+    return RelocationHolder::construct<jeandle_oop_addr_Relocation>(oop_index);
+  }
+
+  void copy_into(RelocationHolder& holder) const override;
+
+  void fix_oop_relocation() override {
+    set_value(reinterpret_cast<address>(oop_addr()));
+  }
+
+  void verify_oop_relocation() override {
+    verify_value(reinterpret_cast<address>(oop_addr()));
+  }
+
+  void fix_relocation_after_move(const CodeBuffer* src, CodeBuffer* dest) override;
+
+ private:
+  jeandle_oop_addr_Relocation(int oop_index)
+    : oop_Relocation(oop_index, 0, relocInfo::jeandle_oop_addr_type) {}
+
+  friend class RelocationHolder;
+  jeandle_oop_addr_Relocation() : oop_Relocation(relocInfo::jeandle_oop_addr_type) {}
+};
 
 // copy of oop_Relocation for now but may delete stuff in both/either
 class metadata_Relocation : public DataRelocation {

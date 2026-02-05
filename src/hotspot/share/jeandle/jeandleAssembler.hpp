@@ -56,11 +56,15 @@ class JeandleAssembler : public StackObj {
 
   void emit_oop_reloc(int offset, jobject oop_handle);
 
+  void emit_oop_addr_reloc(int offset, jobject oop_handle);
+
   // Redirect an offset from the displacement to the end of the call instruction.
   // This is used for ROUTINE_CALL and EXTERNAL_CALL.
   static int fixup_call_inst_offset(int offset);
 
   static bool is_oop_reloc(LinkSymbol& target, LinkKind kind);
+
+  static bool is_oop_addr_reloc(LinkSymbol& target, LinkKind kind);
 
   static bool is_routine_call_reloc(LinkSymbol& target, LinkKind kind);
 
