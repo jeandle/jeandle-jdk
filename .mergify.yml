@@ -46,3 +46,16 @@ merge_queue:
   max_parallel_checks: 1
   queued_label: ""
   dequeued_label: ""
+commands_restrictions:
+  dequeue:
+    conditions:
+      - sender-permission >= admin
+  queue:
+    conditions:
+      - sender-permission >= admin
+  requeue:
+    conditions:
+      - sender-permission >= admin
+  unqueue:
+    conditions:
+      - sender-permission >= admin
