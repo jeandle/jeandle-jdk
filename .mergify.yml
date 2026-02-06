@@ -48,13 +48,13 @@ merge_queue:
 commands_restrictions:
   dequeue:
     conditions:
-      - sender-permission >= admin
+      - sender-permission >= maintain
   queue:
     conditions:
-      - sender-permission >= admin
+      - sender-permission >= maintain
   requeue:
     conditions:
-      - sender-permission >= admin
+      - sender-permission >= maintain
   unqueue:
     conditions:
-      - sender-permission >= admin
+      - sender-permission >= maintain
