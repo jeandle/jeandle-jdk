@@ -24,7 +24,7 @@ import jdk.test.lib.Asserts;
 
 /**
  * @test
- * @summary Test arraylength
+ * @summary Test new object
  * @library /test/lib
  * @run main/othervm -Xcomp -XX:-TieredCompilation
  *      -XX:CompileCommand=compileonly,compiler.jeandle.bytecodeTranslate.alloc.TestNewObject::allocate_java_instance
