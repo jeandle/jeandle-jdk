@@ -45,6 +45,19 @@
 
 ; Byte offsets for oopDesc structure fields.
 @oopDesc.klass_offset_in_bytes = external global i32
+@oopDesc.mark_offset_in_bytes = external global i32
+@instanceOopDesc.base_offset_in_bytes = external global i32
+
+; Byte offsets for JavaThread structure fields.
+@JavaThread.tlab_end_offset = external global i64
+@JavaThread.tlab_top_offset = external global i64
+
+; Byte offsets for markWord structure fields.
+@markWord.prototype_value = external global i64
+
+; Global vm options
+@VMOptions.UseTLAB = external global i1
+@VMOptions.ZeroTLAB = external global i1
 
 ; Keep use to lately-used java operations, until it is lowered.
 @llvm.used = appending addrspace(1) global [1 x ptr] [ptr @jeandle.card_table_barrier], section "llvm.metadata"
@@ -157,6 +170,65 @@ check_subtype:
 
   %is_subtype_ext = zext i1 %is_subtype to i32
   ret i32 %is_subtype_ext
+}
+
+declare hotspotcc ptr addrspace(1) @new_instance(ptr, ptr)
+
+; Implementation of Java new object
+define private hotspotcc ptr addrspace(1) @jeandle.new_instance(ptr %klass, i32 %size_in_bytes) noinline "lower-phase"="1" {
+entry:
+  %use_tlab = load i1, ptr @VMOptions.UseTLAB
+  br i1 %use_tlab, label %test_tlab, label %alloc_slow_path
+
+test_tlab:
+  %tlab_top_offset = load i64, ptr @JavaThread.tlab_top_offset
+  %tlab_end_offset = load i64, ptr @JavaThread.tlab_end_offset
+
+  %tlab_top_ptr = inttoptr i64 %tlab_top_offset to ptr addrspace(2)
+  %tlab_end_ptr = inttoptr i64 %tlab_end_offset to ptr addrspace(2)
+
+  %tlab_old_top = load ptr addrspace(1), ptr addrspace(2) %tlab_top_ptr, align 8
+  %tlab_end = load ptr addrspace(1), ptr addrspace(2) %tlab_end_ptr, align 8
+
+  %tlab_new_top = getelementptr i8, ptr addrspace(1) %tlab_old_top, i32 %size_in_bytes
+  %if_tlab_full = icmp uge ptr addrspace(1) %tlab_new_top, %tlab_end
+  br i1 %if_tlab_full, label %alloc_slow_path, label %alloc_fast_path
+
+alloc_slow_path:                                  ; preds = %entry
+  %current_thread = call hotspotcc ptr @jeandle.current_thread()
+  %slow_alloc_obj = call hotspotcc ptr addrspace(1) @new_instance(ptr %klass, ptr %current_thread)
+  br label %return_block
+
+alloc_fast_path:                                  ; preds = %entry
+  store ptr addrspace(1) %tlab_new_top, ptr addrspace(2) %tlab_top_ptr, align 8
+  %mark_word_offset = load i32, ptr @oopDesc.mark_offset_in_bytes
+  %mark_word_addr = getelementptr i8, ptr addrspace(1) %tlab_old_top, i32 %mark_word_offset
+
+  %klass_offset = load i32, ptr @oopDesc.klass_offset_in_bytes
+  %klass_addr = getelementptr i8, ptr addrspace(1) %tlab_old_top, i32 %klass_offset
+
+  %prototype_value = load i64, ptr @markWord.prototype_value
+
+  store i64 %prototype_value, ptr addrspace(1) %mark_word_addr, align 4
+  store ptr %klass, ptr addrspace(1) %klass_addr, align 8
+
+  %zero_tlab = load i1, ptr @VMOptions.ZeroTLAB
+  %not_clear = and i1 %use_tlab, %zero_tlab
+  br i1 %not_clear, label %initialization_membar, label %clear_memory
+
+clear_memory:
+  %base_offset = load i32, ptr @instanceOopDesc.base_offset_in_bytes
+  %base_addr = getelementptr i8, ptr addrspace(1) %tlab_old_top, i32 %base_offset
+  call void @llvm.memset.p1.i32(ptr addrspace(1) align 8 %base_addr, i8 0, i32 %size_in_bytes, i1 false)
+  br label %initialization_membar
+
+initialization_membar:
+  fence release
+  br label %return_block
+
+return_block:                                     ; preds = %alloc_fast_path, %alloc_slow_path
+  %obj = phi ptr addrspace(1) [ %tlab_old_top, %initialization_membar ], [ %slow_alloc_obj, %alloc_slow_path ]
+  ret ptr addrspace(1) %obj
 }
 
 ; Implementation of Java arraylength operation.

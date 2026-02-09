@@ -150,78 +150,6 @@ DEF_JAVA_OP(card_table_barrier, 1, llvm::Type::getVoidTy(context), llvm::Pointer
   ir_builder.CreateRetVoid();
 JAVA_OP_END
 
-DEF_JAVA_OP(new_instance, 1, llvm::PointerType::get(context, llvm::jeandle::AddrSpace::JavaHeapAddrSpace),
-            llvm::PointerType::get(context, llvm::jeandle::AddrSpace::CHeapAddrSpace), // klass
-            llvm::Type::getInt32Ty(context)) // size_in_bytes
-  // Entry
-  llvm::Value* klass = func->getArg(0);
-  llvm::Value* size = func->getArg(1);
-  // Get current thread pointer using jeandle.current_thread JavaOp
-  llvm::Function* current_thread_func = template_module.getFunction("jeandle.current_thread");
-  if (!current_thread_func) {
-    RuntimeDefinedJavaOps::set_failed("jeandle.current_thread is not found in template module");
-    return;
-  }
-  llvm::CallInst* current_thread = ir_builder.CreateCall(current_thread_func);
-  current_thread->setCallingConv(llvm::CallingConv::Hotspot_JIT);
-
-  // TLAB check
-  llvm::BasicBlock* alloc_slow_path = llvm::BasicBlock::Create(context, "alloc_slow_path", func);
-  llvm::BasicBlock* alloc_fast_path = llvm::BasicBlock::Create(context, "alloc_fast_path", func);
-  llvm::BasicBlock* return_block = llvm::BasicBlock::Create(context, "return_block", func);
-  llvm::Type*  oop_type = llvm::PointerType::get(context, llvm::jeandle::JavaHeapAddrSpace);
-  llvm::Value* tlab_end_ptr = ir_builder.CreateIntToPtr(ir_builder.getInt64((uint64_t)JavaThread::tlab_end_offset()),
-                                                        llvm::PointerType::get(context, llvm::jeandle::AddrSpace::TLSAddrSpace));
-  llvm::Value* tlab_top_ptr = ir_builder.CreateIntToPtr(ir_builder.getInt64((uint64_t)JavaThread::tlab_top_offset()),
-                                                        llvm::PointerType::get(context, llvm::jeandle::AddrSpace::TLSAddrSpace));
-  llvm::Value* tlab_old_top = ir_builder.CreateLoad(oop_type, tlab_top_ptr);
-  llvm::Value* tlab_end = ir_builder.CreateLoad(oop_type, tlab_end_ptr);
-  llvm::Value* tlab_new_top = ir_builder.CreatePtrAdd(tlab_old_top, size);
-
-  llvm::Value* if_tlab_full = ir_builder.CreateICmp(llvm::CmpInst::ICMP_UGE, tlab_new_top, tlab_end);
-  ir_builder.CreateCondBr(if_tlab_full, alloc_slow_path, alloc_fast_path);
-
-  // Alloc Fast Path
-  ir_builder.SetInsertPoint(alloc_fast_path);
-  ir_builder.CreateStore(tlab_new_top, tlab_top_ptr);
-
-  // TODO: prefetch
-
-  // initialize object header
-  llvm::Value* alloc_oop = ir_builder.CreateIntToPtr(tlab_old_top, oop_type);
-  llvm::Value* mark_word = ir_builder.getInt64(markWord::prototype().value()); // TODO: uint32_t for CompactObjectHeaders, it' not available in JDK21
-  llvm::Value* mark_word_ptr = ir_builder.CreateIntToPtr(ir_builder.CreatePtrAdd(alloc_oop, ir_builder.getInt32(oopDesc::mark_offset_in_bytes())), oop_type);
-  llvm::Value* klass_ptr = ir_builder.CreateIntToPtr(ir_builder.CreatePtrAdd(alloc_oop, ir_builder.getInt32(oopDesc::klass_offset_in_bytes())), oop_type);
-  ir_builder.CreateStore(mark_word, mark_word_ptr);
-  ir_builder.CreateStore(klass, klass_ptr);
-
-  // clear memory
-  if (!(UseTLAB && ZeroTLAB)) {
-    int header_size = instanceOopDesc::base_offset_in_bytes();
-    llvm::Value *base_ptr = ir_builder.CreateIntToPtr(ir_builder.CreatePtrAdd(alloc_oop, ir_builder.getInt32(header_size)), oop_type);
-    int alignment = 8;  // TODO: maybe change with other runtime option
-    ir_builder.CreateMemSet(base_ptr, ir_builder.getInt8(0), size, llvm::MaybeAlign(alignment));
-  }
-
-  // storestore membar for initialzation
-  ir_builder.CreateFence(llvm::AtomicOrdering::Release);
-
-  ir_builder.CreateBr(return_block);
-
-  // Alloc Slow Path
-  ir_builder.SetInsertPoint(alloc_slow_path);
-  llvm::CallInst* call_result = ir_builder.CreateCall(JeandleRuntimeRoutine::new_instance_callee(template_module), {klass, current_thread});
-  call_result->setCallingConv(llvm::CallingConv::Hotspot_JIT);
-  ir_builder.CreateBr(return_block);
-
-  // Return
-  ir_builder.SetInsertPoint(return_block);
-  llvm::PHINode* phi = ir_builder.CreatePHI(oop_type, 2);
-  phi->addIncoming(alloc_oop, alloc_fast_path);
-  phi->addIncoming(call_result, alloc_slow_path);
-  ir_builder.CreateRet(phi);
-JAVA_OP_END
-
 } // anonymous namespace
 
 const char* RuntimeDefinedJavaOps::_error_msg = nullptr;
@@ -239,7 +167,6 @@ bool RuntimeDefinedJavaOps::define_all(llvm::Module& template_module) {
   define_current_thread(template_module);
   define_safepoint_poll(template_module);
   define_card_table_barrier(template_module);
-  define_new_instance(template_module);
 
   return failed();
 }
@@ -277,14 +204,23 @@ void RuntimeDefinedJavaOps::define_global_variables(llvm::Module& template_modul
   };
 
   llvm::Type* int32_type = llvm::Type::getInt32Ty(context);
+  llvm::Type* int64_type = llvm::Type::getInt64Ty(context);
+  llvm::Type* int1_type  = llvm::Type::getInt1Ty(context);
 
-  define_global("KlassArray.base_offset_in_bytes",     int32_type, static_cast<uint64_t>(Array<Klass*>::base_offset_in_bytes()));
-  define_global("KlassArray.length_offset_in_bytes",   int32_type, static_cast<uint64_t>(Array<Klass*>::length_offset_in_bytes()));
-  define_global("arrayOopDesc.length_offset_in_bytes", int32_type, static_cast<uint64_t>(arrayOopDesc::length_offset_in_bytes()));
   define_global("arrayOopDesc.base_offset_in_bytes.int", int32_type, static_cast<uint64_t>(arrayOopDesc::base_offset_in_bytes(T_INT)));
-  define_global("Klass.secondary_super_cache_offset",  int32_type, static_cast<uint64_t>(Klass::secondary_super_cache_offset()));
-  define_global("Klass.secondary_supers_offset",       int32_type, static_cast<uint64_t>(Klass::secondary_supers_offset()));
-  define_global("Klass.super_check_offset_offset",     int32_type, static_cast<uint64_t>(Klass::super_check_offset_offset()));
-  define_global("ObjArrayKlass.element_klass_offset",  int32_type, static_cast<uint64_t>(ObjArrayKlass::element_klass_offset()));
-  define_global("oopDesc.klass_offset_in_bytes",       int32_type, static_cast<uint64_t>(oopDesc::klass_offset_in_bytes()));
+  define_global("arrayOopDesc.length_offset_in_bytes",   int32_type, static_cast<uint64_t>(arrayOopDesc::length_offset_in_bytes()));
+  define_global("instanceOopDesc.base_offset_in_bytes",  int32_type, static_cast<uint64_t>(instanceOopDesc::base_offset_in_bytes()));
+  define_global("JavaThread.tlab_end_offset",            int64_type, static_cast<uint64_t>(JavaThread::tlab_end_offset()));
+  define_global("JavaThread.tlab_top_offset",            int64_type, static_cast<uint64_t>(JavaThread::tlab_top_offset()));
+  define_global("Klass.secondary_super_cache_offset",    int32_type, static_cast<uint64_t>(Klass::secondary_super_cache_offset()));
+  define_global("Klass.secondary_supers_offset",         int32_type, static_cast<uint64_t>(Klass::secondary_supers_offset()));
+  define_global("Klass.super_check_offset_offset",       int32_type, static_cast<uint64_t>(Klass::super_check_offset_offset()));
+  define_global("KlassArray.base_offset_in_bytes",       int32_type, static_cast<uint64_t>(Array<Klass*>::base_offset_in_bytes()));
+  define_global("KlassArray.length_offset_in_bytes",     int32_type, static_cast<uint64_t>(Array<Klass*>::length_offset_in_bytes()));
+  define_global("markWord.prototype_value",              int64_type, static_cast<uint64_t>(markWord::prototype().value()));
+  define_global("ObjArrayKlass.element_klass_offset",    int32_type, static_cast<uint64_t>(ObjArrayKlass::element_klass_offset()));
+  define_global("oopDesc.klass_offset_in_bytes",         int32_type, static_cast<uint64_t>(oopDesc::klass_offset_in_bytes()));
+  define_global("oopDesc.mark_offset_in_bytes",          int32_type, static_cast<uint64_t>(oopDesc::mark_offset_in_bytes()));
+  define_global("VMOptions.UseTLAB",                     int1_type, static_cast<uint64_t>(UseTLAB));
+  define_global("VMOptions.ZeroTLAB",                    int1_type, static_cast<uint64_t>(ZeroTLAB));
 }
