@@ -194,12 +194,12 @@ test_tlab:
   %if_tlab_full = icmp uge ptr addrspace(1) %tlab_new_top, %tlab_end
   br i1 %if_tlab_full, label %alloc_slow_path, label %alloc_fast_path
 
-alloc_slow_path:                                  ; preds = %entry
+alloc_slow_path:
   %current_thread = call hotspotcc ptr @jeandle.current_thread()
   %slow_alloc_obj = call hotspotcc ptr addrspace(1) @new_instance(ptr %klass, ptr %current_thread)
   br label %return_block
 
-alloc_fast_path:                                  ; preds = %entry
+alloc_fast_path:
   store ptr addrspace(1) %tlab_new_top, ptr addrspace(2) %tlab_top_ptr, align 8
   %mark_word_offset = load i32, ptr @oopDesc.mark_offset_in_bytes
   %mark_word_addr = getelementptr i8, ptr addrspace(1) %tlab_old_top, i32 %mark_word_offset
@@ -226,7 +226,7 @@ initialization_membar:
   fence release
   br label %return_block
 
-return_block:                                     ; preds = %alloc_fast_path, %alloc_slow_path
+return_block:
   %obj = phi ptr addrspace(1) [ %tlab_old_top, %initialization_membar ], [ %slow_alloc_obj, %alloc_slow_path ]
   ret ptr addrspace(1) %obj
 }
