@@ -122,3 +122,7 @@ void trampoline_stub_Relocation::pd_fix_owner_after_move() {
   Unimplemented();
 }
 #endif // JEANDLE
+
+void jeandle_oop_addr_Relocation::fix_relocation_after_move(const CodeBuffer* src, CodeBuffer* dest) {
+  Unimplemented();
+}

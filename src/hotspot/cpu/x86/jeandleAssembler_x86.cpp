@@ -230,7 +230,8 @@ bool JeandleAssembler::is_oop_reloc(LinkSymbol& target, LinkKind kind) {
 }
 
 bool JeandleAssembler::is_oop_addr_reloc(LinkSymbol& target, LinkKind kind) {
-  Unimplemented();
+  // Unimplemented
+  return false;
 }
 
 bool JeandleAssembler::is_routine_call_reloc(LinkSymbol& target, LinkKind kind) {

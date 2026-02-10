@@ -163,3 +163,11 @@ void poll_Relocation::fix_relocation_after_move(const CodeBuffer* src, CodeBuffe
 
 void metadata_Relocation::pd_fix_value(address x) {
 }
+
+void jeandle_oop_addr_Relocation::fix_relocation_after_move(const CodeBuffer* src, CodeBuffer* dest) {
+  assert(addr_in_const(), "must in const section");
+  address old_addr = *(address*)addr();
+  int delta = dest - src;
+  address new_addr = old_addr + delta;
+  set_value(new_addr);
+}

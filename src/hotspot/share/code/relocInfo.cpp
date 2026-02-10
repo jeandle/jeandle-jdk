@@ -804,13 +804,6 @@ void internal_word_Relocation::fix_relocation_after_move(const CodeBuffer* src, 
   set_value(target);
 }
 
-void jeandle_oop_addr_Relocation::fix_relocation_after_move(const CodeBuffer* src, CodeBuffer* dest) {
-  assert(addr_in_const(), "must in const section");
-  address old_addr = *(address*)addr();
-  int delta = dest - src;
-  address new_addr = old_addr + delta;
-  set_value(new_addr);
-}
 
 address internal_word_Relocation::target() {
   address target = _target;

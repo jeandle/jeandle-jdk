@@ -217,6 +217,9 @@ class JeandleOopAddrReloc : public JeandleReloc {
   }
 
   void fixup_offset(int prolog_length) override {
+  // This relocation resides in the const section, so the offset does not
+  // need to be adjusted by the instruction section's prolog length.
+  // The _fixed_up flag is set solely for assertion checks in debug builds.
 #ifdef ASSERT
     _fixed_up = true;
 #endif
