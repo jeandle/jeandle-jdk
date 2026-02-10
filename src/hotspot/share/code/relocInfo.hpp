@@ -1496,6 +1496,7 @@ class jeandle_section_word_Relocation : public section_word_Relocation {
   friend class RelocationHolder;
   jeandle_section_word_Relocation() : section_word_Relocation(relocInfo::jeandle_section_word_type) { }
 
+  // Represents the addend in JeandleSectionWordReloc.
   int _offset;
 };
 
