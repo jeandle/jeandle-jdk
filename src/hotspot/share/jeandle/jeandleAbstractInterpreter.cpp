@@ -1407,8 +1407,6 @@ void JeandleAbstractInterpreter::invoke() {
     case Bytecodes::_invokevirtual:  // fall through
     case Bytecodes::_invokeinterface: {
       if (target->can_be_statically_bound()) {
-        assert((bc != Bytecodes::_invokeinterface) ||
-               (target->holder()->is_java_lang_Object()), "sanity");
         call_type = JeandleCompiledCall::STATIC_CALL;
         dest = SharedRuntime::get_resolve_opt_virtual_call_stub();
       } else {
