@@ -1336,8 +1336,7 @@ void JeandleAbstractInterpreter::invoke() {
     assert(method_signature == target->signature(), "method signature unmatched");
   }
 
-  // TODO: Additional receiver subtype checks for interface calls via invokespecial or invokeinterface.
-  // To keep consistent with C2, but no suitable test case for now.
+  // Additional receiver subtype checks for interface calls via invokespecial or invokeinterface.
   ciKlass* receiver_constraint = nullptr;
   if (bc == Bytecodes::_invokespecial && !target->is_object_initializer()) {
     ciInstanceKlass* sender_klass = _method->holder();
