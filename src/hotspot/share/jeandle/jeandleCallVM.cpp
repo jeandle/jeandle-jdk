@@ -137,6 +137,8 @@ void JeandleCallVM::generate_call_VM(const char* name, address routine_address, 
     llvm::Value* vm_result_ptr = ir_builder.CreateIntToPtr(ir_builder.getInt64((uint64_t)JavaThread::vm_result_offset()),
                                                            llvm::PointerType::get(context, llvm::jeandle::AddrSpace::TLSAddrSpace));
     ret_val = ir_builder.CreateLoad(pointer_type, vm_result_ptr);
+    // Clear the vm_result.
+    ir_builder.CreateStore(ir_builder.getInt64((intptr_t)nullptr), vm_result_ptr);
   }
 
   ir_builder.CreateRet(ret_val);
