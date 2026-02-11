@@ -1572,6 +1572,9 @@ bool JeandleAbstractInterpreter::inline_intrinsic(const ciMethod* target) {
 // Generate IR for calling into llvm FunctionCallee, without exception handling.
 llvm::CallInst* JeandleAbstractInterpreter::create_call(llvm::FunctionCallee callee, llvm::ArrayRef<llvm::Value *> args, llvm::CallingConv::ID calling_conv, llvm::ArrayRef<llvm::OperandBundleDef> deopt_bundle) {
   llvm::CallInst *call = _ir_builder.CreateCall(callee, args, deopt_bundle);
+  if (llvm::isa<llvm::ConstantExpr>(callee.getCallee())) {
+    call->addFnAttr(llvm::Attribute::get(call->getContext(), "gc-leaf-function"));
+  }
   call->setCallingConv(calling_conv);
   return call;
 }

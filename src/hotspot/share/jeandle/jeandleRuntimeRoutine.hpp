@@ -130,6 +130,7 @@
 // def( name            ,
 //      routine_address ,
 //      reachable       ,
+//      is_leaf         ,
 //      return_type     ,
 //      arg0_type       ,
 //      arg1_type       ,
@@ -139,11 +140,13 @@
   def(StubRoutines_dsin,                                             \
       StubRoutines::dsin(),                                          \
       true,                                                          \
+      true,                                                          \
       llvm::Type::getDoubleTy(context),                              \
       llvm::Type::getDoubleTy(context))                              \
                                                                      \
   def(StubRoutines_dcos,                                             \
       StubRoutines::dcos(),                                          \
+      true,                                                          \
       true,                                                          \
       llvm::Type::getDoubleTy(context),                              \
       llvm::Type::getDoubleTy(context))                              \
@@ -151,11 +154,13 @@
   def(StubRoutines_dtan,                                             \
       StubRoutines::dtan(),                                          \
       true,                                                          \
+      true,                                                          \
       llvm::Type::getDoubleTy(context),                              \
       llvm::Type::getDoubleTy(context))                              \
                                                                      \
   def(StubRoutines_dlog,                                             \
       StubRoutines::dlog(),                                          \
+      true,                                                          \
       true,                                                          \
       llvm::Type::getDoubleTy(context),                              \
       llvm::Type::getDoubleTy(context))                              \
@@ -163,17 +168,20 @@
   def(StubRoutines_dlog10,                                           \
       StubRoutines::dlog10(),                                        \
       true,                                                          \
+      true,                                                          \
       llvm::Type::getDoubleTy(context),                              \
       llvm::Type::getDoubleTy(context))                              \
                                                                      \
   def(StubRoutines_dexp,                                             \
       StubRoutines::dexp(),                                          \
       true,                                                          \
+      true,                                                          \
       llvm::Type::getDoubleTy(context),                              \
       llvm::Type::getDoubleTy(context))                              \
                                                                      \
   def(StubRoutines_dpow,                                             \
       StubRoutines::dpow(),                                          \
+      true,                                                          \
       true,                                                          \
       llvm::Type::getDoubleTy(context),                              \
       llvm::Type::getDoubleTy(context),                              \
@@ -182,30 +190,35 @@
   def(uncommon_trap,                                                 \
       SharedRuntime::uncommon_trap_blob()->entry_point(),            \
       true,                                                          \
+      false,                                                         \
       llvm::Type::getVoidTy(context),                                \
       llvm::Type::getInt32Ty(context))                               \
                                                                      \
   def(SharedRuntime_dsin,                                            \
       SharedRuntime::dsin,                                           \
       false,                                                         \
+      true,                                                          \
       llvm::Type::getDoubleTy(context),                              \
       llvm::Type::getDoubleTy(context))                              \
                                                                      \
   def(SharedRuntime_dcos,                                            \
       SharedRuntime::dcos,                                           \
       false,                                                         \
+      true,                                                          \
       llvm::Type::getDoubleTy(context),                              \
       llvm::Type::getDoubleTy(context))                              \
                                                                      \
   def(SharedRuntime_dtan,                                            \
       SharedRuntime::dtan,                                           \
       false,                                                         \
+      true,                                                          \
       llvm::Type::getDoubleTy(context),                              \
       llvm::Type::getDoubleTy(context))                              \
                                                                      \
   def(SharedRuntime_drem,                                            \
       SharedRuntime::drem,                                           \
       false,                                                         \
+      true,                                                          \
       llvm::Type::getDoubleTy(context),                              \
       llvm::Type::getDoubleTy(context),                              \
       llvm::Type::getDoubleTy(context))                              \
@@ -213,6 +226,7 @@
   def(SharedRuntime_frem,                                            \
       SharedRuntime::frem,                                           \
       false,                                                         \
+      true,                                                          \
       llvm::Type::getFloatTy(context),                               \
       llvm::Type::getFloatTy(context),                               \
       llvm::Type::getFloatTy(context))                               \
@@ -220,24 +234,28 @@
   def(SharedRuntime_dlog,                                            \
       SharedRuntime::dlog,                                           \
       false,                                                         \
+      true,                                                          \
       llvm::Type::getDoubleTy(context),                              \
       llvm::Type::getDoubleTy(context))                              \
                                                                      \
   def(SharedRuntime_dlog10,                                          \
       SharedRuntime::dlog10,                                         \
       false,                                                         \
+      true,                                                          \
       llvm::Type::getDoubleTy(context),                              \
       llvm::Type::getDoubleTy(context))                              \
                                                                      \
   def(SharedRuntime_dexp,                                            \
       SharedRuntime::dexp,                                           \
       false,                                                         \
+      true,                                                          \
       llvm::Type::getDoubleTy(context),                              \
       llvm::Type::getDoubleTy(context))                              \
                                                                      \
   def(SharedRuntime_dpow,                                            \
       SharedRuntime::dpow,                                           \
       false,                                                         \
+      true,                                                          \
       llvm::Type::getDoubleTy(context),                              \
       llvm::Type::getDoubleTy(context),                              \
       llvm::Type::getDoubleTy(context))                              \
@@ -245,6 +263,7 @@
   def(install_exceptional_return_for_call_vm,                        \
       JeandleRuntimeRoutine::install_exceptional_return_for_call_vm, \
       false,                                                         \
+      true,                                                          \
       llvm::Type::getVoidTy(context))                                \
 
 
@@ -272,6 +291,10 @@ class JeandleRuntimeRoutine : public AllStatic {
     return _routine_entry.contains(name);
   }
 
+  static bool is_gc_leaf(address addr) {
+    return _gc_leaf_routines.contains(addr);
+  }
+
 #ifdef ASSERT
   static llvm::StringMap<address> routine_entry() { return _routine_entry; }
 #endif
@@ -287,13 +310,17 @@ class JeandleRuntimeRoutine : public AllStatic {
 
   ALL_JEANDLE_INDIRECT_ROUTINES(DEF_INDIRECT_ROUTINE_CALLEE);
 
-#define DEF_DIRECT_ROUTINE_CALLEE(name, routine_address, reachable, return_type, ...)                                  \
+#define DEF_DIRECT_ROUTINE_CALLEE(name, routine_address, reachable, is_leaf, return_type, ...)                         \
   static llvm::FunctionCallee name##_callee(llvm::Module& target_module) {                                             \
     llvm::LLVMContext& context = target_module.getContext();                                                           \
     llvm::FunctionType* func_type = llvm::FunctionType::get(return_type, {__VA_ARGS__}, false);                        \
     if (reachable) {                                                                                                   \
       llvm::FunctionCallee callee = target_module.getOrInsertFunction(#name, func_type);                               \
-      llvm::cast<llvm::Function>(callee.getCallee())->setCallingConv(llvm::CallingConv::C);                            \
+      llvm::Function* func = llvm::cast<llvm::Function>(callee.getCallee());                                           \
+      func->setCallingConv(llvm::CallingConv::C);                                                                      \
+      if (is_leaf) {                                                                                                   \
+        func->addFnAttr(llvm::Attribute::get(context, "gc-leaf-function"));                                            \
+      }                                                                                                                \
       return callee;                                                                                                   \
     }                                                                                                                  \
     llvm::GlobalValue* address_value = target_module.getNamedValue(#name);                                             \
@@ -322,6 +349,7 @@ class JeandleRuntimeRoutine : public AllStatic {
 
  private:
   static llvm::StringMap<address> _routine_entry; // All the routines.
+  static llvm::DenseSet<address> _gc_leaf_routines; // All the gc leaf routines.
 
   // C/C++ routine implementations:
 

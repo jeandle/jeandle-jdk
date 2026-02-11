@@ -50,10 +50,16 @@
 #define GEN_ASSEMBLY_ROUTINE_BLOB(name) \
   generate_##name();
 
-#define REGISTER_DIRECT_ROUTINE(name, routine_address, reachable, return_type, ...) \
-  if (reachable) { _routine_entry.insert({llvm::StringRef(#name), (address)routine_address}); }
+#define REGISTER_DIRECT_ROUTINE(name, routine_address, reachable, is_leaf, return_type, ...) \
+  if (reachable) {                                                                           \
+    _routine_entry.insert({llvm::StringRef(#name), (address)routine_address});               \
+    if (is_leaf) {                                                                           \
+      _gc_leaf_routines.insert((address)routine_address);                                    \
+    }                                                                                        \
+  }
 
 llvm::StringMap<address> JeandleRuntimeRoutine::_routine_entry;
+llvm::DenseSet<address> JeandleRuntimeRoutine::_gc_leaf_routines;
 
 bool JeandleRuntimeRoutine::generate(llvm::TargetMachine* target_machine, llvm::DataLayout* data_layout) {
   // For each indirect routine, compile a runtime stub to wrap it.
