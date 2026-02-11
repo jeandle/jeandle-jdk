@@ -31,7 +31,8 @@
   enum {
     // AArch64 instructions are always 4 bytes long and 4-aligned, so
     // the two lowest offset bits can always be discarded.
-    offset_unit        =  JEANDLE_PRESENT(2) NOT_JEANDLE(4),
+    // But data in const section may be single byte aligned in Jeandle.
+    offset_unit        =  JEANDLE_PRESENT(1) NOT_JEANDLE(4),
     // Must be at least 1 for RelocInfo::narrow_oop_in_const.
     // Must be at least 2 for ZGC GC barrier patching.
     format_width       =  2

@@ -392,7 +392,7 @@ void JeandleCompiledCode::resolve_reloc_info(JeandleAssembler& assembler) {
   for (auto *block : link_graph->blocks()) {
     // Resolve relocations in the compiled code and constant pool.
     if (block->getSection().getName().compare(".text") != 0 &&
-        block->getSection().getName().compare(".data.rel.ro") != 0 &&
+        !block->getSection().getName().starts_with(".data.rel.ro") &&
         !block->getSection().getName().starts_with(".rodata")) {
       continue;
     }
