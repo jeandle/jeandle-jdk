@@ -93,7 +93,6 @@ void Relocation::pd_set_jeandle_data_value(address x, int addend, bool verify_on
   assert(type() == relocInfo::jeandle_section_word_type ||
          type() == relocInfo::jeandle_oop_type,
          "unexpected reloc type: %d", type());
-  assert(addend == 0, "maybe fix it later");
   if (verify_only) {
     return;
   }
@@ -104,24 +103,23 @@ void Relocation::pd_set_jeandle_data_value(address x, int addend, bool verify_on
   //   2 - adrp Rx, target_page
   //       add  Ry, Rx, #offset_in_page
   address insn_addr = addr();
+  uintptr_t target = (uintptr_t)x;
+  uintptr_t fixup = (uintptr_t)insn_addr;
   if (NativeInstruction::is_adrp_at(insn_addr)) {
-    ptrdiff_t offset = x - insn_addr;
-    uintptr_t pc_page = (uintptr_t)insn_addr >> 12;
-    uintptr_t adr_page = (uintptr_t)x >> 12;
-    offset = adr_page - pc_page;
+    // Quoted from llvm::jitlink::aarch64::EdgeKind_aarch64::Page21:
+    //     Fixup <- (((Target + Addend) & ~0xfff) - (Fixup & ~0xfff)) >> 12 : int21
+    int offset = (((target + addend) & ~0xfff) - (fixup & ~0xfff)) >> 12;
     int offset_lo = offset & 3;
     offset >>= 2;
     Instruction_aarch64::spatch(insn_addr, 23, 5, offset);
     Instruction_aarch64::patch(insn_addr, 30, 29, offset_lo);
   } else if (NativeInstruction::is_ldr_unsigned_at(insn_addr)) {
-    uintptr_t dest = (uintptr_t)x;
-    int offset_lo = dest & 0xfff;
-    uint32_t size = Instruction_aarch64::extract(*(uint32_t*)insn_addr, 31, 30);
-    Instruction_aarch64::patch(insn_addr, 21, 10, offset_lo >> size);
-    guarantee(((dest >> size) << size) == dest, "misaligned target");
+    uint32_t shift = Instruction_aarch64::extract(*(uint32_t*)insn_addr, 31, 30);
+    int offset_lo = ((target + addend) & 0xfff) >> shift;
+    Instruction_aarch64::patch(insn_addr, 21, 10, offset_lo);
+    guarantee((((target + addend) >> shift) << shift) == target, "misaligned target");
   } else if (NativeInstruction::is_add_imm_at(insn_addr)) {
-    uintptr_t dest = (uintptr_t)x;
-    int offset_lo = dest & 0xfff;
+    int offset_lo = (target + addend) & 0xfff;
     Instruction_aarch64::patch(insn_addr, 21, 10, offset_lo);
   } else {
     ShouldNotReachHere();
