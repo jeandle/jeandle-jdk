@@ -1406,8 +1406,13 @@ void JeandleAbstractInterpreter::invoke() {
   switch (bc) {
     case Bytecodes::_invokevirtual:  // fall through
     case Bytecodes::_invokeinterface: {
-      call_type = JeandleCompiledCall::DYNAMIC_CALL;
-      dest = SharedRuntime::get_resolve_virtual_call_stub();
+      if (target->can_be_statically_bound()) {
+        call_type = JeandleCompiledCall::STATIC_CALL;
+        dest = SharedRuntime::get_resolve_opt_virtual_call_stub();
+      } else {
+        call_type = JeandleCompiledCall::DYNAMIC_CALL;
+        dest = SharedRuntime::get_resolve_virtual_call_stub();
+      }
       break;
     }
     case Bytecodes::_invokedynamic:
@@ -1417,13 +1422,14 @@ void JeandleAbstractInterpreter::invoke() {
       break;
     }
     case Bytecodes::_invokehandle: {
+      call_type = JeandleCompiledCall::STATIC_CALL;
       if (target->is_static()) {
-        call_type = JeandleCompiledCall::STATIC_CALL;
         dest = SharedRuntime::get_resolve_static_call_stub();
       } else {
-        call_type = JeandleCompiledCall::DYNAMIC_CALL;
-        dest = SharedRuntime::get_resolve_virtual_call_stub();
+        assert(target->can_be_statically_bound(), "sanity");
+        dest = SharedRuntime::get_resolve_opt_virtual_call_stub();
       }
+      break;
     }
     case Bytecodes::_invokespecial: {
       call_type = JeandleCompiledCall::STATIC_CALL;
