@@ -54,7 +54,7 @@ class JeandleAssembler : public StackObj {
 
   void emit_section_word_reloc(int offset, LinkKind kind, int64_t addend, address target, int reloc_section);
 
-  void emit_oop_reloc(int offset, jobject oop_handle);
+  void emit_oop_reloc(int offset, jobject oop_handle, int64_t addend);
 
   void emit_oop_addr_reloc(int offset, jobject oop_handle);
 
@@ -70,7 +70,7 @@ class JeandleAssembler : public StackObj {
 
   static bool is_external_call_reloc(LinkSymbol& target, LinkKind kind);
 
-  static bool is_const_reloc(LinkSymbol& target, LinkKind kind);
+  static bool is_section_word_reloc(LinkSymbol& target, LinkKind kind);
 
   // Mirrors C2's InteriorEntryAlignment flag.
   int interior_entry_alignment() const;

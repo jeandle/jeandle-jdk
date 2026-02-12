@@ -1,0 +1,144 @@
+# Java / Foreign
+############################################################
+java/foreign/TestHandshake.java   linux-aarch64,linux-x64
+java/foreign/TestSpliterator.java linux-x64
+
+# Java / Lang
+############################################################
+java/lang/Character/CheckUnicode.java                                     linux-aarch64,linux-x64
+java/lang/Character/UnicodeCasingTest.java                                linux-aarch64,linux-x64
+java/lang/constant/MethodTypeDescTest.java                                linux-aarch64,linux-x64
+java/lang/invoke/VarHandles/VarHandleTestByteArrayAsDouble.java           linux-aarch64
+java/lang/Math/CubeRootTests.java                                         linux-aarch64
+java/lang/Math/Log1pTests.java                                            linux-aarch64
+java/lang/Math/WorstCaseTests.java                                        linux-aarch64
+java/lang/Object/FinalizationOption.java                                  linux-aarch64,linux-x64
+java/lang/ProcessHandle/PermissionTest.java                               linux-aarch64,linux-x64
+java/lang/ref/Basic.java                                                  linux-aarch64,linux-x64
+java/lang/ref/FinalizeOverride.java                                       linux-aarch64,linux-x64
+java/lang/ref/FinalizerHistogramTest.java                                 linux-aarch64,linux-x64
+java/lang/ref/ReferenceEnqueue.java                                       linux-x64
+java/lang/reflect/AccessFlag/FieldAccessFlagTest.java                     linux-x64
+java/lang/reflect/AccessFlag/MethodAccessFlagTest.java                    linux-x64
+java/lang/reflect/AccessFlag/VersionedLocationsTest.java                  linux-x64
+java/lang/reflect/Field/Set.java                                          linux-x64
+java/lang/reflect/Generics/getAnnotationTest.java                         linux-x64
+java/lang/reflect/IllegalArgumentsTest.java                               linux-aarch64,linux-x64
+java/lang/reflect/Method/defaultMethodModeling/DefaultMethodModeling.java linux-x64
+java/lang/reflect/Parameter/WithoutParameters.java                        linux-x64
+java/lang/StrictMath/Atan2Tests.java                                      linux-aarch64
+java/lang/StrictMath/ExhaustingTests.java                                 linux-aarch64,linux-x64
+java/lang/StrictMath/ExpTests.java                                        linux-aarch64
+java/lang/StrictMath/TrigTests.java                                       linux-aarch64
+java/lang/String/LiteralReplace.java                                      linux-x64
+java/lang/String/SpecialCasingTest.java                                   linux-aarch64,linux-x64
+java/lang/String/StringJoinTest.java                                      linux-x64
+java/lang/String/ToLowerCase.java                                         linux-aarch64
+java/lang/String/UnicodeCasingTest.java                                   linux-aarch64,linux-x64
+java/lang/StringBuffer/Comparison.java                                    linux-x64
+java/lang/StringBuffer/SBBasher.java                                      linux-x64
+java/lang/StringBuilder/BuilderForwarding.java                            linux-x64
+java/lang/StringBuilder/CharAt.java                                       linux-x64
+java/lang/StringBuilder/Comparison.java                                   linux-x64
+java/lang/StringBuilder/Supplementary.java                                linux-x64
+java/lang/System/FileEncodingTest.java                                    linux-x64
+java/lang/Thread/HoldsLock.java                                           linux-x64
+java/lang/Thread/MainThreadTest.java                                      linux-x64
+java/lang/Thread/ThreadSleepEvent.java                                    linux-aarch64
+java/lang/Thread/virtual/Locking.java                                     linux-x64
+java/lang/Thread/virtual/stress/YieldALot.java#id0                        linux-x64
+java/lang/Throwable/ChainedExceptions.java                                linux-x64
+java/lang/RuntimeTests/exec/ExecEmptyString.java                          linux-x64
+java/lang/RuntimeTests/exec/ExecWithInput.java                            linux-x64
+
+# Java / Math
+############################################################
+java/math/BigInteger/largeMemory/SymmetricRangeTests.java linux-aarch64,linux-x64
+
+# Java / Util
+############################################################
+java/util/BitSet/stream/BitSetStreamTest.java                             linux-x64
+java/util/Collection/HotPotatoes.java                                     linux-x64
+java/util/concurrent/ArrayBlockingQueue/WhiteBox.java                     linux-aarch64,linux-x64
+java/util/concurrent/forkjoin/AsyncShutdownNowInvokeAnyRace.java          linux-x64
+java/util/concurrent/locks/Lock/TimedAcquireLeak.java                     linux-aarch64,linux-x64
+java/util/logging/LoggingDeadlock3.java                                   linux-x64
+java/util/logging/TestLogConfigurationDeadLock.java                       linux-x64
+java/util/logging/TestLogConfigurationDeadLockWithConf.java               linux-x64
+java/util/logging/TestLoggerBundleSync.java                               linux-x64
+java/util/Objects/CheckLongIndex.java                                     linux-aarch64,linux-x64
+java/util/Observable/ClearChanged.java                                    linux-x64
+java/util/PriorityQueue/ForgetMeNot.java                                  linux-aarch64,linux-x64
+java/util/PriorityQueue/NoNulls.java                                      linux-x64
+java/util/Properties/EncodingTest.java                                    linux-x64
+java/util/Random/RandomTestBsi1999.java                                   linux-aarch64
+java/util/Random/T8282144.java                                            linux-aarch64
+java/util/regex/whitebox/GraphemeTest.java                                linux-x64
+java/util/stream/test/org/openjdk/tests/java/util/stream/SliceOpTest.java linux-aarch64,linux-x64
+java/util/stream/test/org/openjdk/tests/java/util/stream/WhileOpTest.java linux-aarch64
+java/util/WeakHashMap/GCDuringIteration.java                              linux-aarch64,linux-x64
+
+# Jdk / Classfile
+############################################################
+jdk/classfile/CorpusTest.java linux-aarch64,linux-x64
+
+# Jdk / Internal
+############################################################
+jdk/internal/loader/ClassLoaderValue/ClassLoaderValueTest.java  linux-aarch64
+jdk/internal/math/FloatingDecimal/TestFDBigInteger.java         linux-x64
+jdk/internal/math/FloatingDecimal/TestFloatingDecimal.java      linux-aarch64
+jdk/internal/reflect/CallerSensitive/CallerSensitiveFinder.java linux-x64
+jdk/internal/reflect/CallerSensitive/CheckCSMs.java             linux-x64
+jdk/internal/shellsupport/doc/JavadocHelperTest.java            linux-aarch64
+
+# Jdk / Javadoc
+############################################################
+jdk/javadoc/doclet/testClassTree/TestClassTree.java                                               linux-x64
+jdk/javadoc/doclet/testHelpFile/TestHelpFile.java                                                 linux-x64
+jdk/javadoc/doclet/testHelpOption/TestHelpOption.java                                             linux-x64
+jdk/javadoc/doclet/testHiddenMembers/TestHiddenMembers.java                                       linux-x64
+jdk/javadoc/doclet/testHtmlStrongTag/TestHtmlStrongTag.java                                       linux-x64
+jdk/javadoc/doclet/testHtmlTag/TestHtmlTag.java                                                   linux-x64
+jdk/javadoc/doclet/testIncluded/TestIncluded.java                                                 linux-x64
+jdk/javadoc/doclet/testInheritDocWithinInappropriateTag/TestInheritDocWithinInappropriateTag.java linux-x64
+jdk/javadoc/doclet/testLinkTaglet/TestLinkTagletWithModule.java                                   linux-x64
+jdk/javadoc/doclet/testMissingComment/TestMissingComment.java                                     linux-x64
+jdk/javadoc/doclet/testValueTag/TestValueTag.java                                                 linux-x64
+jdk/javadoc/tool/VerifyLocale.java                                                                linux-x64
+jdk/javadoc/tool/sourceOption/SourceOption.java                                                   linux-x64
+
+# Jdk / Jfr
+############################################################
+jdk/jfr/event/gc/configuration/TestGCConfigurationEvent.java linux-aarch64,linux-x64
+
+# Jdk / Jshell
+############################################################
+jdk/jshell/AnalyzeSnippetTest.java             linux-x64
+jdk/jshell/CommandCompletionTest.java          linux-aarch64,linux-x64
+jdk/jshell/CompletionSuggestionTest.java       linux-x64
+jdk/jshell/CustomInputToolBuilder.java         linux-x64
+jdk/jshell/ErrorTranslationTest.java           linux-x64
+jdk/jshell/HistoryTest.java                    linux-x64
+jdk/jshell/HistoryUITest.java                  linux-x64
+jdk/jshell/InferTypeTest.java                  linux-x64
+jdk/jshell/PasteAndMeasurementsUITest.java     linux-x64
+jdk/jshell/SourceLevelTest.java                linux-x64
+jdk/jshell/StartOptionTest.java                linux-x64
+jdk/jshell/ToolCommandOptionTest.java          linux-aarch64,linux-x64
+jdk/jshell/ToolEnableNativeAccessTest.java     linux-x64
+jdk/jshell/ToolEnablePreviewTest.java          linux-aarch64,linux-x64
+jdk/jshell/ToolFormatTest.java                 linux-aarch64,linux-x64
+jdk/jshell/ToolLocalSimpleTest.java            linux-aarch64,linux-x64
+jdk/jshell/ToolProviderTest.java               linux-x64
+jdk/jshell/ToolRetainTest.java                 linux-aarch64,linux-x64
+jdk/jshell/ToolShiftTabTest.java               linux-x64
+jdk/jshell/ToolSimpleTest.java                 linux-aarch64,linux-x64
+jdk/jshell/ToolTabSnippetTest.java             linux-x64
+jdk/jshell/ToolingTest.java                    linux-aarch64,linux-x64
+jdk/jshell/TypeNameTest.java                   linux-x64
+jdk/jshell/UndefinedClassTest.java             linux-x64
+jdk/jshell/T8146368/JShellToolTest8146368.java linux-x64
+
+# Jdk / Test
+############################################################
+jdk/test/lib/hprof/HprofTest.java linux-aarch64

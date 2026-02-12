@@ -1,0 +1,78 @@
+# Tools / Doclint
+############################################################
+tools/doclint/html/ListTagsTest.java linux-x64
+
+# Tools / Javac
+############################################################
+tools/javac/7142086/T7142086.java                                                                  linux-x64
+tools/javac/annotations/neg/8022765/VerifyErroneousAnnotationsAttributed.java                      linux-x64
+tools/javac/api/6733837/T6733837.java                                                              linux-x64
+tools/javac/api/EndPositions.java                                                                  linux-x64
+tools/javac/cast/intersection/IntersectionTypeCastTest.java                                        linux-x64
+tools/javac/classfiles/attributes/annotations/RuntimeAnnotationsForInnerEnumTest.java              linux-x64
+tools/javac/classfiles/attributes/annotations/RuntimeParameterAnnotationsForGenericMethodTest.java linux-x64
+tools/javac/classfiles/attributes/annotations/RuntimeParameterAnnotationsForLambdaTest.java        linux-x64
+tools/javac/classfiles/attributes/LocalVariableTable/T8136453/T8136453.java                        linux-x64
+tools/javac/classreader/TruncatedClassFileTest.java                                                linux-x64
+tools/javac/defaultMethods/static/hiding/InterfaceMethodHidingTest.java                            linux-x64
+tools/javac/defaultMethods/super/TestDefaultSuperCall.java                                         linux-x64
+tools/javac/defaultMethods/syntax/TestDefaultMethodsSyntax.java                                    linux-x64
+tools/javac/Diagnostics/6769027/T6769027.java                                                      linux-x64
+tools/javac/diags/CheckExamples.java                                                               linux-x64
+tools/javac/diags/RunExamples.java                                                                 linux-x64
+tools/javac/failover/CheckAttributedTree.java                                                      linux-x64
+tools/javac/file/MultiReleaseJar/MultiReleaseJarAwareSJFM.java                                     linux-x64
+tools/javac/generics/diamond/7030150/GenericConstructorAndDiamondTest.java                         linux-x64
+tools/javac/generics/diamond/7046778/DiamondAndInnerClassTest.java                                 linux-x64
+tools/javac/generics/inference/8176534/TestUncheckedCalls.java                                     linux-x64
+tools/javac/generics/inference/7086601/T7086601b.java                                              linux-x64
+tools/javac/importscope/ImportDependenciesTest.java                                                linux-x64
+tools/javac/importscope/NegativeCyclicDependencyTest.java                                          linux-x64
+tools/javac/importscope/TestDuplicateImport.java                                                   linux-x64
+tools/javac/lambda/LambdaParserTest.java                                                           linux-aarch64,linux-x64
+tools/javac/lambda/intersection/IntersectionTargetTypeTest.java                                    linux-x64
+tools/javac/lambda/typeInference/combo/TypeInferenceComboTest.java                                 linux-x64
+tools/javac/lambda/deduplication/ClassFieldDeduplication.java                                      linux-x64
+tools/javac/lambdaShapes/org/openjdk/tests/javac/FDTest.java                                       linux-x64
+tools/javac/patterns/BindingsTest1.java                                                            linux-aarch64
+tools/javac/patterns/DuplicateBindingTest.java                                                     linux-aarch64
+tools/javac/patterns/BreakAndLoops.java                                                            linux-aarch64
+tools/javac/patterns/Guards.java                                                                   linux-aarch64
+tools/javac/patterns/NullSwitch.java                                                               linux-aarch64
+tools/javac/patterns/Switches.java                                                                 linux-aarch64
+tools/javac/patterns/T8312229.java                                                                 linux-aarch64
+tools/javac/patterns/Unnamed.java                                                                  linux-aarch64
+tools/javac/patterns/UnnamedErrors.java                                                            linux-aarch64
+tools/javac/processing/model/util/elements/doccomments/TestPackageInfoComments.java                linux-x64
+tools/javac/switchexpr/SwitchExpressionSimpleVisitorTest.java                                      linux-aarch64
+tools/javac/switchexpr/WrongYieldTest.java                                                         linux-aarch64
+tools/javac/switchexpr/DefiniteAssignment1.java                                                    linux-aarch64
+tools/javac/switchexpr/EmptySwitch.java                                                            linux-aarch64
+tools/javac/switchexpr/ExpressionSwitch.java                                                       linux-aarch64
+tools/javac/switchexpr/ExpressionSwitchBreaks1.java                                                linux-aarch64
+tools/javac/switchexpr/ExpressionSwitchBreaks2.java                                                linux-aarch64
+tools/javac/switchexpr/ExpressionSwitchBugs.java                                                   linux-aarch64
+tools/javac/switchexpr/ExpressionSwitchEmbedding.java                                              linux-aarch64
+tools/javac/switchexpr/ExpressionSwitchFallThrough.java                                            linux-aarch64
+tools/javac/switchexpr/ExpressionSwitchFallThrough1.java                                           linux-aarch64
+tools/javac/switchexpr/ExpressionSwitchFlow.java                                                   linux-aarch64
+tools/javac/switchexpr/ExpressionSwitchNotExhaustive.java                                          linux-aarch64
+tools/javac/switchexpr/ExpressionSwitchSynchronized.java                                           linux-aarch64
+tools/javac/switchexpr/TryCatch.java                                                               linux-aarch64
+tools/javac/switchexpr/TryCatchFinally.java                                                        linux-aarch64
+tools/javac/switchextra/MultipleLabelsExpression.java                                              linux-aarch64
+tools/javac/switchnull/SwitchNull.java                                                             linux-aarch64,linux-x64
+tools/javac/tree/JavacTreeScannerTest.java                                                         linux-aarch64
+tools/javac/tree/SourceDocTreeScannerTest.java                                                     linux-aarch64
+tools/javac/tree/SourceTreeScannerTest.java                                                        linux-aarch64
+tools/javac/tree/TreePosTest.java                                                                  linux-aarch64
+tools/javac/unicode/SupplementaryJavaID6.java                                                      linux-x64
+tools/javac/warnings/ThisEscape.java                                                               linux-aarch64
+
+# Tools / Jdeps
+############################################################
+tools/jdeps/Options.java                        linux-x64
+tools/jdeps/listdeps/ListModuleDeps.java        linux-x64
+tools/jdeps/missingDeps/MissingDepsTest.java    linux-x64
+tools/jdeps/modules/CheckModuleTest.java        linux-x64
+tools/jdeps/multiVersion/MultiVersionError.java linux-x64
