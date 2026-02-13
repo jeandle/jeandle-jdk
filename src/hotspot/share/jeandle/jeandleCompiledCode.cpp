@@ -116,7 +116,9 @@ class JeandleCallReloc : public JeandleReloc {
 
   void emit_reloc(JeandleAssembler& assembler) override {
     // Each call reloc has an oopmap, except for EXTERNAL_CALL.
-    assert((_call->type() != JeandleCompiledCall::EXTERNAL_CALL && _stack_map != nullptr) ||
+    assert((_call->type() != JeandleCompiledCall::EXTERNAL_CALL && _call->type() != JeandleCompiledCall::ROUTINE_CALL && _stack_map != nullptr) ||
+           (_call->type() == JeandleCompiledCall::ROUTINE_CALL && JeandleRuntimeRoutine::is_gc_leaf(_call->target()) && _stack_map == nullptr) ||
+           (_call->type() == JeandleCompiledCall::ROUTINE_CALL && !JeandleRuntimeRoutine::is_gc_leaf(_call->target()) && _stack_map != nullptr) ||
            (_call->type() == JeandleCompiledCall::EXTERNAL_CALL && _stack_map == nullptr),
            "unmatched call type and oopmap");
     if (_stack_map != nullptr) {
@@ -410,10 +412,15 @@ void JeandleCompiledCode::resolve_reloc_info(JeandleAssembler& assembler) {
 
         // TODO: Set the right bci.
         // JeandleCallReloc for a routine call site will be created during stackmaps resolving because an oopmap is required.
-        _routine_call_sites[inst_end_offset] = new CallSiteInfo(JeandleCompiledCall::ROUTINE_CALL,
-                                                                target_addr,
-                                                                -1/* bci */,
-                                                                target_addr == JeandleRuntimeRoutine::get_routine_entry("uncommon_trap")/* has_deopt_operands */);
+        CallSiteInfo* call_info = new CallSiteInfo(JeandleCompiledCall::ROUTINE_CALL,
+                                                    target_addr,
+                                                    -1/* bci */,
+                                                    target_addr == JeandleRuntimeRoutine::get_routine_entry("uncommon_trap")/* has_deopt_operands */);
+        if (JeandleRuntimeRoutine::is_gc_leaf(target_addr)) {
+          relocs.push_back(new JeandleCallReloc(inst_end_offset, _env, _method, nullptr /* no oopmap */, call_info));
+        } else {
+          _routine_call_sites[inst_end_offset] = call_info;
+        }
       } else if (JeandleAssembler::is_external_call_reloc(target, edge.getKind())) {
         // External call relocations.
         address target_addr = (address)DynamicLibrary::SearchForAddressOfSymbol(target_name.str().c_str());

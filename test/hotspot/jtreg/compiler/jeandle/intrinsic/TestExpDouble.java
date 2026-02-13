@@ -71,9 +71,14 @@ public class TestExpDouble {
         if (is_x86) {
             checker.checkNext("call double @StubRoutines_dexp");
         } else {
-            checker.checkNextPattern("call double inttoptr \\(i64 (\\d+) to ptr\\)");
+            checker.checkNextPattern("call double inttoptr \\(i64 (\\d+) to ptr\\).*#\\d+");
         }
         checker.checkNext("ret double");
+        // check gc-leaf-function
+        if (is_x86) {
+            checker.checkPattern("declare double @StubRoutines_dexp.*#\\d+");
+        }
+        checker.checkPattern("attributes #\\d+ = \\{ \"gc-leaf-function\" \\}");
 
         // intrinsic by SharedRuntime
         if (is_x86) {
@@ -113,8 +118,11 @@ public class TestExpDouble {
             checker.checkNext("entry:");
             checker.checkNext("br label %bci_0");
             checker.checkNext("bci_0:");
-            checker.checkNextPattern("call double inttoptr \\(i64 (\\d+) to ptr\\)");
+            // check gc-leaf-function
+            checker.checkNextPattern("call double inttoptr \\(i64 (\\d+) to ptr\\).*#\\d+");
             checker.checkNext("ret double");
+            checker.checkPattern("attributes #\\d+ = \\{ \"gc-leaf-function\" \\}");
+            
         }
     }
 

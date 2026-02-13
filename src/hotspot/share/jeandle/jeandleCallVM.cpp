@@ -97,6 +97,7 @@ void JeandleCallVM::generate_call_VM(const char* name, address routine_address, 
   ir_builder.SetInsertPoint(forward_exception_block);
 
   llvm::CallInst* call_inst = ir_builder.CreateCall(JeandleRuntimeRoutine::install_exceptional_return_for_call_vm_callee(target_module), {});
+  call_inst->addFnAttr(llvm::Attribute::get(call_inst->getContext(), "gc-leaf-function"));
   call_inst->setCallingConv(llvm::CallingConv::C);
 
   // Return
