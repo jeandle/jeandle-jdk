@@ -53,9 +53,9 @@
 #define REGISTER_DIRECT_ROUTINE(name, routine_address, reachable, is_leaf, return_type, ...) \
   if (reachable) {                                                                           \
     _routine_entry.insert({llvm::StringRef(#name), (address)routine_address});               \
-    if (is_leaf) {                                                                           \
-      _gc_leaf_routines.insert((address)routine_address);                                    \
-    }                                                                                        \
+  }                                                                                          \
+  if (is_leaf) {                                                                             \
+    _gc_leaf_routines.insert((address)routine_address);                                      \
   }
 
 llvm::StringMap<address> JeandleRuntimeRoutine::_routine_entry;

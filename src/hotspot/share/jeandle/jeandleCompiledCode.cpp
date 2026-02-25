@@ -411,7 +411,6 @@ void JeandleCompiledCode::resolve_reloc_info(JeandleAssembler& assembler) {
         int inst_end_offset = JeandleAssembler::fixup_call_inst_offset(static_cast<int>(block->getAddress().getValue() + edge.getOffset()));
 
         // TODO: Set the right bci.
-        // JeandleCallReloc for a routine call site will be created during stackmaps resolving because an oopmap is required.
         CallSiteInfo* call_info = new CallSiteInfo(JeandleCompiledCall::ROUTINE_CALL,
                                                     target_addr,
                                                     -1/* bci */,
@@ -419,6 +418,7 @@ void JeandleCompiledCode::resolve_reloc_info(JeandleAssembler& assembler) {
         if (JeandleRuntimeRoutine::is_gc_leaf(target_addr)) {
           relocs.push_back(new JeandleCallReloc(inst_end_offset, _env, _method, nullptr /* no oopmap */, call_info));
         } else {
+          // JeandleCallReloc for a non-gc-leaf routine call site will be created during stackmaps resolving because an oopmap is required.
           _routine_call_sites[inst_end_offset] = call_info;
         }
       } else if (JeandleAssembler::is_external_call_reloc(target, edge.getKind())) {

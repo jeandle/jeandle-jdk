@@ -1578,7 +1578,12 @@ bool JeandleAbstractInterpreter::inline_intrinsic(const ciMethod* target) {
 llvm::CallInst* JeandleAbstractInterpreter::create_call(llvm::FunctionCallee callee, llvm::ArrayRef<llvm::Value *> args, llvm::CallingConv::ID calling_conv, llvm::ArrayRef<llvm::OperandBundleDef> deopt_bundle) {
   llvm::CallInst *call = _ir_builder.CreateCall(callee, args, deopt_bundle);
   if (llvm::isa<llvm::ConstantExpr>(callee.getCallee())) {
-    call->addFnAttr(llvm::Attribute::get(call->getContext(), "gc-leaf-function"));
+    llvm::ConstantExpr* callee_address = llvm::dyn_cast<llvm::ConstantExpr>(callee.getCallee());
+    llvm::ConstantInt* addr_value = llvm::cast<llvm::ConstantInt>(callee_address->getOperand(0));
+    address target_addr = (address)addr_value->getZExtValue();
+    if (JeandleRuntimeRoutine::is_gc_leaf(target_addr)) {
+      call->addFnAttr(llvm::Attribute::get(call->getContext(), "gc-leaf-function"));
+    }
   }
   call->setCallingConv(calling_conv);
   return call;
