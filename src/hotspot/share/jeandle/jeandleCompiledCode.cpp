@@ -115,12 +115,17 @@ class JeandleCallReloc : public JeandleReloc {
     _env(env), _method(method), _stack_map(stack_map), _call(call) {}
 
   void emit_reloc(JeandleAssembler& assembler) override {
+#ifdef ASSERT
     // Each call reloc has an oopmap, except for EXTERNAL_CALL.
-    assert((_call->type() != JeandleCompiledCall::EXTERNAL_CALL && _call->type() != JeandleCompiledCall::ROUTINE_CALL && _stack_map != nullptr) ||
-           (_call->type() == JeandleCompiledCall::ROUTINE_CALL && JeandleRuntimeRoutine::is_gc_leaf(_call->target()) && _stack_map == nullptr) ||
-           (_call->type() == JeandleCompiledCall::ROUTINE_CALL && !JeandleRuntimeRoutine::is_gc_leaf(_call->target()) && _stack_map != nullptr) ||
-           (_call->type() == JeandleCompiledCall::EXTERNAL_CALL && _stack_map == nullptr),
-           "unmatched call type and oopmap");
+    if (_call->type() == JeandleCompiledCall::ROUTINE_CALL) {
+      bool is_gc_leaf = JeandleRuntimeRoutine::is_gc_leaf(_call->target());
+      assert(is_gc_leaf == (_stack_map == nullptr), "unmatched call type and oopmap");
+    } else if (_call->type() == JeandleCompiledCall::EXTERNAL_CALL) {
+      assert(_stack_map == nullptr, "unmatched call type and oopmap");
+    } else {
+      assert(_stack_map != nullptr, "unmatched call type and oopmap");
+    }
+#endif // ASSERT
     if (_stack_map != nullptr) {
       process_stack_map();
     }

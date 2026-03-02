@@ -19,6 +19,7 @@
  */
 
 #include "jeandle/__llvmHeadersBegin__.hpp"
+#include "llvm/Analysis/ConstantFolding.h"
 #include "llvm/IR/Attributes.h"
 #include "llvm/IR/Jeandle/Attributes.h"
 #include "llvm/IR/Jeandle/GCStrategy.h"
@@ -1577,11 +1578,10 @@ bool JeandleAbstractInterpreter::inline_intrinsic(const ciMethod* target) {
 // Generate IR for calling into llvm FunctionCallee, without exception handling.
 llvm::CallInst* JeandleAbstractInterpreter::create_call(llvm::FunctionCallee callee, llvm::ArrayRef<llvm::Value *> args, llvm::CallingConv::ID calling_conv, llvm::ArrayRef<llvm::OperandBundleDef> deopt_bundle) {
   llvm::CallInst *call = _ir_builder.CreateCall(callee, args, deopt_bundle);
-  if (llvm::isa<llvm::ConstantExpr>(callee.getCallee())) {
-    llvm::ConstantExpr* callee_address = llvm::dyn_cast<llvm::ConstantExpr>(callee.getCallee());
-    llvm::ConstantInt* addr_value = llvm::cast<llvm::ConstantInt>(callee_address->getOperand(0));
-    address target_addr = (address)addr_value->getZExtValue();
-    if (JeandleRuntimeRoutine::is_gc_leaf(target_addr)) {
+  if (auto callee_constant = llvm::dyn_cast<llvm::Constant>(callee.getCallee())) {
+    llvm::ConstantInt* addr_value = llvm::dyn_cast<llvm::ConstantInt>(
+      llvm::ConstantFoldCastOperand(llvm::Instruction::PtrToInt, callee_constant, llvm::Type::getInt64Ty(*_context), _module.getDataLayout()));
+    if (addr_value != nullptr && JeandleRuntimeRoutine::is_gc_leaf((address)addr_value->getZExtValue())) {
       call->addFnAttr(llvm::Attribute::get(call->getContext(), "gc-leaf-function"));
     }
   }
