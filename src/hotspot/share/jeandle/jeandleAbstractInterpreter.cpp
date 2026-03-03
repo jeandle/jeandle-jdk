@@ -2564,7 +2564,7 @@ void JeandleAbstractInterpreter::shared_unlock(LockValue lock) {
   llvm::FunctionCallee monitorexit_callee = JeandleRuntimeRoutine::SharedRuntime_complete_monitor_unlocking_C_callee(_module);
   llvm::CallInst* current_thread = call_java_op("jeandle.current_thread", {});
   llvm::CallInst* call_monitorexit = _ir_builder.CreateCall(monitorexit_callee, {lock.object().value(), lock.lock(), current_thread});
-  call_monitorexit->setCallingConv(llvm::CallingConv::Hotspot_JIT);
+  call_monitorexit->setCallingConv(llvm::CallingConv::C);
 }
 
 void JeandleAbstractInterpreter::monitorenter() {
