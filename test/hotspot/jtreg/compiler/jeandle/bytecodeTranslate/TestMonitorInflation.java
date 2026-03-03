@@ -25,7 +25,7 @@
  *                   -XX:CompileCommand=compileonly,compiler.jeandle.bytecodeTranslate.TestMonitorInflation::handleA
  *                   -XX:CompileCommand=compileonly,compiler.jeandle.bytecodeTranslate.TestMonitorInflation::clearStack
  *                   -XX:CompileCommand=compileonly,compiler.jeandle.bytecodeTranslate.TestMonitorInflation::reenterTheLock
- *                   -XX:-UseJeandleCompiler compiler.jeandle.bytecodeTranslate.TestMonitorInflation
+ *                   -XX:+UseJeandleCompiler compiler.jeandle.bytecodeTranslate.TestMonitorInflation
  */
 
 package compiler.jeandle.bytecodeTranslate;
