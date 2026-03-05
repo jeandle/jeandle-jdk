@@ -175,6 +175,7 @@ check_subtype:
 declare hotspotcc ptr addrspace(1) @new_instance(ptr, ptr)
 
 ; Implementation of Java new object
+; TODO: Support prefetch instructions for next allocations.
 define private hotspotcc ptr addrspace(1) @jeandle.new_instance(ptr %klass, i32 %size_in_bytes) noinline "lower-phase"="1" {
 entry:
   %use_tlab = load i1, ptr @VMOptions.UseTLAB
