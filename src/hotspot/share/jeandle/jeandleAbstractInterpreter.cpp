@@ -126,6 +126,8 @@ bool JeandleVMState::update_phi_nodes(JeandleVMState* income_jvm, llvm::BasicBlo
     llvm::PHINode* phi_node = llvm::cast<llvm::PHINode>(_locals[i].value());
 
     if (income_locals[i].is_null() || phi_node->getType() != income_locals[i].value()->getType()) {
+      assert(phi_node->use_empty(), "cannot use invalid local variable");
+      phi_node->eraseFromParent();
       invalidate_local(i);
       continue;
     }
@@ -291,17 +293,15 @@ bool JeandleBasicBlock::merge_VM_state_from(JeandleVMState* vm_state, llvm::Basi
       initialize_VM_state_from(vm_state, incoming, method->liveness_at_bci(_start_bci));
     }
 
-    if (is_set(is_loop_header)) {
-      // Copy loop header's initial JeandleVMState.
-      _initial_jvm = _jvm->copy();
-    }
-
     return true;
 
   } else if (!is_set(is_compiled) && !is_set(is_loop_header)) {
     assert(_predecessors.size() > 1 || is_exception_handler(), "more than one predecessors are needed for phi nodes");
     return _jvm->update_phi_nodes(vm_state, incoming);
   } else if (is_set(is_loop_header)) {
+    if (!is_set(is_compiled)) {
+      return _jvm->update_phi_nodes(vm_state, incoming);
+    }
     assert(_initial_jvm != nullptr, "loop header initial JeandleVMState is needed");
     return _initial_jvm->update_phi_nodes(vm_state, incoming);
   }
@@ -704,6 +704,11 @@ void JeandleAbstractInterpreter::interpret_block(JeandleBasicBlock* block) {
   // Skip blocks that are unreachable.
   if (_jvm == nullptr) {
     return;
+  }
+
+  if (block->is_set(JeandleBasicBlock::is_loop_header)) {
+    // Copy loop header's initial JeandleVMState.
+    block->set_initial_jvm(_jvm->copy());
   }
 
   _bytecodes.reset_to_bci(block->start_bci());

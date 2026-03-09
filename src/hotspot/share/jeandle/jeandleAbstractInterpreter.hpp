@@ -187,6 +187,8 @@ class JeandleBasicBlock : public JeandleCompilationResourceObj {
   int exeption_range_start_bci() { return _ci_block->ex_start_bci(); }
   int exeption_range_limit_bci() { return _ci_block->ex_limit_bci(); }
 
+  void set_initial_jvm(JeandleVMState* initial_jvm) { _initial_jvm = initial_jvm; }
+
  private:
   int _block_id;
   int _flags;

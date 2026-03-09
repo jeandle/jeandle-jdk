@@ -386,7 +386,6 @@ runtime/modules/AccessCheck/ExpQualToM1PrivateMethodIAE.java                    
 runtime/modules/ModulesSymLink.java                                                            linux-aarch64,linux-x64
 runtime/stringtable/StringTableCleaningTest.java                                               linux-aarch64
 serviceability/dcmd/gc/FinalizerInfoTest.java                                                  linux-aarch64,linux-x64
-serviceability/jvmti/GetLocalVariable/GetLocalVars.java                                        linux-aarch64,linux-x64
 serviceability/jvmti/Heap/IterateHeapWithEscapeAnalysisEnabled.java                            linux-aarch64,linux-x64
 serviceability/jvmti/HeapMonitor/MyPackage/HeapMonitorEventOnOffTest.java                      linux-aarch64,linux-x64
 serviceability/jvmti/HeapMonitor/MyPackage/HeapMonitorGCParallelTest.java                      linux-aarch64,linux-x64
@@ -394,7 +393,6 @@ serviceability/jvmti/HeapMonitor/MyPackage/HeapMonitorGCSerialTest.java         
 serviceability/jvmti/HeapMonitor/MyPackage/HeapMonitorGCTest.java                              linux-aarch64,linux-x64
 serviceability/jvmti/HeapMonitor/MyPackage/HeapMonitorStatIntervalTest.java                    linux-aarch64,linux-x64
 serviceability/jvmti/HeapMonitor/MyPackage/HeapMonitorTest.java                                linux-aarch64,linux-x64
-serviceability/jvmti/vthread/VThreadNotifyFramePopTest/VThreadNotifyFramePopTest.java#default  linux-aarch64,linux-x64
 serviceability/sa/ClhsdbAttachDifferentJVMs.java                                               linux-aarch64
 serviceability/sa/ClhsdbThread.java                                                            linux-aarch64
 serviceability/sa/sadebugd/ClhsdbAttachToDebugServer.java                                      linux-aarch64
