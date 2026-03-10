@@ -123,6 +123,10 @@ JRT_ENTRY(address, JeandleRuntimeRoutine::search_landingpad(JavaThread* current)
   assert(nm != nullptr, "No nmethod found in Jeandle exception handler");
   assert(pc > nm->code_begin(), "sanity check");
 
+  // Reset reserved stack activation.
+  // TODO: Should we consider StackOverflowException during deoptimization?
+  current->stack_overflow_state()->reguard_stack();
+
   JeandleExceptionHandlerTable exception_table(nm);
   uint64_t handler_pc_offset = exception_table.find_handler(static_cast<uint64_t>(pc - nm->code_begin()));
 
