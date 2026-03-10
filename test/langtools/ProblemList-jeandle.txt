@@ -1130,6 +1130,7 @@ tools/doclint/SyntheticTest.java                                                
 tools/doclint/tidy/AnchorAlreadyDefined.java                                                              linux-x64
 tools/doclint/anchorTests/p/package-info.java                                                             linux-x64
 tools/doclint/anchorTests/p/Test.java                                                                     linux-x64
+tools/doclint/html/BlockTagsTest.java                                                                     linux-x64
 tools/javac/6402516/CheckLocalElements.java                                                               linux-x64
 tools/javac/6508981/TestInferBinaryName.java                                                              linux-x64
 tools/javac/6917288/GraphicalInstallerTest.java                                                           linux-x64
