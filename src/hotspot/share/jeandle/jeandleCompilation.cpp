@@ -248,6 +248,8 @@ void JeandleCompilation::initialize() {
 
   set_has_monitors(false);
 
+  _interpreter_frame_size = 0;
+
   // Get timestamp to mark dump files.
   auto now = std::chrono::system_clock::now();
   auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(now.time_since_epoch());

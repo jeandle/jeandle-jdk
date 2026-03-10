@@ -36,6 +36,7 @@
 #include "ci/ciMethodBlocks.hpp"
 #include "ci/ciSymbols.hpp"
 #include "classfile/javaClasses.hpp"
+#include "interpreter/interpreter.hpp"
 #include "logging/log.hpp"
 #include "runtime/sharedRuntime.hpp"
 #include "runtime/stubRoutines.hpp"
@@ -252,8 +253,27 @@ llvm::SmallVector<llvm::Value*> JeandleVMState::deopt_args(llvm::IRBuilder<>& bu
     args.push_back(obj.value());
     args.push_back(lock);
   }
+  // update interpreter frame size for deopt
+  JeandleCompilation::current()->update_interpreter_frame_size(interpreter_frame_size_in_bytes());
   return args;
 }
+
+int JeandleVMState::interpreter_frame_size_in_bytes() {
+  // they will be used if we can inline methods
+  int callee_locals = 0;
+  int callee_parameters = 0;
+  int frame_size = BytesPerWord * Interpreter::size_activation(max_stack(),
+                                                               stack_size(),
+                                                               0,    // extra_size
+                                                               locks_size(),
+                                                               callee_parameters,
+                                                               callee_locals,
+                                                               true // is_top_frame
+                                                              );
+  callee_locals = (int)locals_size();
+  return frame_size + Deoptimization::last_frame_adjust(0, callee_locals) * BytesPerWord;
+}
+
 
 JeandleBasicBlock::JeandleBasicBlock(int block_id,
                                      int start_bci,
@@ -2057,6 +2077,7 @@ void JeandleAbstractInterpreter::store_to_address(llvm::Value* addr, llvm::Value
 }
 
 void JeandleAbstractInterpreter::add_safepoint_poll() {
+  JeandleCompilation::current()->update_interpreter_frame_size(_jvm->interpreter_frame_size_in_bytes());
   call_java_op("jeandle.safepoint_poll", {});
 }
 

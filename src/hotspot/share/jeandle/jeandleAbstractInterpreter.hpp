@@ -127,6 +127,8 @@ class JeandleVMState : public JeandleCompilationResourceObj {
   LockValue lock_at(int index) { return _locks[index]; }
 
   llvm::SmallVector<llvm::Value*> deopt_args(llvm::IRBuilder<> &builder, int bci);
+
+  int interpreter_frame_size_in_bytes();
  private:
   llvm::SmallVector<TypedValue> _stack;
   llvm::SmallVector<TypedValue> _locals;
