@@ -386,7 +386,6 @@ runtime/modules/AccessCheck/ExpQualToM1PrivateMethodIAE.java                    
 runtime/modules/ModulesSymLink.java                                                            linux-aarch64,linux-x64
 runtime/stringtable/StringTableCleaningTest.java                                               linux-aarch64
 serviceability/dcmd/gc/FinalizerInfoTest.java                                                  linux-aarch64,linux-x64
-serviceability/jvmti/Heap/IterateHeapWithEscapeAnalysisEnabled.java                            linux-aarch64,linux-x64
 serviceability/jvmti/HeapMonitor/MyPackage/HeapMonitorEventOnOffTest.java                      linux-aarch64,linux-x64
 serviceability/jvmti/HeapMonitor/MyPackage/HeapMonitorGCParallelTest.java                      linux-aarch64,linux-x64
 serviceability/jvmti/HeapMonitor/MyPackage/HeapMonitorGCSerialTest.java                        linux-aarch64,linux-x64

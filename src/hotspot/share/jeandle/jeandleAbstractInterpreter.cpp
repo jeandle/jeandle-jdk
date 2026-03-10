@@ -1875,10 +1875,10 @@ void JeandleAbstractInterpreter::arith_op(BasicType type, Bytecodes::Code code) 
 }
 
 // Call a Java operation, without exception handling.
-llvm::CallInst* JeandleAbstractInterpreter::call_java_op(llvm::StringRef java_op, llvm::ArrayRef<llvm::Value*> args) {
+llvm::CallInst* JeandleAbstractInterpreter::call_java_op(llvm::StringRef java_op, llvm::ArrayRef<llvm::Value*> args, llvm::ArrayRef<llvm::OperandBundleDef> deopt_bundle ) {
   llvm::Function* java_op_func = _module.getFunction(java_op);
   assert(java_op_func != nullptr, "invalid JavaOp");
-  llvm::CallInst* call_inst = create_call(java_op_func, args, llvm::CallingConv::Hotspot_JIT);
+  llvm::CallInst* call_inst = create_call(java_op_func, args, llvm::CallingConv::Hotspot_JIT, deopt_bundle);
   return call_inst;
 }
 
@@ -2062,7 +2062,8 @@ void JeandleAbstractInterpreter::store_to_address(llvm::Value* addr, llvm::Value
 }
 
 void JeandleAbstractInterpreter::add_safepoint_poll() {
-  call_java_op("jeandle.safepoint_poll", {});
+  llvm::OperandBundleDef deopt_bundle("deopt", _jvm->deopt_args(_ir_builder, _bytecodes.cur_bci()));
+  call_java_op("jeandle.safepoint_poll", {}, {deopt_bundle});
 }
 
 void JeandleAbstractInterpreter::arraylength() {

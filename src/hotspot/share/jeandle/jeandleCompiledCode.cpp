@@ -419,7 +419,8 @@ void JeandleCompiledCode::resolve_reloc_info(JeandleAssembler& assembler) {
         CallSiteInfo* call_info = new CallSiteInfo(JeandleCompiledCall::ROUTINE_CALL,
                                                     target_addr,
                                                     -1/* bci */,
-                                                    target_addr == JeandleRuntimeRoutine::get_routine_entry("uncommon_trap")/* has_deopt_operands */);
+                                                    target_addr == JeandleRuntimeRoutine::get_routine_entry("uncommon_trap") ||
+                                                    target_addr == JeandleRuntimeRoutine::get_routine_entry("safepoint_handler")/* has_deopt_operands */);
         if (JeandleRuntimeRoutine::is_gc_leaf(target_addr)) {
           relocs.push_back(new JeandleCallReloc(inst_end_offset, _env, _method, nullptr /* no oopmap */, call_info));
         } else {
