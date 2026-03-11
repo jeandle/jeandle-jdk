@@ -98,7 +98,8 @@ DEF_JAVA_OP(safepoint_poll, 1, llvm::Type::getVoidTy(context))
   llvm::CallInst* current_thread = ir_builder.CreateCall(current_thread_func);
   current_thread->setCallingConv(llvm::CallingConv::Hotspot_JIT);
   // Call safepoint handler.
-  llvm::CallInst* call_inst = ir_builder.CreateCall(JeandleRuntimeRoutine::safepoint_handler_callee(template_module), {current_thread});
+  llvm::OperandBundleDef deopt_bundle("deopt", llvm::SmallVector<llvm::Value*>{});
+  llvm::CallInst* call_inst = ir_builder.CreateCall(JeandleRuntimeRoutine::safepoint_handler_callee(template_module), {current_thread}, {deopt_bundle});
   call_inst->setCallingConv(llvm::CallingConv::Hotspot_JIT);
   ir_builder.CreateBr(return_block);
 
