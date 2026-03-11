@@ -1304,14 +1304,14 @@ void JeandleAbstractInterpreter::invoke() {
 
   llvm::Value* receiver_value = nullptr;
 
-  // TODO: To keep consistent with C2, but no suitable test case for now.
-  // if (receiver) {
-    // int receiver_depth = target->arg_size() - 1; // Index of stack slots where receiver locates.
-    // receiver_value = _jvm->raw_peek(receiver_depth).value();
+  // If the receiver is a constant null, do not torture the system by attempting to call through it.  
+  if (receiver) {
+    int receiver_depth = target->arg_size() - 1; // Index of stack slots where receiver locates.
+    receiver_value = _jvm->raw_peek(receiver_depth).value();
 
-    // assert(receiver_value != nullptr, "receiver must be present");
-    // null_check(receiver_value);
-  // }
+    assert(receiver_value != nullptr, "receiver must be present");
+    null_check(receiver_value);
+  }
 
   // try inline callee as intrinsic
   if (target->is_loaded()

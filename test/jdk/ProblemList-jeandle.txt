@@ -17,7 +17,6 @@ java/lang/ref/FinalizerHistogramTest.java                                  linux
 java/lang/reflect/IllegalArgumentsTest.java                                linux-aarch64,linux-x64
 java/math/BigInteger/largeMemory/SymmetricRangeTests.java                  linux-aarch64,linux-x64
 java/math/BigDecimal/StringConstructor.java                                linux-x64
-java/util/Base64/TestBase64.java                                           linux-aarch64,linux-x64
 java/util/BitSet/stream/BitSetStreamTest.java                              linux-x64
 java/util/Collection/HotPotatoes.java                                      linux-x64
 java/util/Collection/MOAT.java                                             linux-x64
