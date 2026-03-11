@@ -191,7 +191,6 @@ compiler/runtime/TestFloatsOnStackDeopt.java                                    
 compiler/uncommontrap/Decompile.java                                                           linux-aarch64,linux-x64
 compiler/uncommontrap/Test8009761.java                                                         linux-aarch64,linux-x64
 compiler/uncommontrap/TestStackBangMonitorOwned.java                                           linux-aarch64,linux-x64
-compiler/uncommontrap/TestStackBangRbp.java                                                    linux-aarch64,linux-x64
 compiler/uncommontrap/TestUnstableIfTrap.java                                                  linux-aarch64,linux-x64
 compiler/uncommontrap/UncommonTrapStackBang.java                                               linux-aarch64
 compiler/unsafe/UnsafeGetConstantField.java                                                    linux-aarch64,linux-x64
