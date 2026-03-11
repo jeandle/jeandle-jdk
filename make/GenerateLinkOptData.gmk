@@ -34,6 +34,18 @@ include MakeBase.gmk
 include JavaCompilation.gmk
 
 ################################################################################
+# Copy the template module file for Jeandle
+ifeq ($(INCLUDE_JEANDLE), true)
+  $(eval $(call SetupCopyFiles, COPY_JEANDLE_TEMPLATE, \
+      SRC := $(TOPDIR)/src/hotspot/share/jeandle/templatemodule/, \
+      DEST := $(INTERIM_IMAGE_DIR)/lib/server/, \
+      FILES := template.ll, \
+  ))
+
+  JDK_TARGETS += $(COPY_JEANDLE_TEMPLATE)
+endif
+
+################################################################################
 # Create a jar with our generator class. Using a jar is intentional since it
 # will load more classes
 
@@ -61,7 +73,7 @@ endif
 
 # Save the stderr output of the command and print it along with stdout in case
 # something goes wrong.
-$(CLASSLIST_FILE): $(INTERIM_IMAGE_DIR)/bin/java$(EXECUTABLE_SUFFIX) $(CLASSLIST_JAR)
+$(CLASSLIST_FILE): $(INTERIM_IMAGE_DIR)/bin/java$(EXECUTABLE_SUFFIX) $(CLASSLIST_JAR) $(COPY_JEANDLE_TEMPLATE)
 	$(call MakeDir, $(LINK_OPT_DIR))
 	$(call LogInfo, Generating $(patsubst $(OUTPUTDIR)/%, %, $@))
 	$(call LogInfo, Generating $(patsubst $(OUTPUTDIR)/%, %, $(JLI_TRACE_FILE)))
