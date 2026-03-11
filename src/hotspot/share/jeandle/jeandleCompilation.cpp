@@ -248,7 +248,7 @@ void JeandleCompilation::initialize() {
 
   set_has_monitors(false);
 
-  _interpreter_frame_size = 0;
+  _interpreter_frame_size_in_bytes = 0;
 
   // Get timestamp to mark dump files.
   auto now = std::chrono::system_clock::now();

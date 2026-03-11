@@ -256,7 +256,7 @@ llvm::SmallVector<llvm::Value*> JeandleVMState::deopt_args(llvm::IRBuilder<>& bu
     args.push_back(lock);
   }
   // update interpreter frame size for deopt
-  JeandleCompilation::current()->update_interpreter_frame_size(interpreter_frame_size_in_bytes());
+  JeandleCompilation::current()->update_interpreter_frame_size_in_bytes(interpreter_frame_size_in_bytes());
   return args;
 }
 
@@ -2082,7 +2082,7 @@ void JeandleAbstractInterpreter::store_to_address(llvm::Value* addr, llvm::Value
 }
 
 void JeandleAbstractInterpreter::add_safepoint_poll() {
-  JeandleCompilation::current()->update_interpreter_frame_size(_jvm->interpreter_frame_size_in_bytes());
+  JeandleCompilation::current()->update_interpreter_frame_size_in_bytes(_jvm->interpreter_frame_size_in_bytes());
   call_java_op("jeandle.safepoint_poll", {});
 }
 
