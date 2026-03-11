@@ -404,7 +404,6 @@ bool ObjectSynchronizer::quick_enter(oop obj, JavaThread* current,
     if (owner == current) {
       m->_recursions++;
       current->inc_held_monitor_count();
-      lock->set_displaced_header(markWord::unused_mark());
       return true;
     }
 
