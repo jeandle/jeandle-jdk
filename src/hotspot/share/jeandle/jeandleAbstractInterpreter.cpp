@@ -1304,7 +1304,7 @@ void JeandleAbstractInterpreter::invoke() {
 
   llvm::Value* receiver_value = nullptr;
 
-  // If the receiver is a constant null, do not torture the system by attempting to call through it.  
+  // If the receiver is null, do not torture the system by attempting to call through it.  
   if (receiver) {
     int receiver_depth = target->arg_size() - 1; // Index of stack slots where receiver locates.
     receiver_value = _jvm->raw_peek(receiver_depth).value();
