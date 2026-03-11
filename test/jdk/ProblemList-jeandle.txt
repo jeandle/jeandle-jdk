@@ -3,6 +3,7 @@ com/sun/jdi/EarlyReturnTest.java                                           linux
 com/sun/jdi/InstanceFilter.java                                            linux-x64
 java/foreign/TestHandshake.java                                            linux-aarch64,linux-x64
 java/foreign/TestMemorySession.java                                        linux-aarch64,linux-x64
+java/foreign/LibraryLookupTest.java                                        linux-x64
 java/lang/Character/UnicodeCasingTest.java                                 linux-aarch64
 java/lang/Math/Log1pTests.java                                             linux-aarch64
 java/lang/Object/FinalizationOption.java                                   linux-aarch64,linux-x64

@@ -1121,6 +1121,7 @@ jdk/jshell/UnnamedTest.java                                                     
 jdk/jshell/UserExecutionControlTest.java                                                                  linux-x64
 jdk/jshell/VariablesTest.java                                                                             linux-x64
 jdk/jshell/WrapperTest.java                                                                               linux-x64
+jdk/jshell/CompilerOptionsTest.java                                                                       linux-x64
 tools/EnumAccessible.java                                                                                 linux-x64
 tools/doclint/EmptyPreTest.java                                                                           linux-x64
 tools/doclint/RecordCompactConstructorTest.java                                                           linux-x64
@@ -1132,6 +1133,7 @@ tools/doclint/anchorTests/p/package-info.java                                   
 tools/doclint/anchorTests/p/Test.java                                                                     linux-x64
 tools/doclint/html/BlockTagsTest.java                                                                     linux-x64
 tools/doclint/html/EntitiesTest.java                                                                      linux-x64
+tools/doclint/html/HtmlVersionTagsAttrsTest.java                                                          linux-x64
 tools/javac/6402516/CheckLocalElements.java                                                               linux-x64
 tools/javac/6508981/TestInferBinaryName.java                                                              linux-x64
 tools/javac/6917288/GraphicalInstallerTest.java                                                           linux-x64
