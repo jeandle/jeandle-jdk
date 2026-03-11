@@ -73,7 +73,7 @@ void JeandleCallVM::generate_call_VM(const char* name, address routine_address, 
   call_routine_address->setCallingConv(llvm::CallingConv::C);
   JeandleCompiledCall::Type call_type = JeandleCompiledCall::STUB_C_CALL;
   uint64_t statepoint_id = code.next_statepoint_id();
-  code.push_non_routine_call_site(new CallSiteInfo(call_type, routine_address, -1 /* bci */, false /* _has_deopt_operands */, statepoint_id));
+  code.push_non_routine_call_site(new CallSiteInfo(call_type, routine_address, -1 /* bci */, statepoint_id));
   llvm::Attribute id_attr = llvm::Attribute::get(context,
                                                  llvm::jeandle::Attribute::StatepointID,
                                                  std::to_string(statepoint_id));
