@@ -14,7 +14,6 @@ java/lang/constant/MethodTypeDescTest.java                                 linux
 java/lang/ref/Basic.java                                                   linux-aarch64,linux-x64
 java/lang/ref/FinalizeOverride.java                                        linux-aarch64,linux-x64
 java/lang/ref/FinalizerHistogramTest.java                                  linux-aarch64,linux-x64
-java/lang/reflect/IllegalArgumentsTest.java                                linux-aarch64,linux-x64
 java/math/BigInteger/largeMemory/SymmetricRangeTests.java                  linux-aarch64,linux-x64
 java/math/BigDecimal/StringConstructor.java                                linux-x64
 java/util/BitSet/stream/BitSetStreamTest.java                              linux-x64
