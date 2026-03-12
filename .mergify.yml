@@ -41,6 +41,7 @@ queue_rules:
     draft_bot_account: jeandle-bot
     merge_bot_account: jeandle-bot
     update_bot_account: jeandle-bot
+    branch_protection_injection_mode: merge
 merge_queue:
   max_parallel_checks: 1
   queued_label: ""
