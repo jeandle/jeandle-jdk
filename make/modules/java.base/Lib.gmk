@@ -164,6 +164,20 @@ ifeq ($(call isTargetOsType, unix), true)
 endif
 
 ################################################################################
+# Copy the template module file for Jeandle
+ifeq ($(INCLUDE_JEANDLE), true)
+  LIB_OUTPUTDIR := $(call FindLibDirForModule, java.base)
+
+  $(eval $(call SetupCopyFiles, COPY_JEANDLE_TEMPLATE, \
+      SRC := $(TOPDIR)/src/hotspot/share/jeandle/templatemodule/, \
+      DEST := $(LIB_OUTPUTDIR)/server/, \
+      FILES := template.ll, \
+  ))
+
+  TARGETS += $(COPY_JEANDLE_TEMPLATE)
+endif
+
+################################################################################
 # Create the symbols file for static builds.
 
 ifeq ($(STATIC_BUILD), true)
