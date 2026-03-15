@@ -265,14 +265,14 @@ int JeandleVMState::interpreter_frame_size_in_bytes() {
   int callee_locals = 0;
   int callee_parameters = 0;
   int frame_size = BytesPerWord * Interpreter::size_activation(max_stack(),
-                                                               stack_size(),
-                                                               0,    // extra_size
+                                                               stack_size() + callee_parameters,
+                                                               max_stack() - stack_size(),    // extra_size
                                                                locks_size(),
                                                                callee_parameters,
                                                                callee_locals,
                                                                true // is_top_frame
                                                               );
-  callee_locals = (int)locals_size();
+  callee_locals = (int)max_locals();
   return frame_size + Deoptimization::last_frame_adjust(0, callee_locals) * BytesPerWord;
 }
 
