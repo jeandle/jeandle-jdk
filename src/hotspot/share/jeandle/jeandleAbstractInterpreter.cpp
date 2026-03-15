@@ -1324,14 +1324,14 @@ void JeandleAbstractInterpreter::invoke() {
 
   llvm::Value* receiver_value = nullptr;
 
-  // TODO: To keep consistent with C2, but no suitable test case for now.
-  // if (receiver) {
-    // int receiver_depth = target->arg_size() - 1; // Index of stack slots where receiver locates.
-    // receiver_value = _jvm->raw_peek(receiver_depth).value();
+  // If the receiver is null, do not torture the system by attempting to call through it.  
+  if (receiver) {
+    int receiver_depth = target->arg_size() - 1; // Index of stack slots where receiver locates.
+    receiver_value = _jvm->raw_peek(receiver_depth).value();
 
-    // assert(receiver_value != nullptr, "receiver must be present");
-    // null_check(receiver_value);
-  // }
+    assert(receiver_value != nullptr, "receiver must be present");
+    null_check(receiver_value);
+  }
 
   // try inline callee as intrinsic
   if (target->is_loaded()
@@ -1757,8 +1757,6 @@ void JeandleAbstractInterpreter::checkcast() {
     return;
   }
 
-  _jvm->apop(); // Object was already get by raw_peek().
-
   Klass* super_klass = (Klass*)(ci_super_klass->constant_encoding());
   llvm::PointerType* klass_type = llvm::PointerType::get(*_context,llvm::jeandle::AddrSpace::CHeapAddrSpace);
 
@@ -1777,25 +1775,12 @@ void JeandleAbstractInterpreter::checkcast() {
 
   _ir_builder.CreateCondBr(call, checkcast_pass, checkcast_fail);
 
-  _ir_builder.SetInsertPoint(checkcast_fail);
-  llvm::Value* exception_oop_handle = find_or_insert_oop(CURRENT_ENV->ClassCastException_instance());
-  llvm::Value* exception_oop = _ir_builder.CreateLoad(JeandleType::java2llvm(BasicType::T_OBJECT, *_context), exception_oop_handle);
-
-  // Clear the detail message of the preallocated exception object.
-  // Weblogic sometimes mutates the detail message of exceptions using reflection.
-  int detailMessage_offset = java_lang_Throwable::get_detailMessage_offset();
-  llvm::Value* detailMessage_addr = compute_instance_field_address(exception_oop, detailMessage_offset);
-  llvm::StoreInst* store_inst = _ir_builder.CreateStore(llvm::ConstantPointerNull::get(llvm::cast<llvm::PointerType>(JeandleType::java2llvm(BasicType::T_OBJECT, *_context))),
-                                                        detailMessage_addr);
-  store_inst->setAtomic(llvm::AtomicOrdering::Unordered);
-
-  dispatch_exception_to_handler(exception_oop);
-  RETURN_VOID_ON_JEANDLE_ERROR();
+  // TODO: When too many traps occur, throw exception directly 
+  // instead of deoptimizing, similar to GraphKit::builtin_throw.
+  uncommon_trap(Deoptimization::Reason_class_check, Deoptimization::Action_maybe_recompile, checkcast_fail);
 
   _ir_builder.SetInsertPoint(checkcast_pass);
   _block->set_tail_llvm_block(checkcast_pass);
-
-  _jvm->apush(obj);
 }
 
 void JeandleAbstractInterpreter::instanceof(int klass_index) {
@@ -2584,7 +2569,7 @@ void JeandleAbstractInterpreter::shared_unlock(LockValue lock) {
   llvm::FunctionCallee monitorexit_callee = JeandleRuntimeRoutine::SharedRuntime_complete_monitor_unlocking_C_callee(_module);
   llvm::CallInst* current_thread = call_java_op("jeandle.current_thread", {});
   llvm::CallInst* call_monitorexit = _ir_builder.CreateCall(monitorexit_callee, {lock.object().value(), lock.lock(), current_thread});
-  call_monitorexit->setCallingConv(llvm::CallingConv::Hotspot_JIT);
+  call_monitorexit->setCallingConv(llvm::CallingConv::C);
 }
 
 void JeandleAbstractInterpreter::monitorenter() {

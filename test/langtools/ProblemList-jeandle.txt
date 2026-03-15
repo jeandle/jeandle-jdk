@@ -1243,9 +1243,6 @@ tools/javac/patterns/NullSwitch.java                                            
 tools/javac/patterns/Switches.java                                                                        linux-aarch64
 tools/javac/patterns/Unnamed.java                                                                         linux-aarch64
 tools/javac/patterns/UnnamedErrors.java                                                                   linux-aarch64
-tools/javac/plugin/AutostartPlugins.java                                                                  linux-x64
-tools/javac/plugin/InternalAPI.java                                                                       linux-x64
-tools/javac/plugin/MultiplePlugins.java                                                                   linux-x64
 tools/javac/policy/test3/Test.java                                                                        linux-x64
 tools/javac/preview/PreviewErrors.java                                                                    linux-x64
 tools/javac/processing/6365040/T6365040.java                                                              linux-x64

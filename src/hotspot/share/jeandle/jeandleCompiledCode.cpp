@@ -578,7 +578,8 @@ void JeandleCompiledCode::fill_one_scope_value(const StackMapParser& stackmaps,
   switch (encode._basic_type) {
   case T_INT: {
     if (is_constant) {
-      array->append(new ConstantIntValue(StackMapUtil::getConstantUint(stackmaps, location)));
+      jint const_int = JeandleBitCast::bit_cast<jint>(StackMapUtil::getConstantUint(stackmaps, location));
+      array->append(new ConstantIntValue(const_int));
     } else {
       array->append(new_location_value(location, Location::normal));
     }
@@ -588,7 +589,8 @@ void JeandleCompiledCode::fill_one_scope_value(const StackMapParser& stackmaps,
     // 2 stack slots for long type
     array->append(new ConstantIntValue((jint)0));
     if (is_constant) {
-      array->append(new ConstantLongValue(StackMapUtil::getConstantUlong(stackmaps, location)));
+      jlong const_long = JeandleBitCast::bit_cast<jlong>(StackMapUtil::getConstantUlong(stackmaps, location));
+      array->append(new ConstantLongValue(const_long));
     } else {
       array->append(new_location_value(location, Location::lng));
     }
@@ -885,7 +887,7 @@ uint32_t StackMapUtil::getConstantUint(const StackMapParser& parser, const Stack
 uint64_t StackMapUtil::getConstantUlong(const StackMapParser& parser, const StackMapParser::LocationAccessor& location) {
   switch (location.getKind()) {
   case StackMapParser::LocationKind::Constant:
-    return (uint64_t)location.getSmallConstant();
+    return (uint64_t)(JeandleBitCast::bit_cast<int32_t>(location.getSmallConstant()));
   case StackMapParser::LocationKind::ConstantIndex: {
     uint32_t index = location.getConstantIndex();
     return parser.getConstant(index).getValue();
@@ -896,19 +898,9 @@ uint64_t StackMapUtil::getConstantUlong(const StackMapParser& parser, const Stac
 }
 
 float StackMapUtil::getConstantFloat(const StackMapParser& parser, const StackMapParser::LocationAccessor& location) {
-  union {
-    uint32_t u;
-    float f;
-  } uf;
-  uf.u = getConstantUint(parser, location);
-  return uf.f;
+  return JeandleBitCast::bit_cast<float>(getConstantUint(parser, location));
 }
 
 double StackMapUtil::getConstantDouble(const StackMapParser& parser, const StackMapParser::LocationAccessor& location) {
-  union {
-    uint64_t u;
-    double d;
-  } ud;
-  ud.u = getConstantUlong(parser, location);
-  return ud.d;
+  return JeandleBitCast::bit_cast<double>(getConstantUlong(parser, location));
 }

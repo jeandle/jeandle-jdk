@@ -1,6 +1,5 @@
 compiler/arraycopy/TestArrayCopyNoInitDeopt.java                                               linux-aarch64,linux-x64
 compiler/blackhole/BlackholeIntrinsicTest.java                                                 linux-aarch64,linux-x64
-compiler/c1/CanonicalizeGetModifiers.java#id2                                                  linux-x64
 compiler/c2/Test6910605_1.java                                                                 linux-aarch64,linux-x64
 compiler/c2/Test6910605_2.java                                                                 linux-aarch64,linux-x64
 compiler/c2/TestBit.java                                                                       linux-aarch64,linux-x64
