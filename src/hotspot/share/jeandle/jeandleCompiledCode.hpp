@@ -179,7 +179,8 @@ class JeandleCompiledCode : public StackObj {
                       _env(env),
                       _method(method),
                       _routine_entry(nullptr),
-                      _func_name(JeandleFuncSig::method_name_with_signature(_method)) {}
+                      _func_name(JeandleFuncSig::method_name_with_signature(_method)),
+                      _interpreter_frame_size_in_bytes(0) {}
 
   // For compiled Jeandle runtime stubs.
   JeandleCompiledCode(ciEnv* env, const char* func_name) :
@@ -191,7 +192,8 @@ class JeandleCompiledCode : public StackObj {
                       _env(env),
                       _method(nullptr),
                       _routine_entry(nullptr),
-                      _func_name(func_name) {}
+                      _func_name(func_name),
+                      _interpreter_frame_size_in_bytes(0) {}
 
   void install_obj(std::unique_ptr<ObjectBuffer> obj);
 
@@ -223,6 +225,8 @@ class JeandleCompiledCode : public StackObj {
   bool needs_clinit_barrier(ciMethod* ik,        ciMethod* accessing_method);
   bool needs_clinit_barrier(ciInstanceKlass* ik, ciMethod* accessing_method);
   bool needs_clinit_barrier_on_entry();
+  void update_interpreter_frame_size_in_bytes(int frame_size) { _interpreter_frame_size_in_bytes = MAX2(frame_size, _interpreter_frame_size_in_bytes); }
+  int interpreter_frame_size_in_bytes() { return _interpreter_frame_size_in_bytes; }
 
  private:
   std::unique_ptr<ObjectBuffer> _obj; // Compiled instructions.
@@ -249,6 +253,7 @@ class JeandleCompiledCode : public StackObj {
   ciMethod* _method;
   address _routine_entry;
   std::string _func_name;
+  int _interpreter_frame_size_in_bytes;
 
   void setup_frame_size();
 

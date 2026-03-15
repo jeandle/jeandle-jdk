@@ -78,8 +78,6 @@ class JeandleCompilation : public StackObj {
   Arena* arena() { return _arena; }
 
   const std::string name() { return _name; }
-  void update_interpreter_frame_size_in_bytes(int frame_size) { _interpreter_frame_size_in_bytes = MAX2(frame_size, _interpreter_frame_size_in_bytes); }
-  int interpreter_frame_size_in_bytes() { return _interpreter_frame_size_in_bytes; }
 
  private:
   Arena* _arena; // Hold compilation life-time objects (JeandleCompilationResourceObj).
@@ -92,7 +90,6 @@ class JeandleCompilation : public StackObj {
   std::unique_ptr<llvm::LLVMContext> _context;
   std::unique_ptr<llvm::Module> _llvm_module;
   std::string _comp_start_time;
-  int _interpreter_frame_size_in_bytes;
 
   JeandleCompiledCode _code; // Compiled code.
 

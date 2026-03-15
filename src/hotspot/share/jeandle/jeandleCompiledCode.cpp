@@ -353,7 +353,7 @@ void JeandleCompiledCode::finalize() {
   int frame_size_in_bytes = _frame_size * BytesPerWord;
   bool is_method_compilation = _method != nullptr;
   bool has_java_calls = !_non_routine_call_sites.empty();
-  int bang_size_in_bytes = MAX2(frame_size_in_bytes + os::extra_bang_size_in_bytes(), JeandleCompilation::current()->interpreter_frame_size_in_bytes());
+  int bang_size_in_bytes = MAX2(frame_size_in_bytes + os::extra_bang_size_in_bytes(), interpreter_frame_size_in_bytes());
   if (need_stack_overflow_check(is_method_compilation, has_java_calls, bang_size_in_bytes)) {
     masm->generate_stack_overflow_check(bang_size_in_bytes);
   }
