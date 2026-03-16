@@ -5,15 +5,11 @@ java/foreign/TestHandshake.java                                            linux
 java/foreign/TestMemorySession.java                                        linux-aarch64,linux-x64
 java/lang/Character/UnicodeCasingTest.java                                 linux-aarch64
 java/lang/Math/Log1pTests.java                                             linux-aarch64
-java/lang/Object/FinalizationOption.java                                   linux-aarch64,linux-x64
 java/lang/ProcessHandle/PermissionTest.java                                linux-aarch64,linux-x64
 java/lang/String/ToLowerCase.java                                          linux-aarch64
 java/lang/String/UnicodeCasingTest.java                                    linux-aarch64
 java/lang/Thread/ThreadSleepEvent.java                                     linux-aarch64,linux-x64
 java/lang/constant/MethodTypeDescTest.java                                 linux-aarch64
-java/lang/ref/Basic.java                                                   linux-aarch64,linux-x64
-java/lang/ref/FinalizeOverride.java                                        linux-aarch64,linux-x64
-java/lang/ref/FinalizerHistogramTest.java                                  linux-aarch64,linux-x64
 java/math/BigInteger/largeMemory/SymmetricRangeTests.java                  linux-aarch64,linux-x64
 java/math/BigDecimal/StringConstructor.java                                linux-x64
 java/util/BitSet/stream/BitSetStreamTest.java                              linux-x64
@@ -24,8 +20,6 @@ java/util/Map/BasicSerialization.java                                      linux
 java/util/Objects/CheckLongIndex.java                                      linux-aarch64
 java/util/Optional/Basic.java                                              linux-x64
 java/util/PriorityQueue/ForgetMeNot.java                                   linux-aarch64
-java/util/WeakHashMap/GCDuringIteration.java                               linux-aarch64,linux-x64
-java/util/concurrent/ArrayBlockingQueue/WhiteBox.java                      linux-aarch64,linux-x64
 java/util/concurrent/locks/Lock/TimedAcquireLeak.java                      linux-aarch64,linux-x64
 java/util/logging/LoggingDeadlock3.java                                    linux-x64
 java/util/logging/LoggingMXBeanTest2.java                                  linux-x64

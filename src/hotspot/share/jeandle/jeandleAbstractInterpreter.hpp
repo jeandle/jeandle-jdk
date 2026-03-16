@@ -402,6 +402,9 @@ class JeandleAbstractInterpreter : public StackObj {
 
   void return_current(llvm::Value* value);
 
+  // Register finalizers on return from Object::<init>
+  void call_register_finalizer();
+
   void clinit_barrier(ciInstanceKlass* ik, ciMethod* context);
   void guard_klass_being_initialized(llvm::Value* klass);
   void guard_init_thread(llvm::Value* klass);

@@ -2723,7 +2723,44 @@ void JeandleAbstractInterpreter::boundary_check(llvm::Value* array_oop, llvm::Va
   _block->set_tail_llvm_block(boundary_check_pass);
 }
 
+void JeandleAbstractInterpreter::call_register_finalizer() {
+  llvm::Value* receiver = _jvm->locals_at(0);
+  assert(receiver != nullptr, "must have a receiver");
+
+  // TODO: know statically that registration isn't required
+
+  // dynamic test for whether the instance needs finalization  
+  llvm::Value* klass_offset = llvm::ConstantInt::get(_ir_builder.getInt32Ty(), (uint64_t)oopDesc::klass_offset_in_bytes());
+  llvm::Value* klass_addr = _ir_builder.CreateInBoundsGEP(llvm::Type::getInt8Ty(*_context), receiver, klass_offset);
+  llvm::Value* klass = _ir_builder.CreateLoad(_ir_builder.getPtrTy(), klass_addr);
+  
+  llvm::Value* access_flags_offset = llvm::ConstantInt::get(_ir_builder.getInt32Ty(), (uint64_t)in_bytes(Klass::access_flags_offset()));
+  llvm::Value* access_flags_addr = _ir_builder.CreateInBoundsGEP(llvm::Type::getInt8Ty(*_context), klass, access_flags_offset);
+  llvm::Value* access_flags = _ir_builder.CreateLoad(_ir_builder.getInt32Ty(), access_flags_addr);
+  
+  llvm::Value* mask = _ir_builder.CreateAnd(access_flags, llvm::ConstantInt::get(_ir_builder.getInt32Ty(), JVM_ACC_HAS_FINALIZER));
+  llvm::Value* check = _ir_builder.CreateICmpNE(mask, llvm::ConstantInt::get(_ir_builder.getInt32Ty(), 0));
+  
+  llvm::BasicBlock* register_block = llvm::BasicBlock::Create(*_context, "register_finalizer", _llvm_func);
+  llvm::BasicBlock* skip_block = llvm::BasicBlock::Create(*_context, "skip_register_finalizer", _llvm_func);  
+  _ir_builder.CreateCondBr(check, register_block, skip_block);
+  
+  _ir_builder.SetInsertPoint(register_block);
+  llvm::CallInst* current_thread = call_java_op("jeandle.current_thread", {});
+  create_call(JeandleRuntimeRoutine::SharedRuntime_register_finalizer_callee(_module), {current_thread, receiver}, llvm::CallingConv::Hotspot_JIT);
+  _ir_builder.CreateBr(skip_block);
+  
+  _ir_builder.SetInsertPoint(skip_block);
+  _block->set_tail_llvm_block(skip_block);
+}
+
 void JeandleAbstractInterpreter::return_current(llvm::Value* value) {
+  if (RegisterFinalizersAtInit &&
+      _method &&
+      _method->intrinsic_id() == vmIntrinsics::_Object_init) {
+    call_register_finalizer();
+  }
+
   if (_method && _method->is_synchronized()) {
     LockValue lock = _jvm->pop_lock();
     assert(lock.equals(_sync_lock), "sanity");
