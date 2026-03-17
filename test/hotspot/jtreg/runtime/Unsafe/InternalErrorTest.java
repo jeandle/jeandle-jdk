@@ -143,8 +143,9 @@ public class InternalErrorTest {
                 buffer.get(new byte[8]);
                 break;
             case 1:
+                boolean compressed = WhiteBox.getWhiteBox().getVMFlag("UseCompressedClassPointers").toString().equals("true");
                 // testing Unsafe.copySwapMemory, trying to access next  page after truncation.
-                unsafe.copySwapMemory(null, mapAddr + pageSize, new byte[4000], 16, 2000, 2);
+                unsafe.copySwapMemory(null, mapAddr + pageSize, new byte[4000], compressed ? 16 : 20, 2000, 2);
                 break;
             case 2:
                 // testing Unsafe.copySwapMemory, trying to access next  page after truncation.

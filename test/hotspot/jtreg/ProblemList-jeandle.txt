@@ -374,7 +374,6 @@ runtime/Metaspace/PrintMetaspaceDcmd.java#test-64bit-ccs-guarded                
 runtime/StackGap/TestStackGap.java                                                             linux-aarch64
 runtime/Thread/AsyncExceptionTest.java                                                         linux-aarch64,linux-x64
 runtime/Thread/StopAtExit.java                                                                 linux-aarch64,linux-x64
-runtime/Unsafe/InternalErrorTest.java                                                          linux-x64
 runtime/cds/serviceability/ReplaceCriticalClasses.java                                         linux-aarch64
 runtime/jni/FindClassUtf8/FindClassUtf8.java                                                   linux-aarch64
 runtime/jni/getCreatedJavaVMs/TestGetCreatedJavaVMs.java                                       linux-aarch64
