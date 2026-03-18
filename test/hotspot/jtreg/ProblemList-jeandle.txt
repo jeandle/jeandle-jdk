@@ -1,6 +1,5 @@
 compiler/arraycopy/TestArrayCopyNoInitDeopt.java                                               linux-aarch64,linux-x64
 compiler/blackhole/BlackholeIntrinsicTest.java                                                 linux-aarch64,linux-x64
-compiler/c1/CanonicalizeGetModifiers.java#id2                                                  linux-x64
 compiler/c2/Test6910605_1.java                                                                 linux-aarch64,linux-x64
 compiler/c2/Test6910605_2.java                                                                 linux-aarch64,linux-x64
 compiler/c2/TestBit.java                                                                       linux-aarch64,linux-x64
@@ -191,7 +190,6 @@ compiler/runtime/TestFloatsOnStackDeopt.java                                    
 compiler/uncommontrap/Decompile.java                                                           linux-aarch64,linux-x64
 compiler/uncommontrap/Test8009761.java                                                         linux-aarch64,linux-x64
 compiler/uncommontrap/TestStackBangMonitorOwned.java                                           linux-aarch64,linux-x64
-compiler/uncommontrap/TestStackBangRbp.java                                                    linux-aarch64,linux-x64
 compiler/uncommontrap/TestUnstableIfTrap.java                                                  linux-aarch64,linux-x64
 compiler/uncommontrap/UncommonTrapStackBang.java                                               linux-aarch64
 compiler/unsafe/UnsafeGetConstantField.java                                                    linux-aarch64,linux-x64
@@ -376,7 +374,6 @@ runtime/Metaspace/PrintMetaspaceDcmd.java#test-64bit-ccs-guarded                
 runtime/StackGap/TestStackGap.java                                                             linux-aarch64
 runtime/Thread/AsyncExceptionTest.java                                                         linux-aarch64,linux-x64
 runtime/Thread/StopAtExit.java                                                                 linux-aarch64,linux-x64
-runtime/Unsafe/InternalErrorTest.java                                                          linux-x64
 runtime/cds/serviceability/ReplaceCriticalClasses.java                                         linux-aarch64
 runtime/jni/FindClassUtf8/FindClassUtf8.java                                                   linux-aarch64
 runtime/jni/getCreatedJavaVMs/TestGetCreatedJavaVMs.java                                       linux-aarch64
@@ -386,12 +383,6 @@ runtime/modules/AccessCheck/ExpQualToM1PrivateMethodIAE.java                    
 runtime/modules/ModulesSymLink.java                                                            linux-aarch64,linux-x64
 runtime/stringtable/StringTableCleaningTest.java                                               linux-aarch64
 serviceability/dcmd/gc/FinalizerInfoTest.java                                                  linux-aarch64,linux-x64
-serviceability/jvmti/HeapMonitor/MyPackage/HeapMonitorEventOnOffTest.java                      linux-aarch64,linux-x64
-serviceability/jvmti/HeapMonitor/MyPackage/HeapMonitorGCParallelTest.java                      linux-aarch64,linux-x64
-serviceability/jvmti/HeapMonitor/MyPackage/HeapMonitorGCSerialTest.java                        linux-aarch64,linux-x64
-serviceability/jvmti/HeapMonitor/MyPackage/HeapMonitorGCTest.java                              linux-aarch64,linux-x64
-serviceability/jvmti/HeapMonitor/MyPackage/HeapMonitorStatIntervalTest.java                    linux-aarch64,linux-x64
-serviceability/jvmti/HeapMonitor/MyPackage/HeapMonitorTest.java                                linux-aarch64,linux-x64
 serviceability/sa/ClhsdbAttachDifferentJVMs.java                                               linux-aarch64
 serviceability/sa/ClhsdbThread.java                                                            linux-aarch64
 serviceability/sa/sadebugd/ClhsdbAttachToDebugServer.java                                      linux-aarch64

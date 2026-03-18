@@ -34,15 +34,15 @@ include MakeBase.gmk
 include JavaCompilation.gmk
 
 ################################################################################
-# Copy the template module file for Jeandle
+# Merge the template module file for Jeandle
 ifeq ($(INCLUDE_JEANDLE), true)
-  $(eval $(call SetupCopyFiles, COPY_JEANDLE_TEMPLATE, \
-      SRC := $(TOPDIR)/src/hotspot/share/jeandle/templatemodule/, \
+  $(eval $(call SetupMergeFiles, MERGE_JEANDLE_TEMPLATE, \
       DEST := $(INTERIM_IMAGE_DIR)/lib/server/, \
-      FILES := template.ll, \
+      FILES := $(TOPDIR)/src/hotspot/share/jeandle/templatemodule/template.ll \
+               $(TOPDIR)/src/hotspot/cpu/${OPENJDK_TARGET_CPU_ARCH}/templatemodule/template_${OPENJDK_TARGET_CPU_ARCH}.ll, \
   ))
 
-  JDK_TARGETS += $(COPY_JEANDLE_TEMPLATE)
+  TARGETS += $(MERGE_JEANDLE_TEMPLATE)
 endif
 
 ################################################################################
@@ -73,7 +73,7 @@ endif
 
 # Save the stderr output of the command and print it along with stdout in case
 # something goes wrong.
-$(CLASSLIST_FILE): $(INTERIM_IMAGE_DIR)/bin/java$(EXECUTABLE_SUFFIX) $(CLASSLIST_JAR) $(COPY_JEANDLE_TEMPLATE)
+$(CLASSLIST_FILE): $(INTERIM_IMAGE_DIR)/bin/java$(EXECUTABLE_SUFFIX) $(CLASSLIST_JAR) $(MERGE_JEANDLE_TEMPLATE)
 	$(call MakeDir, $(LINK_OPT_DIR))
 	$(call LogInfo, Generating $(patsubst $(OUTPUTDIR)/%, %, $@))
 	$(call LogInfo, Generating $(patsubst $(OUTPUTDIR)/%, %, $(JLI_TRACE_FILE)))

@@ -118,13 +118,11 @@
       llvm::PointerType::get(context, llvm::jeandle::AddrSpace::JavaHeapAddrSpace), \
       llvm::PointerType::get(context, llvm::jeandle::AddrSpace::CHeapAddrSpace),    \
       llvm::PointerType::get(context, llvm::jeandle::AddrSpace::CHeapAddrSpace))    \
-                                                                                    \
-  def(SharedRuntime_complete_monitor_unlocking_C,                                   \
-      SharedRuntime::complete_monitor_unlocking_C,                                  \
+  def(SharedRuntime_register_finalizer,                                             \
+      SharedRuntime::register_finalizer,                                            \
       llvm::Type::getVoidTy(context),                                               \
-      llvm::PointerType::get(context, llvm::jeandle::AddrSpace::JavaHeapAddrSpace), \
       llvm::PointerType::get(context, llvm::jeandle::AddrSpace::CHeapAddrSpace),    \
-      llvm::PointerType::get(context, llvm::jeandle::AddrSpace::CHeapAddrSpace))    \
+      llvm::PointerType::get(context, llvm::jeandle::AddrSpace::JavaHeapAddrSpace)) \
 
 // Define a direct Jeandle runtime routine.
 // def( name            ,
@@ -265,7 +263,15 @@
       false,                                                         \
       true,                                                          \
       llvm::Type::getVoidTy(context))                                \
-
+                                                                     \
+  def(SharedRuntime_complete_monitor_unlocking_C,                                   \
+      SharedRuntime::complete_monitor_unlocking_C,                                  \
+      false,                                                                        \
+      true,                                                                         \
+      llvm::Type::getVoidTy(context),                                               \
+      llvm::PointerType::get(context, llvm::jeandle::AddrSpace::JavaHeapAddrSpace), \
+      llvm::PointerType::get(context, llvm::jeandle::AddrSpace::CHeapAddrSpace),    \
+      llvm::PointerType::get(context, llvm::jeandle::AddrSpace::CHeapAddrSpace))    \
 
 #define ALL_JEANDLE_ASSEMBLY_ROUTINES(def) \
   def(exceptional_return)                  \

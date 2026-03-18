@@ -114,7 +114,7 @@ JRT_LEAF(address, JeandleRuntimeRoutine::get_exception_handler(JavaThread* curre
   return SharedRuntime::raw_exception_handler_for_return_address(current, current->exception_pc());
 JRT_END
 
-JRT_ENTRY(address, JeandleRuntimeRoutine::search_landingpad(JavaThread* current))
+JRT_ENTRY_NO_ASYNC(address, JeandleRuntimeRoutine::search_landingpad(JavaThread* current))
   assert(current->exception_oop() != nullptr, "exception oop is found");
 
   address pc = current->exception_pc();

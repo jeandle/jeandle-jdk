@@ -1249,6 +1249,10 @@ void VM_Version::get_processor_features() {
       // high lock contention. For now we do not use it by default.
       vm_exit_during_initialization("UseRTMLocking flag should be only set on command line");
     }
+    if (UseJeandleCompiler) {
+      // TODO: implement UseRTMLocking.
+      vm_exit_during_initialization("UseRTMLocking is not available with Jenadle Compiler yet");
+    }
   } else { // !UseRTMLocking
     if (UseRTMForStackLocks) {
       if (!FLAG_IS_DEFAULT(UseRTMForStackLocks)) {

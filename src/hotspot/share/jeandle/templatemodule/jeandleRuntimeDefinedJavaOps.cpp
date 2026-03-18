@@ -35,6 +35,7 @@
 #include "oops/klass.hpp"
 #include "oops/objArrayKlass.hpp"
 #include "runtime/javaThread.hpp"
+#include "runtime/objectMonitor.hpp"
 #include "runtime/safepointMechanism.hpp"
 
 //                  name, lower_phase, return_type, arg_types
@@ -56,6 +57,12 @@
 #define JAVA_OP_END }
 
 namespace {
+
+// We cannot obtain contexts such as BCI in DEF_JAVA_OP. 
+// But we can pass the external deopt bundle into this empty one via inlining.
+llvm::OperandBundleDef create_empty_deopt_bundle() {
+  return llvm::OperandBundleDef("deopt", llvm::SmallVector<llvm::Value*>{});
+}
 
 DEF_JAVA_OP(current_thread, 0, llvm::PointerType::get(context, llvm::jeandle::AddrSpace::CHeapAddrSpace))
   llvm::NamedMDNode* thread_register = template_module.getNamedMetadata(llvm::jeandle::Metadata::CurrentThread);
@@ -98,8 +105,8 @@ DEF_JAVA_OP(safepoint_poll, 1, llvm::Type::getVoidTy(context))
   llvm::CallInst* current_thread = ir_builder.CreateCall(current_thread_func);
   current_thread->setCallingConv(llvm::CallingConv::Hotspot_JIT);
   // Call safepoint handler.
-  llvm::OperandBundleDef deopt_bundle("deopt", llvm::SmallVector<llvm::Value*>{});
-  llvm::CallInst* call_inst = ir_builder.CreateCall(JeandleRuntimeRoutine::safepoint_handler_callee(template_module), {current_thread}, {deopt_bundle});
+  llvm::CallInst* call_inst = ir_builder.CreateCall(JeandleRuntimeRoutine::safepoint_handler_callee(template_module), {current_thread},
+                                                    {create_empty_deopt_bundle()});
   call_inst->setCallingConv(llvm::CallingConv::Hotspot_JIT);
   ir_builder.CreateBr(return_block);
 
@@ -165,7 +172,8 @@ DEF_JAVA_OP(new_instance, 1, llvm::PointerType::get(context, llvm::jeandle::Addr
   current_thread->setCallingConv(llvm::CallingConv::Hotspot_JIT);
 
   // slow path allocation, TODO: implement fast path allocation
-  llvm::CallInst* call_inst = ir_builder.CreateCall(JeandleRuntimeRoutine::new_instance_callee(template_module), {klass, current_thread});
+  llvm::CallInst* call_inst = ir_builder.CreateCall(JeandleRuntimeRoutine::new_instance_callee(template_module), {klass, current_thread},
+                                                    {create_empty_deopt_bundle()});
   call_inst->setCallingConv(llvm::CallingConv::Hotspot_JIT);
 
   ir_builder.CreateRet(call_inst);
@@ -225,15 +233,45 @@ void RuntimeDefinedJavaOps::define_global_variables(llvm::Module& template_modul
     global_var->setLinkage(llvm::GlobalValue::PrivateLinkage);
   };
 
+  llvm::Type* int1_type  = llvm::Type::getInt1Ty(context);
   llvm::Type* int32_type = llvm::Type::getInt32Ty(context);
+  llvm::Type* int64_type = llvm::Type::getInt64Ty(context);
 
-  define_global("KlassArray.base_offset_in_bytes",     int32_type, static_cast<uint64_t>(Array<Klass*>::base_offset_in_bytes()));
-  define_global("KlassArray.length_offset_in_bytes",   int32_type, static_cast<uint64_t>(Array<Klass*>::length_offset_in_bytes()));
-  define_global("arrayOopDesc.length_offset_in_bytes", int32_type, static_cast<uint64_t>(arrayOopDesc::length_offset_in_bytes()));
-  define_global("arrayOopDesc.base_offset_in_bytes.int", int32_type, static_cast<uint64_t>(arrayOopDesc::base_offset_in_bytes(T_INT)));
-  define_global("Klass.secondary_super_cache_offset",  int32_type, static_cast<uint64_t>(Klass::secondary_super_cache_offset()));
-  define_global("Klass.secondary_supers_offset",       int32_type, static_cast<uint64_t>(Klass::secondary_supers_offset()));
-  define_global("Klass.super_check_offset_offset",     int32_type, static_cast<uint64_t>(Klass::super_check_offset_offset()));
-  define_global("ObjArrayKlass.element_klass_offset",  int32_type, static_cast<uint64_t>(ObjArrayKlass::element_klass_offset()));
-  define_global("oopDesc.klass_offset_in_bytes",       int32_type, static_cast<uint64_t>(oopDesc::klass_offset_in_bytes()));
+#ifdef ASSERT
+  define_global("DEBUG_MODE",                                       int1_type,  static_cast<uint64_t>(true));
+#else
+  define_global("DEBUG_MODE",                                       int1_type,  static_cast<uint64_t>(false));
+#endif
+
+  define_global("KlassArray.base_offset_in_bytes",                  int32_type, static_cast<uint64_t>(Array<Klass*>::base_offset_in_bytes()));
+  define_global("KlassArray.length_offset_in_bytes",                int32_type, static_cast<uint64_t>(Array<Klass*>::length_offset_in_bytes()));
+  define_global("arrayOopDesc.length_offset_in_bytes",              int32_type, static_cast<uint64_t>(arrayOopDesc::length_offset_in_bytes()));
+  define_global("arrayOopDesc.base_offset_in_bytes.int",            int32_type, static_cast<uint64_t>(arrayOopDesc::base_offset_in_bytes(T_INT)));
+  define_global("Klass.access_flags_offset",                        int32_type, static_cast<uint64_t>(Klass::access_flags_offset()));
+  define_global("Klass.secondary_super_cache_offset",               int32_type, static_cast<uint64_t>(Klass::secondary_super_cache_offset()));
+  define_global("Klass.secondary_supers_offset",                    int32_type, static_cast<uint64_t>(Klass::secondary_supers_offset()));
+  define_global("Klass.super_check_offset_offset",                  int32_type, static_cast<uint64_t>(Klass::super_check_offset_offset()));
+  define_global("ObjArrayKlass.element_klass_offset",               int32_type, static_cast<uint64_t>(ObjArrayKlass::element_klass_offset()));
+  define_global("oopDesc.klass_offset_in_bytes",                    int32_type, static_cast<uint64_t>(oopDesc::klass_offset_in_bytes()));
+  define_global("oopDesc.mark_offset_in_bytes",                     int32_type, static_cast<uint64_t>(oopDesc::mark_offset_in_bytes()));
+  define_global("BasicLock.displaced_header_offset_in_bytes",       int32_type, static_cast<uint64_t>(BasicLock::displaced_header_offset_in_bytes()));
+  define_global("JavaThread.held_monitor_count_offset",             int32_type, static_cast<uint64_t>(JavaThread::held_monitor_count_offset()));
+  define_global("JavaThread.lock_stack_end",                        int32_type, static_cast<uint64_t>(LockStack::end_offset()));
+  define_global("JavaThread.lock_stack_top_offset",                 int32_type, static_cast<uint64_t>(JavaThread::lock_stack_top_offset()));
+  define_global("ObjectMonitor.EntryList_offset_no_monitor_value",  int32_type, static_cast<uint64_t>(OM_OFFSET_NO_MONITOR_VALUE_TAG(EntryList)));
+  define_global("ObjectMonitor.cxq_offset_no_monitor_value",        int32_type, static_cast<uint64_t>(OM_OFFSET_NO_MONITOR_VALUE_TAG(cxq)));
+  define_global("ObjectMonitor.owner_offset_no_monitor_value",      int32_type, static_cast<uint64_t>(OM_OFFSET_NO_MONITOR_VALUE_TAG(owner)));
+  define_global("ObjectMonitor.recursions_offset_no_monitor_value", int32_type, static_cast<uint64_t>(OM_OFFSET_NO_MONITOR_VALUE_TAG(recursions)));
+  define_global("ObjectMonitor.succ_offset_no_monitor_value",       int32_type, static_cast<uint64_t>(OM_OFFSET_NO_MONITOR_VALUE_TAG(succ)));
+  
+  define_global("markWord.clear_lock_mask",                         int64_type, static_cast<uint64_t>(~(int32_t)markWord::lock_mask_in_place));
+  define_global("markWord.monitor_value",                           int64_type, static_cast<uint64_t>(markWord::monitor_value));
+  define_global("markWord.unlocked_value",                          int64_type, static_cast<uint64_t>(markWord::unlocked_value));
+  define_global("markWord.unused_mark_value",                       int64_type, static_cast<uint64_t>(markWord::unused_mark().value()));
+  define_global("ObjectMonitor.ANONYMOUS_OWNER",                    int64_type, static_cast<uint64_t>(ObjectMonitor::ANONYMOUS_OWNER));
+  
+  define_global("JVM_ACC_IS_VALUE_BASED_CLASS",                     int32_type, static_cast<uint64_t>(JVM_ACC_IS_VALUE_BASED_CLASS));
+  define_global("oopSize",                                          int32_type, static_cast<uint64_t>(oopSize));
+
+  define_global("check_recursive_mask_value",                       int64_type, static_cast<uint64_t>(7 - (int)os::vm_page_size()));
 }

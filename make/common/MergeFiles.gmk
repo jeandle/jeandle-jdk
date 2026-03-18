@@ -1,0 +1,102 @@
+#
+# Copyright (c) 2026, the Jeandle-JDK Authors. All Rights Reserved.
+# DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
+# 
+# This code is free software; you can redistribute it and/or modify it
+# under the terms of the GNU General Public License version 2 only, as
+# published by the Free Software Foundation.
+# 
+# This code is distributed in the hope that it will be useful, but WITHOUT
+# ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
+# FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General Public License
+# version 2 for more details (a copy is included in the LICENSE file that
+# accompanied this code).
+# 
+# You should have received a copy of the GNU General Public License version
+# 2 along with this work; if not, write to the Free Software Foundation,
+# Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301 USA.
+
+ifeq (,$(_MAKEBASE_GMK))
+  $(error You must include MakeBase.gmk prior to including MergeFiles.gmk)
+endif
+
+################################################################################
+#
+# Code for handling the SetupMergeFiles macro.
+#
+################################################################################
+
+define DoMergeFiles
+  # Helper macro for SetupMergeFiles
+  # 1 : Source file (list)
+  # 2 : Dest file (merged result)
+  # 3 : Variable to add targets to
+  # 4 : Macro to call for merge operation
+  # 5 : Action text to log
+  $2: $1
+	$$(call LogInfo, $(strip $5) $$(patsubst $(OUTPUTDIR)/%,%,$$(call DecodeSpace, $$@)))
+	$$($$(strip $4))
+
+  $3 += $2
+  $3_SOURCES += $1
+endef
+
+define merge-file
+	$(call MakeTargetDir)
+	$(CAT) $(foreach s, $+, '$(call DecodeSpace, $s)') > '$(call DecodeSpace, $@)'
+endef
+
+# Returns the value of the first argument
+identity = \
+    $(strip $1)
+
+# Setup make rules for merging files, with an option to do more complex
+# processing instead of merging.
+#
+# Parameter 1 is the name of the rule. This name is used as variable prefix,
+# and the targets generated are listed in a variable by that name.
+#
+# The list of all source files is returned in $1_SOURCES.
+#
+# Remaining parameters are named arguments. These include:
+#   DEST        : Dest root dir.
+#   FILES       : List of files to merge with absolute path.
+#   DEST_FILE   : Dest file name. (defaults to first file of src)
+#   FLATTEN     : Set to flatten the directory structure in the DEST dir.
+#   MACRO       : Optionally override the default macro used for making the merge.
+#                 Default is 'merge-file'.
+#   NAME_MACRO : Optionally supply a macro that rewrites the target file name
+#                based on the source file name.
+#   LOG_ACTION : Optionally specify a different action text for log messages.
+SetupMergeFiles = $(NamedParamsMacroTemplate)
+define SetupMergeFilesBody
+
+  ifeq ($$($1_MACRO), )
+    $1_MACRO := merge-file
+  endif
+
+  # Default DEST_FILE to the first file.
+  ifeq ($$($1_DEST_FILE), )
+    $1_DEST_FILE := $$(notdir $$(firstword $$($1_FILES)))
+  endif
+
+  ifeq ($$($1_NAME_MACRO), )
+    $1_NAME_MACRO := identity
+  endif
+
+  ifeq ($$($1_LOG_ACTION), )
+    $1_LOG_ACTION := Merging
+  endif
+
+  # Remove any trailing slash from DEST
+  $1_DEST := $$(patsubst %/,%,$$($1_DEST))
+
+  $$(eval $$(call DoMergeFiles, \
+      $$(call DoubleDollar, $$($1_FILES)), \
+      $$(call DoubleDollar, $$($1_DEST)/$$(call $$(strip $$($1_NAME_MACRO)),$$($1_DEST_FILE))), \
+      $1, \
+      $$($1_MACRO), \
+      $$($1_LOG_ACTION) \
+  ))
+
+endef

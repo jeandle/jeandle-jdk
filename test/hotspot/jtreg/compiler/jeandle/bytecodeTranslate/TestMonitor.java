@@ -25,6 +25,18 @@
  * @run driver jdk.test.lib.helpers.ClassFileInstaller jdk.test.whitebox.WhiteBox
  * @run main/othervm -Xcomp -Xbootclasspath/a:. -XX:+UnlockDiagnosticVMOptions -XX:+WhiteBoxAPI -XX:-TieredCompilation
  *                   -XX:CompileCommand=compileonly,compiler.jeandle.bytecodeTranslate.TestMonitor::addCounter
+ *                   -XX:CompileCommand=compileonly,compiler.jeandle.bytecodeTranslate.TestMonitor::SyncAddCounter
+ *                   -XX:+UnlockExperimentalVMOptions -XX:LockingMode=0
+ *                   -XX:+UseJeandleCompiler compiler.jeandle.bytecodeTranslate.TestMonitor
+ * @run main/othervm -Xcomp -Xbootclasspath/a:. -XX:+UnlockDiagnosticVMOptions -XX:+WhiteBoxAPI -XX:-TieredCompilation
+ *                   -XX:CompileCommand=compileonly,compiler.jeandle.bytecodeTranslate.TestMonitor::addCounter
+ *                   -XX:CompileCommand=compileonly,compiler.jeandle.bytecodeTranslate.TestMonitor::SyncAddCounter
+ *                   -XX:+UnlockExperimentalVMOptions -XX:LockingMode=1
+ *                   -XX:+UseJeandleCompiler compiler.jeandle.bytecodeTranslate.TestMonitor
+ * @run main/othervm -Xcomp -Xbootclasspath/a:. -XX:+UnlockDiagnosticVMOptions -XX:+WhiteBoxAPI -XX:-TieredCompilation
+ *                   -XX:CompileCommand=compileonly,compiler.jeandle.bytecodeTranslate.TestMonitor::addCounter
+ *                   -XX:CompileCommand=compileonly,compiler.jeandle.bytecodeTranslate.TestMonitor::SyncAddCounter
+ *                   -XX:+UnlockExperimentalVMOptions -XX:LockingMode=2
  *                   -XX:+UseJeandleCompiler compiler.jeandle.bytecodeTranslate.TestMonitor
  */
 
@@ -37,19 +49,25 @@ import jdk.test.whitebox.WhiteBox;
 
 public class TestMonitor {
     private static WhiteBox wb = WhiteBox.getWhiteBox();
-    private static int counter = 0;
     private static final Object lock = new Object();
+    private static int counter = 0;
+    private static final int loopCount = 1000000;
+    private static final int threadCount = 20;
 
     public static void main(String[] args) throws Exception {
         testSynchronized();
     }
 
     static void addCounter() {
-        for (int j = 0; j < 1000000; j++) {
+        for (int j = 0; j < loopCount; j++) {
             synchronized (lock) {
                 counter++;
             }
         }
+    }
+
+    synchronized static void SyncAddCounter() {
+                counter++;
     }
 
     static void testSynchronized() throws Exception {
@@ -61,23 +79,45 @@ public class TestMonitor {
             Thread.yield();
         }
 
-        int threadCount = 3;
-        Thread[] threads = new Thread[threadCount];
+        Thread[] threadsA = new Thread[threadCount];
 
         for (int i = 0; i < threadCount; i++) {
-            threads[i] = new Thread(() -> {
+            threadsA[i] = new Thread(() -> {
                 addCounter();
             });
         }
 
-        for (Thread thread : threads) {
+        for (Thread thread : threadsA) {
             thread.start();
         }
 
-        for (Thread thread : threads) {
+        for (Thread thread : threadsA) {
             thread.join();
         }
 
-        Asserts.assertEquals(counter, 3000000, "counter is not 300000");
+        Asserts.assertEquals(counter, threadCount * loopCount, "counter is not " + (threadCount * loopCount));
+
+        // reset counter
+        counter = 0;
+
+        Thread[] threadsB = new Thread[threadCount];
+
+        for (int i = 0; i < threadCount; i++) {
+            threadsB[i] = new Thread(() -> {
+                for (int j = 0; j < loopCount; j++) {
+                    SyncAddCounter();
+                }
+            });
+        }
+
+        for (Thread thread : threadsB) {
+            thread.start();
+        }
+
+        for (Thread thread : threadsB) {
+            thread.join();
+        }
+
+        Asserts.assertEquals(counter, threadCount * loopCount, "counter is not " + (threadCount * loopCount));
     }
 }
