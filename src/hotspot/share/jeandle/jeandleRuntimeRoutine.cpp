@@ -300,3 +300,18 @@ JRT_ENTRY(void, JeandleRuntimeRoutine::multianewarrayN(Klass* elem_type, arrayOo
   // TODO: deoptimize_caller_frame(current, HAS_PENDING_EXCEPTION);
   current->set_vm_result(obj);
 JRT_END
+
+JRT_ENTRY(jint, JeandleRuntimeRoutine::instanceof_unloaded_or_null(Method* method, int cp_index, Klass* ex_klass, JavaThread* current))
+  ResourceMark rm(current);
+  constantPoolHandle cp(current, method->constants());
+  Klass* catch_klass = cp->klass_at(cp_index, current);
+  // If klass_at fails, the pending exception remains on the thread
+  // and the stub's forward_exception_block will handle it automatically.
+  if (HAS_PENDING_EXCEPTION) {
+    return 0;
+  }
+  if (ex_klass != nullptr && ex_klass->is_subtype_of(catch_klass)) {
+    return 1;
+  }
+  return 0;
+JRT_END

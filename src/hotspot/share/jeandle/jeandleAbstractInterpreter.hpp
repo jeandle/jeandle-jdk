@@ -252,6 +252,8 @@ class BasicBlockBuilder : public JeandleCompilationResourceObj {
 
   void mark_loops();
   void mark_loops(JeandleBasicBlock* block);
+
+  void mark_unloaded_catch_klass();
 };
 
 // Convert java bytecodes to llvm ir.

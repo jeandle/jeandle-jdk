@@ -386,6 +386,7 @@ BasicBlockBuilder::BasicBlockBuilder(ciMethod* method,
   setup_exception_handlers();
   setup_control_flow();
   mark_loops();
+  mark_unloaded_catch_klass();
 }
 
 void BasicBlockBuilder::generate_blocks() {
@@ -600,6 +601,20 @@ void BasicBlockBuilder::mark_loops(JeandleBasicBlock* block) {
   block->set_reverse_post_order(_next_block_order--);
 }
 
+void BasicBlockBuilder::mark_unloaded_catch_klass() {
+  for (ciExceptionHandlerStream handlers(_method); !handlers.is_done(); handlers.next()) {
+    ciExceptionHandler* handler = handlers.handler();
+    if (handler->is_catch_all() || handler->is_rethrow()) {
+      continue;
+    }
+    ciKlass* klass = handler->catch_klass();
+    if (klass == nullptr || !klass->is_loaded()) {
+      JeandleBasicBlock* handler_block = _bci2block[handler->handler_bci()];
+      handler_block->set(JeandleBasicBlock::always_uncommon_trap);
+    }
+  }
+}
+
 JeandleAbstractInterpreter::JeandleAbstractInterpreter(ciMethod* method,
                                                        int entry_bci,
                                                        llvm::Module& target_module,
@@ -746,6 +761,12 @@ void JeandleAbstractInterpreter::interpret_block(JeandleBasicBlock* block) {
   _bytecodes.reset_to_bci(block->start_bci());
 
   Bytecodes::Code code = Bytecodes::_illegal;
+
+  if (block->is_exception_handler() && block->is_set(JeandleBasicBlock::always_uncommon_trap)) {
+    _bytecodes.force_bci(block->start_bci());
+    uncommon_trap(Deoptimization::Reason_unloaded,
+                  Deoptimization::Action_reinterpret);
+  }
 
   // Iterate all bytecodes.
   while ((code = _bytecodes.next()) != ciBytecodeStream::EOBC() &&
@@ -2353,8 +2374,14 @@ JeandleAbstractInterpreter::DispatchedDest JeandleAbstractInterpreter::dispatch_
 }
 
 void JeandleAbstractInterpreter::dispatch_exception_to_handler(llvm::Value* exception_oop) {
+  llvm::Value* ex_klass = nullptr;
+  llvm::Value* current_thread = nullptr;
+  llvm::Value* super_method_ptr = nullptr;
+
+  int cur_bci = _bytecodes.cur_bci();
+
   // traverse exception handler table
-  for (ciExceptionHandlerStream handlers(_method, _bytecodes.cur_bci()); !handlers.is_done(); handlers.next()) {
+  for (ciExceptionHandlerStream handlers(_method, cur_bci); !handlers.is_done(); handlers.next()) {
     ciExceptionHandler* handler = handlers.handler();
     if (handler->is_rethrow()) {
       // unlock before the exception is rethrown out of the synchronized method
@@ -2380,6 +2407,7 @@ void JeandleAbstractInterpreter::dispatch_exception_to_handler(llvm::Value* exce
 
     // dispatch
     ciKlass* klass = handler->catch_klass();
+    llvm::Value* match = nullptr;
     if (klass != nullptr && klass->is_loaded()) {
       Klass* super_klass = (Klass*)(klass->constant_encoding());
       llvm::PointerType* klass_type = llvm::PointerType::get(*_context, llvm::jeandle::AddrSpace::CHeapAddrSpace);
@@ -2387,22 +2415,36 @@ void JeandleAbstractInterpreter::dispatch_exception_to_handler(llvm::Value* exce
       llvm::Value* super_klass_ptr = _ir_builder.CreateIntToPtr(super_klass_addr, klass_type);
 
       // instanceof distinguish
-      llvm::CallInst* match = call_java_op("jeandle.instanceof", {super_klass_ptr, exception_oop});
+      match = call_java_op("jeandle.instanceof", {super_klass_ptr, exception_oop});
+    } else {
+      if (ex_klass == nullptr) {
+        ex_klass = call_java_op("jeandle.load_klass", {exception_oop});
+        current_thread = call_java_op("jeandle.current_thread", {});
+        Method* super_method = (Method*)(_method->constant_encoding());
+        llvm::PointerType* method_type = llvm::PointerType::get(*_context, llvm::jeandle::AddrSpace::CHeapAddrSpace);
+        llvm::Value* super_method_addr = _ir_builder.getInt64((intptr_t)super_method);
+        super_method_ptr = _ir_builder.CreateIntToPtr(super_method_addr, method_type);
+      }
 
-      // if match, the right handler is found, else try the next
-      llvm::BasicBlock* match_dest = handler_block->header_llvm_block();
-      llvm::BasicBlock* next_dest = llvm::BasicBlock::Create(*_context,
-                                                             "bci_" + std::to_string(_bytecodes.cur_bci()) + "_exception_dispatch_to_bci_" + std::to_string(handler_block->start_bci()),
-                                                             _llvm_func);
-
-      bool merged = handler_block->merge_VM_state_from(_jvm->copy_for_exception_handler(exception_oop),
-                                                       _ir_builder.GetInsertBlock(),
-                                                       _method);
-      JEANDLE_ERROR_ASSERT_AND_RET_VOID_ON_FAIL(merged, "failed to update handler's VM state");
-      llvm::Value* cond = _ir_builder.CreateICmpEQ(match, _ir_builder.getInt32(1));
-      _ir_builder.CreateCondBr(cond, match_dest, next_dest);
-      _ir_builder.SetInsertPoint(next_dest);
+      _bytecodes.force_bci(handler_bci);
+      match = create_call_ex(JeandleRuntimeRoutine::instanceof_unloaded_or_null_callee(_module), 
+                        {super_method_ptr, _ir_builder.getInt32(handler->catch_klass_index()), ex_klass, current_thread}, 
+                        llvm::CallingConv::Hotspot_JIT);
+      _bytecodes.force_bci(cur_bci);
     }
+    // if match, the right handler is found, else try the next
+    llvm::BasicBlock* match_dest = handler_block->header_llvm_block();
+    llvm::BasicBlock* next_dest = llvm::BasicBlock::Create(*_context,
+                                                           "bci_" + std::to_string(cur_bci) + "_exception_dispatch_to_bci_" + std::to_string(handler_block->start_bci()),
+                                                           _llvm_func);
+
+    bool merged = handler_block->merge_VM_state_from(_jvm->copy_for_exception_handler(exception_oop),
+                                                     _ir_builder.GetInsertBlock(),
+                                                     _method);
+    JEANDLE_ERROR_ASSERT_AND_RET_VOID_ON_FAIL(merged, "failed to update handler's VM state");
+    llvm::Value* cond = _ir_builder.CreateICmpEQ(match, _ir_builder.getInt32(1));
+    _ir_builder.CreateCondBr(cond, match_dest, next_dest);
+    _ir_builder.SetInsertPoint(next_dest);
   }
 
   // At least one handler is found.
