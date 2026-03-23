@@ -1,34 +1,53 @@
-com/sun/crypto/provider/Cipher/AEAD/GCMShortBuffer.java                    linux-aarch64,linux-x64
-com/sun/jdi/EarlyReturnTest.java                                           linux-x64
-com/sun/jdi/InstanceFilter.java                                            linux-x64
+#
+# Copyright (c) 2026, the Jeandle-JDK Authors. All Rights Reserved.
+# DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
+#
+# This code is free software; you can redistribute it and/or modify it
+# under the terms of the GNU General Public License version 2 only, as
+# published by the Free Software Foundation.
+#
+# This code is distributed in the hope that it will be useful, but WITHOUT
+# ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
+# FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General Public License
+# version 2 for more details (a copy is included in the LICENSE file that
+# accompanied this code).
+#
+# You should have received a copy of the GNU General Public License version
+# 2 along with this work; if not, write to the Free Software Foundation,
+# Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301 USA.
+#
+#
+
+#############################################################################
+#
+# List of quarantined tests for testing with JeandleCompiler.
+# Only classified by main cause, maybe contain multiple reasons in a single testcase.
+#
+#############################################################################
+
+###
+# Deopt handler
+###
+# related issue: https://github.coms/jeandle/jeandle-jdk/issues/411
 java/foreign/TestHandshake.java                                            linux-aarch64,linux-x64
+
+###
+# Random failed in CI
+###
+com/sun/crypto/provider/Cipher/AEAD/GCMShortBuffer.java                    linux-aarch64,linux-x64
 java/foreign/TestMemorySession.java                                        linux-aarch64,linux-x64
-java/lang/Character/UnicodeCasingTest.java                                 linux-aarch64
-java/lang/Math/Log1pTests.java                                             linux-aarch64
-java/lang/ProcessHandle/PermissionTest.java                                linux-aarch64,linux-x64
-java/lang/String/ToLowerCase.java                                          linux-aarch64
-java/lang/String/UnicodeCasingTest.java                                    linux-aarch64
-java/lang/Thread/ThreadSleepEvent.java                                     linux-aarch64,linux-x64
-java/lang/constant/MethodTypeDescTest.java                                 linux-aarch64
+java/lang/Thread/ThreadSleepEvent.java                                     linux-x64
 java/math/BigInteger/largeMemory/SymmetricRangeTests.java                  linux-aarch64,linux-x64
 java/math/BigDecimal/StringConstructor.java                                linux-x64
-java/util/BitSet/stream/BitSetStreamTest.java                              linux-x64
-java/util/Collection/HotPotatoes.java                                      linux-x64
-java/util/Collection/MOAT.java                                             linux-x64
-java/util/regex/RegExTest.java                                             linux-aarch64
-java/util/Map/BasicSerialization.java                                      linux-x64
-java/util/Objects/CheckLongIndex.java                                      linux-aarch64
-java/util/Optional/Basic.java                                              linux-x64
-java/util/PriorityQueue/ForgetMeNot.java                                   linux-aarch64
-java/util/concurrent/locks/Lock/TimedAcquireLeak.java                      linux-aarch64,linux-x64
-java/util/logging/LoggingDeadlock3.java                                    linux-x64
-java/util/logging/LoggingMXBeanTest2.java                                  linux-x64
-java/util/logging/TestLogConfigurationDeadLockWithConf.java                linux-x64
-java/util/logging/TestLoggerBundleSync.java                                linux-x64
-java/util/stream/test/org/openjdk/tests/java/util/stream/SliceOpTest.java  linux-aarch64
-java/util/stream/test/org/openjdk/tests/java/util/stream/WhileOpTest.java  linux-aarch64
-jdk/classfile/CorpusTest.java                                              linux-x64
-jdk/internal/loader/ClassLoaderValue/ClassLoaderValueTest.java             linux-aarch64
-jdk/internal/reflect/CallerSensitive/CallerSensitiveFinder.java            linux-x64
-jdk/internal/reflect/CallerSensitive/CheckCSMs.java                        linux-x64
+
+###
+# GC not support
+###
 jdk/jfr/event/gc/configuration/TestGCConfigurationEvent.java               linux-aarch64,linux-x64
+
+###
+# timeout
+###
+java/lang/Character/UnicodeCasingTest.java                                 linux-aarch64
+java/lang/String/UnicodeCasingTest.java                                    linux-aarch64
+java/util/BitSet/stream/BitSetStreamTest.java                              linux-x64

@@ -1,17 +1,87 @@
-compiler/arraycopy/TestArrayCopyNoInitDeopt.java                                               linux-aarch64,linux-x64
-compiler/blackhole/BlackholeIntrinsicTest.java                                                 linux-aarch64,linux-x64
+#
+# Copyright (c) 2026, the Jeandle-JDK Authors. All Rights Reserved.
+# DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
+#
+# This code is free software; you can redistribute it and/or modify it
+# under the terms of the GNU General Public License version 2 only, as
+# published by the Free Software Foundation.
+#
+# This code is distributed in the hope that it will be useful, but WITHOUT
+# ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
+# FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General Public License
+# version 2 for more details (a copy is included in the LICENSE file that
+# accompanied this code).
+#
+# You should have received a copy of the GNU General Public License version
+# 2 along with this work; if not, write to the Free Software Foundation,
+# Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301 USA.
+#
+#
+
+#############################################################################
+#
+# List of quarantined tests for testing with JeandleCompiler.
+# Only classified by main cause, maybe contain multiple reasons in a single testcase.
+#
+#############################################################################
+
+###
+# Deopt handler
+###
+# related issue: https://github.com/jeandle/jeandle-jdk/issues/322
 compiler/c2/Test6910605_1.java                                                                 linux-aarch64,linux-x64
 compiler/c2/Test6910605_2.java                                                                 linux-aarch64,linux-x64
+compiler/escapeAnalysis/Test6775880.java                                                       linux-aarch64,linux-x64
+compiler/interpreter/Test6833129.java                                                          linux-aarch64,linux-x64
+compiler/jsr292/NonInlinedCall/InvokeTest.java                                                 linux-aarch64,linux-x64
+compiler/profiling/spectrapredefineclass_classloaders/Launcher.java                            linux-aarch64,linux-x64
+compiler/uncommontrap/Test8009761.java                                                         linux-aarch64,linux-x64
+runtime/Thread/AsyncExceptionTest.java                                                         linux-aarch64,linux-x64
+
+# related issue: https://github.com/jeandle/jeandle-jdk/issues/329
+runtime/Thread/StopAtExit.java                                                                 linux-aarch64,linux-x64
+
+###
+# PGO - Lack of some profile-based optimization, which cannot trigger deoptimization
+###
+# related issue: https://github.com/jeandle/jeandle-jdk/issues/343
+compiler/arraycopy/TestArrayCopyNoInitDeopt.java                                               linux-aarch64,linux-x64
+
+compiler/exceptions/OptimizeImplicitExceptions.java                                            linux-aarch64,linux-x64
+compiler/profiling/TestTypeProfiling.java                                                      linux-aarch64,linux-x64
+compiler/uncommontrap/Decompile.java                                                           linux-aarch64,linux-x64
+compiler/uncommontrap/TestUnstableIfTrap.java                                                  linux-aarch64,linux-x64
+
+###
+# OSR - On Stack Replacement
+###
+compiler/blackhole/BlackholeIntrinsicTest.java                                                 linux-aarch64,linux-x64
+compiler/codegen/BMI2.java                                                                     linux-aarch64,linux-x64
+compiler/jvmci/compilerToVM/AllocateCompileIdTest.java                                         linux-aarch64,linux-x64
+compiler/jvmci/compilerToVM/HasCompiledCodeForOSRTest.java                                     linux-aarch64,linux-x64
+
+###
+# EA - Escape Analysis
+###
+compiler/escapeAnalysis/TestIterativeEA.java                                                   linux-aarch64,linux-x64
+compiler/jvmci/compilerToVM/MaterializeVirtualObjectTest.java                                  linux-aarch64,linux-x64
+
+###
+# C2-specific testcases - maybe we should add similar arguments and testcases for Jeandle in future
+###
+# PrintOptoAssembly
 compiler/c2/TestBit.java                                                                       linux-aarch64,linux-x64
-compiler/c2/TestMinMaxSubword.java                                                             linux-aarch64,linux-x64
-compiler/c2/TestShiftRightAndAccumulate.java#id0                                               linux-aarch64,linux-x64
-compiler/c2/TestShiftRightAndAccumulate.java#id1                                               linux-aarch64,linux-x64
-compiler/c2/TestUnsignedByteCompare1.java                                                      linux-aarch64,linux-x64
 compiler/c2/aarch64/TestVolatilesG1.java                                                       linux-aarch64
 compiler/c2/aarch64/TestVolatilesParallel.java                                                 linux-aarch64
 compiler/c2/aarch64/TestVolatilesSerial.java                                                   linux-aarch64
 compiler/c2/aarch64/TestVolatilesShenandoah.java                                               linux-aarch64
+
+# PrintIdeal
+compiler/loopopts/UseCountedLoopSafepointsTest.java                                            linux-aarch64,linux-x64
+
+# C2 irTests
 compiler/c2/cr7200264/TestIntVect.java                                                         linux-x64
+compiler/c2/TestMinMaxSubword.java                                                             linux-aarch64,linux-x64
 compiler/c2/irTests/AddINodeIdealizationTests.java                                             linux-aarch64,linux-x64
 compiler/c2/irTests/AddLNodeIdealizationTests.java                                             linux-aarch64,linux-x64
 compiler/c2/irTests/AndINodeIdealizationTests.java                                             linux-aarch64,linux-x64
@@ -51,7 +121,6 @@ compiler/c2/irTests/TestPostParseCallDevirtualization.java                      
 compiler/c2/irTests/TestPushAddThruCast.java                                                   linux-aarch64,linux-x64
 compiler/c2/irTests/TestRemixAddressExpressions.java                                           linux-aarch64,linux-x64
 compiler/c2/irTests/TestScalarReplacement.java                                                 linux-aarch64,linux-x64
-compiler/c2/irTests/TestScheduleSmallMethod.java                                               linux-aarch64
 compiler/c2/irTests/TestShiftAndMask.java                                                      linux-aarch64,linux-x64
 compiler/c2/irTests/TestSkeletonPredicates.java                                                linux-aarch64,linux-x64
 compiler/c2/irTests/TestSpecialCasesOf_AMinusB_Plus_CMinusD_InAddIdeal.java                    linux-aarch64,linux-x64
@@ -77,53 +146,9 @@ compiler/c2/irTests/igvn/TestIntegerMulRing.java                                
 compiler/c2/irTests/loopOpts/LoopIdealizationTests.java                                        linux-aarch64,linux-x64
 compiler/c2/irTests/scalarReplacement/ScalarReplacementTests.java                              linux-aarch64,linux-x64
 compiler/c2/irTests/stringopts/TestNegativeArraySize.java                                      linux-aarch64,linux-x64
-compiler/c2/unloaded/TestInlineUnloaded.java                                                   linux-aarch64,linux-x64
-compiler/codegen/BMI2.java                                                                     linux-aarch64,linux-x64
-compiler/codegen/TestTrichotomyExpressions.java                                                linux-aarch64,linux-x64
-compiler/escapeAnalysis/Test6775880.java                                                       linux-aarch64,linux-x64
-compiler/escapeAnalysis/TestIterativeEA.java                                                   linux-aarch64,linux-x64
-compiler/exceptions/OptimizeImplicitExceptions.java                                            linux-aarch64,linux-x64
 compiler/gcbarriers/TestZGCBarrierElision.java#id0                                             linux-aarch64,linux-x64
 compiler/gcbarriers/TestZGCBarrierElision.java#id1                                             linux-aarch64,linux-x64
-compiler/inlining/InlineAccessors.java                                                         linux-aarch64,linux-x64
-compiler/inlining/PrintInlining.java                                                           linux-aarch64,linux-x64
-compiler/interpreter/Test6833129.java                                                          linux-aarch64,linux-x64
-compiler/intrinsics/IntrinsicAvailableTest.java                                                linux-aarch64,linux-x64
-compiler/intrinsics/IntrinsicDisabledTest.java                                                 linux-aarch64,linux-x64
-compiler/intrinsics/TestBitShuffleOpers.java                                                   linux-aarch64,linux-x64
-compiler/intrinsics/TestCheckIndex.java                                                        linux-aarch64,linux-x64
-compiler/intrinsics/TestCompareUnsigned.java                                                   linux-aarch64,linux-x64
-compiler/intrinsics/TestDoubleIsInfinite.java                                                  linux-x64
-compiler/intrinsics/TestFloatIsInfinite.java                                                   linux-x64
-compiler/intrinsics/TestIntegerUnsignedDivMod.java                                             linux-aarch64,linux-x64
-compiler/intrinsics/TestLongUnsignedDivMod.java                                                linux-aarch64,linux-x64
-compiler/intrinsics/TestRotate.java                                                            linux-aarch64,linux-x64
-compiler/intrinsics/klass/CastNullCheckDroppingsTest.java                                      linux-aarch64,linux-x64
-compiler/intrinsics/math/TestFpMinMaxReductions.java                                           linux-x64
-compiler/intrinsics/unsafe/HeapByteBufferTest.java#id1                                         linux-aarch64
-compiler/jeandle/bytecodeTranslate/TestOopHandle.java                                          linux-x64
-compiler/jsr292/MHInlineTest.java                                                              linux-aarch64,linux-x64
-compiler/jsr292/NonInlinedCall/InvokeTest.java                                                 linux-aarch64,linux-x64
-compiler/jvmci/JVM_GetJVMCIRuntimeTest.java                                                    linux-aarch64
-compiler/jvmci/TestValidateModules.java                                                        linux-aarch64
-compiler/jvmci/compilerToVM/AllocateCompileIdTest.java                                         linux-aarch64,linux-x64
-compiler/jvmci/compilerToVM/DisassembleCodeBlobTest.java                                       linux-aarch64
-compiler/jvmci/compilerToVM/GetStackTraceElementTest.java                                      linux-aarch64
-compiler/jvmci/compilerToVM/HasCompiledCodeForOSRTest.java                                     linux-aarch64,linux-x64
-compiler/jvmci/compilerToVM/InvalidateInstalledCodeTest.java                                   linux-aarch64
-compiler/jvmci/compilerToVM/IsMatureVsReprofileTest.java                                       linux-aarch64
-compiler/jvmci/compilerToVM/IterateFramesNative.java                                           linux-aarch64
-compiler/jvmci/compilerToVM/MaterializeVirtualObjectTest.java                                  linux-aarch64,linux-x64
-compiler/jvmci/compilerToVM/ShouldInlineMethodTest.java                                        linux-aarch64
-compiler/loopopts/LoopUnswitchingBadNodeBudget.java                                            linux-aarch64
-compiler/loopopts/TestCastIIMakesMainLoopPhiDead2.java                                         linux-aarch64,linux-x64
-compiler/loopopts/TestDivZeroCheckControl.java#id0                                             linux-aarch64,linux-x64
 compiler/loopopts/TestLoopLimitSubtractionsCollapse.java                                       linux-aarch64,linux-x64
-compiler/loopopts/TestPartialPeelAtUnsignedTestsNegativeLimit.java#Xbatch                      linux-aarch64,linux-x64
-compiler/loopopts/TestPartialPeelAtUnsignedTestsNegativeLimit.java#Xcomp-compile-test          linux-aarch64,linux-x64
-compiler/loopopts/TestPartialPeelAtUnsignedTestsNegativeLimit.java#Xcomp-run-inline            linux-aarch64,linux-x64
-compiler/loopopts/TestRemoveEmptyLoop.java                                                     linux-aarch64,linux-x64
-compiler/loopopts/UseCountedLoopSafepointsTest.java                                            linux-aarch64,linux-x64
 compiler/loopopts/superword/MinMaxRed_Int.java                                                 linux-aarch64,linux-x64
 compiler/loopopts/superword/ProdRed_Double.java                                                linux-aarch64,linux-x64
 compiler/loopopts/superword/ProdRed_Float.java                                                 linux-aarch64,linux-x64
@@ -174,24 +199,59 @@ compiler/loopopts/superword/TestDependencyOffsets.java#vec-v032-A               
 compiler/loopopts/superword/TestDependencyOffsets.java#vec-v032-U                              linux-aarch64
 compiler/loopopts/superword/TestDependencyOffsets.java#vec-v064-A                              linux-aarch64
 compiler/loopopts/superword/TestDependencyOffsets.java#vec-v064-U                              linux-aarch64
-compiler/loopopts/superword/TestGeneralizedReductions.java                                     linux-aarch64,linux-x64
+compiler/loopopts/superword/TestGeneralizedReductions.java                                     linux-x64
 compiler/loopopts/superword/TestIndependentPacksWithCyclicDependency.java                      linux-aarch64,linux-x64
 compiler/loopopts/superword/TestScheduleReordersScalarMemops.java                              linux-aarch64,linux-x64
 compiler/loopopts/superword/TestUnorderedReduction.java#MaxVectorSize16-Unaligned              linux-aarch64,linux-x64
-compiler/loopopts/superword/TestUnorderedReduction.java#MaxVectorSize32-Aligned                linux-aarch64
-compiler/loopopts/superword/TestUnorderedReduction.java#Vanilla-Aligned                        linux-aarch64
 compiler/loopopts/superword/TestUnorderedReduction.java#Vanilla-Unaligned                      linux-aarch64
-compiler/loopopts/superword/TestUnorderedReductionPartialVectorization.java                    linux-aarch64,linux-x64
-compiler/profiling/TestTypeProfiling.java                                                      linux-aarch64,linux-x64
-compiler/profiling/spectrapredefineclass_classloaders/Launcher.java                            linux-aarch64,linux-x64
-compiler/runtime/TestFloatsOnStackDeopt.java                                                   linux-aarch64,linux-x64
-compiler/uncommontrap/Decompile.java                                                           linux-aarch64,linux-x64
-compiler/uncommontrap/Test8009761.java                                                         linux-aarch64,linux-x64
-compiler/uncommontrap/TestStackBangMonitorOwned.java                                           linux-aarch64,linux-x64
-compiler/uncommontrap/TestUnstableIfTrap.java                                                  linux-aarch64,linux-x64
-compiler/uncommontrap/UncommonTrapStackBang.java                                               linux-aarch64
+compiler/loopopts/superword/TestUnorderedReductionPartialVectorization.java                    linux-x64
+
+###
+# Inline
+###
+compiler/c2/unloaded/TestInlineUnloaded.java                                                   linux-aarch64,linux-x64
+compiler/inlining/InlineAccessors.java                                                         linux-aarch64,linux-x64
+compiler/inlining/PrintInlining.java                                                           linux-aarch64,linux-x64
+compiler/jsr292/MHInlineTest.java                                                              linux-aarch64,linux-x64
+
+###
+# Intrinsics
+###
+compiler/intrinsics/IntrinsicAvailableTest.java                                                linux-aarch64,linux-x64
+compiler/intrinsics/IntrinsicDisabledTest.java                                                 linux-aarch64,linux-x64
+compiler/intrinsics/TestBitShuffleOpers.java                                                   linux-aarch64,linux-x64
+compiler/intrinsics/TestCheckIndex.java                                                        linux-aarch64,linux-x64
+compiler/intrinsics/TestCompareUnsigned.java                                                   linux-aarch64,linux-x64
+compiler/intrinsics/TestDoubleIsInfinite.java                                                  linux-x64
+compiler/intrinsics/TestFloatIsInfinite.java                                                   linux-x64
+compiler/intrinsics/TestIntegerUnsignedDivMod.java                                             linux-aarch64,linux-x64
+compiler/intrinsics/TestRotate.java                                                            linux-aarch64,linux-x64
+compiler/intrinsics/klass/CastNullCheckDroppingsTest.java                                      linux-aarch64,linux-x64
+compiler/intrinsics/math/TestFpMinMaxReductions.java                                           linux-x64
+
+###
+# Constant Folding
+# related issue: https://github.com/jeandle/jeandle-jdk/issues/387
+###
 compiler/unsafe/UnsafeGetConstantField.java                                                    linux-aarch64,linux-x64
 compiler/unsafe/UnsafeGetStableArrayElement.java                                               linux-aarch64,linux-x64
+
+###
+# CompressedOops/CompressedClassPointers
+###
+gc/arguments/TestMaxRAMFlags.java                                                              linux-aarch64,linux-x64
+gc/arguments/TestUseCompressedOopsErgo.java#id0                                                linux-aarch64,linux-x64
+gc/arguments/TestUseCompressedOopsFlagsWithUlimit.java                                         linux-aarch64,linux-x64
+gc/metaspace/TestMetaspacePerfCounters.java#Serial-64                                          linux-aarch64,linux-x64
+gc/metaspace/TestPerfCountersAndMemoryPools.java#id0                                           linux-aarch64,linux-x64
+gc/metaspace/TestSizeTransitions.java#id0                                                      linux-aarch64,linux-x64
+runtime/Metaspace/PrintMetaspaceDcmd.java#test-64bit-ccs                                       linux-aarch64,linux-x64
+runtime/Metaspace/PrintMetaspaceDcmd.java#test-64bit-ccs-guarded                               linux-aarch64,linux-x64
+runtime/logging/CompressedOopsTest.java                                                        linux-aarch64,linux-x64
+
+###
+# Vectorization
+###
 compiler/vectorization/TestAutoVecIntMinMax.java                                               linux-aarch64,linux-x64
 compiler/vectorization/TestBufferVectorization.java                                            linux-aarch64,linux-x64
 compiler/vectorization/TestEor3AArch64.java                                                    linux-aarch64
@@ -229,6 +289,10 @@ compiler/vectorization/runner/LoopRangeStrideTest.java                          
 compiler/vectorization/runner/LoopReductionOpTest.java                                         linux-aarch64,linux-x64
 compiler/vectorization/runner/MultipleLoopsTest.java                                           linux-aarch64,linux-x64
 compiler/vectorization/runner/StripMinedLoopTest.java                                          linux-aarch64,linux-x64
+
+###
+# GC not support
+###
 gc/TestJNICriticalStressTest.java#id0                                                          linux-aarch64,linux-x64
 gc/TestJNICriticalStressTest.java#id1                                                          linux-aarch64,linux-x64
 gc/TestMemoryMXBeansAndPoolsPresence.java#id0                                                  linux-aarch64,linux-x64
@@ -239,20 +303,16 @@ gc/TestPLABAdaptToMinTLABSize.java#id1                                          
 gc/TestPolicyNamePerfCounter.java#id1                                                          linux-aarch64,linux-x64
 gc/TestPolicyNamePerfCounter.java#id2                                                          linux-aarch64,linux-x64
 gc/arguments/TestAggressiveHeap.java                                                           linux-aarch64,linux-x64
-gc/arguments/TestDisableDefaultGC.java                                                         linux-aarch64,linux-x64
 gc/arguments/TestG1HeapRegionSize.java                                                         linux-aarch64,linux-x64
 gc/arguments/TestG1RemSetFlags.java                                                            linux-aarch64,linux-x64
 gc/arguments/TestInitialTenuringThreshold.java                                                 linux-aarch64,linux-x64
-gc/arguments/TestMaxRAMFlags.java                                                              linux-aarch64,linux-x64
 gc/arguments/TestObjectTenuringFlags.java                                                      linux-aarch64,linux-x64
 gc/arguments/TestParallelGCThreads.java                                                        linux-aarch64,linux-x64
 gc/arguments/TestParallelRefProc.java                                                          linux-aarch64,linux-x64
 gc/arguments/TestSelectDefaultGC.java                                                          linux-aarch64,linux-x64
-gc/arguments/TestUseCompressedOopsErgo.java#id0                                                linux-aarch64,linux-x64
 gc/arguments/TestUseCompressedOopsErgo.java#id1                                                linux-aarch64,linux-x64
 gc/arguments/TestUseCompressedOopsErgo.java#id2                                                linux-aarch64,linux-x64
 gc/arguments/TestUseCompressedOopsErgo.java#id3                                                linux-aarch64,linux-x64
-gc/arguments/TestUseCompressedOopsFlagsWithUlimit.java                                         linux-aarch64,linux-x64
 gc/class_unloading/TestG1ClassUnloadingHWM.java                                                linux-aarch64,linux-x64
 gc/epsilon/TestDieDefault.java                                                                 linux-aarch64,linux-x64
 gc/epsilon/TestDieWithHeapDump.java                                                            linux-aarch64,linux-x64
@@ -309,10 +369,7 @@ gc/logging/TestPrintReferences.java                                             
 gc/metaspace/TestMetaspacePerfCounters.java#Epsilon-64                                         linux-aarch64,linux-x64
 gc/metaspace/TestMetaspacePerfCounters.java#G1-64                                              linux-aarch64,linux-x64
 gc/metaspace/TestMetaspacePerfCounters.java#Parallel-64                                        linux-aarch64,linux-x64
-gc/metaspace/TestMetaspacePerfCounters.java#Serial-64                                          linux-aarch64,linux-x64
 gc/metaspace/TestMetaspacePerfCounters.java#Shenandoah-64                                      linux-aarch64,linux-x64
-gc/metaspace/TestPerfCountersAndMemoryPools.java#id0                                           linux-aarch64,linux-x64
-gc/metaspace/TestSizeTransitions.java#id0                                                      linux-aarch64,linux-x64
 gc/metaspace/TestSizeTransitions.java#id1                                                      linux-aarch64,linux-x64
 gc/metaspace/TestSizeTransitions.java#id2                                                      linux-aarch64,linux-x64
 gc/parallel/TestDynShrinkHeap.java                                                             linux-aarch64,linux-x64
@@ -354,6 +411,29 @@ gc/z/TestPageCacheFlush.java                                                    
 gc/z/TestUncommit.java                                                                         linux-aarch64,linux-x64
 gc/z/TestZForceDiscontiguousHeapReservations.java                                              linux-aarch64,linux-x64
 gc/z/TestZNMT.java                                                                             linux-aarch64,linux-x64
+runtime/ClassUnload/UnloadTestWithVerifyDuringGC.java                                          linux-aarch64,linux-x64
+
+###
+# timeout
+###
+compiler/c2/TestShiftRightAndAccumulate.java#id0                                               linux-aarch64,linux-x64
+compiler/c2/TestShiftRightAndAccumulate.java#id1                                               linux-aarch64,linux-x64
+compiler/c2/TestUnsignedByteCompare1.java                                                      linux-aarch64,linux-x64
+test/hotspot/jtreg/compiler/codegen/TestTrichotomyExpressions.java                             linux-aarch64,linux-x64
+compiler/loopopts/TestCastIIMakesMainLoopPhiDead2.java                                         linux-aarch64,linux-x64
+compiler/loopopts/TestDivZeroCheckControl.java#id0                                             linux-aarch64,linux-x64
+compiler/loopopts/TestPartialPeelAtUnsignedTestsNegativeLimit.java#Xbatch                      linux-aarch64,linux-x64
+compiler/loopopts/TestPartialPeelAtUnsignedTestsNegativeLimit.java#Xcomp-compile-test          linux-aarch64,linux-x64
+compiler/loopopts/TestPartialPeelAtUnsignedTestsNegativeLimit.java#Xcomp-run-inline            linux-aarch64,linux-x64
+compiler/loopopts/TestRemoveEmptyLoop.java                                                     linux-aarch64,linux-x64
+compiler/intrinsics/TestLongUnsignedDivMod.java                                                linux-aarch64,linux-x64
+serviceability/dcmd/gc/FinalizerInfoTest.java                                                  linux-aarch64,linux-x64
+serviceability/sa/ClhsdbAttachDifferentJVMs.java                                               linux-aarch64
+serviceability/sa/ClhsdbThread.java                                                            linux-aarch64
+
+###
+# gtest
+###
 gtest/GTestWrapper.java                                                                        linux-aarch64,linux-x64
 gtest/LargePageGtests.java#use-large-pages                                                     linux-aarch64,linux-x64
 gtest/LargePageGtests.java#use-large-pages-1G                                                  linux-aarch64,linux-x64
@@ -364,23 +444,3 @@ gtest/MetaspaceGtests.java#default-debug                                        
 gtest/NMTGtests.java#nmt-detail                                                                linux-aarch64,linux-x64
 gtest/NMTGtests.java#nmt-off                                                                   linux-aarch64,linux-x64
 gtest/NMTGtests.java#nmt-summary                                                               linux-aarch64,linux-x64
-runtime/ClassUnload/UnloadTestWithVerifyDuringGC.java                                          linux-aarch64,linux-x64
-runtime/LoadLibrary/TestSunBootLibraryPath.java                                                linux-aarch64
-runtime/LocalVariableTable/TestLVT.java                                                        linux-aarch64
-runtime/Metaspace/PrintMetaspaceDcmd.java#test-64bit-ccs                                       linux-aarch64,linux-x64
-runtime/Metaspace/PrintMetaspaceDcmd.java#test-64bit-ccs-guarded                               linux-aarch64,linux-x64
-runtime/StackGap/TestStackGap.java                                                             linux-aarch64
-runtime/Thread/AsyncExceptionTest.java                                                         linux-aarch64,linux-x64
-runtime/Thread/StopAtExit.java                                                                 linux-aarch64,linux-x64
-runtime/cds/serviceability/ReplaceCriticalClasses.java                                         linux-aarch64
-runtime/jni/FindClassUtf8/FindClassUtf8.java                                                   linux-aarch64
-runtime/jni/getCreatedJavaVMs/TestGetCreatedJavaVMs.java                                       linux-aarch64
-runtime/jsig/Testjsig.java                                                                     linux-aarch64
-runtime/logging/CompressedOopsTest.java                                                        linux-aarch64,linux-x64
-runtime/modules/AccessCheck/ExpQualToM1PrivateMethodIAE.java                                   linux-aarch64
-runtime/modules/ModulesSymLink.java                                                            linux-aarch64,linux-x64
-runtime/stringtable/StringTableCleaningTest.java                                               linux-aarch64
-serviceability/dcmd/gc/FinalizerInfoTest.java                                                  linux-aarch64,linux-x64
-serviceability/sa/ClhsdbAttachDifferentJVMs.java                                               linux-aarch64
-serviceability/sa/ClhsdbThread.java                                                            linux-aarch64
-serviceability/sa/sadebugd/ClhsdbAttachToDebugServer.java                                      linux-aarch64
