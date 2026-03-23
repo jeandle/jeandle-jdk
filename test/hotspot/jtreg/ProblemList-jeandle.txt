@@ -430,17 +430,3 @@ compiler/intrinsics/TestLongUnsignedDivMod.java                                 
 serviceability/dcmd/gc/FinalizerInfoTest.java                                                  linux-aarch64,linux-x64
 serviceability/sa/ClhsdbAttachDifferentJVMs.java                                               linux-aarch64
 serviceability/sa/ClhsdbThread.java                                                            linux-aarch64
-
-###
-# gtest
-###
-gtest/GTestWrapper.java                                                                        linux-aarch64,linux-x64
-gtest/LargePageGtests.java#use-large-pages                                                     linux-aarch64,linux-x64
-gtest/LargePageGtests.java#use-large-pages-1G                                                  linux-aarch64,linux-x64
-gtest/LargePageGtests.java#use-large-pages-sysV                                                linux-aarch64,linux-x64
-gtest/MetaspaceGtests.java#balanced-no-ccs                                                     linux-aarch64,linux-x64
-gtest/MetaspaceGtests.java#balanced-with-guards                                                linux-aarch64,linux-x64
-gtest/MetaspaceGtests.java#default-debug                                                       linux-aarch64,linux-x64
-gtest/NMTGtests.java#nmt-detail                                                                linux-aarch64,linux-x64
-gtest/NMTGtests.java#nmt-off                                                                   linux-aarch64,linux-x64
-gtest/NMTGtests.java#nmt-summary                                                               linux-aarch64,linux-x64
