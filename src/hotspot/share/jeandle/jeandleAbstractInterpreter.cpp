@@ -2374,9 +2374,9 @@ JeandleAbstractInterpreter::DispatchedDest JeandleAbstractInterpreter::dispatch_
 }
 
 void JeandleAbstractInterpreter::dispatch_exception_to_handler(llvm::Value* exception_oop) {
-  llvm::Value* ex_klass = nullptr;
+  llvm::Value* exception_klass = nullptr;
   llvm::Value* current_thread = nullptr;
-  llvm::Value* super_method_ptr = nullptr;
+  llvm::Value* current_method_ptr = nullptr;
 
   int cur_bci = _bytecodes.cur_bci();
 
@@ -2417,19 +2417,19 @@ void JeandleAbstractInterpreter::dispatch_exception_to_handler(llvm::Value* exce
       // instanceof distinguish
       match = call_java_op("jeandle.instanceof", {super_klass_ptr, exception_oop});
     } else {
-      if (ex_klass == nullptr) {
-        ex_klass = call_java_op("jeandle.load_klass", {exception_oop});
+      if (exception_klass == nullptr) {
+        exception_klass = call_java_op("jeandle.load_klass", {exception_oop});
         current_thread = call_java_op("jeandle.current_thread", {});
-        Method* super_method = (Method*)(_method->constant_encoding());
+        Method* current_method = (Method*)(_method->constant_encoding());
         llvm::PointerType* method_type = llvm::PointerType::get(*_context, llvm::jeandle::AddrSpace::CHeapAddrSpace);
-        llvm::Value* super_method_addr = _ir_builder.getInt64((intptr_t)super_method);
-        super_method_ptr = _ir_builder.CreateIntToPtr(super_method_addr, method_type);
+        llvm::Value* current_method_addr = _ir_builder.getInt64((intptr_t)current_method);
+        current_method_ptr = _ir_builder.CreateIntToPtr(current_method_addr, method_type);
       }
 
       _bytecodes.force_bci(handler_bci);
       match = create_call_ex(JeandleRuntimeRoutine::instanceof_unloaded_or_null_callee(_module), 
-                        {super_method_ptr, _ir_builder.getInt32(handler->catch_klass_index()), ex_klass, current_thread}, 
-                        llvm::CallingConv::Hotspot_JIT);
+                            {current_method_ptr, _ir_builder.getInt32(handler->catch_klass_index()), exception_klass, current_thread}, 
+                            llvm::CallingConv::Hotspot_JIT);
       _bytecodes.force_bci(cur_bci);
     }
     // if match, the right handler is found, else try the next

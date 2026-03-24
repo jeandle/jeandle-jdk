@@ -304,6 +304,7 @@ JRT_END
 JRT_ENTRY(jint, JeandleRuntimeRoutine::instanceof_unloaded_or_null(Method* method, int cp_index, Klass* ex_klass, JavaThread* current))
   ResourceMark rm(current);
   constantPoolHandle cp(current, method->constants());
+  // This may trigger class loading.
   Klass* catch_klass = cp->klass_at(cp_index, current);
   // If klass_at fails, the pending exception remains on the thread
   // and the stub's forward_exception_block will handle it automatically.
