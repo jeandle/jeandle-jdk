@@ -143,14 +143,26 @@ void JeandleCompiledCode::finalize() {
   masm->set_oop_recorder(_env->oop_recorder());
   JeandleAssembler assembler(masm);
 
-  if (_method && !_method->is_static()) {
+  bool is_osr_compilation = JeandleCompilation::current()->is_osr_compilation();
+
+  if (is_osr_compilation) {
+    assert(masm->offset() == 0, "sanity");
+    _offsets.set_value(CodeOffsets::Verified_Entry, masm->offset());
+    if (PoisonOSREntry) {
+      assembler.emit_poisoned_osr_entry();
+    }
+  } else if (_method && !_method->is_static()) {
     // For non-static Java method finalization.
     assembler.emit_ic_check();
   }
 
   masm->align(assembler.interior_entry_alignment());
 
-  _offsets.set_value(CodeOffsets::Verified_Entry, masm->offset());
+  if (is_osr_compilation) {
+    _offsets.set_value(CodeOffsets::OSR_Entry, masm->offset());
+  } else {
+    _offsets.set_value(CodeOffsets::Verified_Entry, masm->offset());
+  }
   assembler.emit_verified_entry();
 
   if (needs_clinit_barrier_on_entry()) {

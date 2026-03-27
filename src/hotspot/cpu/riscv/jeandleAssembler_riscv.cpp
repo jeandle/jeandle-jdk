@@ -186,6 +186,10 @@ void JeandleAssembler::emit_ic_check() {
   __ bind(dont);
 }
 
+void JeandleAssembler::emit_poisoned_osr_entry() {
+  __ ebreak();
+}
+
 void JeandleAssembler::emit_verified_entry() {
   {
     Assembler::IncompressibleRegion ir(this->_masm);

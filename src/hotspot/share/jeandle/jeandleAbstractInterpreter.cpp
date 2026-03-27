@@ -35,6 +35,7 @@
 #include "jeandle/__hotspotHeadersBegin__.hpp"
 #include "ci/ciMethodBlocks.hpp"
 #include "ci/ciSymbols.hpp"
+#include "ci/ciTypeFlow.hpp"
 #include "classfile/javaClasses.hpp"
 #include "interpreter/interpreter.hpp"
 #include "logging/log.hpp"
@@ -371,6 +372,7 @@ void JeandleBasicBlock::initialize_VM_state_from(JeandleVMState* incoming_state,
 }
 
 BasicBlockBuilder::BasicBlockBuilder(ciMethod* method,
+                                     int entry_bci,
                                      llvm::LLVMContext* context,
                                      llvm::Function* llvm_func) :
                                      _bci2block(method->code_size()),
@@ -381,7 +383,8 @@ BasicBlockBuilder::BasicBlockBuilder(ciMethod* method,
                                      _entry_block(new JeandleBasicBlock(-1, -1, -1, llvm::BasicBlock::Create(*_context, "entry", _llvm_func), nullptr)),
                                      _active(),
                                      _visited(),
-                                     _next_block_order(-1) {
+                                     _next_block_order(-1),
+                                     _entry_bci(entry_bci) {
   generate_blocks();
   setup_exception_handlers();
   setup_control_flow();
@@ -448,7 +451,13 @@ void BasicBlockBuilder::setup_control_flow() {
   // Connect all basic blocks according to control flow transfer instructions.
   ciBytecodeStream codes(_method);
 
-  JeandleBasicBlock* current = _entry_block;
+  if (!is_osr()) {
+    connect_block(_bci2block[0], entry_block());
+  } else {
+    connect_block(_bci2block[_entry_bci], osr_entry_block());
+  }
+
+  JeandleBasicBlock* current = nullptr;
   int limit_bci = _method->code_size();
 
   while (codes.next() != ciBytecodeStream::EOBC()) {
@@ -568,7 +577,11 @@ void BasicBlockBuilder::mark_loops() {
   _visited.initialize(num_blocks);
   _next_block_order = num_blocks - 1;
 
-  mark_loops(_bci2block[0]);
+  if(!is_osr()) {
+    mark_loops(_bci2block[0]);
+  } else {
+    mark_loops(_bci2block[_entry_bci]);
+  }
 
   // Remove dangling Resource pointers before the ResourceMark goes out-of-scope.
   _active.resize(0);
@@ -620,13 +633,13 @@ JeandleAbstractInterpreter::JeandleAbstractInterpreter(ciMethod* method,
                                                        llvm::Module& target_module,
                                                        JeandleCompiledCode& code) :
                                                        _method(method),
-                                                       _llvm_func(JeandleFuncSig::create_llvm_func(method, target_module)),
+                                                       _llvm_func(JeandleFuncSig::create_llvm_func(method, target_module, entry_bci != InvocationEntryBci)),
                                                        _entry_bci(entry_bci),
                                                        _context(&target_module.getContext()),
                                                        _bytecodes(_method),
                                                        _module(target_module),
                                                        _compiled_code(code),
-                                                       _block_builder(new BasicBlockBuilder(method, _context, _llvm_func)),
+                                                       _block_builder(new BasicBlockBuilder(method, entry_bci, _context, _llvm_func)),
                                                        _ir_builder(_block_builder->entry_block()->header_llvm_block()),
                                                        _oops(),
                                                        _block(nullptr),
@@ -643,80 +656,204 @@ void JeandleAbstractInterpreter::initialize_VM_state() {
   int locals_idx = 0; // next index in locals
   int arg_idx = 0;  // next index in arguments
 
-  // Store the receiver into locals.
-  if (!_method->is_static()) {
-    initial_jvm->store(BasicType::T_OBJECT, 0, _llvm_func->getArg(0));
-    locals_idx = 1;
-    arg_idx = 1;
-  }
+  if (!is_osr()) {
+    // Store the receiver into locals.
+    if (!_method->is_static()) {
+      initial_jvm->store(BasicType::T_OBJECT, 0, _llvm_func->getArg(0));
+      locals_idx = 1;
+      arg_idx = 1;
+    }
+  
+    // Set up locals for incoming arguments.
+    ciSignature* sig = _method->signature();
+    for (int i = 0; i < sig->count(); ++i, ++arg_idx) {
+      ciType* type = sig->type_at(i);
+      initial_jvm->store(type->basic_type(), locals_idx, _llvm_func->getArg(arg_idx));
+      locals_idx += type->size();
+    }
+  } else {
+    llvm::BasicBlock* osr_migration = llvm::BasicBlock::Create(*_context, "osr_migration", _llvm_func);
+    _ir_builder.CreateBr(osr_migration);
+    _ir_builder.SetInsertPoint(osr_migration);
+    _block_builder->entry_block()->set_tail_llvm_block(osr_migration);
 
-  // Set up locals for incoming arguments.
-  ciSignature* sig = _method->signature();
-  for (int i = 0; i < sig->count(); ++i, ++arg_idx) {
-    ciType* type = sig->type_at(i);
-    initial_jvm->store(type->basic_type(), locals_idx, _llvm_func->getArg(arg_idx));
-    locals_idx += type->size();
+    initialize_VM_state_from_osr_buffer(initial_jvm, _llvm_func->getArg(0));
   }
 
   _block_builder->entry_block()->set_VM_state(initial_jvm);
 }
 
+void JeandleAbstractInterpreter::initialize_VM_state_from_osr_buffer(JeandleVMState* initial_jvm, llvm::Value* osr_buffer) {
+  assert(is_osr(), "sanity");
+
+  // Do some special top-level things.
+  assert(_method != nullptr, "only for Java method compilations");
+  ciTypeFlow* flow = _method->get_osr_flow_analysis(_entry_bci);
+  assert(!flow->failing(), "type flow analysis failed for OSR compilation");
+
+  int max_locals = initial_jvm->max_locals();
+  ciTypeFlow::Block* osr_entry_block = flow->rpo_at(0);
+  assert(osr_entry_block->start() == _entry_bci, "the first rpo block must be osr entry block");
+
+  // Check bailouts.  We currently do not perform on stack replacement
+  // of loops in catch blocks or loops which branch with a non-empty stack.
+  if (osr_entry_block->stack_size() != 0) {
+    JEANDLE_REPORT_ERROR_AND_RET_VOID("OSR starts with non-empty stack");
+  }
+
+  // Commute monitors from interpreter frame to compiler frame.
+  int mcnt = osr_entry_block->monitor_count();
+  if (mcnt != 0) {
+    int monitors_addr_offset = (max_locals + mcnt * 2 - 1) * wordSize;
+    llvm::IRBuilder entry_block_ir_builder(_block_builder->entry_block()->header_llvm_block()->getTerminator());
+    llvm::SmallVector<llvm::Value*> locks(mcnt);
+    for (int index = 0; index < mcnt; index++) {
+      llvm::Value* lock_object_addr = _ir_builder.CreateInBoundsGEP(llvm::Type::getInt8Ty(*_context),
+                                                                    osr_buffer,
+                                                                    _ir_builder.getInt64(monitors_addr_offset - (index * 2) * wordSize));
+      llvm::Value* lock_object = load_from_address(lock_object_addr, T_OBJECT, false);
+      llvm::Value* displaced_hdr_addr = _ir_builder.CreateInBoundsGEP(llvm::Type::getInt8Ty(*_context),
+                                                                      osr_buffer,
+                                                                      _ir_builder.getInt64(monitors_addr_offset - (index * 2 + 1) * wordSize));
+      llvm::Value* displaced_hdr = load_from_address(displaced_hdr_addr, T_ADDRESS, false);
+
+      llvm::Value* lock = entry_block_ir_builder.CreateAlloca(_ir_builder.getIntPtrTy(_module.getDataLayout()),
+                                                              llvm::jeandle::AddrSpace::CHeapAddrSpace,
+                                                              nullptr,
+                                                              "BasicLock");
+      store_to_address(lock, displaced_hdr, T_ADDRESS, false);
+
+      if (index == 0 && _method->is_synchronized()) {
+        JeandleCompilation::current()->set_has_monitors(true);
+        _sync_lock.set_object(TypedValue(BasicType::T_OBJECT, lock_object));
+        _sync_lock.set_lock(lock);
+      }
+      initial_jvm->push_lock(LockValue(T_OBJECT, lock_object, lock));
+    }
+  }
+
+  // Use the raw liveness computation to make sure that unexpected
+  // values don't propagate into the OSR frame.
+  MethodLivenessResult live_locals = _method->liveness_at_bci(_entry_bci);
+  if (!live_locals.is_valid()) {
+    // Degenerate or breakpointed method.
+    assert(false, "OSR in empty or breakpointed method");
+    JEANDLE_REPORT_ERROR_AND_RET_VOID("OSR in empty or breakpointed method");
+  }
+
+  // Extract the needed locals from the interpreter frame.
+  int locals_addr_offset = (max_locals - 1) * wordSize;
+
+  // find all the locals that the interpreter thinks contain live oops
+  bool skip_next_slot = false; // skip next slot for double word type.
+  for (int index = 0; index < max_locals; index++) {
+    BasicType local_type = osr_entry_block->local_type_at(index)->basic_type();
+
+    if (skip_next_slot) {
+      assert(local_type == (BasicType)ciTypeFlow::StateVector::T_LONG2 || local_type == (BasicType)ciTypeFlow::StateVector::T_DOUBLE2, "sanity");
+      skip_next_slot = false; // reset to false
+      continue;
+    }
+
+    if (!live_locals.at(index)) {
+      continue;
+    }
+
+    if (local_type == T_VOID ||
+        local_type == T_CONFLICT) {
+      continue;
+    }
+
+    int index_offset = 0;
+    if (is_double_word_type(local_type)) {
+      index_offset = 1;
+      skip_next_slot = true;
+    }
+
+    llvm::Value* local_addr = _ir_builder.CreateInBoundsGEP(llvm::Type::getInt8Ty(*_context),
+                                                            osr_buffer,
+                                                            _ir_builder.getInt64(locals_addr_offset - (index + index_offset) * wordSize));
+    llvm::Value* local = load_from_address(local_addr, local_type, false);
+    initial_jvm->set_locals_at(index, TypedValue(local_type, local));
+  }
+
+  // Release osr buffser
+  llvm::FunctionCallee OSR_migration_end_callee = JeandleRuntimeRoutine::SharedRuntime_OSR_migration_end_callee(_module);
+  llvm::CallInst* call_OSR_migration_end = _ir_builder.CreateCall(OSR_migration_end_callee, {osr_buffer});
+  call_OSR_migration_end->setCallingConv(llvm::CallingConv::C);
+
+  // Now that the interpreter state is loaded, make sure it will match
+  // at execution time what the compiler is expecting now:
+  // TODO: Check oop type
+}
+
 void JeandleAbstractInterpreter::interpret() {
-  JeandleBasicBlock* current = bci2block()[0];
+  assert(_method != nullptr, "only for Java method compilations");
+  JeandleBasicBlock* current;
+  if (!is_osr()) {
+    current = bci2block()[0];
+  } else {
+    // TODO: check sp
+    current = bci2block()[_entry_bci];
+    assert(current->is_set(JeandleBasicBlock::is_loop_header), "sanity");
+  }
 
   // Prepare work list. Push the first block.
   add_to_work_list(current);
 
   initialize_VM_state();
+  RETURN_VOID_ON_JEANDLE_ERROR();
 
-  if (_method && _method->is_synchronized()) {
-    JeandleCompilation::current()->set_has_monitors(true);
-    _jvm = _block_builder->entry_block()->VM_state();
-    _block = _block_builder->entry_block();
+  if (!is_osr()) {
+    if (_method->is_synchronized()) {
+      JeandleCompilation::current()->set_has_monitors(true);
+      _jvm = _block_builder->entry_block()->VM_state();
+      _block = _block_builder->entry_block();
 
-    // Strictly reserve 'entry' for allocas to ensure static stack allocation.
-    // This prevents dynamic RSP adjustments and ensures valid StackMap generation for GC.
-    llvm::BasicBlock* sync_method_lock = llvm::BasicBlock::Create(*_context, "sync_method_lock", _llvm_func);
-    _ir_builder.CreateBr(sync_method_lock);
-    _ir_builder.SetInsertPoint(sync_method_lock);
-    _block->set_tail_llvm_block(sync_method_lock);
+      // Strictly reserve 'entry' for allocas to ensure static stack allocation.
+      // This prevents dynamic RSP adjustments and ensures valid StackMap generation for GC.
+      llvm::BasicBlock* sync_method_lock = llvm::BasicBlock::Create(*_context, "sync_method_lock", _llvm_func);
+      _ir_builder.CreateBr(sync_method_lock);
+      _ir_builder.SetInsertPoint(sync_method_lock);
+      _block->set_tail_llvm_block(sync_method_lock);
 
-    // Setup Object Pointer
-    llvm::Value* lock_obj = nullptr;
-    if (_method->is_static()) {
-      llvm::Value* oop_handle = find_or_insert_oop(_method->holder()->java_mirror());
-      lock_obj = _ir_builder.CreateLoad(JeandleType::java2llvm(BasicType::T_OBJECT, *_context), oop_handle);
-    } else {
-      // Lock the "this" pointer, which is the first parameter
-      lock_obj = _jvm->locals_at(0);
+      // Setup Object Pointer
+      llvm::Value* lock_obj = nullptr;
+      if (_method->is_static()) {
+        llvm::Value* oop_handle = find_or_insert_oop(_method->holder()->java_mirror());
+        lock_obj = _ir_builder.CreateLoad(JeandleType::java2llvm(BasicType::T_OBJECT, *_context), oop_handle);
+      } else {
+        // Lock the "this" pointer, which is the first parameter
+        lock_obj = _jvm->locals_at(0);
+      }
+
+      // Allocate a BasicLock on stack.
+      // Alloca insts should be in the entry block to be 'StaticAlloca'. Then they could be folded into prologue code.
+      llvm::IRBuilder entry_block_ir_builder(_block_builder->entry_block()->header_llvm_block()->getTerminator());
+      llvm::Value* lock = entry_block_ir_builder.CreateAlloca(_ir_builder.getIntPtrTy(_module.getDataLayout()),
+                                                              llvm::jeandle::AddrSpace::CHeapAddrSpace, nullptr, "BasicLock");
+      // record object and lock for synchronized method
+      TypedValue obj(BasicType::T_OBJECT, lock_obj);
+      _sync_lock.set_object(obj);
+      _sync_lock.set_lock(lock);
+
+      shared_lock(LockValue(obj, lock));
     }
 
-    // Allocate a BasicLock on stack.
-    // Alloca insts should be in the entry block to be 'StaticAlloca'. Then they could be folded into prologue code.
-    llvm::IRBuilder entry_block_ir_builder(_block_builder->entry_block()->header_llvm_block()->getTerminator());
-    llvm::Value* lock = entry_block_ir_builder.CreateAlloca(_ir_builder.getIntPtrTy(_module.getDataLayout()),
-                                                            llvm::jeandle::AddrSpace::CHeapAddrSpace, nullptr, "BasicLock");
-    // record object and lock for synchronized method
-    TypedValue obj(BasicType::T_OBJECT, lock_obj);
-    _sync_lock.set_object(obj);
-    _sync_lock.set_lock(lock);
+    if (_compiled_code.needs_clinit_barrier_on_entry()) {
+      assert(_method != nullptr, "only for Java method compilations");
+      assert(!_method->holder()->is_not_initialized(), "initialization should have been started");
 
-    shared_lock(LockValue(obj, lock));
-  }
+      _jvm = _block_builder->entry_block()->VM_state();
+      _block = _block_builder->entry_block();
+      _bytecodes.force_bci(0); // to get cur_bci for uncommon trap
 
-  if (_compiled_code.needs_clinit_barrier_on_entry()) {
-    assert(_method != nullptr, "only for Java method compilations");
-    assert(!_method->holder()->is_not_initialized(), "initialization should have been started");
-
-    _jvm = _block_builder->entry_block()->VM_state();
-    _block = _block_builder->entry_block();
-    _bytecodes.force_bci(0); // to get cur_bci for uncommon trap
-
-    Klass* klass = (Klass*)_method->holder()->constant_encoding();
-    llvm::PointerType* klass_type = llvm::PointerType::get(*_context, llvm::jeandle::AddrSpace::CHeapAddrSpace);
-    llvm::Value* klass_addr = _ir_builder.getInt64((intptr_t)klass);
-    llvm::Value* klass_ptr = _ir_builder.CreateIntToPtr(klass_addr, klass_type);
-    guard_klass_being_initialized(klass_ptr);
+      Klass* klass = (Klass*)_method->holder()->constant_encoding();
+      llvm::PointerType* klass_type = llvm::PointerType::get(*_context, llvm::jeandle::AddrSpace::CHeapAddrSpace);
+      llvm::Value* klass_addr = _ir_builder.getInt64((intptr_t)klass);
+      llvm::Value* klass_ptr = _ir_builder.CreateIntToPtr(klass_addr, klass_type);
+      guard_klass_being_initialized(klass_ptr);
+    }
   }
 
   // Create branch from the entry block.
@@ -2692,6 +2829,7 @@ void JeandleAbstractInterpreter::monitorexit() {
   llvm::Value* obj = _jvm->apop();
 
   LockValue lock = _jvm->pop_lock();
+  // assert(obj == lock.object().value(), "monitorexit with wrong obj");
   shared_unlock(lock);
 }
 

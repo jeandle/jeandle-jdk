@@ -214,15 +214,17 @@ class JeandleBasicBlock : public JeandleCompilationResourceObj {
   JeandleVMState* _initial_jvm;
 
   void initialize_VM_state_from(JeandleVMState* incoming_state, llvm::BasicBlock* incoming_block, MethodLivenessResult liveness);
+  void initialize_VM_state_from_osr_buffer(JeandleVMState* initial_jvm, llvm::Value* osr_buffer);
 };
 
 class BasicBlockBuilder : public JeandleCompilationResourceObj {
  public:
-  BasicBlockBuilder(ciMethod* method, llvm::LLVMContext* context, llvm::Function* llvm_func);
+  BasicBlockBuilder(ciMethod* method, int entry_bci, llvm::LLVMContext* context, llvm::Function* llvm_func);
 
   llvm::SmallVector<JeandleBasicBlock*>& bci2block() { return _bci2block; }
 
   JeandleBasicBlock* entry_block() { return _entry_block; }
+  JeandleBasicBlock* osr_entry_block() { assert(is_osr(), "sanity"); return _entry_block; }
 
   static void connect_block(JeandleBasicBlock* child_block, JeandleBasicBlock* parent_block) {
     assert(child_block != nullptr && parent_block != nullptr, "connecting nullptr");
@@ -244,6 +246,7 @@ class BasicBlockBuilder : public JeandleCompilationResourceObj {
   ResourceBitMap _active;
   ResourceBitMap _visited;
   int _next_block_order;
+  int _entry_bci;
 
   void generate_blocks();
   void setup_exception_handlers();
@@ -254,6 +257,8 @@ class BasicBlockBuilder : public JeandleCompilationResourceObj {
   void mark_loops(JeandleBasicBlock* block);
 
   void mark_unloaded_catch_klass();
+
+  bool is_osr() { return _entry_bci != InvocationEntryBci; }
 };
 
 // Convert java bytecodes to llvm ir.
@@ -288,7 +293,10 @@ class JeandleAbstractInterpreter : public StackObj {
   // Object & Lock for synchronized method
   LockValue _sync_lock;
 
+  bool is_osr() { return _entry_bci != InvocationEntryBci; }
+
   void initialize_VM_state();
+  void initialize_VM_state_from_osr_buffer(JeandleVMState* initial_jvm, llvm::Value* osr_buffer);
   void interpret();
   void interpret_block(JeandleBasicBlock* block);
 

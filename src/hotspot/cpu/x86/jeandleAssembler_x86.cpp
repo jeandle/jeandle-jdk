@@ -165,6 +165,10 @@ void JeandleAssembler::emit_ic_check() {
     __ nop(nops_cnt);
 }
 
+void JeandleAssembler::emit_poisoned_osr_entry() {
+  __ int3();
+}
+
 void JeandleAssembler::emit_verified_entry() {
   // Emit a 5-bytes address nop for patching a jump instruction.
   __ addr_nop_5();

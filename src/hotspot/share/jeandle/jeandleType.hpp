@@ -76,6 +76,8 @@ class JeandleType : public AllStatic {
       case T_ARRAY  :
       case T_OBJECT :
         return T_OBJECT;
+      case T_ADDRESS:
+        return T_ADDRESS;
       default       :
         ShouldNotReachHere();
     }

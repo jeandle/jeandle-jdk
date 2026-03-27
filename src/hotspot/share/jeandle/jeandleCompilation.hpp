@@ -79,6 +79,8 @@ class JeandleCompilation : public StackObj {
 
   const std::string name() { return _name; }
 
+  bool is_osr_compilation() { return _entry_bci != InvocationEntryBci; }
+
  private:
   Arena* _arena; // Hold compilation life-time objects (JeandleCompilationResourceObj).
   llvm::TargetMachine* _target_machine;

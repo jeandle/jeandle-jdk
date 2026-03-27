@@ -46,8 +46,7 @@ llvm::Type* JeandleType::java2llvm(BasicType java_type, llvm::LLVMContext& conte
     case BasicType::T_VOID:
       return llvm::Type::getVoidTy(context);
     case BasicType::T_ADDRESS:
-      Unimplemented();
-      return nullptr;
+      return llvm::PointerType::get(context, llvm::jeandle::AddrSpace::CHeapAddrSpace);
     case BasicType::T_NARROWOOP:
       Unimplemented();
       return nullptr;

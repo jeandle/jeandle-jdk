@@ -53,6 +53,7 @@
 #include "jeandle/jeandleUtils.hpp"
 
 #include "jeandle/__hotspotHeadersBegin__.hpp"
+#include "ci/ciTypeFlow.hpp"
 #include "ci/ciUtilities.inline.hpp"
 #include "logging/log.hpp"
 #include "runtime/sharedRuntime.hpp"
@@ -106,10 +107,6 @@ JeandleCompilation::JeandleCompilation(llvm::TargetMachine* target_machine,
                                        _context(std::make_unique<llvm::LLVMContext>()),
                                        _code(env, method),
                                        _error_msg(nullptr) {
-  if (entry_bci != InvocationEntryBci) {
-    env->record_method_not_compilable("OSR not supported");
-    return;
-  }
 
   const char* reason = check_can_parse(method);
   if (reason != nullptr) {
@@ -213,6 +210,7 @@ const char* JeandleCompilation::check_can_parse(ciMethod* method) {
   if ( method->is_native())                   return "native method";
   if ( method->is_abstract())                 return "abstract method";
   if (!method->has_balanced_monitors())       return "not compilable (unbalanced monitors)";
+  if ( method->get_flow_analysis()->failing()) return "not compilable (flow analysis failed)";
   if (!method->can_be_parsed())               return "cannot be parsed";
   return nullptr;
 }
@@ -275,6 +273,8 @@ void JeandleCompilation::compile_java_method() {
     JeandleTraceTime tt_abstract_interpreter("Jeandle Abstract Interpret", abstract_interpreter_timer);
     JeandleAbstractInterpreter interpret(_method, _entry_bci, *_llvm_module, _code);
   }
+
+  RETURN_VOID_ON_JEANDLE_ERROR();
 
   if (JeandleDumpIR) {
     dump_ir(false);

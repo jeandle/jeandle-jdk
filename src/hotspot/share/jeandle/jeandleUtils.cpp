@@ -30,18 +30,23 @@
 #include "compiler/compilerThread.hpp"
 #include "runtime/thread.hpp"
 
-llvm::Function* JeandleFuncSig::create_llvm_func(ciMethod* method, llvm::Module& target_module) {
+llvm::Function* JeandleFuncSig::create_llvm_func(ciMethod* method, llvm::Module& target_module, bool is_osr) {
   llvm::SmallVector<llvm::Type*> args;
   llvm::LLVMContext& context = target_module.getContext();
 
-  // Receiver is the first argument.
-  if (!method->is_static()) {
-    args.push_back(JeandleType::java2llvm(BasicType::T_OBJECT, context));
-  }
-
   ciSignature* sig = method->signature();
-  for (int i = 0; i < sig->count(); i++) {
-    args.push_back(JeandleType::java2llvm(sig->type_at(i)->basic_type(), context));
+  if (!is_osr) {
+    // Receiver is the first argument.
+    if (!method->is_static()) {
+      args.push_back(JeandleType::java2llvm(BasicType::T_OBJECT, context));
+    }
+
+    for (int i = 0; i < sig->count(); i++) {
+      args.push_back(JeandleType::java2llvm(sig->type_at(i)->basic_type(), context));
+    }
+  } else {
+    // Address of osr buffer
+    args.push_back(JeandleType::java2llvm(BasicType::T_ADDRESS, context));
   }
 
   llvm::FunctionType* func_type =
