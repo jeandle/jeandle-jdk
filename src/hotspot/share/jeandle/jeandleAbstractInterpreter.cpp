@@ -40,6 +40,7 @@
 #include "ci/ciTypeFlow.hpp"
 #include "oops/objArrayKlass.hpp"
 #include "classfile/javaClasses.hpp"
+#include "gc/shared/gc_globals.hpp"
 #include "interpreter/interpreter.hpp"
 #include "logging/log.hpp"
 #include "runtime/sharedRuntime.hpp"
@@ -2613,7 +2614,7 @@ void JeandleAbstractInterpreter::do_array_store_inner(BasicType basic_type, llvm
   // Currently, we can't get array type in LLVM pass. Once a clearer design is available, the barrier
   // insertion operation will be moved to the LLVM pass.
   if (basic_type == T_OBJECT) {
-    call_java_op("jeandle.card_table_barrier", {element_address});
+    call_java_op("jeandle.post_barrier", {element_address, value});
   }
 }
 
