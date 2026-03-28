@@ -743,8 +743,6 @@ void JeandleAbstractInterpreter::initialize_VM_state_from_osr_buffer(JeandleVMSt
 
   // Extract the needed locals from the interpreter frame.
   int locals_addr_offset = (max_locals - 1) * wordSize;
-
-  // find all the locals that the interpreter thinks contain live oops
   bool skip_next_slot = false; // skip next slot for double word type.
   for (int index = 0; index < max_locals; index++) {
     BasicType local_type = osr_entry_block->local_type_at(index)->basic_type();
@@ -759,10 +757,19 @@ void JeandleAbstractInterpreter::initialize_VM_state_from_osr_buffer(JeandleVMSt
       continue;
     }
 
-    if (local_type == T_VOID ||
-        local_type == T_CONFLICT) {
+    if (local_type == (BasicType)ciTypeFlow::StateVector::T_TOP ||
+        local_type == (BasicType)ciTypeFlow::StateVector::T_BOTTOM) {
       continue;
     }
+
+    // Special handling for null oop
+    if (local_type == (BasicType)ciTypeFlow::StateVector::T_NULL) {
+      llvm::Value* null_oop = llvm::ConstantPointerNull::get(llvm::cast<llvm::PointerType>(JeandleType::java2llvm(BasicType::T_OBJECT, *_context)));
+      initial_jvm->set_locals_at(index, TypedValue(BasicType::T_OBJECT, null_oop));
+      continue;
+    }
+
+    assert(!is_subword_type(local_type), "subword types are treated as T_INT in calling sequences");
 
     int index_offset = 0;
     if (is_double_word_type(local_type)) {
@@ -776,6 +783,8 @@ void JeandleAbstractInterpreter::initialize_VM_state_from_osr_buffer(JeandleVMSt
     llvm::Value* local = load_from_address(local_addr, local_type, false);
     initial_jvm->set_locals_at(index, TypedValue(local_type, local));
   }
+
+  assert(!skip_next_slot, "broken double word");
 
   // Release osr buffser
   llvm::FunctionCallee OSR_migration_end_callee = JeandleRuntimeRoutine::SharedRuntime_OSR_migration_end_callee(_module);
