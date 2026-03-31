@@ -164,6 +164,7 @@ JAVA_OP_END
 DEF_JAVA_OP(pre_barrier, 1, llvm::Type::getVoidTy(context), llvm::PointerType::get(context, llvm::jeandle::AddrSpace::JavaHeapAddrSpace))
   // Only serial/G1 GC is supported on jeandle for now
   if (UseG1GC) {
+    // TODO: implement ReduceInitialCardMarks
     llvm::Function* g1_pre_barrier_func = template_module.getFunction("jeandle.g1_pre_barrier");
     assert(g1_pre_barrier_func != nullptr, "g1_pre_barrier function not found");
     llvm::CallInst* call_inst = ir_builder.CreateCall(g1_pre_barrier_func, {func->getArg(0)});
@@ -177,6 +178,7 @@ DEF_JAVA_OP(post_barrier, 1, llvm::Type::getVoidTy(context),
             llvm::PointerType::get(context, llvm::jeandle::AddrSpace::JavaHeapAddrSpace))
   // Only serial/G1 GC is supported on jeandle for now
   if (UseG1GC) {
+    // TODO: implement ReduceInitialCardMarks
     llvm::Function* g1_post_barrier_func = template_module.getFunction("jeandle.g1_post_barrier");
     assert(g1_post_barrier_func != nullptr, "g1_post_barrier function not found");
     llvm::CallInst* call_inst = ir_builder.CreateCall(g1_post_barrier_func, {func->getArg(0), func->getArg(1)});

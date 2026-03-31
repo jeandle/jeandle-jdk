@@ -328,14 +328,13 @@ declare hotspotcc void @jeandle.card_table_barrier(ptr addrspace(1) %addr) noinl
 ; Implementation of Java g1 pre barrier.
 define private hotspotcc void @jeandle.g1_pre_barrier(ptr addrspace(1) %addr) noinline "lower-phase"="1" {
 entry:
-  %current_thread = call hotspotcc ptr @jeandle.current_thread()
   %marking_offset = load i32, ptr @G1ThreadLocalData.satb_mark_queue_active_offset
   %index_offset = load i32, ptr @G1ThreadLocalData.satb_mark_queue_index_offset
   %buffer_offset = load i32, ptr @G1ThreadLocalData.satb_mark_queue_buffer_offset
-  %marking_adr = getelementptr inbounds i8, ptr %current_thread, i32 %marking_offset
-  %buffer_adr = getelementptr inbounds i8, ptr %current_thread, i32 %buffer_offset
-  %index_adr = getelementptr inbounds i8, ptr %current_thread, i32 %index_offset
-  %marking = load i8, ptr %marking_adr
+  %marking_adr = inttoptr i32 %marking_offset to ptr addrspace(2)
+  %index_adr = inttoptr i32 %index_offset to ptr addrspace(2)
+  %buffer_adr = inttoptr i32 %buffer_offset to ptr addrspace(2)
+  %marking = load i8, ptr addrspace(2) %marking_adr
   %is_already_marked = icmp eq i8 %marking, 0
   br i1 %is_already_marked, label %pre_barrier_done, label %store_original_value
 
@@ -343,19 +342,20 @@ pre_barrier_done:
   ret void
 
 store_original_value:
-  %index = load i64, ptr %index_adr
+  %index = load i64, ptr addrspace(2) %index_adr
   %pre_val = load atomic ptr addrspace(1), ptr addrspace(1) %addr unordered, align 8
   %is_null = icmp eq ptr addrspace(1) %pre_val, null
   br i1 %is_null, label %pre_barrier_done, label %load_stab_queue
 
 load_stab_queue:
-  %buffer = load ptr, ptr %buffer_adr
+  %buffer = load ptr, ptr addrspace(2) %buffer_adr
   %is_zero = icmp eq i64 %index, 0
   br i1 %is_zero, label %buffer_is_full, label %store_in_buffer
 
 buffer_is_full:
   %callee_addr = load i64, ptr @G1BarrierSetRuntime.write_ref_field_pre_entry
   %callee = inttoptr i64 %callee_addr to ptr
+  %current_thread = call hotspotcc ptr @jeandle.current_thread()
   call void %callee(ptr addrspace(1) %pre_val, ptr %current_thread) #0
   br label %pre_barrier_done
 
@@ -364,20 +364,17 @@ store_in_buffer:
   %next_index = sub i64 %index, %wordsize
   %log_addr = getelementptr inbounds i8, ptr %buffer, i64 %next_index
   store atomic ptr addrspace(1) %pre_val, ptr %log_addr unordered, align 8
-  store atomic i64 %next_index, ptr %index_adr unordered, align 8
+  store atomic i64 %next_index, ptr addrspace(2) %index_adr unordered, align 8
   br label %pre_barrier_done
 }
 
 ; Implementation of Java g1 post barrier.
 define private hotspotcc void @jeandle.g1_post_barrier(ptr addrspace(1) %addr, ptr addrspace(1) captures(none) %oop) noinline "lower-phase"="1" {
 entry:
-  %current_thread = call hotspotcc ptr @jeandle.current_thread()
   %index_offset = load i32, ptr @G1ThreadLocalData.dirty_card_queue_index_offset
   %buffer_offset = load i32, ptr @G1ThreadLocalData.dirty_card_queue_buffer_offset
-  %buffer_adr = getelementptr inbounds i8, ptr %current_thread, i32 %buffer_offset
-  %index_adr = getelementptr inbounds i8, ptr %current_thread, i32 %index_offset
-  %index = load i64, ptr %index_adr
-  %buffer = load ptr, ptr %buffer_adr
+  %index_adr = inttoptr i32 %index_offset to ptr addrspace(2)
+  %buffer_adr = inttoptr i32 %buffer_offset to ptr addrspace(2)
   %obj_ptr = ptrtoint ptr addrspace(1) %addr to i64
   %card_shift = load i64, ptr @CardTable.card_shift
   %card_offset = lshr i64 %obj_ptr, %card_shift
@@ -413,21 +410,24 @@ filter_young_card:
 
 store_dirty_block:
   store atomic i8 0, ptr %card_adr release, align 1
+  %index = load i64, ptr addrspace(2) %index_adr
   %is_full = icmp eq i64 %index, 0
   br i1 %is_full, label %buffer_is_full, label %store_in_buffer
 
 buffer_is_full:
   %callee_addr = load i64, ptr @G1BarrierSetRuntime.write_ref_field_post_entry
   %callee = inttoptr i64 %callee_addr to ptr
+  %current_thread = call hotspotcc ptr @jeandle.current_thread()
   call void %callee(ptr %card_adr, ptr %current_thread) #0
   br label %post_barrier_done
 
 store_in_buffer:
   %wordsize = load i64, ptr @WordSize
   %next_index = sub i64 %index, %wordsize
+  %buffer = load ptr, ptr addrspace(2) %buffer_adr
   %log_addr = getelementptr inbounds i8, ptr %buffer, i64 %next_index
   store atomic ptr %card_adr, ptr %log_addr unordered, align 8
-  store atomic i64 %next_index, ptr %index_adr unordered, align 8
+  store atomic i64 %next_index, ptr addrspace(2) %index_adr unordered, align 8
   br label %post_barrier_done
 }
 
