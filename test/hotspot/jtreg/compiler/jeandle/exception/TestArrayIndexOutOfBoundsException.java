@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2025, the Jeandle-JDK Authors. All Rights Reserved.
+ * Copyright (c) 2025, 2026, the Jeandle-JDK Authors. All Rights Reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -24,7 +24,6 @@ import jdk.test.lib.Asserts;
 
 /*
  * @test
- * @requires os.arch=="amd64" | os.arch=="x86_64" | os.arch=="aarch64"
  * @library /test/lib
  * @run main/othervm -Xcomp -XX:-TieredCompilation -XX:+UseJeandleCompiler
  *      -XX:CompileCommand=compileonly,compiler.jeandle.exception.TestArrayIndexOutOfBoundsException::test*

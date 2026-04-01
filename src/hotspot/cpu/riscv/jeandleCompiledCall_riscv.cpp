@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2025, the Jeandle-JDK Authors. All Rights Reserved.
+ * Copyright (c) 2025, 2026, the Jeandle-JDK Authors. All Rights Reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -20,12 +20,35 @@
 
 #include "jeandle/jeandleCompiledCall.hpp"
 
+#include "jeandle/__hotspotHeadersBegin__.hpp"
+#include "nativeInst_riscv.hpp"
+
 int JeandleCompiledCall::call_site_size(JeandleCompiledCall::Type call_type) {
-  Unimplemented();
-  return 0;
+  if (call_type == JeandleCompiledCall::ROUTINE_CALL) {
+    return NativeInstruction::instruction_size;
+  } else if (call_type == JeandleCompiledCall::EXTERNAL_CALL) {
+    return NativeInstruction::instruction_size;
+  }
+
+  return call_site_patch_size(call_type);
 }
 
 int JeandleCompiledCall::call_site_patch_size(JeandleCompiledCall::Type call_type) {
-  Unimplemented();
-  return 0;
+  assert(call_type != JeandleCompiledCall::NOT_A_CALL, "sanity");
+  switch (call_type) {
+    case JeandleCompiledCall::STATIC_CALL:
+      return NativeInstruction::instruction_size;
+    case JeandleCompiledCall::DYNAMIC_CALL:
+      // lui + addi + slli + addi + slli + addi + jalr
+      return NativeMovConstReg::movptr_instruction_size + NativeInstruction::instruction_size;
+    case JeandleCompiledCall::ROUTINE_CALL:
+      // No need to patch routine call site.
+      return 0;
+    case JeandleCompiledCall::STUB_C_CALL:
+      // auipc + addi + sd + lui + addi + slli + addi + slli + jalr
+      return NativeInstruction::instruction_size * 9;
+    default:
+      ShouldNotReachHere();
+      break;
+  }
 }

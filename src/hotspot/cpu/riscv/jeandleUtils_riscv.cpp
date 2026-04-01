@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2025, the Jeandle-JDK Authors. All Rights Reserved.
+ * Copyright (c) 2025, 2026, the Jeandle-JDK Authors. All Rights Reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -20,9 +20,28 @@
 
 #include "jeandle/__llvmHeadersBegin__.hpp"
 #include "llvm/IR/Jeandle/Attributes.h"
+#include "llvm/IR/Jeandle/GCStrategy.h"
 
 #include "jeandle/jeandleUtils.hpp"
 
 void JeandleFuncSig::setup_description(llvm::Function* func, bool is_stub) {
-  Unimplemented();
+  func->setCallingConv(llvm::CallingConv::Hotspot_JIT);
+
+  func->setGC(llvm::jeandle::JeandleGC);
+
+  // RISCV must enable extensions manually.
+  func->addFnAttr("target-features", "+i,+m,+a,+f,+d");
+
+  if (!is_stub) {
+    llvm::GlobalVariable* personality_func = func->getParent()->getGlobalVariable("jeandle.personality");
+    assert(personality_func != nullptr, "no personality function");
+    func->setPersonalityFn(personality_func);
+  }
+
+  if (UseCompressedOops) {
+    func->addFnAttr(llvm::Attribute::get(func->getContext(), llvm::jeandle::Attribute::UseCompressedOops));
+  }
+
+  // Always disable tail call for jeandle, to ensure the correct stack states.
+  func->addFnAttr("disable-tail-calls", "true");
 }

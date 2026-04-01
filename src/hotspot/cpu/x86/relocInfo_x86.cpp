@@ -1,6 +1,6 @@
 /*
  * Copyright (c) 1998, 2023, Oracle and/or its affiliates. All rights reserved.
- * Copyright (c) 2025, the Jeandle-JDK Authors. All Rights Reserved.
+ * Copyright (c) 2025, 2026, the Jeandle-JDK Authors. All Rights Reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -224,4 +224,28 @@ void trampoline_stub_Relocation::pd_fix_owner_after_move() {
 
 void jeandle_oop_addr_Relocation::fix_relocation_after_move(const CodeBuffer* src, CodeBuffer* dest) {
   Unimplemented();
+}
+
+bool jeandle_oop_Relocation::pd_pack_data_to(CodeSection* dest) {
+  return false;
+}
+
+bool jeandle_oop_Relocation::pd_unpack_data() {
+  return false;
+}
+
+bool jeandle_oop_addr_Relocation::pd_pack_data_to(CodeSection* dest) {
+  return false;
+}
+
+bool jeandle_oop_addr_Relocation::pd_unpack_data() {
+  return false;
+}
+
+bool jeandle_section_word_Relocation::pd_pack_data_to(CodeSection* dest) {
+  return false;
+}
+
+bool jeandle_section_word_Relocation::pd_unpack_data() {
+  return false;
 }

@@ -44,6 +44,7 @@
 #include "code/exceptionHandlerTable.hpp"
 #include "runtime/sharedRuntime.hpp"
 
+class JeandleReloc;
 
 class DeoptValueEncoding {
   friend class JeandleCompiledCode;
@@ -106,12 +107,10 @@ class CallSiteInfo : public JeandleCompilationResourceObj {
   CallSiteInfo(JeandleCompiledCall::Type type,
                address target,
                int bci,
-               bool has_deopt_operands = false,
                uint64_t statepoint_id = llvm::StatepointDirectives::DefaultStatepointID) :
                _type(type),
                _target(target),
                _bci(bci),
-               _has_deopt_operands(has_deopt_operands),
                _statepoint_id(statepoint_id) {
 #ifdef ASSERT
     // We don't need to assign a unique statepoint id for each routine call site, only call type and target is used.
@@ -129,13 +128,11 @@ class CallSiteInfo : public JeandleCompilationResourceObj {
   JeandleCompiledCall::Type type() const { return _type; }
   uint64_t statepoint_id() const { return _statepoint_id; }
   address target() const { return _target; }
-  bool has_deopt_operands() const { return _has_deopt_operands; }
 
  private:
   JeandleCompiledCall::Type _type;
   address _target;
   int _bci;
-  bool _has_deopt_operands;
 
   // Used to distinguish each call site in stackmaps.
   uint64_t _statepoint_id;
@@ -183,7 +180,8 @@ class JeandleCompiledCode : public StackObj {
                       _env(env),
                       _method(method),
                       _routine_entry(nullptr),
-                      _func_name(JeandleFuncSig::method_name_with_signature(_method)) {}
+                      _func_name(JeandleFuncSig::method_name_with_signature(_method)),
+                      _interpreter_frame_size_in_bytes(0) {}
 
   // For compiled Jeandle runtime stubs.
   JeandleCompiledCode(ciEnv* env, const char* func_name) :
@@ -195,7 +193,8 @@ class JeandleCompiledCode : public StackObj {
                       _env(env),
                       _method(nullptr),
                       _routine_entry(nullptr),
-                      _func_name(func_name) {}
+                      _func_name(func_name),
+                      _interpreter_frame_size_in_bytes(0) {}
 
   void install_obj(std::unique_ptr<ObjectBuffer> obj);
 
@@ -227,6 +226,8 @@ class JeandleCompiledCode : public StackObj {
   bool needs_clinit_barrier(ciMethod* ik,        ciMethod* accessing_method);
   bool needs_clinit_barrier(ciInstanceKlass* ik, ciMethod* accessing_method);
   bool needs_clinit_barrier_on_entry();
+  void update_interpreter_frame_size_in_bytes(int frame_size) { _interpreter_frame_size_in_bytes = MAX2(frame_size, _interpreter_frame_size_in_bytes); }
+  int interpreter_frame_size_in_bytes() { return _interpreter_frame_size_in_bytes; }
 
  private:
   std::unique_ptr<ObjectBuffer> _obj; // Compiled instructions.
@@ -253,10 +254,14 @@ class JeandleCompiledCode : public StackObj {
   ciMethod* _method;
   address _routine_entry;
   std::string _func_name;
+  int _interpreter_frame_size_in_bytes;
 
   void setup_frame_size();
 
   void resolve_reloc_info(JeandleAssembler& assembler);
+  bool pd_resolve_reloc(JeandleAssembler& assembler,
+                        llvm::SmallVector<JeandleReloc*>& relocs,
+                        llvm::jitlink::LinkGraph* link_graph);
 
   // Lookup address of const section in CodeBuffer.
   address lookup_const_section(llvm::StringRef name, JeandleAssembler& assembler);
@@ -270,6 +275,7 @@ class JeandleCompiledCode : public StackObj {
                               const StackMapParser::LocationAccessor& lock, GrowableArray<MonitorValue*>* array);
 
   void build_exception_handler_table();
+  bool pd_build_exception_handler_table();
   void build_implicit_exception_table();
 
   int frame_size_in_slots();

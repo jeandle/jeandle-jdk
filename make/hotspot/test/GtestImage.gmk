@@ -37,6 +37,17 @@ $(foreach v, $(JVM_VARIANTS), \
   $(eval TARGETS += $$(COPY_GTEST_$v)) \
 )
 
+ifeq ($(INCLUDE_JEANDLE), true)
+  $(foreach v, $(JVM_VARIANTS), \
+    $(eval $(call SetupMergeFiles, MERGE_JEANDLE_TEMPLATE_GTEST_$v, \
+      DEST := $(TEST_IMAGE_DIR)/hotspot/gtest/$v, \
+      FILES := $(TOPDIR)/src/hotspot/share/jeandle/templatemodule/template.ll \
+               $(TOPDIR)/src/hotspot/cpu/${OPENJDK_TARGET_CPU_ARCH}/templatemodule/template_${OPENJDK_TARGET_CPU_ARCH}.ll, \
+    )) \
+    $(eval TARGETS += $$(MERGE_JEANDLE_TEMPLATE_GTEST_$v)) \
+  )
+endif
+
 ifeq ($(call isTargetOs, windows), true)
   $(foreach v, $(JVM_VARIANTS), \
     $(eval $(call SetupCopyFiles, COPY_GTEST_MSVCR_$v, \

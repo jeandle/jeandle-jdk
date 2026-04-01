@@ -1,6 +1,6 @@
 /*
  * Copyright (c) 1997, 2023, Oracle and/or its affiliates. All rights reserved.
- * Copyright (c) 2025, the Jeandle-JDK Authors. All Rights Reserved.
+ * Copyright (c) 2025, 2026, the Jeandle-JDK Authors. All Rights Reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -487,7 +487,13 @@ class RelocationHolder {
   // provide that behavior.  If that changes, we can instead add a Relocation*
   // _reloc member to capture the result of the placement new, and use that to
   // access the base subobject.
+#if (defined(JEANDLE) && defined(RISCV64))
+  // RISCV64 needs more space for the field `_rel_offset` of `jeandle_oop_Relocation`,
+  // `jeandle_oop_addr_Relocation` and `jeandle_section_word_Relocation`.
+  static const size_t _relocbuf_size = 6 * sizeof(void*);
+#else
   static const size_t _relocbuf_size = 5 * sizeof(void*);
+#endif // (defined(JEANDLE) && defined(RISCV64))
   alignas(void*) char _relocbuf[_relocbuf_size];
 
   template<typename Reloc, typename... Args>
@@ -1014,11 +1020,10 @@ class oop_Relocation : public DataRelocation {
 
   void copy_into(RelocationHolder& holder) const override;
 
- private:
+ protected:
   jint _oop_index;                  // if > 0, index into CodeBlob::oop_at
   jint _offset;                     // byte offset to apply to the oop itself
 
- protected:
   friend class RelocationHolder;
   oop_Relocation(relocInfo::relocType type = relocInfo::oop_type) : DataRelocation(type) {}
   oop_Relocation(int oop_index, int offset, relocInfo::relocType type = relocInfo::oop_type)
@@ -1062,12 +1067,20 @@ class jeandle_oop_Relocation : public oop_Relocation {
     verify_value(reinterpret_cast<address>(oop_addr()));
   }
 
+  void pack_data_to(CodeSection* dest) override;
+  void unpack_data() override;
+
+  bool pd_pack_data_to(CodeSection* dest);
+  bool pd_unpack_data();
+
  private:
   jeandle_oop_Relocation(int oop_index, int offset)
     : oop_Relocation(oop_index, offset, relocInfo::jeandle_oop_type) {}
 
   friend class RelocationHolder;
   jeandle_oop_Relocation() : oop_Relocation(relocInfo::jeandle_oop_type) { }
+
+#include CPU_HEADER(jeandle_oop_Relocation)
 };
 
 class jeandle_oop_addr_Relocation : public oop_Relocation {
@@ -1089,12 +1102,20 @@ class jeandle_oop_addr_Relocation : public oop_Relocation {
 
   void fix_relocation_after_move(const CodeBuffer* src, CodeBuffer* dest) override;
 
+  void pack_data_to(CodeSection* dest) override;
+  void unpack_data() override;
+
+  bool pd_pack_data_to(CodeSection* dest);
+  bool pd_unpack_data();
+
  private:
   jeandle_oop_addr_Relocation(int oop_index)
     : oop_Relocation(oop_index, 0, relocInfo::jeandle_oop_addr_type) {}
 
   friend class RelocationHolder;
   jeandle_oop_addr_Relocation() : oop_Relocation(relocInfo::jeandle_oop_addr_type) {}
+
+#include CPU_HEADER(jeandle_oop_addr_Relocation)
 };
 
 // copy of oop_Relocation for now but may delete stuff in both/either
@@ -1516,11 +1537,13 @@ class jeandle_section_word_Relocation : public section_word_Relocation {
   jeandle_section_word_Relocation(address target, int section, int offset)
     : section_word_Relocation(target, section, relocInfo::jeandle_section_word_type), _offset(offset) { }
 
-  // Inherited. Additionally pack/unpack _offset field.
   void pack_data_to(CodeSection* dest) override;
   void unpack_data() override;
 
   int offset() override { return _offset; }
+
+  bool pd_pack_data_to(CodeSection* dest);
+  bool pd_unpack_data();
 
  private:
   friend class RelocationHolder;
@@ -1528,6 +1551,8 @@ class jeandle_section_word_Relocation : public section_word_Relocation {
 
   // Represents the addend in JeandleSectionWordReloc.
   int _offset;
+
+#include CPU_HEADER(jeandle_section_word_Relocation)
 };
 
 class poll_Relocation : public Relocation {

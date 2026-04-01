@@ -34,6 +34,18 @@ include MakeBase.gmk
 include JavaCompilation.gmk
 
 ################################################################################
+# Merge the template module file for Jeandle
+ifeq ($(INCLUDE_JEANDLE), true)
+  $(eval $(call SetupMergeFiles, MERGE_JEANDLE_TEMPLATE, \
+      DEST := $(INTERIM_IMAGE_DIR)/lib/server/, \
+      FILES := $(TOPDIR)/src/hotspot/share/jeandle/templatemodule/template.ll \
+               $(TOPDIR)/src/hotspot/cpu/${OPENJDK_TARGET_CPU_ARCH}/templatemodule/template_${OPENJDK_TARGET_CPU_ARCH}.ll, \
+  ))
+
+  TARGETS += $(MERGE_JEANDLE_TEMPLATE)
+endif
+
+################################################################################
 # Create a jar with our generator class. Using a jar is intentional since it
 # will load more classes
 
@@ -61,7 +73,7 @@ endif
 
 # Save the stderr output of the command and print it along with stdout in case
 # something goes wrong.
-$(CLASSLIST_FILE): $(INTERIM_IMAGE_DIR)/bin/java$(EXECUTABLE_SUFFIX) $(CLASSLIST_JAR)
+$(CLASSLIST_FILE): $(INTERIM_IMAGE_DIR)/bin/java$(EXECUTABLE_SUFFIX) $(CLASSLIST_JAR) $(MERGE_JEANDLE_TEMPLATE)
 	$(call MakeDir, $(LINK_OPT_DIR))
 	$(call LogInfo, Generating $(patsubst $(OUTPUTDIR)/%, %, $@))
 	$(call LogInfo, Generating $(patsubst $(OUTPUTDIR)/%, %, $(JLI_TRACE_FILE)))

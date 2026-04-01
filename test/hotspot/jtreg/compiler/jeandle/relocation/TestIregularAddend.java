@@ -23,7 +23,7 @@
 
 /*
  * @test
- * @requires os.arch=="amd64" | os.arch=="x86_64"
+ * @requires os.arch=="amd64" | os.arch=="x86_64" | os.arch=="riscv64"
  * @summary Correcting the gap in relocation target with special addend.
  *  issue: https://github.com/jeandle/jeandle-jdk/issues/326
  *

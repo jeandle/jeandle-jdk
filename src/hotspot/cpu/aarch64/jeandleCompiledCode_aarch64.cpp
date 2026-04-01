@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2025, the Jeandle-JDK Authors. All Rights Reserved.
+ * Copyright (c) 2025, 2026, the Jeandle-JDK Authors. All Rights Reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -18,8 +18,10 @@
  *
  */
 
+#include "jeandle/jeandleAssembler.hpp"
 #include "jeandle/jeandleCompiledCode.hpp"
 #include "jeandle/jeandleCompilation.hpp"
+#include "jeandle/jeandleReloc.hpp"
 
 // Get the frame size from .stack_sizes section.
 void JeandleCompiledCode::setup_frame_size() {
@@ -34,4 +36,14 @@ void JeandleCompiledCode::setup_frame_size() {
   uint64_t frame_size_in_bytes = data_extractor.getULEB128(&offset);
   assert(frame_size_in_bytes % StackAlignmentInBytes == 0, "frame size must be aligned");
   _frame_size = frame_size_in_bytes / BytesPerWord;
+}
+
+bool JeandleCompiledCode::pd_build_exception_handler_table() {
+  return false;
+}
+
+bool JeandleCompiledCode::pd_resolve_reloc(JeandleAssembler& assembler,
+                                           llvm::SmallVector<JeandleReloc*>& relocs,
+                                           llvm::jitlink::LinkGraph* link_graph) {
+  return false;
 }

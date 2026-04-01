@@ -96,6 +96,15 @@ void GCConfig::fail_if_non_included_gc_is_selected() {
 }
 
 void GCConfig::select_gc_ergonomically() {
+  if (UseJeandleCompiler) {
+    // Only serial GC is supported on jeandle for now, set it ergonomically
+    // This should be removed after support G1GC
+#if INCLUDE_SERIALGC
+    FLAG_SET_ERGO_IF_DEFAULT(UseSerialGC, true);
+#endif
+    return;
+  }
+
   if (os::is_server_class_machine()) {
 #if INCLUDE_G1GC
     FLAG_SET_ERGO_IF_DEFAULT(UseG1GC, true);
@@ -145,11 +154,11 @@ GCArguments* GCConfig::select_gc() {
 
   if (UseJeandleCompiler) {
     FOR_EACH_INCLUDED_GC(gc) {
-      if (gc->_name == CollectedHeap::Serial) {
-        gc->_flag = true;
-      } else if (gc->_flag) {
-        warning("Only serial GC is supported on jeandle for now. It will be enabled by default until jeandle supports other GCs.");
-        gc->_flag = false;
+      if (gc->_flag) {
+        if (gc->_name != CollectedHeap::Serial) {
+          warning("Only serial GC is supported on jeandle for now. It will be enabled by default until jeandle supports other GCs.");
+          gc->_flag = false;
+        }
       }
     }
   }

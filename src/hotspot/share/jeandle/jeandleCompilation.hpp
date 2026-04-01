@@ -114,7 +114,8 @@ class JeandleCompilation : public StackObj {
 #define JEANDLE_CRASH_ON_ERROR(_error_msg)                            \
 do {                                                                  \
   if (JeandleCrashOnError) {                                          \
-    fatal("Compilation failed in '%s': %s", JeandleCompilation::current()->name().c_str(), _error_msg); \
+    fatal("Compilation failed in '%s': %s",                           \
+      JeandleCompilation::current()->name().c_str(), _error_msg);     \
   }                                                                   \
 } while (0)
 #else
@@ -137,6 +138,18 @@ do {                                                                  \
     JEANDLE_CRASH_ON_ERROR(msg);                                      \
     return return_val;                                                \
   }                                                                   \
+} while (0)
+
+#define JEANDLE_REPORT_ERROR_AND_RET_VOID(msg)                        \
+do {                                                                  \
+  JeandleCompilation::report_jeandle_error(msg);                      \
+  return;                                                             \
+} while (0)
+
+#define JEANDLE_REPORT_ERROR_AND_RET(msg, return_val)                 \
+do {                                                                  \
+  JeandleCompilation::report_jeandle_error(msg);                      \
+  return return_val;                                                  \
 } while (0)
 
 #define RETURN_VOID_ON_JEANDLE_ERROR()                                \

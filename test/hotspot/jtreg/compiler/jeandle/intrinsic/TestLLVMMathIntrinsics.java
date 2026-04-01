@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2025, the Jeandle-JDK Authors. All Rights Reserved.
+ * Copyright (c) 2025, 2026, the Jeandle-JDK Authors. All Rights Reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -21,7 +21,6 @@
 /*
  * @test TestLLVMMathIntrinsics.java
  * @summary Test LLVM DTrig intrinsics implementation
- * @requires os.arch=="amd64" | os.arch=="x86_64" | os.arch=="aarch64"
  * @library /test/lib /
  * @build compiler.jeandle.fileCheck.FileCheck
  * @run driver TestLLVMMathIntrinsics

@@ -119,10 +119,17 @@
       llvm::PointerType::get(context, llvm::jeandle::AddrSpace::CHeapAddrSpace),    \
       llvm::PointerType::get(context, llvm::jeandle::AddrSpace::CHeapAddrSpace))    \
                                                                                     \
-  def(SharedRuntime_complete_monitor_unlocking_C,                                   \
-      SharedRuntime::complete_monitor_unlocking_C,                                  \
+  def(SharedRuntime_register_finalizer,                                             \
+      SharedRuntime::register_finalizer,                                            \
       llvm::Type::getVoidTy(context),                                               \
-      llvm::PointerType::get(context, llvm::jeandle::AddrSpace::JavaHeapAddrSpace), \
+      llvm::PointerType::get(context, llvm::jeandle::AddrSpace::CHeapAddrSpace),    \
+      llvm::PointerType::get(context, llvm::jeandle::AddrSpace::JavaHeapAddrSpace)) \
+                                                                                    \
+  def(instanceof_unloaded_or_null,                                                  \
+      JeandleRuntimeRoutine::instanceof_unloaded_or_null,                           \
+      llvm::Type::getInt32Ty(context),                                              \
+      llvm::PointerType::get(context, llvm::jeandle::AddrSpace::CHeapAddrSpace),    \
+      llvm::Type::getInt32Ty(context),                                              \
       llvm::PointerType::get(context, llvm::jeandle::AddrSpace::CHeapAddrSpace),    \
       llvm::PointerType::get(context, llvm::jeandle::AddrSpace::CHeapAddrSpace))    \
 
@@ -265,7 +272,15 @@
       false,                                                         \
       true,                                                          \
       llvm::Type::getVoidTy(context))                                \
-
+                                                                     \
+  def(SharedRuntime_complete_monitor_unlocking_C,                                   \
+      SharedRuntime::complete_monitor_unlocking_C,                                  \
+      false,                                                                        \
+      true,                                                                         \
+      llvm::Type::getVoidTy(context),                                               \
+      llvm::PointerType::get(context, llvm::jeandle::AddrSpace::JavaHeapAddrSpace), \
+      llvm::PointerType::get(context, llvm::jeandle::AddrSpace::CHeapAddrSpace),    \
+      llvm::PointerType::get(context, llvm::jeandle::AddrSpace::CHeapAddrSpace))    \
 
 #define ALL_JEANDLE_ASSEMBLY_ROUTINES(def) \
   def(exceptional_return)                  \
@@ -375,6 +390,8 @@ class JeandleRuntimeRoutine : public AllStatic {
   static void multianewarray4(Klass* elem_type, int len1, int len2, int len3, int len4, JavaThread* current);
   static void multianewarray5(Klass* elem_type, int len1, int len2, int len3, int len4, int len5, JavaThread* current);
   static void multianewarrayN(Klass* elem_type, arrayOopDesc* dims, JavaThread* current);
+
+  static jint instanceof_unloaded_or_null(Method* method, int cp_index, Klass* ex_klass, JavaThread* current);
 
   // Assembly routine implementations:
 

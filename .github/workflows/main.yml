@@ -31,7 +31,8 @@ on:
     types: [opened, synchronize, reopened, labeled, unlabeled]
     branches:
       - 'main'
-
+  repository_dispatch:
+    types: ["dispatch-from-llvm"]
 concurrency:
   group: ${{ github.workflow }}-${{ github.head_ref }}
   cancel-in-progress: true
@@ -47,8 +48,8 @@ jobs:
     runs-on: ubuntu-22.04
     outputs:
       linux-x64: true # We always run test on x86
-      linux-aarch64: ${{ contains(github.event.pull_request.labels.*.name, 'AArch64') }}
-      linux-riscv64: ${{ contains(github.event.pull_request.labels.*.name, 'RISC-V') }}
+      linux-aarch64: ${{ (github.event_name == 'pull_request_target' && contains(github.event.pull_request.labels.*.name, 'AArch64')) || (github.event_name == 'repository_dispatch' && contains(github.event.client_payload.labels, 'AArch64')) }}
+      linux-riscv64: ${{ (github.event_name == 'pull_request_target' && contains(github.event.pull_request.labels.*.name, 'RISC-V')) || (github.event_name == 'repository_dispatch' && contains(github.event.client_payload.labels, 'RISC-V')) }}
 
     steps:
       - name: 'Checkout the scripts'
@@ -62,6 +63,13 @@ jobs:
         id: jtreg
         uses: ./.github/actions/build-jtreg
 
+      - name: ${{ github.event_name == 'repository_dispatch' && github.event.client_payload.id }}
+        run: |
+          if [ "${{ github.event_name }}" = 'repository_dispatch' ]; then
+            echo "run identifier: ${{ github.event.client_payload.id }}"
+          else
+            echo "run identifier: pull_request"
+          fi
   ###
   ### Build jobs
   ###

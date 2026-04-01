@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2025, the Jeandle-JDK Authors. All Rights Reserved.
+ * Copyright (c) 2025, 2026, the Jeandle-JDK Authors. All Rights Reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -41,6 +41,7 @@ import jdk.test.lib.process.ProcessTools;
 public class TestSinDouble {
     public static void main(String[] args) throws Exception {
         boolean is_x86 = System.getProperty("os.arch").equals("amd64");
+        boolean is_riscv64 = System.getProperty("os.arch").equals("riscv64");
         String dump_path = System.getProperty("java.io.tmpdir");
 
         // intrinsic by StubRoutine
@@ -69,10 +70,16 @@ public class TestSinDouble {
         checker.checkNext("entry:");
         checker.checkNext("br label %bci_0");
         checker.checkNext("bci_0:");
-        checker.checkNext("call double @StubRoutines_dsin");
+        if (is_riscv64) {
+            checker.checkNext("call double inttoptr");
+        } else {
+            checker.checkNextPattern("call double @StubRoutines_dsin");
+        }
         checker.checkNext("ret double");
         // check gc-leaf-function
-        checker.checkPattern("declare double @StubRoutines_dsin.*#\\d+");
+        if (!is_riscv64) {
+            checker.checkPattern("declare double @StubRoutines_dsin.*#\\d+");
+        }
         checker.checkPattern("attributes #\\d+ = \\{ \"gc-leaf-function\" \\}");
 
         // intrinsic by SharedRuntime

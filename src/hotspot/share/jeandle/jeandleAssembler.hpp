@@ -77,6 +77,8 @@ class JeandleAssembler : public StackObj {
 
  private:
   MacroAssembler* _masm;
+
+#include CPU_HEADER(jeandleAssembler)
 };
 
 #endif // SHARE_JEANDLE_ASSEMBLER_HPP

@@ -129,6 +129,9 @@ void CodeBuffer::initialize(csize_t inst_size,
                             csize_t stubs_size,
                             OopRecorder* oop_recorder) {
   initialize(inst_size + stubs_size, locs_size);
+  if (blob() == nullptr) {
+    return;  // caller must test this
+  }
   initialize_section_size(&_stubs, stubs_size);
   initialize_oop_recorder(oop_recorder);
 }

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2025, the Jeandle-JDK Authors. All Rights Reserved.
+ * Copyright (c) 2025, 2026, the Jeandle-JDK Authors. All Rights Reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -18,87 +18,307 @@
  *
  */
 
+#include "jeandle/__llvmHeadersBegin__.hpp"
+#include "llvm/ExecutionEngine/JITLink/riscv.h"
+
 #include "jeandle/jeandleAssembler.hpp"
+#include "jeandle/jeandleCompilation.hpp"
+#include "jeandle/jeandleRuntimeRoutine.hpp"
+
+#include "jeandle/__hotspotHeadersBegin__.hpp"
+#include "runtime/sharedRuntime.hpp"
+
+#define __ _masm->
 
 void JeandleAssembler::emit_static_call_stub(int inst_offset, CallSiteInfo* call) {
-  Unimplemented();
+  assert(call->type() == JeandleCompiledCall::STATIC_CALL, "legal call type");
+  address call_address = __ addr_at(inst_offset);
+
+  // same as C1 call_stub_size()
+  int stub_size = 14 * NativeInstruction::instruction_size +
+                  (NativeInstruction::instruction_size + NativeCallTrampolineStub::instruction_size);
+  address stub = __ start_a_stub(stub_size);
+  JEANDLE_ERROR_ASSERT_AND_RET_VOID_ON_FAIL(stub != nullptr, "static call stub overflow");
+
+  int start = __ offset();
+
+  __ relocate(static_stub_Relocation::spec(call_address));
+  __ emit_static_call_stub();
+
+  assert(__ offset() - start <= stub_size, "stub too big");
+  __ end_a_stub();
 }
 
 void JeandleAssembler::patch_static_call_site(int inst_offset, CallSiteInfo* call) {
-  Unimplemented();
+  assert(call->type() == JeandleCompiledCall::STATIC_CALL, "illegal call type");
+
+  // The following `set_insts_end` conflicts with code buffer expansion,
+  // we need to confirm that stub code section has enough space before invoking `set_insts_end`.
+  int required_space = __ max_trampoline_stub_size();
+  if (__ code()->stubs()->maybe_expand_to_ensure_remaining(required_space)) {
+    JEANDLE_ERROR_ASSERT_AND_RET_VOID_ON_FAIL(__ code()->blob() != nullptr, "trampoline stub overflow");
+  }
+
+  // Set insts_end to where to patch
+  address call_address = __ addr_at(inst_offset);
+  int insts_end_offset = __ code()->insts_end() - __ code()->insts_begin();
+  __ code()->set_insts_end(call_address);
+
+  relocInfo::relocType rtype;
+  if (call->target() == SharedRuntime::get_resolve_opt_virtual_call_stub()) {
+    rtype = relocInfo::opt_virtual_call_type;
+  } else {
+    assert(call->target() == SharedRuntime::get_resolve_static_call_stub(), "illegal call target");
+    rtype = relocInfo::static_call_type;
+  }
+  Address call_addr = Address(call->target(), rtype);
+  // emit trampoline call for patch
+  address tpc = __ trampoline_call(call_addr);
+  JEANDLE_ERROR_ASSERT_AND_RET_VOID_ON_FAIL(tpc != nullptr, "trampoline stub overflow");
+  // Restore insts_end
+  __ code()->set_insts_end(__ code()->insts_begin() + insts_end_offset);
 }
 
 void JeandleAssembler::patch_stub_C_call_site(int inst_offset, CallSiteInfo* call) {
-  Unimplemented();
+  assert(call->type() == JeandleCompiledCall::STUB_C_CALL, "illegal call type");
+
+  // Set insts_end to where to patch
+  address patch_pc = __ addr_at(inst_offset);
+  int insts_end_offset = __ code()->insts_end() - __ code()->insts_begin();
+  __ code()->set_insts_end(patch_pc);
+
+  Label return_pc;
+  return_pc.add_patch_at(__ code(), __ locator());
+  {
+    Assembler::IncompressibleRegion ir(this->_masm);
+    // set last_Java_pc
+    __ la(t0, return_pc); // auipc + addi
+    __ sd(t0, Address(xthread, JavaThread::frame_anchor_offset() +
+                               JavaFrameAnchor::last_Java_pc_offset()));
+
+    // set call target
+    int32_t offset = 0;
+    __ movptr(t1, call->target(), offset); // lui + addi + slli + addi + slli
+    __ jalr(x1, t1, offset);
+  }
+  __ bind(return_pc);
+
+  // Restore insts_end
+  __ code()->set_insts_end(__ code()->insts_begin() + insts_end_offset);
 }
 
 void JeandleAssembler::patch_routine_call_site(int inst_offset, address target) {
-  Unimplemented();
+  // Set insts_end to where to patch
+  address patch_pc = __ addr_at(inst_offset);
+  int insts_end_offset = __ code()->insts_end() - __ code()->insts_begin();
+  __ code()->set_insts_end(patch_pc);
+
+  // Patch
+  address tpc = __ trampoline_call(Address(target, relocInfo::runtime_call_type));
+  JEANDLE_ERROR_ASSERT_AND_RET_VOID_ON_FAIL(tpc != nullptr, "trampoline stub overflow");
+
+  // Restore insts_end
+  __ code()->set_insts_end(__ code()->insts_begin() + insts_end_offset);
 }
 
 void JeandleAssembler::patch_ic_call_site(int inst_offset, CallSiteInfo* call) {
-  Unimplemented();
+  assert(inst_offset >= 0, "invalid call instruction address");
+  assert(call->type() == JeandleCompiledCall::DYNAMIC_CALL, "illegal call type");
+
+  // The following `set_insts_end` conflicts with code buffer expansion,
+  // we need to confirm that stub code section has enough space before invoking `set_insts_end`.
+  int required_space = __ max_trampoline_stub_size();
+  if (__ code()->stubs()->maybe_expand_to_ensure_remaining(required_space)) {
+    JEANDLE_ERROR_ASSERT_AND_RET_VOID_ON_FAIL(__ code()->blob() != nullptr, "trampoline stub overflow");
+  }
+
+  // Set insts_end to where to patch
+  address patch_pc = __ addr_at(inst_offset);
+  int insts_end_offset = __ code()->insts_end() - __ code()->insts_begin();
+  __ code()->set_insts_end(patch_pc);
+
+  // Patch
+  address tpc = __ ic_call(call->target());
+  JEANDLE_ERROR_ASSERT_AND_RET_VOID_ON_FAIL(tpc != nullptr, "trampoline stub overflow");
+
+  // Restore insts_end
+  __ code()->set_insts_end(__ code()->insts_begin() + insts_end_offset);
 }
 
 void JeandleAssembler::patch_external_call_site(int inst_offset, CallSiteInfo* call) {
-  Unimplemented();
+  assert(call->type() == JeandleCompiledCall::EXTERNAL_CALL, "illegal call type");
+
+  // The following `set_insts_end` conflicts with code buffer expansion,
+  // we need to confirm that stub code section has enough space before invoking `set_insts_end`.
+  int required_space = __ max_trampoline_stub_size();
+  if (__ code()->stubs()->maybe_expand_to_ensure_remaining(required_space)) {
+    JEANDLE_ERROR_ASSERT_AND_RET_VOID_ON_FAIL(__ code()->blob() != nullptr, "trampoline stub overflow");
+  }
+
+  // Set insts_end to where to patch
+  address patch_pc = __ addr_at(inst_offset);
+  int insts_end_offset = __ code()->insts_end() - __ code()->insts_begin();
+  __ code()->set_insts_end(patch_pc);
+
+  // Patch
+  address tpc = __ trampoline_call(Address(call->target(), relocInfo::runtime_call_type));
+  JEANDLE_ERROR_ASSERT_AND_RET_VOID_ON_FAIL(tpc != nullptr, "trampoline stub overflow");
+
+  // Restore insts_end
+  __ code()->set_insts_end(__ code()->insts_begin() + insts_end_offset);
 }
 
 void JeandleAssembler::emit_ic_check() {
-  Unimplemented();
+  int start_offset = __ offset();
+  Label dont;
+  // t1: ic_klass
+  // j_rarg0: receiver
+  __ cmp_klass(j_rarg0, t1, t0, t2, dont);
+
+  // Cache missing
+  __ far_jump(RuntimeAddress(SharedRuntime::get_ic_miss_stub()));
+
+  if (__ offset() - start_offset > 4 * 4) {
+    // force alignment after the cache check.
+    __ align(CodeEntryAlignment);
+  }
+
+  __ bind(dont);
 }
 
 void JeandleAssembler::emit_verified_entry() {
-  Unimplemented();
+  {
+    Assembler::IncompressibleRegion ir(this->_masm);
+    __ nop();
+  }
 }
 
 void JeandleAssembler::emit_clinit_barrier_on_entry(Klass* klass) {
-  Unimplemented();
+  Label fallthrough;
+  __ mov_metadata(t1, klass);
+  __ clinit_barrier(t1, t0, &fallthrough);
+  __ far_jump(RuntimeAddress(SharedRuntime::get_handle_wrong_method_stub()));
+  __ bind(fallthrough);
 }
 
 int JeandleAssembler::interior_entry_alignment() const {
-  Unimplemented();
-  return 0;
+  // Keep interior entry 16-byte aligned (matches default HotSpot interior entry alignment).
+  return 16;
 }
 
 int JeandleAssembler::emit_exception_handler() {
-  Unimplemented();
-  return 0;
+  int stub_size = __ far_branch_size();
+  address stub = __ start_a_stub(stub_size);
+  JEANDLE_ERROR_ASSERT_AND_RET_ON_FAIL(stub != nullptr, "exception handler stub overflow", 0);
+
+  int start = __ offset();
+  __ far_jump(RuntimeAddress(JeandleRuntimeRoutine::get_routine_entry(JeandleRuntimeRoutine::_exception_handler)));
+
+  assert(__ offset() - start <= stub_size, "stub too big");
+  __ end_a_stub();
+  return start;
 }
 
-void JeandleAssembler::emit_section_word_reloc(int operand_offset, LinkKind kind, int64_t addend, address target, int reloc_section) {
-  Unimplemented();
+using LinkKind_riscv = llvm::jitlink::riscv::EdgeKind_riscv;
+
+void JeandleAssembler::emit_section_word_reloc(int operand_offset, LinkKind kind, int64_t addend, address target, int reloc_section, int64_t rel_offset) {
+  assert(operand_offset >= 0, "invalid operand address");
+
+  if (reloc_section == CodeBuffer::SECT_INSTS) {
+    address at_addr = __ code()->insts_begin() + operand_offset;
+    RelocationHolder rspec = jeandle_section_word_Relocation::spec(target, CodeBuffer::SECT_CONSTS, addend, rel_offset);
+    __ code()->insts()->relocate(at_addr, rspec);
+  } else if (reloc_section == CodeBuffer::SECT_CONSTS && kind == LinkKind_riscv::R_RISCV_ADD32) {
+    address at_addr = __ code()->consts()->start() + operand_offset;
+    RelocationHolder rspec = jeandle_section_word_Relocation::spec(target, CodeBuffer::SECT_INSTS, addend, 0);
+    __ code()->consts()->relocate(at_addr, rspec);
+  } else {
+    assert(reloc_section == CodeBuffer::SECT_CONSTS, "unexpected code section");
+    assert(kind == LinkKind_riscv::R_RISCV_SUB32, "unexpected link kind");
+    address at_addr = __ code()->consts()->start() + operand_offset;
+    RelocationHolder rspec = jeandle_section_word_Relocation::spec(target, CodeBuffer::SECT_CONSTS, addend, 0);
+    __ code()->consts()->relocate(at_addr, rspec);
+  }
 }
 
-void JeandleAssembler::emit_oop_reloc(int offset, jobject oop_handle, int64_t addend) {
-  Unimplemented();
+void JeandleAssembler::emit_oop_reloc(int offset, jobject oop_handle, int64_t addend, int64_t rel_offset) {
+  address at_addr = __ code()->insts_begin() + offset;
+  int index = __ oop_recorder()->find_index(oop_handle);
+  RelocationHolder rspec = jeandle_oop_Relocation::spec(index, addend, rel_offset);
+  __ code_section()->relocate(at_addr, rspec);
 }
 
-void JeandleAssembler::emit_oop_addr_reloc(int offset, jobject oop_handle) {
-  Unimplemented();
+void JeandleAssembler::emit_oop_addr_reloc(int offset, jobject oop_handle, int64_t rel_offset) {
+  address at_addr = __ code()->consts()->start() + offset;
+  int index = __ oop_recorder()->find_index(oop_handle);
+  RelocationHolder rspec = jeandle_oop_addr_Relocation::spec(index, rel_offset);
+  __ code()->consts()->relocate(at_addr, rspec);
 }
 
 int JeandleAssembler::fixup_call_inst_offset(int offset) {
-  Unimplemented();
+  assert(offset >= 0, "invalid offset");
+  // PC relative call needs two instructions: auipc + jalr
+  return offset + 2 * NativeJump::instruction_size;
 }
 
-bool JeandleAssembler::is_oop_reloc(LinkSymbol& target, LinkKind kind) {
-  Unimplemented();
+bool JeandleAssembler::is_oop_reloc(LinkEdge& edge, llvm::DenseMap<std::pair<LinkBlock*, ExecutorAddrDiff>, LinkEdge*>& _rel_high_edges) {
+  if (!edge.getTarget().isDefined() && (edge.getKind() == LinkKind_riscv::R_RISCV_PCREL_HI20)) {
+    return true;
+  }
+  if (edge.getKind() == LinkKind_riscv::R_RISCV_PCREL_LO12_I) {
+    auto high_edge = getRelHighEdge(edge, _rel_high_edges);
+    if (!high_edge->getTarget().isDefined() && high_edge->getKind() == LinkKind_riscv::R_RISCV_PCREL_HI20) {
+      return true;
+    }
+  }
+  return false;
 }
 
-bool JeandleAssembler::is_oop_addr_reloc(LinkSymbol& target, LinkKind kind) {
+bool JeandleAssembler::is_oop_addr_reloc(LinkEdge& edge, llvm::DenseMap<std::pair<LinkBlock*, ExecutorAddrDiff>, LinkEdge*>& rel_high_edges) {
   // Unimplemented
   return false;
 }
 
 bool JeandleAssembler::is_routine_call_reloc(LinkSymbol& target, LinkKind kind) {
-  Unimplemented();
+  llvm::StringRef target_name = target.hasName() ? *(target.getName()) : "";
+  return !target_name.empty() && !target.isDefined() &&
+         JeandleRuntimeRoutine::is_routine_entry(target_name) &&
+         kind == LinkKind_riscv::R_RISCV_CALL_PLT;
 }
 
 bool JeandleAssembler::is_external_call_reloc(LinkSymbol& target, LinkKind kind) {
-  Unimplemented();
+  llvm::StringRef target_name = target.hasName() ? *(target.getName()) : "";
+  return !target_name.empty() && !target.isDefined() &&
+         !JeandleRuntimeRoutine::is_routine_entry(target_name) &&
+         kind == LinkKind_riscv::R_RISCV_CALL_PLT;
 }
 
-bool JeandleAssembler::is_section_word_reloc(LinkSymbol& target, LinkKind kind) {
-  Unimplemented();
+bool JeandleAssembler::is_section_word_reloc(LinkEdge& edge, llvm::DenseMap<std::pair<LinkBlock*, ExecutorAddrDiff>, LinkEdge*>& _rel_high_edges) {
+  if (edge.getTarget().isDefined() &&
+      (edge.getKind() == LinkKind_riscv::R_RISCV_PCREL_HI20 ||
+       edge.getKind() == LinkKind_riscv::R_RISCV_ADD32 ||
+       edge.getKind() == LinkKind_riscv::R_RISCV_SUB32)) {
+    return true;
+  }
+  if (edge.getKind() == LinkKind_riscv::R_RISCV_PCREL_LO12_I) {
+    auto high_edge = getRelHighEdge(edge, _rel_high_edges);
+    if (high_edge->getTarget().isDefined() && high_edge->getKind() == LinkKind_riscv::R_RISCV_PCREL_HI20) {
+      return true;
+    }
+  }
+  return false;
 }
+
+// RISCV does not need the following methods.
+
+void JeandleAssembler::emit_section_word_reloc(int offset, LinkKind kind, int64_t addend, address target, int reloc_section) { }
+
+void JeandleAssembler::emit_oop_reloc(int offset, jobject oop_handle, int64_t addend) { }
+
+void JeandleAssembler::emit_oop_addr_reloc(int offset, jobject oop_handle) { }
+
+bool JeandleAssembler::is_oop_reloc(LinkSymbol& target, LinkKind kind) { return false; }
+
+bool JeandleAssembler::is_oop_addr_reloc(LinkSymbol& target, LinkKind kind) { return false; }
+
+bool JeandleAssembler::is_section_word_reloc(LinkSymbol& target, LinkKind kind) { return false; }

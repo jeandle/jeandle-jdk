@@ -1,6 +1,7 @@
 /*
  * Copyright (c) 1998, 2023, Oracle and/or its affiliates. All rights reserved.
  * Copyright (c) 2014, Red Hat Inc. All rights reserved.
+ * Copyright (c) 2026, the Jeandle-JDK Authors. All Rights Reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -168,4 +169,28 @@ void jeandle_oop_addr_Relocation::fix_relocation_after_move(const CodeBuffer* sr
   int delta = dest - src;
   address new_addr = old_addr + delta;
   set_value(new_addr);
+}
+
+bool jeandle_oop_Relocation::pd_pack_data_to(CodeSection* dest) {
+  return false;
+}
+
+bool jeandle_oop_Relocation::pd_unpack_data() {
+  return false;
+}
+
+bool jeandle_oop_addr_Relocation::pd_pack_data_to(CodeSection* dest) {
+  return false;
+}
+
+bool jeandle_oop_addr_Relocation::pd_unpack_data() {
+  return false;
+}
+
+bool jeandle_section_word_Relocation::pd_pack_data_to(CodeSection* dest) {
+  return false;
+}
+
+bool jeandle_section_word_Relocation::pd_unpack_data() {
+  return false;
 }

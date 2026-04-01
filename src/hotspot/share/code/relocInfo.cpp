@@ -1,5 +1,6 @@
 /*
  * Copyright (c) 1997, 2023, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2026, the Jeandle-JDK Authors. All Rights Reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -817,7 +818,38 @@ address internal_word_Relocation::target() {
   return target;
 }
 
+void jeandle_oop_Relocation::pack_data_to(CodeSection* dest) {
+  if (pd_pack_data_to(dest)) {
+    return;
+  }
+  oop_Relocation::pack_data_to(dest);
+}
+
+void jeandle_oop_Relocation::unpack_data() {
+  if (pd_unpack_data()) {
+    return;
+  }
+  oop_Relocation::unpack_data();
+}
+
+void jeandle_oop_addr_Relocation::pack_data_to(CodeSection* dest) {
+  if (pd_pack_data_to(dest)) {
+    return;
+  }
+  oop_Relocation::pack_data_to(dest);
+}
+
+void jeandle_oop_addr_Relocation::unpack_data() {
+  if (pd_unpack_data()) {
+    return;
+  }
+  oop_Relocation::unpack_data();
+}
+
 void jeandle_section_word_Relocation::pack_data_to(CodeSection* dest) {
+  if (pd_pack_data_to(dest)) {
+    return;
+  }
   // Pack _target.
   short* p = (short*) dest->locs_end();
   normalize_address(_target, dest, true);
@@ -841,6 +873,9 @@ void jeandle_section_word_Relocation::pack_data_to(CodeSection* dest) {
 }
 
 void jeandle_section_word_Relocation::unpack_data() {
+  if (pd_unpack_data()) {
+    return;
+  }
   // unpack compressed target and _offset
   int compressed_target;
   unpack_2_ints(compressed_target, _offset);

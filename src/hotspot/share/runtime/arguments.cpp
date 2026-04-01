@@ -3539,7 +3539,15 @@ void Arguments::init_shared_archive_paths() {
 char* Arguments::get_jeandle_template_path() {
   if (_jeandle_template_path == nullptr) {
     char jvm_path[JVM_MAXPATHLEN];
-    os::jvm_path(jvm_path, sizeof(jvm_path));
+    char dli_fname[MAXPATHLEN];
+    dli_fname[0] = '\0';
+    bool ret = os::dll_address_to_library_name(
+                                          CAST_FROM_FN_PTR(address, os::jvm_path),
+                                          dli_fname, sizeof(dli_fname), nullptr);
+    assert(ret, "cannot locate libjvm");
+    if (ret && dli_fname[0] != '\0') {
+      os::Posix::realpath(dli_fname, jvm_path, sizeof(jvm_path));
+    }
     char *end = strrchr(jvm_path, *os::file_separator());
     if (end != nullptr) *end = '\0';
     size_t jvm_path_len = strlen(jvm_path);

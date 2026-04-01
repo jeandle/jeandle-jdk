@@ -164,6 +164,20 @@ ifeq ($(call isTargetOsType, unix), true)
 endif
 
 ################################################################################
+# Merge the template module file for Jeandle
+ifeq ($(INCLUDE_JEANDLE), true)
+  LIB_OUTPUTDIR := $(call FindLibDirForModule, java.base)
+
+  $(eval $(call SetupMergeFiles, MERGE_JEANDLE_TEMPLATE, \
+      DEST := $(LIB_OUTPUTDIR)/server/, \
+      FILES := $(TOPDIR)/src/hotspot/share/jeandle/templatemodule/template.ll \
+               $(TOPDIR)/src/hotspot/cpu/${OPENJDK_TARGET_CPU_ARCH}/templatemodule/template_${OPENJDK_TARGET_CPU_ARCH}.ll, \
+  ))
+
+  TARGETS += $(MERGE_JEANDLE_TEMPLATE)
+endif
+
+################################################################################
 # Create the symbols file for static builds.
 
 ifeq ($(STATIC_BUILD), true)

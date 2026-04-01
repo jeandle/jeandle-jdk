@@ -114,7 +114,7 @@ JRT_LEAF(address, JeandleRuntimeRoutine::get_exception_handler(JavaThread* curre
   return SharedRuntime::raw_exception_handler_for_return_address(current, current->exception_pc());
 JRT_END
 
-JRT_ENTRY(address, JeandleRuntimeRoutine::search_landingpad(JavaThread* current))
+JRT_ENTRY_NO_ASYNC(address, JeandleRuntimeRoutine::search_landingpad(JavaThread* current))
   assert(current->exception_oop() != nullptr, "exception oop is found");
 
   address pc = current->exception_pc();
@@ -122,6 +122,9 @@ JRT_ENTRY(address, JeandleRuntimeRoutine::search_landingpad(JavaThread* current)
   nmethod* nm = CodeCache::find_nmethod(pc);
   assert(nm != nullptr, "No nmethod found in Jeandle exception handler");
   assert(pc > nm->code_begin(), "sanity check");
+
+  // Reset reserved stack activation.
+  current->stack_overflow_state()->reguard_stack();
 
   JeandleExceptionHandlerTable exception_table(nm);
   uint64_t handler_pc_offset = exception_table.find_handler(static_cast<uint64_t>(pc - nm->code_begin()));
@@ -301,4 +304,20 @@ JRT_ENTRY(void, JeandleRuntimeRoutine::multianewarrayN(Klass* elem_type, arrayOo
   oop obj = ArrayKlass::cast(elem_type)->multi_allocate(len, c_dims, THREAD);
   // TODO: deoptimize_caller_frame(current, HAS_PENDING_EXCEPTION);
   current->set_vm_result(obj);
+JRT_END
+
+JRT_ENTRY(jint, JeandleRuntimeRoutine::instanceof_unloaded_or_null(Method* method, int cp_index, Klass* ex_klass, JavaThread* current))
+  ResourceMark rm(current);
+  constantPoolHandle cp(current, method->constants());
+  // This may trigger class loading.
+  Klass* catch_klass = cp->klass_at(cp_index, current);
+  // If klass_at fails, the pending exception remains on the thread
+  // and the stub's forward_exception_block will handle it automatically.
+  if (HAS_PENDING_EXCEPTION) {
+    return 0;
+  }
+  if (ex_klass != nullptr && ex_klass->is_subtype_of(catch_klass)) {
+    return 1;
+  }
+  return 0;
 JRT_END
