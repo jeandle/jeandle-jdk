@@ -111,13 +111,26 @@ bool JeandleVMState::match(JeandleVMState* to_match) {
   return true;
 }
 
-bool JeandleVMState::update_phi_nodes(JeandleVMState* income_jvm, llvm::BasicBlock* income_block) {
+bool JeandleVMState::update_phi_nodes(JeandleVMState* income_jvm, llvm::BasicBlock* income_block, bool is_osr) {
   if (!match(income_jvm)) {
     return false;
   }
 
   llvm::SmallVector<TypedValue>& income_locals = income_jvm->_locals;
   llvm::SmallVector<TypedValue>& income_stack = income_jvm->_stack;
+
+  if (is_osr) {
+    // Create phi nodes for locks.
+    for (size_t i = 0; i < income_jvm->locks_size(); i++) {
+      assert(!income_jvm->lock_at(i).is_null(), "null lock");
+      assert(!lock_at(i).is_null(), "null lock");
+      assert(lock_at(i).lock() == income_jvm->lock_at(i).lock(), "unbalanced monitors");
+
+      llvm::PHINode* phi_node = llvm::cast<llvm::PHINode>(lock_at(i).object().value());
+
+      phi_node->addIncoming(income_jvm->lock_at(i).object().value(), income_block);
+    }
+  }
 
   // Create phi nodes for locals.
   for (size_t i = 0; i < _locals.size(); i++) {
@@ -296,7 +309,7 @@ JeandleBasicBlock::JeandleBasicBlock(int block_id,
                                      _ci_block(ci_block),
                                      _initial_jvm(nullptr) {}
 
-bool JeandleBasicBlock::merge_VM_state_from(JeandleVMState* vm_state, llvm::BasicBlock* incoming, ciMethod* method) {
+bool JeandleBasicBlock::merge_VM_state_from(JeandleVMState* vm_state, llvm::BasicBlock* incoming, ciMethod* method, bool is_osr) {
   if (_jvm == nullptr) {
     if (is_set(is_compiled)) {
       // A compiled block with null JeandleVMState.
@@ -311,27 +324,27 @@ bool JeandleBasicBlock::merge_VM_state_from(JeandleVMState* vm_state, llvm::Basi
       // More than one predecessors. Set up phi nodes.
       // NOTE: Since we don't know exactly how many predecessor blocks an exception handler will have, we create
       // phi nodes for every exception handler conservatively.
-      initialize_VM_state_from(vm_state, incoming, method->liveness_at_bci(_start_bci));
+      initialize_VM_state_from(vm_state, incoming, method->liveness_at_bci(_start_bci), is_osr);
     }
 
     return true;
 
   } else if (!is_set(is_compiled) && !is_set(is_loop_header)) {
     assert(_predecessors.size() > 1 || is_exception_handler(), "more than one predecessors are needed for phi nodes");
-    return _jvm->update_phi_nodes(vm_state, incoming);
+    return _jvm->update_phi_nodes(vm_state, incoming, is_osr);
   } else if (is_set(is_loop_header)) {
     if (!is_set(is_compiled)) {
-      return _jvm->update_phi_nodes(vm_state, incoming);
+      return _jvm->update_phi_nodes(vm_state, incoming, is_osr);
     }
     assert(_initial_jvm != nullptr, "loop header initial JeandleVMState is needed");
-    return _initial_jvm->update_phi_nodes(vm_state, incoming);
+    return _initial_jvm->update_phi_nodes(vm_state, incoming, is_osr);
   }
 
   // Bad bytecodes.
   return false;
 }
 
-void JeandleBasicBlock::initialize_VM_state_from(JeandleVMState* incoming_state, llvm::BasicBlock* incoming_block, MethodLivenessResult liveness) {
+void JeandleBasicBlock::initialize_VM_state_from(JeandleVMState* incoming_state, llvm::BasicBlock* incoming_block, MethodLivenessResult liveness, bool is_osr) {
   assert(_jvm == nullptr, "cannot initialize twice");
 
   llvm::IRBuilder<> ir_builder(_header_llvm_block);
@@ -341,7 +354,13 @@ void JeandleBasicBlock::initialize_VM_state_from(JeandleVMState* incoming_state,
   for (size_t i = 0; i < incoming_state->locks_size(); i++) {
     LockValue lock = incoming_state->lock_at(i);
     assert(!lock.is_null(), "null lock");
-    _jvm->push_lock(lock);
+    if (!is_osr) {
+      _jvm->push_lock(lock);
+    } else {
+      llvm::PHINode* phi_node = ir_builder.CreatePHI(lock.object().value()->getType(), 2);
+      phi_node->addIncoming(lock.object().value(), incoming_block);
+      _jvm->push_lock(LockValue(T_OBJECT, phi_node, lock.lock()));
+    }
   }
 
   for (size_t i = 0; i < incoming_state->locals_size(); i++) {
@@ -721,6 +740,8 @@ void JeandleAbstractInterpreter::initialize_VM_state_from_osr_buffer(JeandleVMSt
                                                               llvm::jeandle::AddrSpace::CHeapAddrSpace,
                                                               nullptr,
                                                               "BasicLock");
+      push_allocated_basic_lock(lock);
+      assert(allocated_basic_lock_at(initial_jvm->locks_size()) == lock, "unbalanced monitors");
       store_to_address(lock, displaced_hdr, T_ADDRESS, false);
 
       if (index == 0 && _method->is_synchronized()) {
@@ -841,6 +862,8 @@ void JeandleAbstractInterpreter::interpret() {
       llvm::IRBuilder entry_block_ir_builder(_block_builder->entry_block()->header_llvm_block()->getTerminator());
       llvm::Value* lock = entry_block_ir_builder.CreateAlloca(_ir_builder.getIntPtrTy(_module.getDataLayout()),
                                                               llvm::jeandle::AddrSpace::CHeapAddrSpace, nullptr, "BasicLock");
+      push_allocated_basic_lock(lock);
+      assert(allocated_basic_lock_at(_jvm->locks_size()) == lock, "unbalanced monitors");
       // record object and lock for synchronized method
       TypedValue obj(BasicType::T_OBJECT, lock_obj);
       _sync_lock.set_object(obj);
@@ -870,7 +893,7 @@ void JeandleAbstractInterpreter::interpret() {
 
   bool merged = current->merge_VM_state_from(_block_builder->entry_block()->VM_state(),
                                              _block_builder->entry_block()->tail_llvm_block(),
-                                             _method);
+                                             _method, is_osr());
   JEANDLE_ERROR_ASSERT_AND_RET_VOID_ON_FAIL(merged, "failed to create initial VM state");
 
   // Iterate all blocks
@@ -1232,7 +1255,7 @@ void JeandleAbstractInterpreter::interpret_block(JeandleBasicBlock* block) {
   // Add all successors to work list and set up their JeandleVMStates.
   for (JeandleBasicBlock* suc : block->successors()) {
     // Don't update handlers' VM state here. They are updated by exception throwers.
-    if (!suc->is_exception_handler() && !suc->merge_VM_state_from(block->VM_state(), block->tail_llvm_block(), _method)) {
+    if (!suc->is_exception_handler() && !suc->merge_VM_state_from(block->VM_state(), block->tail_llvm_block(), _method, is_osr())) {
       JEANDLE_ERROR_ASSERT_AND_RET_VOID_ON_FAIL(false, "failed to merge VM state into successor block");
     }
 
@@ -2545,7 +2568,7 @@ void JeandleAbstractInterpreter::dispatch_exception_to_handler(llvm::Value* exce
     if (handler->is_catch_all()) {
       bool merged = handler_block->merge_VM_state_from(_jvm->copy_for_exception_handler(exception_oop),
                                                        _ir_builder.GetInsertBlock(),
-                                                       _method);
+                                                       _method, is_osr());
       JEANDLE_ERROR_ASSERT_AND_RET_VOID_ON_FAIL(merged, "failed to update handler's VM state");
       _ir_builder.CreateBr(handler_block->header_llvm_block());
       return;
@@ -2586,7 +2609,7 @@ void JeandleAbstractInterpreter::dispatch_exception_to_handler(llvm::Value* exce
 
     bool merged = handler_block->merge_VM_state_from(_jvm->copy_for_exception_handler(exception_oop),
                                                      _ir_builder.GetInsertBlock(),
-                                                     _method);
+                                                     _method, is_osr());
     JEANDLE_ERROR_ASSERT_AND_RET_VOID_ON_FAIL(merged, "failed to update handler's VM state");
     llvm::Value* cond = _ir_builder.CreateICmpEQ(match, _ir_builder.getInt32(1));
     _ir_builder.CreateCondBr(cond, match_dest, next_dest);
@@ -2750,10 +2773,20 @@ void JeandleAbstractInterpreter::shared_lock(LockValue lock) {
   assert(_block != nullptr, "sanity");
 
   if (lock.lock() == nullptr) {
-    // Allocate a BasicLock on stack.
-    // Alloca insts should be in the entry block to be 'StaticAlloca'. Then they could be folded into prologue code.
-    llvm::IRBuilder entry_block_ir_builder(_block_builder->entry_block()->header_llvm_block()->getTerminator());
-    llvm::Value* basic_lock = entry_block_ir_builder.CreateAlloca(_ir_builder.getIntPtrTy(_module.getDataLayout()), llvm::jeandle::AddrSpace::CHeapAddrSpace, nullptr, "BasicLock");
+    llvm::Value* basic_lock = nullptr;
+    int monitor_nest_level = _jvm->locks_size();
+    if (need_alloc_for(monitor_nest_level)) {
+      // Allocate a BasicLock on stack.
+      // Alloca insts should be in the entry block to be 'StaticAlloca'. Then they could be folded into prologue code.
+      llvm::IRBuilder entry_block_ir_builder(_block_builder->entry_block()->header_llvm_block()->getTerminator());
+      basic_lock = entry_block_ir_builder.CreateAlloca(_ir_builder.getIntPtrTy(_module.getDataLayout()),
+                                                       llvm::jeandle::AddrSpace::CHeapAddrSpace, nullptr, "BasicLock");
+      // Save the basic_lock for later reuse.
+      push_allocated_basic_lock(basic_lock);
+      assert(allocated_basic_lock_at(monitor_nest_level) == basic_lock, "unbalanced monitors");
+    } else {
+      basic_lock = allocated_basic_lock_at(monitor_nest_level);
+    }
     lock.set_lock(basic_lock);
   }
 
@@ -2838,7 +2871,8 @@ void JeandleAbstractInterpreter::monitorexit() {
   llvm::Value* obj = _jvm->apop();
 
   LockValue lock = _jvm->pop_lock();
-  // assert(obj == lock.object().value(), "monitorexit with wrong obj");
+  assert(allocated_basic_lock_at(_jvm->locks_size()) == lock.lock(), "unbalanced monitors");
+
   shared_unlock(lock);
 }
 

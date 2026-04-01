@@ -53,7 +53,7 @@ class JeandleVMState : public JeandleCompilationResourceObj {
   bool match(JeandleVMState* jvm);
 
   // Add incoming values for phi nodes. Return false if type check fails.
-  bool update_phi_nodes(JeandleVMState* income_jvm, llvm::BasicBlock* income_block);
+  bool update_phi_nodes(JeandleVMState* income_jvm, llvm::BasicBlock* income_block, bool is_osr);
 
   // Stack operations:
 
@@ -144,7 +144,7 @@ class JeandleBasicBlock : public JeandleCompilationResourceObj {
   JeandleBasicBlock(int block_id, int start_bci, int limit_bci, llvm::BasicBlock* llvm_block, ciBlock* ci_block);
 
   // Update the JeandleVMState according to the predecessor block's stack values and locals.
-  bool merge_VM_state_from(JeandleVMState* vm_state, llvm::BasicBlock* incoming, ciMethod* method);
+  bool merge_VM_state_from(JeandleVMState* vm_state, llvm::BasicBlock* incoming, ciMethod* method, bool is_osr);
 
   enum Flag {
     no_flag                       = 0,
@@ -213,7 +213,7 @@ class JeandleBasicBlock : public JeandleCompilationResourceObj {
   // phi nodes. Use this variable to find the right phi nodes to update.
   JeandleVMState* _initial_jvm;
 
-  void initialize_VM_state_from(JeandleVMState* incoming_state, llvm::BasicBlock* incoming_block, MethodLivenessResult liveness);
+  void initialize_VM_state_from(JeandleVMState* incoming_state, llvm::BasicBlock* incoming_block, MethodLivenessResult liveness, bool is_osr);
   void initialize_VM_state_from_osr_buffer(JeandleVMState* initial_jvm, llvm::Value* osr_buffer);
 };
 
@@ -292,6 +292,23 @@ class JeandleAbstractInterpreter : public StackObj {
 
   // Object & Lock for synchronized method
   LockValue _sync_lock;
+
+  // Reuse stack allocation for monitor
+  llvm::SmallVector<llvm::Value*> _allocated_basic_lock;
+
+  bool need_alloc_for(int monitor_nest_level) {
+    return (int)_allocated_basic_lock.size() <= monitor_nest_level;
+  };
+
+  void push_allocated_basic_lock(llvm::Value* basic_lock) {
+    assert(basic_lock != nullptr, "basic_lock should not be nullptr");
+    return _allocated_basic_lock.push_back(basic_lock);
+  };
+
+  llvm::Value* allocated_basic_lock_at(int index) {
+    assert(index >= 0 && index < (int)_allocated_basic_lock.size(), "index out of bound");
+    return _allocated_basic_lock[index];
+  };
 
   bool is_osr() { return _entry_bci != InvocationEntryBci; }
 

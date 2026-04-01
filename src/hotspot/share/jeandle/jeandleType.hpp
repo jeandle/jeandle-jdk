@@ -121,7 +121,7 @@ public:
   LockValue() : _object(TypedValue()), _basic_lock(nullptr) { }
 
   bool equals(const LockValue& rhs) {
-    return _object.value() == rhs._object.value() && _basic_lock == rhs._basic_lock;
+    return _object.value()->getType() == rhs._object.value()->getType() && _basic_lock == rhs._basic_lock;
   }
 
   TypedValue    object() const { return _object; }
