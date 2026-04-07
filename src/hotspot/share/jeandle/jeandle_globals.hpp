@@ -53,6 +53,18 @@
   product(bool, JeandleUseHotspotIntrinsics, false,                         \
           "Prefer Hotspot intrinsics over LLVM intrinsics")                 \
                                                                             \
+  product(bool, JeandleInline, false,                                       \
+          "Enable method inlining in Jeandle compiler")                     \
+                                                                            \
+  product(intx, JeandleMaxInlineDepth, 3,                                   \
+          "Maximum inline depth for Jeandle compiler")                      \
+                                                                            \
+  product(intx, JeandleMaxInlineSize, 100,                                  \
+          "Maximum bytecode size for inlining in Jeandle compiler")         \
+                                                                            \
+  develop(bool, JeandleTraceInlining, false,                                \
+          "Trace inlining decisions in Jeandle compiler")                   \
+                                                                            \
 
 // end of JEANDLE_FLAGS
 

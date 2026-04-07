@@ -30,6 +30,7 @@
 #include "llvm/IR/LLVMContext.h"
 
 #include "jeandle/jeandleCompilation.hpp"
+#include "jeandle/jeandleInlinePolicy.hpp"
 #include "jeandle/jeandleType.hpp"
 
 #include "jeandle/__hotspotHeadersBegin__.hpp"
@@ -256,15 +257,40 @@ class BasicBlockBuilder : public JeandleCompilationResourceObj {
   void mark_unloaded_catch_klass();
 };
 
+// Holds the return target for inlined methods.
+// When _return_target is non-null on JeandleAbstractInterpreter,
+// return_current() branches to the merge block instead of generating a ret instruction.
+struct JeandleInlineReturnTarget : public JeandleCompilationResourceObj {
+  llvm::BasicBlock* _merge_block;
+  llvm::PHINode*    _return_phi;  // nullptr for void methods
+
+  JeandleInlineReturnTarget(llvm::BasicBlock* merge, llvm::PHINode* phi)
+    : _merge_block(merge), _return_phi(phi) {}
+};
+
+class JeandleInlineAdapter;
+
 // Convert java bytecodes to llvm ir.
 class JeandleAbstractInterpreter : public StackObj {
+  friend class JeandleInlineAdapter;
  public:
+  // Top-level constructor: used when compiling a root method.
   JeandleAbstractInterpreter(ciMethod* method,
                              int entry_bci,
                              llvm::Module& target_module,
                              JeandleCompiledCode& code);
 
  private:
+  // Internal constructor used by JeandleInlineAdapter.
+  // Does NOT call interpret() — the adapter handles lifecycle.
+  JeandleAbstractInterpreter(ciMethod* callee,
+                             llvm::Module& target_module,
+                             JeandleCompiledCode& code,
+                             llvm::Function* caller_func,
+                             llvm::LLVMContext* context,
+                             JeandleInlineReturnTarget* return_target,
+                             const JeandleInlinePolicy& inline_policy);
+
   ciMethod* _method;
   llvm::Function* _llvm_func;
   int _entry_bci;
@@ -288,6 +314,10 @@ class JeandleAbstractInterpreter : public StackObj {
   // Object & Lock for synchronized method
   LockValue _sync_lock;
 
+  // Inlining support:
+  JeandleInlinePolicy _inline_policy;
+  JeandleInlineReturnTarget* _return_target; // nullptr for top-level, non-null for inlined methods
+
   void initialize_VM_state();
   llvm::Value* ensure_orig_pc_slot();
   void interpret();
@@ -309,6 +339,7 @@ class JeandleAbstractInterpreter : public StackObj {
   void table_switch();
   void invoke();
   bool inline_intrinsic(const ciMethod* target);
+  bool inline_method(ciMethod* callee, int bci);
   void stack_op(Bytecodes::Code code);
   void shift_op(BasicType type, Bytecodes::Code code);
   void checkcast();
@@ -409,6 +440,38 @@ class JeandleAbstractInterpreter : public StackObj {
   void clinit_barrier(ciInstanceKlass* ik, ciMethod* context);
   void guard_klass_being_initialized(llvm::Value* klass);
   void guard_init_thread(llvm::Value* klass);
+};
+
+// Adapter that handles all glue logic for inlining a callee into
+// the caller's LLVM Function. Inspired by C2's ParseGenerator.
+class JeandleInlineAdapter : public StackObj {
+ public:
+  // Main entry: inline callee into caller's Function.
+  // On success, caller_ir_builder is positioned at return merge block,
+  // and caller_jvm has the return value pushed (if non-void).
+  static bool inline_into(ciMethod* callee,
+                          llvm::Module& module,
+                          JeandleCompiledCode& code,
+                          llvm::Function* caller_func,
+                          llvm::IRBuilder<>& caller_ir_builder,
+                          JeandleVMState* caller_jvm,
+                          JeandleBasicBlock* caller_block,
+                          const JeandleInlinePolicy& child_policy);
+
+ private:
+  static JeandleVMState* transfer_arguments(ciMethod* callee,
+                                            JeandleVMState* caller_jvm,
+                                            llvm::LLVMContext* context);
+
+  static JeandleInlineReturnTarget* create_return_target(ciMethod* callee,
+                                                         llvm::Function* func,
+                                                         llvm::LLVMContext* context);
+
+  static void patch_entry_block(BasicBlockBuilder* block_builder);
+
+  static void push_return_value(ciMethod* callee,
+                                JeandleInlineReturnTarget* target,
+                                JeandleVMState* caller_jvm);
 };
 
 #endif // SHARE_JEANDLE_ABSTRACT_INTERPRETER_HPP

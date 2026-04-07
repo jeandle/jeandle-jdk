@@ -25,6 +25,7 @@
 #include "llvm/IR/Jeandle/GCStrategy.h"
 #include "llvm/IR/Jeandle/Metadata.h"
 
+#include <algorithm>
 
 #include "jeandle/jeandleAbstractInterpreter.hpp"
 #include "jeandle/jeandleCompiledCall.hpp"
@@ -638,9 +639,170 @@ JeandleAbstractInterpreter::JeandleAbstractInterpreter(ciMethod* method,
                                                        _jvm(nullptr),
                                                        _work_list(),
                                                        _sync_lock(LockValue()),
+                                                       _inline_policy(method),
+                                                       _return_target(nullptr),
                                                        _oop_idx(0) {
   // Fill basic blocks with LLVM IR.
   interpret();
+}
+
+// Internal constructor used by JeandleInlineAdapter.
+// Does NOT call interpret() — lifecycle managed by the adapter.
+JeandleAbstractInterpreter::JeandleAbstractInterpreter(ciMethod* callee,
+                                                       llvm::Module& target_module,
+                                                       JeandleCompiledCode& code,
+                                                       llvm::Function* caller_func,
+                                                       llvm::LLVMContext* context,
+                                                       JeandleInlineReturnTarget* return_target,
+                                                       const JeandleInlinePolicy& inline_policy) :
+                                                       _method(callee),
+                                                       _llvm_func(caller_func),
+                                                       _entry_bci(0),
+                                                       _context(context),
+                                                       _bytecodes(callee),
+                                                       _module(target_module),
+                                                       _compiled_code(code),
+                                                       _block_builder(new BasicBlockBuilder(callee, _context, _llvm_func)),
+                                                       _ir_builder(*_context),
+                                                       _oops(),
+                                                       _block(nullptr),
+                                                       _jvm(nullptr),
+                                                       _work_list(),
+                                                       _sync_lock(LockValue()),
+                                                       _inline_policy(inline_policy),
+                                                       _return_target(return_target),
+                                                       _oop_idx(0) {
+  // Intentionally does NOT call interpret().
+  // The caller (JeandleInlineAdapter) is responsible for:
+  //   1. Setting up VM state on the entry block
+  //   2. Positioning _ir_builder
+  //   3. Calling interpret()
+}
+
+//----------------------------------------------------------------------
+// JeandleInlineAdapter — handles all glue logic for method inlining
+//----------------------------------------------------------------------
+
+JeandleInlineReturnTarget* JeandleInlineAdapter::create_return_target(ciMethod* callee,
+                                                                      llvm::Function* func,
+                                                                      llvm::LLVMContext* context) {
+  // Build a name prefix for inlined blocks to avoid collisions.
+  std::string class_name = std::string(callee->holder()->name()->as_utf8());
+  std::replace(class_name.begin(), class_name.end(), '/', '_');
+  std::string prefix = std::string("inlined_") + class_name + "_" + callee->name()->as_utf8() + "_";
+
+  // Create return merge block in the caller's function.
+  llvm::BasicBlock* merge_block = llvm::BasicBlock::Create(*context, prefix + "return_merge", func);
+
+  // Create PHI node for return value if callee returns non-void.
+  llvm::PHINode* return_phi = nullptr;
+  BasicType return_type = callee->return_type()->basic_type();
+  if (return_type != BasicType::T_VOID) {
+    llvm::IRBuilder<> merge_builder(merge_block);
+    return_phi = merge_builder.CreatePHI(JeandleType::java2llvm(return_type, *context), 2,
+                                         prefix + "return_val");
+  }
+
+  return new JeandleInlineReturnTarget(merge_block, return_phi);
+}
+
+JeandleVMState* JeandleInlineAdapter::transfer_arguments(ciMethod* callee,
+                                                         JeandleVMState* caller_jvm,
+                                                         llvm::LLVMContext* context) {
+  // Initialize callee's locals from caller's operand stack.
+  // The caller has pushed args in order: [arg0, arg1, ..., argN] (bottom to top).
+  // We peek them by depth and store into callee's locals.
+  JeandleVMState* callee_jvm = new JeandleVMState(callee->max_stack(), callee->max_locals(), context);
+  ciSignature* sig = callee->signature();
+  int locals_idx = 0;
+
+  // For non-static methods, first local is the receiver.
+  if (!callee->is_static()) {
+    callee_jvm->store(BasicType::T_OBJECT, 0, caller_jvm->raw_peek(callee->arg_size() - 1).value());
+    locals_idx = 1;
+  }
+
+  // Store the remaining arguments into callee's locals.
+  for (int i = 0; i < sig->count(); i++) {
+    ciType* type = sig->type_at(i);
+    BasicType arg_type = type->basic_type();
+    int stack_depth = callee->arg_size() - locals_idx - 1;
+    callee_jvm->store(arg_type, locals_idx, caller_jvm->raw_peek(stack_depth).value());
+    locals_idx += type->size();
+  }
+
+  // Pop all arguments from the caller's stack.
+  for (int i = 0; i < callee->arg_size(); i++) {
+    caller_jvm->raw_pop();
+  }
+
+  return callee_jvm;
+}
+
+void JeandleInlineAdapter::patch_entry_block(BasicBlockBuilder* block_builder) {
+  // The callee's BasicBlockBuilder creates an LLVM entry block in the caller's Function,
+  // but for inlined methods it's only used as a VM state holder — no code branches to it.
+  // Add an unreachable terminator so LLVM module verification passes.
+  llvm::BasicBlock* callee_entry = block_builder->entry_block()->header_llvm_block();
+  if (callee_entry->getTerminator() == nullptr) {
+    llvm::IRBuilder<> entry_builder(callee_entry);
+    entry_builder.CreateUnreachable();
+  }
+}
+
+void JeandleInlineAdapter::push_return_value(ciMethod* callee,
+                                             JeandleInlineReturnTarget* target,
+                                             JeandleVMState* caller_jvm) {
+  // Push return value to caller's operand stack if non-void.
+  BasicType return_type = callee->return_type()->basic_type();
+  if (return_type != BasicType::T_VOID && target->_return_phi != nullptr) {
+    // Only push if the PHI has incoming values (i.e., callee actually returned).
+    if (target->_return_phi->getNumIncomingValues() > 0) {
+      caller_jvm->push(return_type, target->_return_phi);
+    }
+  }
+}
+
+bool JeandleInlineAdapter::inline_into(ciMethod* callee,
+                                       llvm::Module& module,
+                                       JeandleCompiledCode& code,
+                                       llvm::Function* caller_func,
+                                       llvm::IRBuilder<>& caller_ir_builder,
+                                       JeandleVMState* caller_jvm,
+                                       JeandleBasicBlock* caller_block,
+                                       const JeandleInlinePolicy& child_policy) {
+  llvm::LLVMContext* context = &module.getContext();
+
+  // 1. Create return merge block + PHI.
+  JeandleInlineReturnTarget* return_target = create_return_target(callee, caller_func, context);
+
+  // 2. Transfer arguments: caller stack → callee locals.
+  JeandleVMState* callee_jvm = transfer_arguments(callee, caller_jvm, context);
+
+  // 3. Create the interpreter instance (internal ctor, does NOT call interpret()).
+  JeandleAbstractInterpreter interp(callee, module, code,
+                                    caller_func, context,
+                                    return_target, child_policy);
+
+  // 4. Set callee's initial VM state on the entry block.
+  interp._block_builder->entry_block()->set_VM_state(callee_jvm);
+
+  // 5. Position the interpreter's IR builder at the caller's current insertion point.
+  interp._ir_builder.SetInsertPoint(caller_ir_builder.GetInsertBlock());
+
+  // 6. Run the interpreter — callee's bytecodes generate IR into caller's Function.
+  interp.interpret();
+
+  // 7. Patch the callee's orphan LLVM entry block with unreachable.
+  patch_entry_block(interp._block_builder);
+
+  // 8. Position caller's IR builder at the merge block.
+  caller_ir_builder.SetInsertPoint(return_target->_merge_block);
+
+  // 9. Push return value to caller's operand stack.
+  push_return_value(callee, return_target, caller_jvm);
+
+  return true;
 }
 
 void JeandleAbstractInterpreter::initialize_VM_state() {
@@ -672,64 +834,76 @@ void JeandleAbstractInterpreter::interpret() {
   // Prepare work list. Push the first block.
   add_to_work_list(current);
 
-  initialize_VM_state();
+  if (_return_target == nullptr) {
+    // For top-level compilation: initialize VM state from function arguments,
+    // handle synchronized methods and class initialization barriers.
+    initialize_VM_state();
 
-  if (_method && _method->is_synchronized()) {
-    JeandleCompilation::current()->set_has_monitors(true);
-    _jvm = _block_builder->entry_block()->VM_state();
-    _block = _block_builder->entry_block();
+    if (_method && _method->is_synchronized()) {
+      JeandleCompilation::current()->set_has_monitors(true);
+      _jvm = _block_builder->entry_block()->VM_state();
+      _block = _block_builder->entry_block();
 
-    // Strictly reserve 'entry' for allocas to ensure static stack allocation.
-    // This prevents dynamic RSP adjustments and ensures valid StackMap generation for GC.
-    llvm::BasicBlock* sync_method_lock = llvm::BasicBlock::Create(*_context, "sync_method_lock", _llvm_func);
-    _ir_builder.CreateBr(sync_method_lock);
-    _ir_builder.SetInsertPoint(sync_method_lock);
-    _block->set_tail_llvm_block(sync_method_lock);
+      // Strictly reserve 'entry' for allocas to ensure static stack allocation.
+      // This prevents dynamic RSP adjustments and ensures valid StackMap generation for GC.
+      llvm::BasicBlock* sync_method_lock = llvm::BasicBlock::Create(*_context, "sync_method_lock", _llvm_func);
+      _ir_builder.CreateBr(sync_method_lock);
+      _ir_builder.SetInsertPoint(sync_method_lock);
+      _block->set_tail_llvm_block(sync_method_lock);
 
-    // Setup Object Pointer
-    llvm::Value* lock_obj = nullptr;
-    if (_method->is_static()) {
-      llvm::Value* oop_handle = find_or_insert_oop(_method->holder()->java_mirror());
-      lock_obj = _ir_builder.CreateLoad(JeandleType::java2llvm(BasicType::T_OBJECT, *_context), oop_handle);
-    } else {
-      // Lock the "this" pointer, which is the first parameter
-      lock_obj = _jvm->locals_at(0);
+      // Setup Object Pointer
+      llvm::Value* lock_obj = nullptr;
+      if (_method->is_static()) {
+        llvm::Value* oop_handle = find_or_insert_oop(_method->holder()->java_mirror());
+        lock_obj = _ir_builder.CreateLoad(JeandleType::java2llvm(BasicType::T_OBJECT, *_context), oop_handle);
+      } else {
+        // Lock the "this" pointer, which is the first parameter
+        lock_obj = _jvm->locals_at(0);
+      }
+
+      // Allocate a BasicLock on stack.
+      // Alloca insts should be in the entry block to be 'StaticAlloca'. Then they could be folded into prologue code.
+      llvm::IRBuilder entry_block_ir_builder(_block_builder->entry_block()->header_llvm_block()->getTerminator());
+      llvm::Value* lock = entry_block_ir_builder.CreateAlloca(_ir_builder.getIntPtrTy(_module.getDataLayout()),
+                                                              llvm::jeandle::AddrSpace::CHeapAddrSpace, nullptr, "BasicLock");
+      // record object and lock for synchronized method
+      TypedValue obj(BasicType::T_OBJECT, lock_obj);
+      _sync_lock.set_object(obj);
+      _sync_lock.set_lock(lock);
+
+      shared_lock(LockValue(obj, lock));
     }
 
-    // Allocate a BasicLock on stack.
-    // Alloca insts should be in the entry block to be 'StaticAlloca'. Then they could be folded into prologue code.
-    llvm::IRBuilder entry_block_ir_builder(_block_builder->entry_block()->header_llvm_block()->getTerminator());
-    llvm::Value* lock = entry_block_ir_builder.CreateAlloca(_ir_builder.getIntPtrTy(_module.getDataLayout()),
-                                                            llvm::jeandle::AddrSpace::CHeapAddrSpace, nullptr, "BasicLock");
-    // record object and lock for synchronized method
-    TypedValue obj(BasicType::T_OBJECT, lock_obj);
-    _sync_lock.set_object(obj);
-    _sync_lock.set_lock(lock);
+    if (_compiled_code.needs_clinit_barrier_on_entry()) {
+      assert(_method != nullptr, "only for Java method compilations");
+      assert(!_method->holder()->is_not_initialized(), "initialization should have been started");
 
-    shared_lock(LockValue(obj, lock));
+      _jvm = _block_builder->entry_block()->VM_state();
+      _block = _block_builder->entry_block();
+      _bytecodes.force_bci(0); // to get cur_bci for uncommon trap
+
+      Klass* klass = (Klass*)_method->holder()->constant_encoding();
+      llvm::PointerType* klass_type = llvm::PointerType::get(*_context, llvm::jeandle::AddrSpace::CHeapAddrSpace);
+      llvm::Value* klass_addr = _ir_builder.getInt64((intptr_t)klass);
+      llvm::Value* klass_ptr = _ir_builder.CreateIntToPtr(klass_addr, klass_type);
+      guard_klass_being_initialized(klass_ptr);
+    }
+
+    // Set the insertion point to the entry block's tail before creating the branch.
+    _ir_builder.SetInsertPoint(_block_builder->entry_block()->tail_llvm_block());
   }
+  // For inlined methods: VM state was already set up by the inline constructor,
+  // and the IR builder is positioned at the caller's current insertion point.
 
-  if (_compiled_code.needs_clinit_barrier_on_entry()) {
-    assert(_method != nullptr, "only for Java method compilations");
-    assert(!_method->holder()->is_not_initialized(), "initialization should have been started");
+  // Save the current insertion block before creating the branch — this is the
+  // incoming block for the VM state merge (needed for PHI nodes).
+  llvm::BasicBlock* incoming_block = _ir_builder.GetInsertBlock();
 
-    _jvm = _block_builder->entry_block()->VM_state();
-    _block = _block_builder->entry_block();
-    _bytecodes.force_bci(0); // to get cur_bci for uncommon trap
-
-    Klass* klass = (Klass*)_method->holder()->constant_encoding();
-    llvm::PointerType* klass_type = llvm::PointerType::get(*_context, llvm::jeandle::AddrSpace::CHeapAddrSpace);
-    llvm::Value* klass_addr = _ir_builder.getInt64((intptr_t)klass);
-    llvm::Value* klass_ptr = _ir_builder.CreateIntToPtr(klass_addr, klass_type);
-    guard_klass_being_initialized(klass_ptr);
-  }
-
-  // Create branch from the entry block.
-  _ir_builder.SetInsertPoint(_block_builder->entry_block()->tail_llvm_block());
+  // Create branch to the first bytecode block.
   _ir_builder.CreateBr(current->header_llvm_block());
 
   bool merged = current->merge_VM_state_from(_block_builder->entry_block()->VM_state(),
-                                             _block_builder->entry_block()->tail_llvm_block(),
+                                             incoming_block,
                                              _method);
   JEANDLE_ERROR_ASSERT_AND_RET_VOID_ON_FAIL(merged, "failed to create initial VM state");
 
@@ -1118,6 +1292,9 @@ void JeandleAbstractInterpreter::interpret_block(JeandleBasicBlock* block) {
   }
 }
 
+// TODO(inline): When an inlined callee hits uncommon_trap, the deopt bundle
+// must encode the full virtual stack (caller + callee frames) so the runtime can
+// reconstruct all interpreter frames.
 void JeandleAbstractInterpreter::uncommon_trap(Deoptimization::DeoptReason reason, Deoptimization::DeoptAction action, llvm::BasicBlock* insert_block) {
   auto saved_insert_block = _ir_builder.GetInsertBlock();
   auto saved_insert_point = _ir_builder.GetInsertPoint();
@@ -1406,6 +1583,11 @@ void JeandleAbstractInterpreter::invoke() {
     return;
   }
 
+  // Try ordinary method inlining.
+  if (inline_method(target, _bytecodes.cur_bci())) {
+    return;
+  }
+
   // Push appendix argument (MethodType, CallSite, etc.), if one.
   if (_bytecodes.has_appendix()) {
     assert(Bytecodes::has_optional_appendix(bc), "appendix only valid for invokedynamic or invokehandle");
@@ -1658,6 +1840,42 @@ bool JeandleAbstractInterpreter::inline_intrinsic(const ciMethod* target) {
       return false;
   }
   return true;
+}
+
+bool JeandleAbstractInterpreter::inline_method(ciMethod* callee, int bci) {
+  // Only inline statically-bound calls for now.
+  // invokeinterface targets are dispatched virtually at runtime, and
+  // invokedynamic targets may not represent the real callee.
+  Bytecodes::Code bc = _bytecodes.cur_bc();
+  if (bc != Bytecodes::_invokestatic &&
+      bc != Bytecodes::_invokespecial &&
+      !(bc == Bytecodes::_invokevirtual && callee->can_be_statically_bound())) {
+    return false;
+  }
+
+  // Ask the inline policy whether this callee should be inlined.
+  if (!_inline_policy.should_inline(callee, bci)) {
+    return false;
+  }
+
+  // Create a child policy for the next level of inlining.
+  JeandleInlinePolicy child = _inline_policy.child_policy(callee);
+
+  // Delegate to JeandleInlineAdapter for all glue logic:
+  // argument transfer, return merge block/PHI creation, callee interpretation,
+  // entry block patching, and return value pushing.
+  bool success = JeandleInlineAdapter::inline_into(
+      callee, _module, _compiled_code,
+      _llvm_func, _ir_builder, _jvm, _block, child);
+
+  if (success) {
+    // After inlining, the caller's IR builder insertion point has been
+    // updated to the return merge block by the adapter.
+    // Update the caller's tail block to reflect the new insertion point.
+    _block->set_tail_llvm_block(_ir_builder.GetInsertBlock());
+  }
+
+  return success;
 }
 
 // Generate IR for calling into llvm FunctionCallee, without exception handling.
@@ -2131,6 +2349,9 @@ void JeandleAbstractInterpreter::store_to_address(llvm::Value* addr, llvm::Value
   }
 }
 
+// TODO(inline): GC safepoint polls in inlined code carry a deopt bundle
+// that must describe the full caller+callee virtual stack, so that GC can properly
+// walk and relocate all oop references across the inlined frame boundary.
 void JeandleAbstractInterpreter::add_safepoint_poll() {
   call_java_op("jeandle.safepoint_poll", {}, {create_current_deopt_bundle()});
 }
@@ -2391,6 +2612,9 @@ JeandleAbstractInterpreter::DispatchedDest JeandleAbstractInterpreter::dispatch_
                           exception_oop_addr,
                           true /* is_volatile */);
 
+  // TODO(inline): When this method is an inlined callee, exception dispatch
+  // must search the callee's handler table first, then propagate to the caller's handlers
+  // if no match is found.
   dispatch_exception_to_handler(exception_oop);
   RETURN_ON_JEANDLE_ERROR(dispatched);
 
@@ -2830,6 +3054,17 @@ void JeandleAbstractInterpreter::call_register_finalizer() {
 }
 
 void JeandleAbstractInterpreter::return_current(llvm::Value* value) {
+  // For inlined methods: branch to the return merge block instead of generating ret.
+  // TODO(inline): When the inlined callee has multiple return paths, each
+  // adds an incoming edge to _return_phi.
+  if (_return_target != nullptr) {
+    if (value != nullptr && _return_target->_return_phi != nullptr) {
+      _return_target->_return_phi->addIncoming(value, _ir_builder.GetInsertBlock());
+    }
+    _ir_builder.CreateBr(_return_target->_merge_block);
+    return;
+  }
+
   if (RegisterFinalizersAtInit &&
       _method &&
       _method->intrinsic_id() == vmIntrinsics::_Object_init) {
