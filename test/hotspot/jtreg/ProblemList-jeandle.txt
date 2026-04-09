@@ -26,22 +26,6 @@
 #############################################################################
 
 ###
-# Deopt handler
-###
-# related issue: https://github.com/jeandle/jeandle-jdk/issues/322
-compiler/c2/Test6910605_1.java                                                                 linux-aarch64,linux-x64
-compiler/c2/Test6910605_2.java                                                                 linux-aarch64,linux-x64
-compiler/escapeAnalysis/Test6775880.java                                                       linux-aarch64,linux-x64
-compiler/interpreter/Test6833129.java                                                          linux-aarch64,linux-x64
-compiler/jsr292/NonInlinedCall/InvokeTest.java                                                 linux-aarch64,linux-x64
-compiler/profiling/spectrapredefineclass_classloaders/Launcher.java                            linux-aarch64,linux-x64
-compiler/uncommontrap/Test8009761.java                                                         linux-aarch64,linux-x64
-runtime/Thread/AsyncExceptionTest.java                                                         linux-aarch64,linux-x64
-
-# related issue: https://github.com/jeandle/jeandle-jdk/issues/329
-runtime/Thread/StopAtExit.java                                                                 linux-aarch64,linux-x64
-
-###
 # PGO - Lack of some profile-based optimization, which cannot trigger deoptimization
 ###
 # related issue: https://github.com/jeandle/jeandle-jdk/issues/343

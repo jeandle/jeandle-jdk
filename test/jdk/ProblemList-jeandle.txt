@@ -26,12 +26,6 @@
 #############################################################################
 
 ###
-# Deopt handler
-###
-# related issue: https://github.coms/jeandle/jeandle-jdk/issues/411
-java/foreign/TestHandshake.java                                            linux-aarch64,linux-x64
-
-###
 # Random failed in CI
 ###
 com/sun/crypto/provider/Cipher/AEAD/GCMShortBuffer.java                    linux-aarch64,linux-x64
