@@ -39,7 +39,6 @@ java/math/BigDecimal/StringConstructor.java                                linux
 ###
 jdk/jfr/event/gc/configuration/TestGCConfigurationEvent.java               linux-aarch64,linux-x64
 
-
 ###
 # timeout
 ###
