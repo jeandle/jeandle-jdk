@@ -1378,7 +1378,7 @@ void JeandleAbstractInterpreter::invoke() {
 
   llvm::Value* receiver_value = nullptr;
 
-  // If the receiver is null, do not torture the system by attempting to call through it.  
+  // If the receiver is null, do not torture the system by attempting to call through it.
   if (receiver) {
     int receiver_depth = target->arg_size() - 1; // Index of stack slots where receiver locates.
     receiver_value = _jvm->raw_peek(receiver_depth).value();
@@ -1835,7 +1835,7 @@ void JeandleAbstractInterpreter::checkcast() {
 
   _ir_builder.CreateCondBr(call, checkcast_pass, checkcast_fail);
 
-  // TODO: When too many traps occur, throw exception directly 
+  // TODO: When too many traps occur, throw exception directly
   // instead of deoptimizing, similar to GraphKit::builtin_throw.
   uncommon_trap(Deoptimization::Reason_class_check, Deoptimization::Action_maybe_recompile, checkcast_fail);
 
@@ -1845,7 +1845,6 @@ void JeandleAbstractInterpreter::checkcast() {
 
 void JeandleAbstractInterpreter::instanceof(int klass_index) {
   llvm::Value* obj = _jvm->raw_peek().value();
-  null_check(obj);
 
   bool will_link;
   ciKlass* ci_super_klass = _bytecodes.get_klass(will_link);
@@ -2029,6 +2028,23 @@ void JeandleAbstractInterpreter::do_get_xxx(ciField* field, bool is_static) {
 
   bool is_volatile = field->is_volatile();
   llvm::Value* value = load_from_address(addr, field->layout_type(), is_volatile);
+
+  // Attach java-klass metadata to loads of object/array fields.
+  // Skip interface types: the verifier does not enforce interface types,
+  // so a field declared as an interface could hold any Object at runtime.
+  if (field->type()->is_klass()) {
+    ciKlass* field_klass = field->type()->as_klass();
+    if (field_klass->is_loaded() && !field_klass->is_interface()) {
+      Klass* klass_enc = (Klass*)(field_klass->constant_encoding());
+      if (llvm::Instruction* load_inst = llvm::dyn_cast<llvm::Instruction>(value)) {
+        llvm::MDNode* klass_md = llvm::MDNode::get(*_context, {
+            llvm::ConstantAsMetadata::get(_ir_builder.getInt64((intptr_t)klass_enc))
+        });
+        load_inst->setMetadata(llvm::jeandle::Metadata::JavaKlass, klass_md);
+      }
+    }
+  }
+
   _jvm->push(field->type()->basic_type(), value);
 }
 
@@ -2355,7 +2371,17 @@ void JeandleAbstractInterpreter::do_new() {
   llvm::Value* klass_addr = _ir_builder.getInt64((int64_t)klass_enc);
   llvm::Value* klass_ptr = _ir_builder.CreateIntToPtr(klass_addr, klass_type);
 
-  _jvm->apush(call_java_op_ex("jeandle.new_instance", {klass_ptr, size_in_bytes}, {create_current_deopt_bundle()}));
+  llvm::InvokeInst* new_inst = llvm::cast<llvm::InvokeInst>(
+      call_java_op_ex("jeandle.new_instance", {klass_ptr, size_in_bytes}, {create_current_deopt_bundle()}));
+
+  // new always produces an exact type.
+  new_inst->addRetAttr(llvm::Attribute::get(*_context,
+      llvm::jeandle::Attribute::JavaKlass,
+      std::to_string((uintptr_t)klass_enc)));
+  new_inst->addRetAttr(llvm::Attribute::get(*_context,
+      llvm::jeandle::Attribute::JavaKlassExact));
+
+  _jvm->apush(new_inst);
 }
 
 JeandleAbstractInterpreter::DispatchedDest JeandleAbstractInterpreter::dispatch_exception_for_invoke() {
@@ -2460,8 +2486,8 @@ void JeandleAbstractInterpreter::dispatch_exception_to_handler(llvm::Value* exce
       }
 
       _bytecodes.force_bci(handler_bci);
-      match = create_call_ex(JeandleRuntimeRoutine::instanceof_unloaded_or_null_callee(_module), 
-                            {current_method_ptr, _ir_builder.getInt32(handler->catch_klass_index()), exception_klass, current_thread}, 
+      match = create_call_ex(JeandleRuntimeRoutine::instanceof_unloaded_or_null_callee(_module),
+                            {current_method_ptr, _ir_builder.getInt32(handler->catch_klass_index()), exception_klass, current_thread},
                             llvm::CallingConv::Hotspot_JIT);
       _bytecodes.force_bci(cur_bci);
     }
@@ -2544,7 +2570,7 @@ void JeandleAbstractInterpreter::do_unified_newarray(Klass* array_klass) {
   llvm::PointerType* klass_type = llvm::PointerType::get(*_context, llvm::jeandle::AddrSpace::CHeapAddrSpace);
   llvm::Value* array_klass_addr = _ir_builder.getInt64((intptr_t)array_klass);
   llvm::Value* array_klass_ptr =  _ir_builder.CreateIntToPtr(array_klass_addr, klass_type);
-  
+
   llvm::InvokeInst* result = call_java_op_ex("jeandle.newarray", {array_klass_ptr, length}, {create_current_deopt_bundle()});
   _jvm->apush(result);
 }
@@ -2804,27 +2830,27 @@ void JeandleAbstractInterpreter::call_register_finalizer() {
 
   // TODO: know statically that registration isn't required
 
-  // dynamic test for whether the instance needs finalization  
+  // dynamic test for whether the instance needs finalization
   llvm::Value* klass_offset = llvm::ConstantInt::get(_ir_builder.getInt32Ty(), (uint64_t)oopDesc::klass_offset_in_bytes());
   llvm::Value* klass_addr = _ir_builder.CreateInBoundsGEP(llvm::Type::getInt8Ty(*_context), receiver, klass_offset);
   llvm::Value* klass = _ir_builder.CreateLoad(_ir_builder.getPtrTy(), klass_addr);
-  
+
   llvm::Value* access_flags_offset = llvm::ConstantInt::get(_ir_builder.getInt32Ty(), (uint64_t)in_bytes(Klass::access_flags_offset()));
   llvm::Value* access_flags_addr = _ir_builder.CreateInBoundsGEP(llvm::Type::getInt8Ty(*_context), klass, access_flags_offset);
   llvm::Value* access_flags = _ir_builder.CreateLoad(_ir_builder.getInt32Ty(), access_flags_addr);
-  
+
   llvm::Value* mask = _ir_builder.CreateAnd(access_flags, llvm::ConstantInt::get(_ir_builder.getInt32Ty(), JVM_ACC_HAS_FINALIZER));
   llvm::Value* check = _ir_builder.CreateICmpNE(mask, llvm::ConstantInt::get(_ir_builder.getInt32Ty(), 0));
-  
+
   llvm::BasicBlock* register_block = llvm::BasicBlock::Create(*_context, "register_finalizer", _llvm_func);
-  llvm::BasicBlock* skip_block = llvm::BasicBlock::Create(*_context, "skip_register_finalizer", _llvm_func);  
+  llvm::BasicBlock* skip_block = llvm::BasicBlock::Create(*_context, "skip_register_finalizer", _llvm_func);
   _ir_builder.CreateCondBr(check, register_block, skip_block);
-  
+
   _ir_builder.SetInsertPoint(register_block);
   llvm::CallInst* current_thread = call_java_op("jeandle.current_thread", {});
   create_call(JeandleRuntimeRoutine::SharedRuntime_register_finalizer_callee(_module), {current_thread, receiver}, llvm::CallingConv::Hotspot_JIT);
   _ir_builder.CreateBr(skip_block);
-  
+
   _ir_builder.SetInsertPoint(skip_block);
   _block->set_tail_llvm_block(skip_block);
 }

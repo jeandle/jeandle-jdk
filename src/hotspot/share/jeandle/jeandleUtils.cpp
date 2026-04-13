@@ -21,11 +21,13 @@
 #include "jeandle/__llvmHeadersBegin__.hpp"
 #include "llvm/IR/Jeandle/Attributes.h"
 #include "llvm/IR/Jeandle/GCStrategy.h"
+#include "llvm/IR/Jeandle/Metadata.h"
 
 #include "jeandle/jeandleType.hpp"
 #include "jeandle/jeandleUtils.hpp"
 
 #include "jeandle/__hotspotHeadersBegin__.hpp"
+#include "ci/ciInstanceKlass.hpp"
 #include "compiler/abstractCompiler.hpp"
 #include "compiler/compilerThread.hpp"
 #include "runtime/thread.hpp"
@@ -52,6 +54,57 @@ llvm::Function* JeandleFuncSig::create_llvm_func(ciMethod* method, llvm::Module&
                                                 llvm::Function::ExternalLinkage,
                                                 method_name_with_signature(method),
                                                 target_module);
+
+  // Attach java-klass type attributes to parameters.
+  int arg_idx = 0;
+  if (!method->is_static()) {
+    ciInstanceKlass* holder = method->holder();
+    // Skip interface types: the verifier does not enforce interface types,
+    // so a parameter declared as an interface could hold any Object at runtime.
+    // This matches C2's ignore_interfaces behavior (see type.cpp TypePtr::interfaces).
+    if (holder->is_loaded() && !holder->is_interface()) {
+      Klass* holder_klass = (Klass*)(holder->constant_encoding());
+      func->addParamAttr(arg_idx, llvm::Attribute::get(context,
+          llvm::jeandle::Attribute::JavaKlass,
+          std::to_string((uintptr_t)holder_klass)));
+      if (holder->is_final()) {
+        func->addParamAttr(arg_idx, llvm::Attribute::get(context,
+            llvm::jeandle::Attribute::JavaKlassExact));
+      }
+    }
+    arg_idx++;
+  }
+
+  for (int i = 0; i < sig->count(); i++, arg_idx++) {
+    ciType* type = sig->type_at(i);
+    if (type->is_klass()) {
+      ciKlass* klass = type->as_klass();
+      // Skip interface types (see comment above for receiver).
+      if (klass->is_loaded() && !klass->is_interface()) {
+        Klass* klass_enc = (Klass*)(klass->constant_encoding());
+        func->addParamAttr(arg_idx, llvm::Attribute::get(context,
+            llvm::jeandle::Attribute::JavaKlass,
+            std::to_string((uintptr_t)klass_enc)));
+        if (klass->is_instance_klass() && klass->as_instance_klass()->is_final()) {
+          func->addParamAttr(arg_idx, llvm::Attribute::get(context,
+              llvm::jeandle::Attribute::JavaKlassExact));
+        }
+      }
+    }
+  }
+
+  // Attach java-klass type attribute to return value.
+  ciType* ret_type = sig->return_type();
+  if (ret_type->is_klass()) {
+    ciKlass* ret_klass = ret_type->as_klass();
+    // Skip interface types (see comment above for receiver).
+    if (ret_klass->is_loaded() && !ret_klass->is_interface()) {
+      Klass* ret_klass_enc = (Klass*)(ret_klass->constant_encoding());
+      func->addRetAttr(llvm::Attribute::get(context,
+          llvm::jeandle::Attribute::JavaKlass,
+          std::to_string((uintptr_t)ret_klass_enc)));
+    }
+  }
 
   setup_description(func);
 

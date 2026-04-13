@@ -173,7 +173,7 @@ JeandleCompilation::JeandleCompilation(llvm::TargetMachine* target_machine,
   }
 
   // Optimize.
-  llvm::jeandle::optimize(_llvm_module.get(), llvm::OptimizationLevel::O3);
+  llvm::jeandle::optimize(*_llvm_module, llvm::OptimizationLevel::O3);
 
   if (JeandleDumpRuntimeStubs) {
     dump_ir(true);
@@ -289,7 +289,7 @@ void JeandleCompilation::compile_java_method() {
   // Optimize.
   {
     JeandleTraceTime tt_optimize("Jeandle LLVM Optimize", llvm_optimizer_timer);
-    llvm::jeandle::optimize(_llvm_module.get(), llvm::OptimizationLevel::O3);
+    llvm::jeandle::optimize(*_llvm_module, llvm::OptimizationLevel::O3);
   }
 
   if (JeandleDumpIR) {
