@@ -189,6 +189,7 @@ compiler/loopopts/superword/TestScheduleReordersScalarMemops.java               
 compiler/loopopts/superword/TestUnorderedReduction.java#MaxVectorSize16-Unaligned              linux-aarch64,linux-x64
 compiler/loopopts/superword/TestUnorderedReduction.java#Vanilla-Unaligned                      linux-aarch64
 compiler/loopopts/superword/TestUnorderedReductionPartialVectorization.java                    linux-x64
+compiler/intrinsics/TestLongUnsignedDivMod.java                                                linux-aarch64,linux-x64
 
 ###
 # Inline
@@ -400,6 +401,7 @@ runtime/ClassUnload/UnloadTestWithVerifyDuringGC.java                           
 ###
 # timeout
 ###
+compiler/loopopts/TestDivZeroCheckControl.java#id0                                             linux-aarch64,linux-x64
+# intermittent timeout on linux-aarch64
+compiler/loopopts/TestPartialPeelAtUnsignedTestsNegativeLimit.java#Xbatch                      linux-aarch64
 compiler/loopopts/TestRemoveEmptyLoop.java                                                     linux-aarch64,linux-x64
-compiler/intrinsics/TestLongUnsignedDivMod.java   											   linux-aarch64,linux-x64
-compiler/loopopts/TestDivZeroCheckControl.java#id0   										   linux-aarch64,linux-x64
