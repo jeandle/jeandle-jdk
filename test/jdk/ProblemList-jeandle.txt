@@ -42,6 +42,3 @@ jdk/jfr/event/gc/configuration/TestGCConfigurationEvent.java               linux
 ###
 # timeout
 ###
-java/lang/Character/UnicodeCasingTest.java                                 linux-aarch64
-java/lang/String/UnicodeCasingTest.java                                    linux-aarch64
-java/util/BitSet/stream/BitSetStreamTest.java                              linux-x64
