@@ -34,6 +34,7 @@
 
 #include "jeandle/__hotspotHeadersBegin__.hpp"
 #include "ci/ciMethodBlocks.hpp"
+#include "ci/ciTypeFlow.hpp"
 #include "ci/compilerInterface.hpp"
 #include "memory/allocation.hpp"
 #include "memory/universe.hpp"
@@ -214,7 +215,6 @@ class JeandleBasicBlock : public JeandleCompilationResourceObj {
   JeandleVMState* _initial_jvm;
 
   void initialize_VM_state_from(JeandleVMState* incoming_state, llvm::BasicBlock* incoming_block, MethodLivenessResult liveness, bool is_osr);
-  void initialize_VM_state_from_osr_buffer(JeandleVMState* initial_jvm, llvm::Value* osr_buffer);
 };
 
 class BasicBlockBuilder : public JeandleCompilationResourceObj {
@@ -314,6 +314,9 @@ class JeandleAbstractInterpreter : public StackObj {
 
   void initialize_VM_state();
   void initialize_VM_state_from_osr_buffer(JeandleVMState* initial_jvm, llvm::Value* osr_buffer);
+  void check_interpreter_type(ciTypeFlow::Block* osr_entry_block,
+                              MethodLivenessResult* live_locals,
+                              const ResourceBitMap* live_oops);
   llvm::Value* ensure_orig_pc_slot();
   void interpret();
   void interpret_block(JeandleBasicBlock* block);

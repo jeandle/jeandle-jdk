@@ -191,6 +191,21 @@ check_subtype:
   ret i32 %is_subtype_ext
 }
 
+; Implementation of Java exact_instance_of operation.
+define hotspotcc i1 @jeandle.exact_instance_of(ptr addrspace(0) nocapture %klass, ptr addrspace(1) nocapture %oop) noinline "lower-phase"="0" {
+entry:
+  %is_null = icmp eq ptr addrspace(1) %oop, null
+  br i1 %is_null, label %return_true, label %check_same_klass
+
+return_true:
+  ret i1 true
+
+check_same_klass:
+  %oop_klass = call hotspotcc ptr addrspace(0) @jeandle.load_klass(ptr addrspace(1) %oop)
+  %is_same_klass = icmp eq ptr addrspace(0) %oop_klass, %klass
+  ret i1 %is_same_klass
+}
+
 ; Implementation of Java arraylength operation.
 define hotspotcc i32 @jeandle.arraylength(ptr addrspace(1) nocapture readonly %array_oop) noinline "lower-phase"="0"  {
 entry:

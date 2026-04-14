@@ -414,3 +414,18 @@ compiler/intrinsics/TestLongUnsignedDivMod.java                                 
 serviceability/dcmd/gc/FinalizerInfoTest.java                                                  linux-aarch64,linux-x64
 serviceability/sa/ClhsdbAttachDifferentJVMs.java                                               linux-aarch64
 serviceability/sa/ClhsdbThread.java                                                            linux-aarch64
+
+###
+# timeout due to unimplemented vm option `InlineUnsafeOps`
+###
+compiler/loopopts/superword/TestLargeScaleAndStride.java                                       linux-aarch64,linux-x64
+
+###
+# timeout due to missing safepoint
+###
+runtime/NMT/SummaryDiffThreadCount.java                                                        linux-aarch64,linux-x64
+
+###
+# fails dut to `Math.log` (issue #424)
+###
+compiler/interpreter/Test6539464.java                                                          linux-aarch64

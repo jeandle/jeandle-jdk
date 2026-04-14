@@ -767,6 +767,9 @@ void JeandleAbstractInterpreter::initialize_VM_state_from_osr_buffer(JeandleVMSt
     JEANDLE_REPORT_ERROR_AND_RET_VOID("OSR in empty or breakpointed method");
   }
 
+  // find all the locals that the interpreter thinks contain live oops
+  const ResourceBitMap live_oops = _method->live_local_oops_at_bci(_entry_bci);
+
   // Extract the needed locals from the interpreter frame.
   int locals_addr_offset = (max_locals - 1) * wordSize;
   bool skip_next_slot = false; // skip next slot for double word type.
@@ -788,8 +791,10 @@ void JeandleAbstractInterpreter::initialize_VM_state_from_osr_buffer(JeandleVMSt
       continue;
     }
 
+    assert(local_type != T_NARROWOOP, "sanity");
+
     // Special handling for null oop
-    if (local_type == (BasicType)ciTypeFlow::StateVector::T_NULL) {
+    if (local_type == (BasicType)ciTypeFlow::StateVector::T_NULL || (is_reference_type(local_type) && !live_oops.at(index))) {
       llvm::Value* null_oop = llvm::ConstantPointerNull::get(llvm::cast<llvm::PointerType>(JeandleType::java2llvm(BasicType::T_OBJECT, *_context)));
       initial_jvm->set_locals_at(index, TypedValue(BasicType::T_OBJECT, null_oop));
       continue;
@@ -812,14 +817,68 @@ void JeandleAbstractInterpreter::initialize_VM_state_from_osr_buffer(JeandleVMSt
 
   assert(!skip_next_slot, "broken double word");
 
-  // Release osr buffser
+  // Release osr buffer
   llvm::FunctionCallee OSR_migration_end_callee = JeandleRuntimeRoutine::SharedRuntime_OSR_migration_end_callee(_module);
   llvm::CallInst* call_OSR_migration_end = _ir_builder.CreateCall(OSR_migration_end_callee, {osr_buffer});
   call_OSR_migration_end->setCallingConv(llvm::CallingConv::C);
 
+  // Initilaize vm_state for incoming uncommon_trap
+  _jvm = initial_jvm;
+
   // Now that the interpreter state is loaded, make sure it will match
   // at execution time what the compiler is expecting now:
-  // TODO: Check oop type
+  check_interpreter_type(osr_entry_block, &live_locals, &live_oops);
+}
+
+void JeandleAbstractInterpreter::check_interpreter_type(ciTypeFlow::Block* osr_entry_block,
+                                                        MethodLivenessResult* live_locals,
+                                                        const ResourceBitMap* live_oops) {
+  // Initialize the active block pointer.
+  // Create an anonymous block as the starting point for OSR type checks.
+  llvm::BasicBlock* current_block = llvm::BasicBlock::Create(*_context, "", _llvm_func);
+  _ir_builder.CreateBr(current_block);
+  _ir_builder.SetInsertPoint(current_block);
+  _block_builder->entry_block()->set_tail_llvm_block(current_block);
+
+  llvm::BasicBlock* osr_entry_trap_block = nullptr;
+
+  for (int index = 0; index < (int)(_jvm->max_locals()); index++) {
+    BasicType local_type = osr_entry_block->local_type_at(index)->basic_type();
+
+    if (!live_locals->at(index) || !is_reference_type(local_type)) {
+      continue;
+    }
+
+    if (!live_oops->at(index)) {
+      continue;
+    }
+
+    if (osr_entry_trap_block == nullptr) {
+      osr_entry_trap_block = llvm::BasicBlock::Create(*_context, "osr_entry_trap_block", _llvm_func);
+      _bytecodes.force_bci(_entry_bci);
+      uncommon_trap(Deoptimization::Reason_constraint, Deoptimization::Action_reinterpret, osr_entry_trap_block);
+    }
+
+    // Set the name of current_block
+    current_block->setName("osr_entry_check_local_" + std::to_string(index));
+
+    // Create a block for the success path. 
+    llvm::BasicBlock* next_block = llvm::BasicBlock::Create(*_context, "", _llvm_func);
+
+    Klass* klass = (Klass*)(osr_entry_block->local_type_at(index)->constant_encoding());
+    llvm::Value* klass_value = _ir_builder.CreateIntToPtr(_ir_builder.getInt64((intptr_t)klass),
+                                                          llvm::PointerType::get(*_context, llvm::jeandle::AddrSpace::CHeapAddrSpace));
+
+    llvm::CallInst* is_same_klass = call_java_op("jeandle.exact_instance_of", {klass_value, _jvm->locals_at(index)});
+
+    _ir_builder.CreateCondBr(is_same_klass, next_block, osr_entry_trap_block);
+    _ir_builder.SetInsertPoint(next_block);
+    _block_builder->entry_block()->set_tail_llvm_block(next_block);
+
+    current_block = next_block;
+  }
+
+  current_block->setName("osr_entry_check_locals_done");
 }
 
 void JeandleAbstractInterpreter::interpret() {
@@ -828,7 +887,6 @@ void JeandleAbstractInterpreter::interpret() {
   if (!is_osr()) {
     current = bci2block()[0];
   } else {
-    // TODO: check sp
     current = bci2block()[_entry_bci];
     assert(current->is_set(JeandleBasicBlock::is_loop_header), "sanity");
   }
