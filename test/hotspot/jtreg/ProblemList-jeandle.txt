@@ -408,7 +408,8 @@ compiler/loopopts/TestRemoveEmptyLoop.java                                      
 ###
 # timeout due to unimplemented vm option `InlineUnsafeOps`
 ###
-compiler/loopopts/superword/TestLargeScaleAndStride.java                                       linux-aarch64,linux-x64
+compiler/loopopts/superword/TestLargeScaleAndStride.java#vanilla                               linux-aarch64,linux-x64
+compiler/loopopts/superword/TestLargeScaleAndStride.java#AlignVector                           linux-aarch64,linux-x64
 
 ###
 # timeout due to missing safepoint
