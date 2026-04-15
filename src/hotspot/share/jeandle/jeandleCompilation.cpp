@@ -221,7 +221,7 @@ void JeandleCompilation::install_code() {
   _env->register_method(_method,
                         _entry_bci,
                         _code.offsets(),
-                        0, // temporary value
+                        _code.orig_pc_offset_in_bytes(),
                         _code.code_buffer(),
                         _code.frame_size(),
                         _env->debug_info()->_oopmaps,

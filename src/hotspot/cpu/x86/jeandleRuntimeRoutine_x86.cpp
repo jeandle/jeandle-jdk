@@ -210,3 +210,7 @@ void JeandleRuntimeRoutine::generate_exception_handler() {
 
   _routine_entry[_exception_handler] = rs->entry_point();
 }
+
+void JeandleRuntimeRoutine::generate_deopt_blob() {
+  _routine_entry[_deopt_blob] = SharedRuntime::deopt_blob()->unpack();
+}

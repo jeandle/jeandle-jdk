@@ -202,7 +202,7 @@ void JeandleVMState::store(BasicType type, int index, llvm::Value* value) {
 
 llvm::SmallVector<llvm::Value*> JeandleVMState::deopt_args(llvm::IRBuilder<>& builder, int bci) {
   llvm::SmallVector<llvm::Value*> args;
-  // |--- bci ---|--- locals ---|--- stack ---|--- monitor ---|
+  // |--- bci ---|--- locals ---|--- stack ---|--- monitor ---|--- orig_pc ---|
   /* TODO: scalar */
   args.push_back(builder.getInt32(bci));
   for (size_t i = 0; i < _locals.size(); i++) {
@@ -254,6 +254,11 @@ llvm::SmallVector<llvm::Value*> JeandleVMState::deopt_args(llvm::IRBuilder<>& bu
     args.push_back(builder.getInt64(encode));
     args.push_back(obj.value());
     args.push_back(lock);
+  }
+  if (llvm::Value* orig_pc_slot = JeandleCompilation::current()->compiled_code()->orig_pc_slot()) {
+    uint64_t encode = DeoptValueEncoding(0, DeoptValueEncoding::OrigPcSlotType, T_ADDRESS).encode();
+    args.push_back(builder.getInt64(encode));
+    args.push_back(orig_pc_slot);
   }
   // update interpreter frame size for deopt
   JeandleCompilation::current()->compiled_code()->update_interpreter_frame_size_in_bytes(interpreter_frame_size_in_bytes());
@@ -720,6 +725,7 @@ void JeandleAbstractInterpreter::interpret() {
   }
 
   // Create branch from the entry block.
+  _ir_builder.SetInsertPoint(_block_builder->entry_block()->tail_llvm_block());
   _ir_builder.CreateBr(current->header_llvm_block());
 
   bool merged = current->merge_VM_state_from(_block_builder->entry_block()->VM_state(),
@@ -738,6 +744,22 @@ void JeandleAbstractInterpreter::interpret() {
   }
 
   _block_builder->remove_dead_blocks();
+}
+
+llvm::Value* JeandleAbstractInterpreter::ensure_orig_pc_slot() {
+  if (llvm::Value* slot = _compiled_code.orig_pc_slot()) {
+    return slot;
+  }
+
+  llvm::BasicBlock* entry_header = _block_builder->entry_block()->header_llvm_block();
+  llvm::Instruction* term = entry_header->getTerminator();
+  assert(term != nullptr, "OrigPcSlot should be allocated after the entry terminator exists");
+
+  llvm::IRBuilder<> entry_block_ir_builder(term);
+  llvm::Value* slot = entry_block_ir_builder.CreateAlloca(_ir_builder.getIntPtrTy(_module.getDataLayout()),
+                                                          llvm::jeandle::AddrSpace::CHeapAddrSpace, nullptr, "OrigPcSlot");
+  _compiled_code.set_orig_pc_slot(slot);
+  return slot;
 }
 
 void JeandleAbstractInterpreter::interpret_block(JeandleBasicBlock* block) {
@@ -1365,6 +1387,12 @@ void JeandleAbstractInterpreter::invoke() {
     null_check(receiver_value);
   }
 
+  bool is_method_handle_invoke = (target->is_method_handle_intrinsic() ||
+                                  target->is_compiled_lambda_form());
+  if (is_method_handle_invoke) {
+    _compiled_code.set_has_method_handle_invoke(true);
+  }
+
   // try inline callee as intrinsic
   if (target->is_loaded()
     && target->check_intrinsic_candidate()
@@ -1501,7 +1529,7 @@ void JeandleAbstractInterpreter::invoke() {
 
   // Record this call.
   uint32_t id = _compiled_code.next_statepoint_id();
-  _compiled_code.push_non_routine_call_site(new CallSiteInfo(call_type, dest, _bytecodes.cur_bci(), id));
+  _compiled_code.push_non_routine_call_site(new CallSiteInfo(call_type, dest, _bytecodes.cur_bci(), is_method_handle_invoke, id));
 
   // Every invoke instruction may throw exceptions, handle them here.
   DispatchedDest dispatched = dispatch_exception_for_invoke();
@@ -1925,6 +1953,11 @@ llvm::InvokeInst* JeandleAbstractInterpreter::call_java_op_ex(llvm::StringRef ja
   assert(java_op_func != nullptr, "invalid JavaOp");
   llvm::InvokeInst* invoke_inst = create_call_ex(java_op_func, args, llvm::CallingConv::Hotspot_JIT, deopt_bundle);
   return invoke_inst;
+}
+
+llvm::OperandBundleDef JeandleAbstractInterpreter::create_current_deopt_bundle() {
+  ensure_orig_pc_slot();
+  return llvm::OperandBundleDef("deopt", _jvm->deopt_args(_ir_builder, _bytecodes.cur_bci()));
 }
 
 llvm::Value* JeandleAbstractInterpreter::find_or_insert_oop(ciObject* oop) {

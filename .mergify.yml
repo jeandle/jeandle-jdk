@@ -8,8 +8,7 @@ merge_protections:
     if:
       - base = main
     success_conditions:
-      - "title ~=
-        ^(fix|feat|docs|style|refactor|enhance|test|build|ci|chore|revert):"
+      - "title ~= ^(fix|feat|docs|style|refactor|enhance|test|build|ci|chore|revert):"
   - name: Actions status check for AArch64
     if:
       - and:
@@ -58,3 +57,5 @@ commands_restrictions:
   unqueue:
     conditions:
       - sender-permission >= maintain
+merge_protections_settings:
+  reporting_method: check-runs

@@ -107,7 +107,7 @@ void JeandleCallReloc::process_stack_map() {
                            _call->bci(),
                            _stack_map->reexecute(),
                            false,
-                           false,
+                           _call->is_method_handle_invoke(),
                            false,
                            false,
                            false,

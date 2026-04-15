@@ -284,7 +284,8 @@
 
 #define ALL_JEANDLE_ASSEMBLY_ROUTINES(def) \
   def(exceptional_return)                  \
-  def(exception_handler)
+  def(exception_handler)                   \
+  def(deopt_blob)
 
 
 // JeandleRuntimeRoutine contains C/C++/Assembly routines and Hotspot routines that can be called from Jeandle compiled code.

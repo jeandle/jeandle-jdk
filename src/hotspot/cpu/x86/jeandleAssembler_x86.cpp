@@ -185,10 +185,44 @@ int JeandleAssembler::interior_entry_alignment() const {
 
 int JeandleAssembler::emit_exception_handler() {
   address base = __ start_a_stub(NativeJump::instruction_size);
-  JEANDLE_ERROR_ASSERT_AND_RET_ON_FAIL(base != nullptr, "exception handler stub overflow", 0);
+  if (base == nullptr) {
+    JEANDLE_REPORT_ERROR_AND_RET("exception handler stub overflow", 0);
+  }
   int offset = __ offset();
   __ jump(RuntimeAddress(JeandleRuntimeRoutine::get_routine_entry(JeandleRuntimeRoutine::_exception_handler)));
   assert(__ offset() - offset <= (int)NativeJump::instruction_size, "overflow");
+  __ end_a_stub();
+  return offset;
+}
+
+int JeandleAssembler::deopt_handler_size() {
+  return 17;
+}
+
+int JeandleAssembler::emit_deopt_handler() {
+  address base = __ start_a_stub(deopt_handler_size());
+  if (base == nullptr) {
+    JEANDLE_REPORT_ERROR_AND_RET("deopt handler stub overflow", 0);
+  }
+  int offset = __ offset();
+
+#ifdef _LP64
+  address the_pc = (address) __ pc();
+  Label next;
+  // push a "the_pc" on the stack without destroying any registers
+  // as they all may be live.
+
+  // push address of "next"
+  __ call(next, relocInfo::none); // reloc none is fine since it is a disp32
+  __ bind(next);
+  // adjust it so it matches "the_pc"
+  __ subptr(Address(rsp, 0), __ offset() - offset);
+#else
+  InternalAddress here(__ pc());
+  __ pushptr(here.addr(), noreg);
+#endif
+  __ jump(RuntimeAddress(JeandleRuntimeRoutine::get_routine_entry(JeandleRuntimeRoutine::_deopt_blob)));
+  assert(__ offset() - offset <= deopt_handler_size(), "deopt handler stub overflow");
   __ end_a_stub();
   return offset;
 }

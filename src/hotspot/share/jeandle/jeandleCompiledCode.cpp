@@ -131,7 +131,7 @@ void JeandleCompiledCode::finalize() {
   // TODO: How to figure out memory usage.
   _code_buffer.initialize(code_size + consts_size + 2048/* for prolog */,
                           sizeof(relocInfo) + relocInfo::length_limit,
-                          128,
+                          160,
                           _env->oop_recorder());
   if (_code_buffer.blob() == nullptr) {
     JEANDLE_REPORT_ERROR_AND_RET_VOID("CodeCache is full");
@@ -192,8 +192,14 @@ void JeandleCompiledCode::finalize() {
 
   build_implicit_exception_table();
 
-  // TODO: generate code for deopt handler.
-  _offsets.set_value(CodeOffsets::Deopt, masm->offset());
+  if (_method) {
+    _offsets.set_value(CodeOffsets::Deopt, assembler.emit_deopt_handler());
+    RETURN_VOID_ON_JEANDLE_ERROR();
+    if (_has_method_handle_invoke) {
+      _offsets.set_value(CodeOffsets::DeoptMH, assembler.emit_deopt_handler());
+      RETURN_VOID_ON_JEANDLE_ERROR();
+    }
+  }
 }
 
 void JeandleCompiledCode::resolve_reloc_info(JeandleAssembler& assembler) {
@@ -556,6 +562,14 @@ JeandleStackMap* JeandleCompiledCode::parse_stackmap(StackMapParser& stackmaps, 
         num_deopts -= 3;
         break;
       }
+      case DeoptValueEncoding::OrigPcSlotType: {
+        assert(location != record->location_end(), "must be in range");
+        auto orig_pc_location = *(location++);
+        assert(StackMapUtil::is_stack(orig_pc_location), "orig pc slot must be stack allocated");
+        set_real_orig_pc_offset_in_bytes(StackMapUtil::stack_offset(orig_pc_location));
+        num_deopts -= 2;
+        break;
+      }
       default:
         Unimplemented();
     }
@@ -678,6 +692,15 @@ void JeandleCompiledCode::build_implicit_exception_table() {
 
 int JeandleCompiledCode::frame_size_in_slots() {
   return _frame_size * sizeof(intptr_t) / VMRegImpl::stack_slot_size;
+}
+
+void JeandleCompiledCode::set_real_orig_pc_offset_in_bytes(int offset) {
+  assert(offset >= 0, "sanity");
+  if (_orig_pc_offset_in_bytes == -1) {
+    _orig_pc_offset_in_bytes = offset;
+  } else {
+    assert(_orig_pc_offset_in_bytes == offset, "orig pc slot offset must be stable");
+  }
 }
 
 uint32_t StackMapUtil::getConstantUint(const StackMapParser& parser, const StackMapParser::LocationAccessor& location) {

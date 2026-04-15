@@ -222,10 +222,30 @@ int JeandleAssembler::interior_entry_alignment() const {
 int JeandleAssembler::emit_exception_handler() {
   int stub_size = __ far_codestub_branch_size();
   address base = __ start_a_stub(stub_size);
-  JEANDLE_ERROR_ASSERT_AND_RET_ON_FAIL(base != nullptr, "exception handler stub overflow", 0);
+  if (base == nullptr) {
+    JEANDLE_REPORT_ERROR_AND_RET("exception handler stub overflow", 0);
+  }
   int offset = __ offset();
   __ far_jump(RuntimeAddress(JeandleRuntimeRoutine::get_routine_entry(JeandleRuntimeRoutine::_exception_handler)));
   assert(__ offset() - offset <= stub_size, "overflow");
+  __ end_a_stub();
+  return offset;
+}
+
+int JeandleAssembler::deopt_handler_size() {
+  return 7 * NativeInstruction::instruction_size;
+}
+
+int JeandleAssembler::emit_deopt_handler() {
+  int stub_size = deopt_handler_size();
+  address base = __ start_a_stub(stub_size);
+  if (base == nullptr) {
+    JEANDLE_REPORT_ERROR_AND_RET("deopt handler stub overflow", 0);
+  }
+  int offset = __ offset();
+  __ adr(lr, __ pc());
+  __ far_jump(RuntimeAddress(JeandleRuntimeRoutine::get_routine_entry(JeandleRuntimeRoutine::_deopt_blob)));
+  assert(__ offset() - offset <= stub_size, "deopt handler stub overflow");
   __ end_a_stub();
   return offset;
 }

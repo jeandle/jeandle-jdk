@@ -55,11 +55,14 @@ public:
     ArgumentType = 2,
     MonitorType = 3,
     ScalarValueType = 4,
-    LastType = ScalarValueType + 1
+    OrigPcSlotType = 5,
+    LastType = OrigPcSlotType + 1
   };
   DeoptValueEncoding(int index, DeoptValueType value_type, BasicType basic_type):
     _index(index), _value_type(value_type), _basic_type(basic_type) {
-    assert(_value_type == LocalType || _value_type == StackType || _value_type == MonitorType, "Unsupported value type");
+    assert(_value_type == LocalType || _value_type == StackType ||
+           _value_type == MonitorType || _value_type == OrigPcSlotType,
+           "Unsupported value type");
   }
 
   uint64_t encode() {
@@ -87,6 +90,7 @@ public:
       case ArgumentType: return "ArgumentType";
       case MonitorType: return "MonitorType";
       case ScalarValueType: return "ScalarValueType";
+      case OrigPcSlotType: return "OrigPcSlotType";
       default: return "Unknown";
     }
   }
@@ -107,10 +111,12 @@ class CallSiteInfo : public JeandleCompilationResourceObj {
   CallSiteInfo(JeandleCompiledCall::Type type,
                address target,
                int bci,
+               bool is_method_handle_invoke = false,
                uint64_t statepoint_id = llvm::StatepointDirectives::DefaultStatepointID) :
                _type(type),
                _target(target),
                _bci(bci),
+               _is_method_handle_invoke(is_method_handle_invoke),
                _statepoint_id(statepoint_id) {
 #ifdef ASSERT
     // We don't need to assign a unique statepoint id for each routine call site, only call type and target is used.
@@ -128,11 +134,13 @@ class CallSiteInfo : public JeandleCompilationResourceObj {
   JeandleCompiledCall::Type type() const { return _type; }
   uint64_t statepoint_id() const { return _statepoint_id; }
   address target() const { return _target; }
+  bool is_method_handle_invoke() const { return _is_method_handle_invoke; }
 
  private:
   JeandleCompiledCall::Type _type;
   address _target;
   int _bci;
+  bool _is_method_handle_invoke;
 
   // Used to distinguish each call site in stackmaps.
   uint64_t _statepoint_id;
@@ -181,7 +189,10 @@ class JeandleCompiledCode : public StackObj {
                       _method(method),
                       _routine_entry(nullptr),
                       _func_name(JeandleFuncSig::method_name_with_signature(_method)),
-                      _interpreter_frame_size_in_bytes(0) {}
+                      _orig_pc_slot(nullptr),
+                      _orig_pc_offset_in_bytes(-1),
+                      _interpreter_frame_size_in_bytes(0),
+                      _has_method_handle_invoke(false) {}
 
   // For compiled Jeandle runtime stubs.
   JeandleCompiledCode(ciEnv* env, const char* func_name) :
@@ -194,7 +205,10 @@ class JeandleCompiledCode : public StackObj {
                       _method(nullptr),
                       _routine_entry(nullptr),
                       _func_name(func_name),
-                      _interpreter_frame_size_in_bytes(0) {}
+                      _orig_pc_slot(nullptr),
+                      _orig_pc_offset_in_bytes(-1),
+                      _interpreter_frame_size_in_bytes(0),
+                      _has_method_handle_invoke(false) {}
 
   void install_obj(std::unique_ptr<ObjectBuffer> obj);
 
@@ -215,6 +229,11 @@ class JeandleCompiledCode : public StackObj {
   ImplicitExceptionTable* implicit_exception_table() { return &_implicit_exception_table; }
 
   int frame_size() const { return _frame_size; }
+  int orig_pc_offset_in_bytes() const { return _orig_pc_offset_in_bytes; }
+  void set_orig_pc_slot(llvm::Value* slot) { _orig_pc_slot = slot; }
+  llvm::Value* orig_pc_slot() const { return _orig_pc_slot; }
+  void set_real_orig_pc_offset_in_bytes(int offset);
+  void set_has_method_handle_invoke(bool z) { _has_method_handle_invoke = z; }
 
   address routine_entry() const { return _routine_entry; }
   void set_routine_entry(address entry) { _routine_entry = entry; }
@@ -254,7 +273,10 @@ class JeandleCompiledCode : public StackObj {
   ciMethod* _method;
   address _routine_entry;
   std::string _func_name;
+  llvm::Value* _orig_pc_slot;
+  int _orig_pc_offset_in_bytes;
   int _interpreter_frame_size_in_bytes;
+  bool _has_method_handle_invoke;
 
   void setup_frame_size();
 
