@@ -31,6 +31,7 @@
 #include "jeandle/jeandleCompiler.hpp"
 #include "jeandle/jeandleRuntimeRoutine.hpp"
 #include "jeandle/jeandleType.hpp"
+#include "jeandle/jeandleUtils.hpp"
 #include "jeandle/templatemodule/jeandleRuntimeDefinedJavaOps.hpp"
 
 #include "jeandle/__hotspotHeadersBegin__.hpp"
@@ -73,7 +74,21 @@ bool JeandleCompiler::initialize_target_machine() {
   llvm::SubtargetFeatures features;
   options.EmitStackSizeSection = true;
 
-  _target_machine = target->createTargetMachine(target_triple, ""/* CPU */, features.getString(), options,
+  std::string cpu = llvm::sys::getHostCPUName().str();
+  if (cpu.empty()) {
+    cpu = "generic";
+  }
+
+  llvm::StringMap<bool> host_features = llvm::sys::getHostCPUFeatures();
+  for (const auto& feature : host_features) {
+    if (feature.second) {
+      features.AddFeature(feature.first());
+    }
+  }
+
+  apply_vm_flag_feature_overrides(features);
+
+  _target_machine = target->createTargetMachine(target_triple, cpu, features.getString(), options,
                                                 llvm::Reloc::Model::PIC_, llvm::CodeModel::Model::Small,
                                                 llvm::CodeGenOptLevel::Aggressive, true/* JIT */);
   return _target_machine != nullptr;

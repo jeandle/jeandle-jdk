@@ -22,12 +22,15 @@
 #define SHARE_JEANDLE_UTILS_HPP
 
 #include "jeandle/__llvmHeadersBegin__.hpp"
-#include "llvm/IR/Module.h"
 #include "llvm/IR/Function.h"
+#include "llvm/IR/Module.h"
 
 #include "jeandle/__hotspotHeadersBegin__.hpp"
 #include "ci/ciMethod.hpp"
 
+namespace llvm {
+class SubtargetFeatures;
+}
 
 class JeandleFuncSig : public AllStatic {
  public:
@@ -37,6 +40,8 @@ class JeandleFuncSig : public AllStatic {
   static std::string method_name_with_signature(ciMethod* method);
   static void setup_description(llvm::Function* func, bool is_stub = false);
 };
+
+void apply_vm_flag_feature_overrides(llvm::SubtargetFeatures& features);
 
 bool is_jeandle_compiler_thread(Thread* t);
 

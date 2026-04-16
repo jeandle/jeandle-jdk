@@ -21,16 +21,50 @@
 #include "jeandle/__llvmHeadersBegin__.hpp"
 #include "llvm/IR/Jeandle/Attributes.h"
 #include "llvm/IR/Jeandle/GCStrategy.h"
+#include "llvm/TargetParser/SubtargetFeature.h"
 
 #include "jeandle/jeandleUtils.hpp"
+
+#include "jeandle/__hotspotHeadersBegin__.hpp"
+#include "runtime/arguments.hpp"
+
+void apply_vm_flag_feature_overrides(llvm::SubtargetFeatures& features) {
+  if (!UseRVC) {
+    features.AddFeature("c", false);
+  }
+  if (!UseRVV) {
+    features.AddFeature("v", false);
+  }
+  if (!UseZba) {
+    features.AddFeature("zba", false);
+  }
+  if (!UseZbb) {
+    features.AddFeature("zbb", false);
+  }
+  if (!UseZbs) {
+    features.AddFeature("zbs", false);
+  }
+  if (!UseZic64b) {
+    features.AddFeature("zic64b", false);
+  }
+  if (!UseZicbom) {
+    features.AddFeature("zicbom", false);
+  }
+  if (!UseZicbop) {
+    features.AddFeature("zicbop", false);
+  }
+  if (!UseZicboz) {
+    features.AddFeature("zicboz", false);
+  }
+  if (!UseZihintpause) {
+    features.AddFeature("zihintpause", false);
+  }
+}
 
 void JeandleFuncSig::setup_description(llvm::Function* func, bool is_stub) {
   func->setCallingConv(llvm::CallingConv::Hotspot_JIT);
 
   func->setGC(llvm::jeandle::JeandleGC);
-
-  // RISCV must enable extensions manually.
-  func->addFnAttr("target-features", "+i,+m,+a,+f,+d");
 
   if (!is_stub) {
     llvm::GlobalVariable* personality_func = func->getParent()->getGlobalVariable("jeandle.personality");
