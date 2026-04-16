@@ -24,5 +24,3 @@
 # Only classified by main cause, maybe contain multiple reasons in a single testcase.
 #
 #############################################################################
-
-tools/javac/unicode/SupplementaryJavaID6.java                                                             linux-aarch64,linux-x64
