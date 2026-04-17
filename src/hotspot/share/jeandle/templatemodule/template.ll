@@ -243,7 +243,7 @@ alloc_fast_path:
 
   ; TODO: Mark word and klass are written atomically, to enable the object initialization barrier below.
   ; Otherwise, the compiler may reorder the non-atomic stores. This is a conservative design. We may need
-  ; to revisit this design by adding a specified memory barrier intrinsic.
+  ; to revisit this design to find a more efficient way.
   store atomic i64 %prototype_value, ptr addrspace(1) %mark_word_addr unordered, align 8
   store atomic ptr %klass, ptr addrspace(1) %klass_addr unordered, align 8
 
