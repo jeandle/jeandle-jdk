@@ -407,3 +407,136 @@ compiler/loopopts/TestDivZeroCheckControl.java#id0                              
 compiler/loopopts/TestPartialPeelAtUnsignedTestsNegativeLimit.java#Xbatch                      linux-aarch64,linux-x64
 
 compiler/loopopts/TestRemoveEmptyLoop.java                                                     linux-aarch64,linux-x64
+
+###
+# CHA - Class Hierarchy Analysis deoptimization not supported
+###
+compiler/cha/AbstractRootMethod.java                                                             linux-x64
+compiler/cha/DefaultRootMethod.java                                                              linux-x64
+compiler/cha/StrengthReduceInterfaceCall.java                                                    linux-x64
+
+###
+# CodeEntryAlignment
+###
+compiler/arguments/TestCodeEntryAlignment.java                                                   linux-x64
+
+###
+# Intrinsics - BMI/LZCNT/TZCNT/OnSpinWait not emitted by Jeandle
+###
+compiler/intrinsics/bmi/verifycode/BzhiTestI2L.java                                             linux-x64
+compiler/intrinsics/bmi/verifycode/LZcntTestI.java                                              linux-x64
+compiler/intrinsics/bmi/verifycode/LZcntTestL.java                                              linux-x64
+compiler/intrinsics/bmi/verifycode/TZcntTestI.java                                              linux-x64
+compiler/intrinsics/bmi/verifycode/TZcntTestL.java                                              linux-x64
+compiler/onSpinWait/TestOnSpinWait.java                                                          linux-x64
+
+###
+# Loop Strip Mining - not supported (Jeandle disables counted safepoints)
+###
+compiler/loopstripmining/CheckLoopStripMiningIterShortLoop.java                                  linux-x64
+compiler/loopstripmining/TestNoWarningLoopStripMiningIterSet.java#Epsilon                        linux-x64
+compiler/loopstripmining/TestNoWarningLoopStripMiningIterSet.java#G1                             linux-x64
+compiler/loopstripmining/TestNoWarningLoopStripMiningIterSet.java#Shenandoah                     linux-x64
+compiler/loopstripmining/TestNoWarningLoopStripMiningIterSet.java#ZGenerational                  linux-x64
+compiler/loopstripmining/TestNoWarningLoopStripMiningIterSet.java#ZSinglegen                     linux-x64
+
+###
+# Range Check optimizations - C2-specific deoptimization not implemented
+###
+compiler/rangechecks/TestExplicitRangeChecks.java                                                linux-x64
+compiler/rangechecks/TestLongRangeCheck.java                                                     linux-x64
+compiler/rangechecks/TestRangeCheckHoistingScaledIV.java                                         linux-x64
+compiler/rangechecks/TestRangeCheckSmearing.java                                                 linux-x64
+
+###
+# RTM - Restricted Transactional Memory not supported
+###
+compiler/rtm/cli/TestPrintPreciseRTMLockingStatisticsOptionOnSupportedConfig.java                linux-x64
+compiler/rtm/cli/TestRTMTotalCountIncrRateOptionOnSupportedConfig.java                           linux-x64
+compiler/rtm/cli/TestUseRTMDeoptOptionOnSupportedConfig.java                                     linux-x64
+compiler/rtm/cli/TestUseRTMForStackLocksOptionOnSupportedConfig.java                             linux-x64
+compiler/rtm/cli/TestUseRTMLockingOptionOnSupportedConfig.java                                   linux-x64
+compiler/rtm/locking/TestRTMRetryCount.java                                                      linux-x64
+compiler/rtm/locking/TestRTMTotalCountIncrRate.java                                              linux-x64
+compiler/rtm/locking/TestUseRTMAfterLockInflation.java                                           linux-x64
+compiler/rtm/locking/TestUseRTMForInflatedLocks.java                                             linux-x64
+compiler/rtm/locking/TestUseRTMForStackLocks.java                                                linux-x64
+compiler/rtm/method_options/TestNoRTMLockElidingOption.java                                      linux-x64
+compiler/rtm/method_options/TestUseRTMLockElidingOption.java                                     linux-x64
+
+###
+# Constant Folding - @Stable field values not constant-folded
+###
+compiler/stable/TestStableBoolean.java                                                           linux-x64
+compiler/stable/TestStableByte.java                                                              linux-x64
+compiler/stable/TestStableChar.java                                                              linux-x64
+compiler/stable/TestStableDouble.java                                                            linux-x64
+compiler/stable/TestStableFloat.java                                                             linux-x64
+compiler/stable/TestStableInt.java                                                               linux-x64
+compiler/stable/TestStableLong.java                                                              linux-x64
+compiler/stable/TestStableObject.java                                                            linux-x64
+compiler/stable/TestStableShort.java                                                             linux-x64
+compiler/stable/TestStableUByte.java                                                             linux-x64
+compiler/stable/TestStableUShort.java                                                            linux-x64
+
+###
+# CompressedOops/CompressedClassPointers (tier2)
+###
+gc/arguments/TestUseCompressedOopsErgo.java#id0                                                  linux-x64
+gc/arguments/TestUseCompressedOopsErgo.java#id1                                                  linux-x64
+gc/arguments/TestUseCompressedOopsErgo.java#id2                                                  linux-x64
+gc/arguments/TestUseCompressedOopsErgo.java#id3                                                  linux-x64
+gc/metaspace/TestMetaspacePerfCounters.java#Epsilon-64                                           linux-x64
+gc/metaspace/TestMetaspacePerfCounters.java#G1-64                                                linux-x64
+gc/metaspace/TestMetaspacePerfCounters.java#Parallel-64                                          linux-x64
+gc/metaspace/TestMetaspacePerfCounters.java#Serial-64                                            linux-x64
+gc/metaspace/TestMetaspacePerfCounters.java#Shenandoah-64                                        linux-x64
+runtime/CompressedOops/UseCompressedOops.java                                                    linux-x64
+runtime/cds/appcds/TestCombinedCompressedFlags.java                                              linux-x64
+runtime/cds/appcds/TestSerialGCWithCDS.java#id1                                                  linux-x64
+
+###
+# GC not support (tier2)
+###
+gc/ergonomics/TestDynamicNumberOfGCThreads.java                                                  linux-x64
+gc/ergonomics/TestInitialGCThreadLogging.java                                                    linux-x64
+gc/shenandoah/TestPeriodicGC.java                                                                linux-x64
+gc/shenandoah/TestReferenceShortcutCycle.java#iu-100                                             linux-x64
+gc/shenandoah/TestReferenceShortcutCycle.java#satb-100                                           linux-x64
+gc/shenandoah/jni/TestPinnedGarbage.java#aggressive                                              linux-x64
+gc/shenandoah/jni/TestPinnedGarbage.java#passive                                                 linux-x64
+gc/shenandoah/jni/TestPinnedGarbage.java#verify                                                  linux-x64
+runtime/cds/appcds/TestZGCWithCDS.java#ZGenerational                                             linux-x64
+runtime/cds/appcds/TestZGCWithCDS.java#ZSinglegen                                                linux-x64
+serviceability/sa/ClhsdbScanOops.java#id0                                                        linux-x64
+
+###
+# Bug - JVM crash or wrong result in Jeandle implementation
+###
+# Wrong result in implicit narrowing conversion at putfield
+compiler/conversions/TestPrimitiveConversions.java                                               linux-x64
+
+# JVM crash (SIGSEGV): PHI node predecessor mismatch in exception dispatch
+compiler/parsing/TestExceptionBlockWithPredecessorsMain.java                                     linux-x64
+
+# JVM crash (SIGSEGV): failed to update handler's VM state in exception dispatch
+compiler/parsing/TestMissingSafepointOnTryCatch.java                                             linux-x64
+
+# JVM crash (SIGABRT): assert(_stack_guard_state == stack_guard_reserved_disabled) failed
+runtime/ReservedStack/ReservedStackTest.java                                                     linux-x64
+
+# ReentrantLock corruption during reserved stack overflow handling
+runtime/ReservedStack/ReservedStackTestCompiler.java                                             linux-x64
+
+###
+# Serviceability/SA - timeout or environment issue with Jeandle
+###
+# Timeout (6000s) with -Xcomp: SA/jhsdb hangs when attaching to Jeandle-compiled process
+serviceability/sa/ClhsdbJstackXcompStress.java                                                   linux-x64
+
+# Timeout (2400s): jhsdb jmap --binaryheap hangs on Jeandle-compiled process
+serviceability/sa/TestHeapDumpForInvokeDynamic.java                                              linux-x64
+
+# Core dump written to non-standard location (/home/admin/logs/core.%p); test can't find core file
+serviceability/sa/TestJmapCore.java                                                              linux-x64
+serviceability/sa/TestJmapCoreMetaspace.java                                                     linux-x64

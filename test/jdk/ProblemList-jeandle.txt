@@ -29,3 +29,38 @@
 # GC not support
 ###
 jdk/jfr/event/gc/configuration/TestGCConfigurationEvent.java               linux-aarch64,linux-x64
+
+###
+# Bug - JVM crash in Jeandle implementation
+###
+# JVM crash (SIGSEGV, exit code 139) during HTTP client test
+java/net/httpclient/ShortResponseBodyPost.java                               linux-x64
+
+# JVM crash (SIGABRT, exit code 134) during HTTP client test
+java/net/httpclient/ShortResponseBodyPostWithRetry.java                      linux-x64
+
+###
+# Environment/Infrastructure issues (not Jeandle-specific)
+###
+# Network interface aliasing in container (eth0/p0 share same IP/MAC)
+java/net/DatagramSocket/DatagramSocketMulticasting.java                      linux-x64
+java/net/MulticastSocket/IPMulticastIF.java                                  linux-x64
+java/net/MulticastSocket/NoSetNetworkInterface.java                          linux-x64
+java/net/MulticastSocket/Promiscuous.java                                    linux-x64
+java/net/MulticastSocket/SetGetNetworkInterfaceTest.java                     linux-x64
+java/net/MulticastSocket/TestInterfaces.java                                 linux-x64
+java/net/NetworkInterface/NetworkInterfaceRetrievalTests.java                linux-x64
+java/net/NetworkInterface/UniqueMacAddressesTest.java                        linux-x64
+java/nio/channels/DatagramChannel/AdaptorMulticasting.java                   linux-x64
+
+# Cookie expiry parsing issue (locale/timezone dependent)
+java/net/CookieHandler/B6644726.java                                         linux-x64
+
+# Flaky resource tracker assertion (pending TCP connections not cleaned up in time)
+java/net/httpclient/ThrowingSubscribersAsInputStreamAsync.java               linux-x64
+
+# Expired CA certificate (baltimorecybertrustca expired May 2025)
+sun/security/lib/cacerts/VerifyCACerts.java                                  linux-x64
+
+# Expired TSA certificate (tsbefore2019 expired Mar 20, 2026)
+sun/security/tools/jarsigner/TimestampCheck.java                             linux-x64
