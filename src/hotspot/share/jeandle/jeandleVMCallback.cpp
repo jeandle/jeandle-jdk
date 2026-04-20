@@ -65,6 +65,10 @@ uintptr_t jeandle_get_field_type(uintptr_t klass_ptr, int offset) {
   return 0; // field not found at offset
 }
 
+bool jeandle_is_interface(uintptr_t klass_ptr) {
+  return ((Klass*)klass_ptr)->is_interface();
+}
+
 } // anonymous namespace
 
 void register_jeandle_vm_callbacks() {
@@ -72,5 +76,6 @@ void register_jeandle_vm_callbacks() {
   callbacks.IsSubtype = &jeandle_is_subtype;
   callbacks.GetCommonSuperKlass = &jeandle_get_common_super_klass;
   callbacks.GetFieldType = &jeandle_get_field_type;
+  callbacks.IsInterface = &jeandle_is_interface;
   llvm::jeandle::registerVMCallbacks(callbacks);
 }

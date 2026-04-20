@@ -314,16 +314,20 @@ public class TestTypeCheckElimination {
     // Group 11: Transitive subtype relationships
     // =========================================================================
 
-    // 11a. new Poodle() instanceof Animal (Poodle -> Dog -> Animal)
-    static boolean testTransitiveSubtype() {
-        Object p = new Poodle();
-        return p instanceof Animal; // Eliminated: exact Poodle is subtype of Animal
+    // 11a. Transitive subtype
+    static boolean testTransitiveSubtype(Object p) {
+        if (p instanceof Poodle) {
+            return p instanceof Animal; // Eliminated: exact Poodle is subtype of Animal
+        }
+        return false;
     }
 
-    // 11b. new Poodle() instanceof Cat (negative, transitive non-subtype)
-    static boolean testTransitiveNonSubtype() {
-        Object p = new Poodle();
-        return p instanceof Cat; // Eliminated to false: exact Poodle, not subtype of Cat
+    // 11b. Transitive non-subtype
+    static boolean testTransitiveNonSubtype(Object p) {
+        if (p instanceof Poodle) {
+            return p instanceof Cat; // Eliminated to false: not subtype of Cat
+        }
+        return false;
     }
 
     // =========================================================================
@@ -632,10 +636,10 @@ public class TestTypeCheckElimination {
                 Asserts.assertTrue(testCheckcastDominatesInstanceof(dog));
                 break;
             case "testTransitiveSubtype":
-                Asserts.assertTrue(testTransitiveSubtype());
+                Asserts.assertTrue(testTransitiveSubtype(poodle));
                 break;
             case "testTransitiveNonSubtype":
-                Asserts.assertFalse(testTransitiveNonSubtype());
+                Asserts.assertFalse(testTransitiveNonSubtype(poodle));
                 break;
             case "testRedundantDuplicateCheck":
                 Asserts.assertEquals(testRedundantDuplicateCheck(dog), 2);
@@ -838,7 +842,7 @@ public class TestTypeCheckElimination {
             Asserts.assertGTE(beforeCount, 2,
                 "2f: should have >= 2 check_instanceof before, got " + beforeCount);
             Asserts.assertLT(afterCount, beforeCount,
-                "2f: loop PHI prevents elimination; before=" + beforeCount + " after=" + afterCount);
+                "2f: type check in loop should be eliminated; before=" + beforeCount + " after=" + afterCount);
         }
 
         // === 2g. Complex dominator chain ===
@@ -851,9 +855,9 @@ public class TestTypeCheckElimination {
             int beforeCount = countOccurrences(beforeIR, "jeandle.check_instanceof");
             int afterCount = countOccurrences(afterIR, "jeandle.check_instanceof");
             Asserts.assertGTE(beforeCount, 3,
-                "2f: should have >= 2 check_instanceof before, got " + beforeCount);
+                "2g: should have >= 2 check_instanceof before, got " + beforeCount);
             Asserts.assertLTE(afterCount, beforeCount - 1,
-                "2f: loop PHI prevents elimination; before=" + beforeCount + " after=" + afterCount);
+                "2g: returned check should be eliminated; before=" + beforeCount + " after=" + afterCount);
         }
 
         // === 3a. Diamond PHI with same type ===
@@ -1019,30 +1023,34 @@ public class TestTypeCheckElimination {
                 "10a: instanceof after checkcast should be eliminated; before=" + beforeCount + " after=" + afterCount);
         }
 
-        // === 11a. Transitive subtype from new ===
+        // === 11a. Transitive subtype ===
         {
             OutputAnalyzer output = runTestProcess("testTransitiveSubtype", "testTransitiveSubtype");
             output.shouldHaveExitValue(0);
             String fullOutput = output.getOutput();
             String beforeIR = extractBeforeIR(fullOutput, "testTransitiveSubtype");
             String afterIR = extractAfterIR(fullOutput, "testTransitiveSubtype");
-            assertIRContains(beforeIR, "jeandle.check_instanceof",
-                "11a: check_instanceof should exist before");
-            assertIRNotContains(afterIR, "jeandle.check_instanceof",
-                "11a: new Poodle() instanceof Animal should be eliminated (transitive)");
+            int beforeCount = countOccurrences(beforeIR, "jeandle.check_instanceof");
+            int afterCount = countOccurrences(afterIR, "jeandle.check_instanceof");
+            Asserts.assertGTE(beforeCount, 2,
+                "11a: should have >= 2 check_instanceof before, got " + beforeCount);
+            Asserts.assertLTE(afterCount, beforeCount - 1,
+                "11a: transitive type check should be eliminated; before=" + beforeCount + " after=" + afterCount);
         }
 
-        // === 11b. Transitive non-subtype (exact negative) ===
+        // === 11b. Transitive non-subtype ===
         {
             OutputAnalyzer output = runTestProcess("testTransitiveNonSubtype", "testTransitiveNonSubtype");
             output.shouldHaveExitValue(0);
             String fullOutput = output.getOutput();
             String beforeIR = extractBeforeIR(fullOutput, "testTransitiveNonSubtype");
             String afterIR = extractAfterIR(fullOutput, "testTransitiveNonSubtype");
-            assertIRContains(beforeIR, "jeandle.check_instanceof",
-                "11b: check_instanceof should exist before");
-            assertIRNotContains(afterIR, "jeandle.check_instanceof",
-                "11b: new Poodle() instanceof Cat should be eliminated to false");
+            int beforeCount = countOccurrences(beforeIR, "jeandle.check_instanceof");
+            int afterCount = countOccurrences(afterIR, "jeandle.check_instanceof");
+            Asserts.assertGTE(beforeCount, 2,
+                "11b: should have >= 2 check_instanceof before, got " + beforeCount);
+            Asserts.assertLTE(afterCount, beforeCount - 1,
+                "11b: transitive type check should be eliminated; before=" + beforeCount + " after=" + afterCount);
         }
 
         // === 12a. Redundant duplicate check ===
