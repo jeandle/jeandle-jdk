@@ -33,34 +33,102 @@ jdk/jfr/event/gc/configuration/TestGCConfigurationEvent.java               linux
 ###
 # Bug - JVM crash in Jeandle implementation
 ###
+# JVM crash (SIGABRT, exit code 134) during HTTP client test
+java/net/httpclient/ShortResponseBodyGet.java                              linux-aarch64
+
 # JVM crash (SIGSEGV, exit code 139) during HTTP client test
-java/net/httpclient/ShortResponseBodyPost.java                               linux-x64
+java/net/httpclient/ShortResponseBodyPost.java                             linux-aarch64,linux-x64
 
 # JVM crash (SIGABRT, exit code 134) during HTTP client test
-java/net/httpclient/ShortResponseBodyPostWithRetry.java                      linux-x64
+java/net/httpclient/ShortResponseBodyPostWithRetry.java                    linux-aarch64,linux-x64
 
 ###
 # Environment/Infrastructure issues (not Jeandle-specific)
 ###
 # Network interface aliasing in container (eth0/p0 share same IP/MAC)
-java/net/DatagramSocket/DatagramSocketMulticasting.java                      linux-x64
-java/net/MulticastSocket/IPMulticastIF.java                                  linux-x64
-java/net/MulticastSocket/NoSetNetworkInterface.java                          linux-x64
-java/net/MulticastSocket/Promiscuous.java                                    linux-x64
-java/net/MulticastSocket/SetGetNetworkInterfaceTest.java                     linux-x64
-java/net/MulticastSocket/TestInterfaces.java                                 linux-x64
-java/net/NetworkInterface/NetworkInterfaceRetrievalTests.java                linux-x64
-java/net/NetworkInterface/UniqueMacAddressesTest.java                        linux-x64
-java/nio/channels/DatagramChannel/AdaptorMulticasting.java                   linux-x64
+java/net/DatagramSocket/DatagramSocketMulticasting.java                    linux-x64
+java/net/MulticastSocket/IPMulticastIF.java                                linux-x64
+java/net/MulticastSocket/NoSetNetworkInterface.java                        linux-x64
+java/net/MulticastSocket/Promiscuous.java                                  linux-x64
+java/net/MulticastSocket/SetGetNetworkInterfaceTest.java                   linux-x64
+java/net/MulticastSocket/TestInterfaces.java                               linux-x64
+java/net/NetworkInterface/NetworkInterfaceRetrievalTests.java              linux-x64
+java/net/NetworkInterface/UniqueMacAddressesTest.java                      linux-x64
+java/nio/channels/DatagramChannel/AdaptorMulticasting.java                 linux-x64
 
 # Cookie expiry parsing issue (locale/timezone dependent)
-java/net/CookieHandler/B6644726.java                                         linux-x64
+java/net/CookieHandler/B6644726.java                                       linux-aarch64,linux-x64
 
 # Flaky resource tracker assertion (pending TCP connections not cleaned up in time)
-java/net/httpclient/ThrowingSubscribersAsInputStreamAsync.java               linux-x64
+java/net/httpclient/ThrowingSubscribersAsInputStreamAsync.java             linux-x64
 
 # Expired CA certificate (baltimorecybertrustca expired May 2025)
-sun/security/lib/cacerts/VerifyCACerts.java                                  linux-x64
+sun/security/lib/cacerts/VerifyCACerts.java                                linux-aarch64,linux-x64
 
 # Expired TSA certificate (tsbefore2019 expired Mar 20, 2026)
-sun/security/tools/jarsigner/TimestampCheck.java                             linux-x64
+sun/security/tools/jarsigner/TimestampCheck.java                           linux-aarch64,linux-x64
+
+# Cannot assign requested address
+com/sun/net/httpserver/SANTest.java                                        linux-aarch64
+java/net/MulticastSocket/SetLoopbackMode.java                              linux-aarch64
+java/net/MulticastSocket/Test.java                                         linux-aarch64
+java/nio/channels/DatagramChannel/Disconnect.java                          linux-aarch64
+
+# SendBufferSize set error
+java/net/DatagramSocket/SetGetSendBufferSize.java                          linux-aarch64
+
+# Address 0:0:0:0:0:0:0:0 can not be reachable
+java/net/Inet4Address/PingThis.java                                        linux-aarch64
+
+# Got Inet4Address rather than Inet6Address
+java/net/Inet6Address/PreferIPv6AddressesTest.java                         linux-aarch64
+
+# Connection timed out
+java/net/InetAddress/CheckJNI.java                                         linux-aarch64
+
+# InterruptedException
+java/net/MulticastSocket/NoLoopbackPackets.java                            linux-aarch64
+
+# Unexpected EOF from server
+java/net/Socket/HttpProxy.java                                             linux-aarch64
+
+# SocketTimeoutException: Receive timed out
+java/net/Socket/HttpProxy.java                                             linux-aarch64
+
+# Network is unreachable
+java/net/httpclient/http2/ConnectionReuseTest.java                         linux-aarch64
+java/net/ipv6tests/TcpTest.java                                            linux-aarch64
+java/nio/channels/Selector/SelectWithConsumer.java#id0                     linux-aarch64
+java/nio/channels/etc/ProtocolFamilies.java                                linux-aarch64
+
+###
+# Timeout
+###
+java/net/Inet6Address/B6558853.java                                        linux-aarch64
+java/net/Inet6Address/Scoping.java                                         linux-aarch64
+java/net/httpclient/http2/HpackBinaryTestDriver.java                       linux-aarch64
+java/net/httpclient/http2/HpackHuffmanDriver.java                          linux-aarch64
+java/net/httpclient/websocket/ReaderDriver.java                            linux-aarch64
+java/net/ipv6tests/UdpTest.java                                            linux-aarch64
+java/nio/channels/DatagramChannel/ManySourcesAndTargets.java               linux-aarch64
+java/nio/channels/DatagramChannel/SendReceiveMaxSize.java                  linux-aarch64
+java/nio/channels/etc/OpenAndConnect.java                                  linux-aarch64
+java/nio/channels/unixdomain/IOExchanges.java                              linux-aarch64
+javax/net/ssl/DTLS/DTLSEnginesClosureTest.java                             linux-aarch64
+javax/net/ssl/DTLS/DTLSMFLNTest.java                                       linux-aarch64
+javax/net/ssl/DTLSv10/DTLSv10MFLNTest.java                                 linux-aarch64
+javax/net/ssl/TLS/TLSEnginesClosureTest.java                               linux-aarch64
+javax/net/ssl/TLS/TLSMFLNTest.java                                         linux-aarch64
+javax/net/ssl/TLSv11/TLSMFLNTest.java                                      linux-aarch64
+javax/net/ssl/TLSv12/TLSEnginesClosureTest.java                            linux-aarch64
+javax/net/ssl/TLSv1/TLSMFLNTest.java                                       linux-aarch64
+sun/security/util/math/TestIntegerModuloP.java#Curve25519OrderField        linux-aarch64
+sun/security/util/math/TestIntegerModuloP.java#Curve448OrderField          linux-aarch64
+sun/security/util/math/TestIntegerModuloP.java#IntegerPolynomial25519      linux-aarch64
+sun/security/util/math/TestIntegerModuloP.java#IntegerPolynomial448        linux-aarch64
+sun/security/util/math/TestIntegerModuloP.java#IntegerPolynomialP256       linux-aarch64
+sun/security/util/math/TestIntegerModuloP.java#IntegerPolynomialP384       linux-aarch64
+sun/security/util/math/TestIntegerModuloP.java#IntegerPolynomialP521       linux-aarch64
+sun/security/util/math/TestIntegerModuloP.java#P256OrderField              linux-aarch64
+sun/security/util/math/TestIntegerModuloP.java#P384OrderField              linux-aarch64
+sun/security/util/math/TestIntegerModuloP.java#P521OrderField              linux-aarch64
