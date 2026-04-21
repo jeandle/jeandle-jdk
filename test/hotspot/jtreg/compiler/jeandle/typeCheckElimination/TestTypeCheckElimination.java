@@ -549,6 +549,50 @@ public class TestTypeCheckElimination {
     }
 
     // =========================================================================
+    // Group 24: PHI incoming block branch sharpening
+    // When a PHI incoming comes from a block whose branch checks the value's
+    // type, that branch should be considered to sharpen the PHI's type.
+    // =========================================================================
+
+    // 24a. Direct branch to PHI: true-branch of instanceof goes to merge
+    static boolean testPhiIncomingBranchDirect(Object obj) {
+        Object x;
+        if (obj instanceof Dog) {
+            x = obj; // on true-branch, obj is Dog
+        } else {
+            x = new Dog();
+        }
+        // x = phi [obj (from instanceof-true), new Dog() (from else)]
+        // Both incomings are Dog → instanceof Animal should be eliminated
+        return x instanceof Animal;
+    }
+
+    // 24b. Loop header branch sharpens back-edge incoming
+    static int testPhiLoopHeaderSharpening(Object obj) {
+        int sum = 0;
+        while (obj instanceof Animal) {
+            Animal a = (Animal) obj; // Should be eliminated: dominated by while-condition
+            sum += a.id;
+            if (sum > 100) break;
+            obj = new Dog(); // back-edge: new Dog, which passes while-condition
+        }
+        return sum;
+    }
+
+    // 24c. Negative: incoming branch goes to PHI via false-branch (type denied)
+    static boolean testPhiIncomingBranchDenied(Object obj) {
+        Object x;
+        if (obj instanceof Dog) {
+            x = new Cat();
+        } else {
+            x = obj; // on false-branch, obj is NOT Dog
+        }
+        // x = phi [new Cat() (true), obj (false)]
+        // obj incoming is NOT Dog, but could be Animal → cannot eliminate
+        return x instanceof Animal;
+    }
+
+    // =========================================================================
     // Helper: extract IR section between "IR Dump Before" and "IR Dump After"
     // for a specific function, and the section after "IR Dump After".
     // =========================================================================
@@ -814,6 +858,18 @@ public class TestTypeCheckElimination {
                 break;
             case "testFinalReturnType":
                 Asserts.assertTrue(testFinalReturnType());
+                break;
+            case "testPhiIncomingBranchDirect":
+                Asserts.assertTrue(testPhiIncomingBranchDirect(dog));
+                Asserts.assertTrue(testPhiIncomingBranchDirect("hello"));
+                break;
+            case "testPhiLoopHeaderSharpening":
+                Asserts.assertTrue(testPhiLoopHeaderSharpening(dog) > 0);
+                Asserts.assertEquals(testPhiLoopHeaderSharpening("hello"), 0);
+                break;
+            case "testPhiIncomingBranchDenied":
+                Asserts.assertFalse(testPhiIncomingBranchDenied("hello"));
+                Asserts.assertTrue(testPhiIncomingBranchDenied(dog));
                 break;
             default:
                 throw new IllegalArgumentException("Unknown test: " + testName);
@@ -1445,6 +1501,48 @@ public class TestTypeCheckElimination {
                 "23a: check_instanceof should exist before");
             assertIRNotContains(afterIR, "jeandle.check_instanceof",
                 "23a: String return instanceof String should be eliminated (final return type)");
+        }
+
+        // === 24a. PHI incoming branch direct: instanceof true-branch to merge ===
+        {
+            OutputAnalyzer output = runTestProcess("testPhiIncomingBranchDirect", "testPhiIncomingBranchDirect");
+            output.shouldHaveExitValue(0);
+            String fullOutput = output.getOutput();
+            String beforeIR = extractBeforeIR(fullOutput, "testPhiIncomingBranchDirect");
+            String afterIR = extractAfterIR(fullOutput, "testPhiIncomingBranchDirect");
+            int beforeCount = countOccurrences(beforeIR, "jeandle.check_instanceof");
+            int afterCount = countOccurrences(afterIR, "jeandle.check_instanceof");
+            // Before: instanceof Dog (guard) + instanceof Animal (check) = 2
+            // After: instanceof Dog stays (Object param), instanceof Animal eliminated
+            Asserts.assertGTE(beforeCount, 2,
+                "24a: should have >= 2 check_instanceof before, got " + beforeCount);
+            Asserts.assertLT(afterCount, beforeCount,
+                "24a: instanceof Animal on PHI with Dog incomings should be eliminated; before=" + beforeCount + " after=" + afterCount);
+        }
+
+        // === 24b. Loop header branch sharpens back-edge incoming ===
+        {
+            OutputAnalyzer output = runTestProcess("testPhiLoopHeaderSharpening", "testPhiLoopHeaderSharpening");
+            output.shouldHaveExitValue(0);
+            String fullOutput = output.getOutput();
+            String beforeIR = extractBeforeIR(fullOutput, "testPhiLoopHeaderSharpening");
+            String afterIR = extractAfterIR(fullOutput, "testPhiLoopHeaderSharpening");
+            int beforeCount = countOccurrences(beforeIR, "jeandle.check_instanceof");
+            int afterCount = countOccurrences(afterIR, "jeandle.check_instanceof");
+            Asserts.assertGTE(beforeCount, 2,
+                "24b: should have >= 2 check_instanceof before, got " + beforeCount);
+            Asserts.assertLT(afterCount, beforeCount,
+                "24b: checkcast in loop body should be eliminated; before=" + beforeCount + " after=" + afterCount);
+        }
+
+        // === 24c. PHI incoming branch denied: false-branch to merge (negative) ===
+        {
+            OutputAnalyzer output = runTestProcess("testPhiIncomingBranchDenied", "testPhiIncomingBranchDenied");
+            output.shouldHaveExitValue(0);
+            String fullOutput = output.getOutput();
+            String afterIR = extractAfterIR(fullOutput, "testPhiIncomingBranchDenied");
+            assertIRContains(afterIR, "jeandle.check_instanceof",
+                "24c: instanceof Animal on obj from false-branch should NOT be eliminated");
         }
 
         System.out.println("All TypeCheckElimination tests passed.");
