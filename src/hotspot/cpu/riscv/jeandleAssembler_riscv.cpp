@@ -219,6 +219,27 @@ int JeandleAssembler::emit_exception_handler() {
   return start;
 }
 
+int JeandleAssembler::deopt_handler_size() {
+  // count auipc + far branch
+  return NativeInstruction::instruction_size + MacroAssembler::far_branch_size();
+}
+
+// Emit deopt handler code.
+int JeandleAssembler::emit_deopt_handler() {
+  address base = __ start_a_stub(deopt_handler_size());
+  if (base == NULL) {
+    JEANDLE_REPORT_ERROR_AND_RET("deopt handler stub overflow", 0);
+  }
+  int offset = __ offset();
+
+  __ auipc(ra, 0);
+  __ far_jump(RuntimeAddress(JeandleRuntimeRoutine::get_routine_entry(JeandleRuntimeRoutine::_deopt_blob)));
+
+  assert(__ offset() - offset <= (int) deopt_handler_size(), "deopt handler stub overflow");
+  __ end_a_stub();
+  return offset;
+}
+
 using LinkKind_riscv = llvm::jitlink::riscv::EdgeKind_riscv;
 
 void JeandleAssembler::emit_section_word_reloc(int operand_offset, LinkKind kind, int64_t addend, address target, int reloc_section, int64_t rel_offset) {
