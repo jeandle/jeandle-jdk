@@ -65,10 +65,10 @@ public class TestTanDouble {
             checker.check("define hotspotcc double @\"compiler_jeandle_intrinsic_TestTanDouble$TestWrapper_tan_double");
             // check IR
             checker.checkNext("entry:");
-            checker.checkNext("br label %bci_0");
+            checker.check("br label %bci_0");
             checker.checkNext("bci_0:");
             checker.checkNext("call double @StubRoutines_dtan");
-            checker.checkNext("ret double");
+            checker.check("ret double");
             // check gc-leaf-function
             checker.checkPattern("declare double @StubRoutines_dtan.*#\\d+");
             checker.checkPattern("attributes #\\d+ = \\{ \"gc-leaf-function\" \\}");
@@ -115,11 +115,11 @@ public class TestTanDouble {
         checker.check("define hotspotcc double @\"compiler_jeandle_intrinsic_TestTanDouble$TestWrapper_tan_double");
         // check IR
         checker.checkNext("entry:");
-        checker.checkNext("br label %bci_0");
+        checker.check("br label %bci_0");
         checker.checkNext("bci_0:");
         // check gc-leaf-function
         checker.checkNextPattern("call double inttoptr \\(i64 (\\d+) to ptr\\).*#\\d+");
-        checker.checkNext("ret double");
+        checker.check("ret double");
         checker.checkPattern("attributes #\\d+ = \\{ \"gc-leaf-function\" \\}");
     }
 

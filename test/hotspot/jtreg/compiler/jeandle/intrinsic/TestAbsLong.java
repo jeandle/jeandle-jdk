@@ -59,7 +59,7 @@ public class TestAbsLong {
                 "define hotspotcc i64 @\"compiler_jeandle_intrinsic_TestAbsLong$TestWrapper_abs_long");
         // check IR
         checker.checkNext("entry:");
-        checker.checkNext("br label %bci_0");
+        checker.check("br label %bci_0");
         checker.checkNext("bci_0:");
         // the llvm intrinsic is used
         checker.checkNext("call i64 @llvm.abs.i64(i64 %0, i1 false)");

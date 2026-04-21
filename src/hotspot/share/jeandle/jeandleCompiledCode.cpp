@@ -484,6 +484,16 @@ void JeandleCompiledCode::fill_one_monitor_value(const StackMapParser& stackmaps
   array->append(new MonitorValue(locked_object, basic_lock, false /* eliminated */));
 }
 
+static bool bytecode_should_reexecute(Bytecodes::Code code) {
+  if (code == Bytecodes::_ireturn || code == Bytecodes::_lreturn ||
+      code == Bytecodes::_freturn || code == Bytecodes::_dreturn ||
+      code == Bytecodes::_areturn || code == Bytecodes::_return) {
+    return true;
+  } else {
+    return AbstractInterpreter::bytecode_should_reexecute(code);
+  }
+}
+
 JeandleStackMap* JeandleCompiledCode::parse_stackmap(StackMapParser& stackmaps, StackMapParser::record_iterator& record, CallSiteInfo* call_info) {
   assert(_frame_size > 0, "frame size must be greater than zero");
 
@@ -515,7 +525,7 @@ JeandleStackMap* JeandleCompiledCode::parse_stackmap(StackMapParser& stackmaps, 
 
     if (bci != InvocationEntryBci) {
       Bytecodes::Code code = _method->java_code_at_bci(bci);
-      reexecute = Interpreter::bytecode_should_reexecute(code); /* TODO: special case of multianewarray, please check GraphKit::should_reexecute_implied_by_bytecode */
+      reexecute = bytecode_should_reexecute(code); /* TODO: special case of multianewarray, please check GraphKit::should_reexecute_implied_by_bytecode */
     }
   }
 

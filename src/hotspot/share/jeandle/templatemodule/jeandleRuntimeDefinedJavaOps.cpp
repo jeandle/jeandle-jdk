@@ -89,10 +89,9 @@ DEF_JAVA_OP(safepoint_poll, 1, llvm::Type::getVoidTy(context))
                                                          llvm::PointerType::get(context, llvm::jeandle::AddrSpace::TLSAddrSpace));
   // Do poll.
   llvm::Value* poll_word = ir_builder.CreateLoad(intptr_type, poll_word_ptr, true /* is_volatile */);
-  llvm::Value* if_safepoint = ir_builder.CreateICmp(llvm::CmpInst::ICMP_EQ,
-                                                    poll_word,
-                                                    llvm::ConstantInt::get(intptr_type, ~SafepointMechanism::poll_bit()));
-  ir_builder.CreateCondBr(if_safepoint, return_block, do_safepoint_block);
+  llvm::Value* masked = ir_builder.CreateAnd(poll_word, llvm::ConstantInt::get(intptr_type, SafepointMechanism::poll_bit()));
+  llvm::Value* need_safepoint = ir_builder.CreateICmpNE(masked, llvm::ConstantInt::get(intptr_type, 0));
+  ir_builder.CreateCondBr(need_safepoint, do_safepoint_block, return_block);
 
   // ***** Do Safepoint Block *****
   ir_builder.SetInsertPoint(do_safepoint_block);

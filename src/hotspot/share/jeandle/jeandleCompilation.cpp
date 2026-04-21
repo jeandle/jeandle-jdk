@@ -162,6 +162,7 @@ JeandleCompilation::JeandleCompilation(llvm::TargetMachine* target_machine,
   initialize();
 
   _llvm_module->setDataLayout(*_data_layout);
+  _llvm_module->setTargetTriple(_target_machine->getTargetTriple());
   JeandleCallVM::generate_call_VM(name, routine_address, func_type, *_llvm_module, _code);
 
   // Verify module, if failes, crashes in debug builds and only reports compilation error in release builds.
@@ -264,6 +265,7 @@ void JeandleCompilation::setup_llvm_module(llvm::MemoryBuffer* template_buffer) 
 
   _llvm_module->setModuleIdentifier(JeandleFuncSig::method_name(_method));
   _llvm_module->setDataLayout(*_data_layout);
+  _llvm_module->setTargetTriple(_target_machine->getTargetTriple());
 
   llvm::NamedMDNode* metadata_node = _llvm_module->getOrInsertNamedMetadata(llvm::jeandle::Metadata::JavaMethodCompilation);
   assert(metadata_node != nullptr, "invalid metadata node");

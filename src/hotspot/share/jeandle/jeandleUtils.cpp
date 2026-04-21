@@ -22,6 +22,7 @@
 #include "llvm/IR/Jeandle/Attributes.h"
 #include "llvm/IR/Jeandle/GCStrategy.h"
 #include "llvm/IR/Jeandle/Metadata.h"
+#include "llvm/TargetParser/SubtargetFeature.h"
 
 #include "jeandle/jeandleType.hpp"
 #include "jeandle/jeandleUtils.hpp"

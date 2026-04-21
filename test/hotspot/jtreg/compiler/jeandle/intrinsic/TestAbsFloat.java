@@ -59,7 +59,7 @@ public class TestAbsFloat {
         checker.check("define hotspotcc float @\"compiler_jeandle_intrinsic_TestAbsFloat$TestWrapper_abs_float");
         // check IR
         checker.checkNext("entry:");
-        checker.checkNext("br label %bci_0");
+        checker.check("br label %bci_0");
         checker.checkNext("bci_0:");
         // the llvm intrinsic is used
         checker.checkNext("call float @llvm.fabs.f32(float %0)");

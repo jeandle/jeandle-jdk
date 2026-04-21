@@ -68,14 +68,14 @@ public class TestSinDouble {
         checker.check("define hotspotcc double @\"compiler_jeandle_intrinsic_TestSinDouble$TestWrapper_sin_double");
         // check IR
         checker.checkNext("entry:");
-        checker.checkNext("br label %bci_0");
+        checker.check("br label %bci_0");
         checker.checkNext("bci_0:");
         if (is_riscv64) {
             checker.checkNext("call double inttoptr");
         } else {
             checker.checkNextPattern("call double @StubRoutines_dsin");
         }
-        checker.checkNext("ret double");
+        checker.check("ret double");
         // check gc-leaf-function
         if (!is_riscv64) {
             checker.checkPattern("declare double @StubRoutines_dsin.*#\\d+");
@@ -118,11 +118,11 @@ public class TestSinDouble {
             checker.check("define hotspotcc double @\"compiler_jeandle_intrinsic_TestSinDouble$TestWrapper_sin_double");
             // check IR
             checker.checkNext("entry:");
-            checker.checkNext("br label %bci_0");
+            checker.check("br label %bci_0");
             checker.checkNext("bci_0:");
             // check gc-leaf-function
             checker.checkNextPattern("call double inttoptr \\(i64 (\\d+) to ptr\\).*#\\d+");
-            checker.checkNext("ret double");
+            checker.check("ret double");
             checker.checkPattern("attributes #\\d+ = \\{ \"gc-leaf-function\" \\}");
         }
     }
