@@ -452,6 +452,103 @@ public class TestTypeCheckElimination {
     }
 
     // =========================================================================
+    // Group 20: Negative constraints from failed type checks (ExcludedKlasses)
+    // =========================================================================
+
+    // 20a. Failed instanceof Animal → instanceof Dog should be false
+    static boolean testDeniedByFailedCheck(Object obj) {
+        if (!(obj instanceof Animal)) {
+            return obj instanceof Dog; // Eliminated to false: Dog subtype of excluded Animal
+        }
+        return true;
+    }
+
+    // 20b. Failed instanceof Animal → instanceof Poodle should be false (transitive)
+    static boolean testDeniedTransitive(Object obj) {
+        if (!(obj instanceof Animal)) {
+            return obj instanceof Poodle; // Eliminated to false: Poodle -> Dog -> Animal
+        }
+        return true;
+    }
+
+    // 20c. Failed instanceof Dog does NOT exclude Animal (negative)
+    static boolean testDeniedNotApplicable(Object obj) {
+        if (!(obj instanceof Dog)) {
+            return obj instanceof Animal; // NOT eliminated: Animal is not subtype of Dog
+        }
+        return true;
+    }
+
+    // 20d. Failed instanceof Dog → instanceof Dog should be false (same type)
+    static boolean testDeniedSameType(Object obj) {
+        if (!(obj instanceof Dog)) {
+            return obj instanceof Dog; // Eliminated to false: same excluded type
+        }
+        return true;
+    }
+
+    // 20e. Failed instanceof Barkable (interface) does NOT exclude Dog (negative)
+    static boolean testDeniedInterfaceNotApplicable(Object obj) {
+        if (!(obj instanceof Barkable)) {
+            return obj instanceof Dog; // NOT eliminated: interface exclusion
+        }
+        return true;
+    }
+
+    // =========================================================================
+    // Group 21: Array klass type checks
+    // =========================================================================
+
+    // 21a. new String[] instanceof String[] → eliminated (new → exact, String is final)
+    static boolean testArrayExactFinalElement() {
+        Object o = new String[1];
+        return o instanceof String[]; // Eliminated: exact String[]
+    }
+
+    // 21b. String[] param instanceof Object[] → eliminated (String[] exact, subtype of Object[])
+    static boolean testArrayParamFinalElement(String[] s) {
+        return s instanceof Object[]; // Eliminated: String[] is subtype of Object[]
+    }
+
+    // 21c. Animal[] param instanceof Dog[] → NOT eliminated (Animal not final)
+    static boolean testArrayParamNonFinal(Animal[] a) {
+        return a instanceof Dog[]; // NOT eliminated: Dog[] subtype of Animal[], a could be Dog[]
+    }
+
+    // 21d. new int[] instanceof int[] → eliminated (new → exact, primitive array)
+    static boolean testPrimitiveArray() {
+        Object o = new int[1];
+        return o instanceof int[]; // Eliminated: exact int[]
+    }
+
+    // =========================================================================
+    // Group 22: Field load exactness (final field types)
+    // =========================================================================
+
+    static class StringHolder {
+        String stringField;
+        StringHolder(String s) { this.stringField = s; }
+    }
+
+    // 22a. Field declared as String (final), load and check instanceof String
+    static boolean testFinalFieldType(StringHolder holder) {
+        Object obj = holder.stringField; // Load has java-klass=String, java-klass-exact
+        return obj instanceof String; // Eliminated: exact String is subtype of String
+    }
+
+    // =========================================================================
+    // Group 23: Return type exactness (final return types)
+    // =========================================================================
+
+    static String getAString() { return "hello"; }
+
+    // 23a. Method returns String (final), check instanceof String
+    static boolean testFinalReturnType() {
+        Object obj = getAString(); // Return has java-klass=String, java-klass-exact
+        return obj instanceof String; // Eliminated: exact String is subtype of String
+    }
+
+    // =========================================================================
     // Helper: extract IR section between "IR Dump Before" and "IR Dump After"
     // for a specific function, and the section after "IR Dump After".
     // =========================================================================
@@ -526,6 +623,7 @@ public class TestTypeCheckElimination {
         Class.forName("TestTypeCheckElimination$Poodle");
         Class.forName("TestTypeCheckElimination$Barkable");
         Class.forName("TestTypeCheckElimination$AnimalHolder");
+        Class.forName("TestTypeCheckElimination$StringHolder");
 
         if (args.length == 0) {
             runAllTests();
@@ -677,6 +775,45 @@ public class TestTypeCheckElimination {
             case "testVeryDeepDominatorChain":
                 Asserts.assertTrue(testVeryDeepDominatorChain(dog) > 0);
                 Asserts.assertEquals(testVeryDeepDominatorChain("hello"), 0);
+                break;
+            case "testDeniedByFailedCheck":
+                Asserts.assertTrue(testDeniedByFailedCheck(dog));
+                Asserts.assertFalse(testDeniedByFailedCheck("hello"));
+                break;
+            case "testDeniedTransitive":
+                Asserts.assertTrue(testDeniedTransitive(dog));
+                Asserts.assertFalse(testDeniedTransitive("hello"));
+                break;
+            case "testDeniedNotApplicable":
+                Asserts.assertTrue(testDeniedNotApplicable(dog));
+                Asserts.assertTrue(testDeniedNotApplicable(cat));
+                break;
+            case "testDeniedSameType":
+                Asserts.assertTrue(testDeniedSameType(dog));
+                Asserts.assertFalse(testDeniedSameType("hello"));
+                break;
+            case "testDeniedInterfaceNotApplicable":
+                Asserts.assertFalse(testDeniedInterfaceNotApplicable(cat));
+                Asserts.assertTrue(testDeniedInterfaceNotApplicable(dog));
+                break;
+            case "testArrayExactFinalElement":
+                Asserts.assertTrue(testArrayExactFinalElement());
+                break;
+            case "testArrayParamFinalElement":
+                Asserts.assertTrue(testArrayParamFinalElement(new String[]{"a"}));
+                break;
+            case "testArrayParamNonFinal":
+                Asserts.assertFalse(testArrayParamNonFinal(new Animal[]{cat}));
+                Asserts.assertTrue(testArrayParamNonFinal(new Dog[]{dog}));
+                break;
+            case "testPrimitiveArray":
+                Asserts.assertTrue(testPrimitiveArray());
+                break;
+            case "testFinalFieldType":
+                Asserts.assertTrue(testFinalFieldType(new StringHolder("hello")));
+                break;
+            case "testFinalReturnType":
+                Asserts.assertTrue(testFinalReturnType());
                 break;
             default:
                 throw new IllegalArgumentException("Unknown test: " + testName);
@@ -1168,6 +1305,146 @@ public class TestTypeCheckElimination {
                 "18a: should have >= 2 check_instanceof before, got " + beforeCount);
             Asserts.assertLT(afterCount, beforeCount,
                 "18a: deeply dominated checkcast should be eliminated; before=" + beforeCount + " after=" + afterCount);
+        }
+
+        // === 20a. Denied by failed check: !(instanceof Animal) → instanceof Dog = false ===
+        {
+            OutputAnalyzer output = runTestProcess("testDeniedByFailedCheck", "testDeniedByFailedCheck");
+            output.shouldHaveExitValue(0);
+            String fullOutput = output.getOutput();
+            String beforeIR = extractBeforeIR(fullOutput, "testDeniedByFailedCheck");
+            String afterIR = extractAfterIR(fullOutput, "testDeniedByFailedCheck");
+            int beforeCount = countOccurrences(beforeIR, "jeandle.check_instanceof");
+            int afterCount = countOccurrences(afterIR, "jeandle.check_instanceof");
+            Asserts.assertGTE(beforeCount, 2,
+                "20a: should have >= 2 check_instanceof before, got " + beforeCount);
+            Asserts.assertLT(afterCount, beforeCount,
+                "20a: instanceof Dog after failed instanceof Animal should be eliminated; before=" + beforeCount + " after=" + afterCount);
+        }
+
+        // === 20b. Denied transitive: !(instanceof Animal) → instanceof Poodle = false ===
+        {
+            OutputAnalyzer output = runTestProcess("testDeniedTransitive", "testDeniedTransitive");
+            output.shouldHaveExitValue(0);
+            String fullOutput = output.getOutput();
+            String beforeIR = extractBeforeIR(fullOutput, "testDeniedTransitive");
+            String afterIR = extractAfterIR(fullOutput, "testDeniedTransitive");
+            int beforeCount = countOccurrences(beforeIR, "jeandle.check_instanceof");
+            int afterCount = countOccurrences(afterIR, "jeandle.check_instanceof");
+            Asserts.assertGTE(beforeCount, 2,
+                "20b: should have >= 2 check_instanceof before, got " + beforeCount);
+            Asserts.assertLT(afterCount, beforeCount,
+                "20b: instanceof Poodle after failed instanceof Animal should be eliminated; before=" + beforeCount + " after=" + afterCount);
+        }
+
+        // === 20c. Denied not applicable: !(instanceof Dog) does NOT exclude Animal ===
+        {
+            OutputAnalyzer output = runTestProcess("testDeniedNotApplicable", "testDeniedNotApplicable");
+            output.shouldHaveExitValue(0);
+            String fullOutput = output.getOutput();
+            String afterIR = extractAfterIR(fullOutput, "testDeniedNotApplicable");
+            assertIRContains(afterIR, "jeandle.check_instanceof",
+                "20c: instanceof Animal after failed instanceof Dog should NOT be eliminated");
+        }
+
+        // === 20d. Denied same type: !(instanceof Dog) → instanceof Dog = false ===
+        {
+            OutputAnalyzer output = runTestProcess("testDeniedSameType", "testDeniedSameType");
+            output.shouldHaveExitValue(0);
+            String fullOutput = output.getOutput();
+            String beforeIR = extractBeforeIR(fullOutput, "testDeniedSameType");
+            String afterIR = extractAfterIR(fullOutput, "testDeniedSameType");
+            int beforeCount = countOccurrences(beforeIR, "jeandle.check_instanceof");
+            int afterCount = countOccurrences(afterIR, "jeandle.check_instanceof");
+            Asserts.assertGTE(beforeCount, 2,
+                "20d: should have >= 2 check_instanceof before, got " + beforeCount);
+            Asserts.assertLT(afterCount, beforeCount,
+                "20d: duplicate instanceof Dog after failed instanceof Dog should be eliminated; before=" + beforeCount + " after=" + afterCount);
+        }
+
+        // === 20e. Denied interface not applicable: !(instanceof Barkable) does NOT exclude Dog ===
+        {
+            OutputAnalyzer output = runTestProcess("testDeniedInterfaceNotApplicable", "testDeniedInterfaceNotApplicable");
+            output.shouldHaveExitValue(0);
+            String fullOutput = output.getOutput();
+            String afterIR = extractAfterIR(fullOutput, "testDeniedInterfaceNotApplicable");
+            assertIRContains(afterIR, "jeandle.check_instanceof",
+                "20e: instanceof Dog after failed instanceof Barkable should NOT be eliminated");
+        }
+
+        // === 21a. Array exact final element: new String[] instanceof String[] ===
+        {
+            OutputAnalyzer output = runTestProcess("testArrayExactFinalElement", "testArrayExactFinalElement");
+            output.shouldHaveExitValue(0);
+            String fullOutput = output.getOutput();
+            String beforeIR = extractBeforeIR(fullOutput, "testArrayExactFinalElement");
+            String afterIR = extractAfterIR(fullOutput, "testArrayExactFinalElement");
+            assertIRContains(beforeIR, "jeandle.check_instanceof",
+                "21a: check_instanceof should exist before");
+            assertIRNotContains(afterIR, "jeandle.check_instanceof",
+                "21a: new String[] instanceof String[] should be eliminated");
+        }
+
+        // === 21b. Array param final element: String[] instanceof Object[] ===
+        {
+            OutputAnalyzer output = runTestProcess("testArrayParamFinalElement", "testArrayParamFinalElement");
+            output.shouldHaveExitValue(0);
+            String fullOutput = output.getOutput();
+            String beforeIR = extractBeforeIR(fullOutput, "testArrayParamFinalElement");
+            String afterIR = extractAfterIR(fullOutput, "testArrayParamFinalElement");
+            assertIRContains(beforeIR, "jeandle.check_instanceof",
+                "21b: check_instanceof should exist before");
+            assertIRNotContains(afterIR, "jeandle.check_instanceof",
+                "21b: String[] instanceof Object[] should be eliminated (String is final)");
+        }
+
+        // === 21c. Array param non-final: Animal[] instanceof Dog[] — NOT eliminated ===
+        {
+            OutputAnalyzer output = runTestProcess("testArrayParamNonFinal", "testArrayParamNonFinal");
+            output.shouldHaveExitValue(0);
+            String fullOutput = output.getOutput();
+            String afterIR = extractAfterIR(fullOutput, "testArrayParamNonFinal");
+            assertIRContains(afterIR, "jeandle.check_instanceof",
+                "21c: Animal[] instanceof Dog[] should NOT be eliminated (Animal not final)");
+        }
+
+        // === 21d. Primitive array: new int[] instanceof int[] ===
+        {
+            OutputAnalyzer output = runTestProcess("testPrimitiveArray", "testPrimitiveArray");
+            output.shouldHaveExitValue(0);
+            String fullOutput = output.getOutput();
+            String beforeIR = extractBeforeIR(fullOutput, "testPrimitiveArray");
+            String afterIR = extractAfterIR(fullOutput, "testPrimitiveArray");
+            assertIRContains(beforeIR, "jeandle.check_instanceof",
+                "21d: check_instanceof should exist before");
+            assertIRNotContains(afterIR, "jeandle.check_instanceof",
+                "21d: new int[] instanceof int[] should be eliminated");
+        }
+
+        // === 22a. Final field type: String field instanceof String ===
+        {
+            OutputAnalyzer output = runTestProcess("testFinalFieldType", "testFinalFieldType");
+            output.shouldHaveExitValue(0);
+            String fullOutput = output.getOutput();
+            String beforeIR = extractBeforeIR(fullOutput, "testFinalFieldType");
+            String afterIR = extractAfterIR(fullOutput, "testFinalFieldType");
+            assertIRContains(beforeIR, "jeandle.check_instanceof",
+                "22a: check_instanceof should exist before");
+            assertIRNotContains(afterIR, "jeandle.check_instanceof",
+                "22a: String field instanceof String should be eliminated (final field type)");
+        }
+
+        // === 23a. Final return type: String return instanceof String ===
+        {
+            OutputAnalyzer output = runTestProcess("testFinalReturnType", "testFinalReturnType");
+            output.shouldHaveExitValue(0);
+            String fullOutput = output.getOutput();
+            String beforeIR = extractBeforeIR(fullOutput, "testFinalReturnType");
+            String afterIR = extractAfterIR(fullOutput, "testFinalReturnType");
+            assertIRContains(beforeIR, "jeandle.check_instanceof",
+                "23a: check_instanceof should exist before");
+            assertIRNotContains(afterIR, "jeandle.check_instanceof",
+                "23a: String return instanceof String should be eliminated (final return type)");
         }
 
         System.out.println("All TypeCheckElimination tests passed.");

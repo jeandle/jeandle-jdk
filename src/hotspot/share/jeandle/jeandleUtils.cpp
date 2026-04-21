@@ -28,9 +28,24 @@
 
 #include "jeandle/__hotspotHeadersBegin__.hpp"
 #include "ci/ciInstanceKlass.hpp"
+#include "ci/ciObjArrayKlass.hpp"
 #include "compiler/abstractCompiler.hpp"
 #include "compiler/compilerThread.hpp"
 #include "runtime/thread.hpp"
+
+// A klass is effectively final if no subtype can exist at runtime.
+// For instance klasses: final class.
+// For type array klasses (int[], byte[]): always (no subtypes).
+// For obj array klasses (String[]): if the base element klass is effectively final.
+bool JeandleFuncSig::is_effectively_final(ciKlass* klass) {
+  if (klass->is_instance_klass())
+    return klass->as_instance_klass()->is_final();
+  if (klass->is_type_array_klass())
+    return true;
+  if (klass->is_obj_array_klass())
+    return is_effectively_final(klass->as_obj_array_klass()->base_element_klass());
+  return false;
+}
 
 llvm::Function* JeandleFuncSig::create_llvm_func(ciMethod* method, llvm::Module& target_module) {
   llvm::SmallVector<llvm::Type*> args;
@@ -67,7 +82,7 @@ llvm::Function* JeandleFuncSig::create_llvm_func(ciMethod* method, llvm::Module&
       func->addParamAttr(arg_idx, llvm::Attribute::get(context,
           llvm::jeandle::Attribute::JavaKlass,
           std::to_string((uintptr_t)holder_klass)));
-      if (holder->is_final()) {
+      if (is_effectively_final(holder)) {
         func->addParamAttr(arg_idx, llvm::Attribute::get(context,
             llvm::jeandle::Attribute::JavaKlassExact));
       }
@@ -85,7 +100,7 @@ llvm::Function* JeandleFuncSig::create_llvm_func(ciMethod* method, llvm::Module&
         func->addParamAttr(arg_idx, llvm::Attribute::get(context,
             llvm::jeandle::Attribute::JavaKlass,
             std::to_string((uintptr_t)klass_enc)));
-        if (klass->is_instance_klass() && klass->as_instance_klass()->is_final()) {
+        if (is_effectively_final(klass)) {
           func->addParamAttr(arg_idx, llvm::Attribute::get(context,
               llvm::jeandle::Attribute::JavaKlassExact));
         }
@@ -103,6 +118,10 @@ llvm::Function* JeandleFuncSig::create_llvm_func(ciMethod* method, llvm::Module&
       func->addRetAttr(llvm::Attribute::get(context,
           llvm::jeandle::Attribute::JavaKlass,
           std::to_string((uintptr_t)ret_klass_enc)));
+      if (is_effectively_final(ret_klass)) {
+        func->addRetAttr(llvm::Attribute::get(context,
+            llvm::jeandle::Attribute::JavaKlassExact));
+      }
     }
   }
 

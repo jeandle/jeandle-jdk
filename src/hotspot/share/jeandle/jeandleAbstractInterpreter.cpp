@@ -34,6 +34,7 @@
 
 #include "jeandle/__hotspotHeadersBegin__.hpp"
 #include "ci/ciMethodBlocks.hpp"
+#include "ci/ciObjArrayKlass.hpp"
 #include "ci/ciSymbols.hpp"
 #include "classfile/javaClasses.hpp"
 #include "interpreter/interpreter.hpp"
@@ -1556,6 +1557,22 @@ void JeandleAbstractInterpreter::invoke() {
   invoke->addFnAttr(id_attr);
   invoke->addFnAttr(patch_bytes_attr);
 
+  // Attach java-klass return type attribute to the call site.
+  ciType* ret_type = method_signature->return_type();
+  if (ret_type->is_klass()) {
+    ciKlass* ret_klass = ret_type->as_klass();
+    if (ret_klass->is_loaded() && !ret_klass->is_interface()) {
+      Klass* ret_klass_enc = (Klass*)(ret_klass->constant_encoding());
+      invoke->addRetAttr(llvm::Attribute::get(*_context,
+          llvm::jeandle::Attribute::JavaKlass,
+          std::to_string((uintptr_t)ret_klass_enc)));
+      if (JeandleFuncSig::is_effectively_final(ret_klass)) {
+        invoke->addRetAttr(llvm::Attribute::get(*_context,
+            llvm::jeandle::Attribute::JavaKlassExact));
+      }
+    }
+  }
+
   if (return_type != BasicType::T_VOID) {
     _jvm->push(return_type, invoke);
   }
@@ -2041,6 +2058,10 @@ void JeandleAbstractInterpreter::do_get_xxx(ciField* field, bool is_static) {
             llvm::ConstantAsMetadata::get(_ir_builder.getInt64((intptr_t)klass_enc))
         });
         load_inst->setMetadata(llvm::jeandle::Metadata::JavaKlass, klass_md);
+        if (JeandleFuncSig::is_effectively_final(field_klass)) {
+          load_inst->setMetadata(llvm::jeandle::Metadata::JavaKlassExact,
+                                 llvm::MDNode::get(*_context, {}));
+        }
       }
     }
   }
@@ -2572,6 +2593,14 @@ void JeandleAbstractInterpreter::do_unified_newarray(Klass* array_klass) {
   llvm::Value* array_klass_ptr =  _ir_builder.CreateIntToPtr(array_klass_addr, klass_type);
 
   llvm::InvokeInst* result = call_java_op_ex("jeandle.newarray", {array_klass_ptr, length}, {create_current_deopt_bundle()});
+
+  // newarray always produces an exact type.
+  result->addRetAttr(llvm::Attribute::get(*_context,
+      llvm::jeandle::Attribute::JavaKlass,
+      std::to_string((uintptr_t)array_klass)));
+  result->addRetAttr(llvm::Attribute::get(*_context,
+      llvm::jeandle::Attribute::JavaKlassExact));
+
   _jvm->apush(result);
 }
 
