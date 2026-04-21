@@ -60,7 +60,7 @@ public class TestAbsDouble {
         checker.check("define hotspotcc double @\"compiler_jeandle_intrinsic_TestAbsDouble$TestWrapper_abs_double");
         // check IR
         checker.checkNext("entry:");
-        checker.checkNext("br label %bci_0");
+        checker.check("br label %bci_0");
         checker.checkNext("bci_0:");
         // the llvm intrinsic is used
         checker.checkNext("call double @llvm.fabs.f64(double %0)");

@@ -324,7 +324,7 @@ bool JeandleBasicBlock::merge_VM_state_from(JeandleVMState* vm_state, llvm::Basi
     assert(_predecessors.size() > 1 || is_exception_handler(), "more than one predecessors are needed for phi nodes");
     return _jvm->update_phi_nodes(vm_state, incoming);
   } else if (is_set(is_loop_header)) {
-    if (!is_set(is_compiled)) {
+    if (_initial_jvm == nullptr) {
       return _jvm->update_phi_nodes(vm_state, incoming);
     }
     assert(_initial_jvm != nullptr, "loop header initial JeandleVMState is needed");
@@ -1024,12 +1024,12 @@ void JeandleAbstractInterpreter::interpret_block(JeandleBasicBlock* block) {
       case Bytecodes::_tableswitch: table_switch(); break;
       case Bytecodes::_lookupswitch: lookup_switch(); break;
 
-      case Bytecodes::_ireturn: return_current(_jvm->ipop()); break;
-      case Bytecodes::_lreturn: return_current(_jvm->lpop()); break;
-      case Bytecodes::_freturn: return_current(_jvm->fpop()); break;
-      case Bytecodes::_dreturn: return_current(_jvm->dpop()); break;
-      case Bytecodes::_areturn: return_current(_jvm->apop()); break;
-      case Bytecodes::_return:  return_current(nullptr); break;
+      case Bytecodes::_ireturn: add_safepoint_poll(); return_current(_jvm->ipop()); break;
+      case Bytecodes::_lreturn: add_safepoint_poll(); return_current(_jvm->lpop()); break;
+      case Bytecodes::_freturn: add_safepoint_poll(); return_current(_jvm->fpop()); break;
+      case Bytecodes::_dreturn: add_safepoint_poll(); return_current(_jvm->dpop()); break;
+      case Bytecodes::_areturn: add_safepoint_poll(); return_current(_jvm->apop()); break;
+      case Bytecodes::_return:  add_safepoint_poll(); return_current(nullptr); break;
 
       // References:
 
@@ -1215,7 +1215,7 @@ void JeandleAbstractInterpreter::increment() {
 }
 
 void JeandleAbstractInterpreter::if_zero(llvm::CmpInst::Predicate p) {
-  if (_bytecodes.get_dest() < _bytecodes.cur_bci()) {
+  if (_bytecodes.get_dest() <= _bytecodes.cur_bci()) {
     add_safepoint_poll();
   }
   llvm::Value* v = _jvm->ipop();
@@ -1226,7 +1226,7 @@ void JeandleAbstractInterpreter::if_zero(llvm::CmpInst::Predicate p) {
 }
 
 void JeandleAbstractInterpreter::if_icmp(llvm::CmpInst::Predicate p) {
-  if (_bytecodes.get_dest() < _bytecodes.cur_bci()) {
+  if (_bytecodes.get_dest() <= _bytecodes.cur_bci()) {
     add_safepoint_poll();
   }
   llvm::Value* r = _jvm->ipop();
@@ -1248,7 +1248,7 @@ void JeandleAbstractInterpreter::lcmp() {
 }
 
 void JeandleAbstractInterpreter::if_acmp(llvm::CmpInst::Predicate p) {
-  if (_bytecodes.get_dest() < _bytecodes.cur_bci()) {
+  if (_bytecodes.get_dest() <= _bytecodes.cur_bci()) {
     add_safepoint_poll();
   }
   llvm::Value* r = _jvm->apop();
@@ -1260,7 +1260,7 @@ void JeandleAbstractInterpreter::if_acmp(llvm::CmpInst::Predicate p) {
 }
 
 void JeandleAbstractInterpreter::if_null(llvm::CmpInst::Predicate p) {
-  if (_bytecodes.get_dest() < _bytecodes.cur_bci()) {
+  if (_bytecodes.get_dest() <= _bytecodes.cur_bci()) {
     add_safepoint_poll();
   }
   llvm::Value* v = _jvm->apop();
@@ -1296,7 +1296,7 @@ void JeandleAbstractInterpreter::fcmp(BasicType type, bool true_if_unordered) {
 }
 
 void JeandleAbstractInterpreter::goto_bci(int bci) {
-  if (bci < _bytecodes.cur_bci()) {
+  if (bci <= _bytecodes.cur_bci()) {
     add_safepoint_poll();
   }
   _ir_builder.CreateBr(bci2block()[bci]->header_llvm_block());
@@ -1307,6 +1307,18 @@ void JeandleAbstractInterpreter::lookup_switch() {
 
   int length = sw.number_of_pairs();
   int cur_bci = _bytecodes.cur_bci();
+
+  bool makes_backward_branch = (cur_bci + sw.default_offset()) <= cur_bci;
+  for (int i = 0; i < length && !makes_backward_branch; i++) {
+    LookupswitchPair pair = sw.pair_at(i);
+    if ((cur_bci + pair.offset()) <= cur_bci) {
+      makes_backward_branch = true;
+    }
+  }
+
+  if (makes_backward_branch) {
+    add_safepoint_poll();
+  }
 
   llvm::Value* key = _jvm->ipop();
   llvm::BasicBlock* default_block = bci2block()[cur_bci + sw.default_offset()]->header_llvm_block();
@@ -1324,6 +1336,17 @@ void JeandleAbstractInterpreter::table_switch() {
   int length = sw.length();
   int cur_bci = _bytecodes.cur_bci();
   int low = sw.low_key();
+
+  bool makes_backward_branch = (cur_bci + sw.default_offset()) <= cur_bci;
+  for (int i = 0; i < length && !makes_backward_branch; i++) {
+    if ((cur_bci + sw.dest_offset_at(i)) <= cur_bci) {
+      makes_backward_branch = true;
+    }
+  }
+
+  if (makes_backward_branch) {
+    add_safepoint_poll();
+  }
 
   llvm::Value* idx = _jvm->ipop();
   llvm::BasicBlock* default_block = bci2block()[cur_bci + sw.default_offset()]->header_llvm_block();
@@ -2430,6 +2453,9 @@ void JeandleAbstractInterpreter::dispatch_exception_to_handler(llvm::Value* exce
 
     // catch_all
     if (handler->is_catch_all()) {
+      if (handler_bci <= cur_bci) {
+        add_safepoint_poll();
+      }
       bool merged = handler_block->merge_VM_state_from(_jvm->copy_for_exception_handler(exception_oop),
                                                        _ir_builder.GetInsertBlock(),
                                                        _method);
@@ -2441,6 +2467,7 @@ void JeandleAbstractInterpreter::dispatch_exception_to_handler(llvm::Value* exce
     // dispatch
     ciKlass* klass = handler->catch_klass();
     llvm::Value* match = nullptr;
+    bool needs_explicit_poll = false;
     if (klass != nullptr && klass->is_loaded()) {
       Klass* super_klass = (Klass*)(klass->constant_encoding());
       llvm::PointerType* klass_type = llvm::PointerType::get(*_context, llvm::jeandle::AddrSpace::CHeapAddrSpace);
@@ -2449,6 +2476,7 @@ void JeandleAbstractInterpreter::dispatch_exception_to_handler(llvm::Value* exce
 
       // instanceof distinguish
       match = call_java_op("jeandle.instanceof", {super_klass_ptr, exception_oop});
+      needs_explicit_poll = (handler_bci <= cur_bci);
     } else {
       if (exception_klass == nullptr) {
         exception_klass = call_java_op("jeandle.load_klass", {exception_oop});
@@ -2471,12 +2499,25 @@ void JeandleAbstractInterpreter::dispatch_exception_to_handler(llvm::Value* exce
                                                            "bci_" + std::to_string(cur_bci) + "_exception_dispatch_to_bci_" + std::to_string(handler_block->start_bci()),
                                                            _llvm_func);
 
-    bool merged = handler_block->merge_VM_state_from(_jvm->copy_for_exception_handler(exception_oop),
+    llvm::Value* cond = _ir_builder.CreateICmpEQ(match, _ir_builder.getInt32(1));
+    if (needs_explicit_poll) {
+      llvm::BasicBlock* match_poll = llvm::BasicBlock::Create(*_context, "bci_" + std::to_string(cur_bci) + "_exception_handler_safepoint", _llvm_func);
+      _ir_builder.CreateCondBr(cond, match_poll, next_dest);
+      _ir_builder.SetInsertPoint(match_poll);
+      add_safepoint_poll();
+
+      bool merged = handler_block->merge_VM_state_from(_jvm->copy_for_exception_handler(exception_oop),
                                                      _ir_builder.GetInsertBlock(),
                                                      _method);
-    JEANDLE_ERROR_ASSERT_AND_RET_VOID_ON_FAIL(merged, "failed to update handler's VM state");
-    llvm::Value* cond = _ir_builder.CreateICmpEQ(match, _ir_builder.getInt32(1));
-    _ir_builder.CreateCondBr(cond, match_dest, next_dest);
+      JEANDLE_ERROR_ASSERT_AND_RET_VOID_ON_FAIL(merged, "failed to update handler's VM state");
+      _ir_builder.CreateBr(match_dest);
+    } else {
+      bool merged = handler_block->merge_VM_state_from(_jvm->copy_for_exception_handler(exception_oop),
+                                                     _ir_builder.GetInsertBlock(),
+                                                     _method);
+      JEANDLE_ERROR_ASSERT_AND_RET_VOID_ON_FAIL(merged, "failed to update handler's VM state");
+      _ir_builder.CreateCondBr(cond, match_dest, next_dest);
+    }
     _ir_builder.SetInsertPoint(next_dest);
   }
 
