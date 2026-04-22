@@ -1584,7 +1584,7 @@ void JeandleAbstractInterpreter::invoke() {
   ciType* ret_type = method_signature->return_type();
   if (ret_type->is_klass()) {
     ciKlass* ret_klass = ret_type->as_klass();
-    if (ret_klass->is_loaded() && !ret_klass->is_interface()) {
+    if (ret_klass->is_loaded() && !JeandleFuncSig::is_unverified_interface(ret_klass)) {
       Klass* ret_klass_enc = (Klass*)(ret_klass->constant_encoding());
       invoke->addRetAttr(llvm::Attribute::get(*_context,
           llvm::jeandle::Attribute::JavaKlass,
@@ -2074,7 +2074,7 @@ void JeandleAbstractInterpreter::do_get_xxx(ciField* field, bool is_static) {
   // so a field declared as an interface could hold any Object at runtime.
   if (field->type()->is_klass()) {
     ciKlass* field_klass = field->type()->as_klass();
-    if (field_klass->is_loaded() && !field_klass->is_interface()) {
+    if (field_klass->is_loaded() && !JeandleFuncSig::is_unverified_interface(field_klass)) {
       Klass* klass_enc = (Klass*)(field_klass->constant_encoding());
       if (llvm::Instruction* load_inst = llvm::dyn_cast<llvm::Instruction>(value)) {
         llvm::MDNode* klass_md = llvm::MDNode::get(*_context, {

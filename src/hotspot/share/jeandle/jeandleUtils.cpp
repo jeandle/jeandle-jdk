@@ -34,6 +34,18 @@
 #include "compiler/compilerThread.hpp"
 #include "runtime/thread.hpp"
 
+// Check if a klass is an interface type that the verifier does not enforce.
+// This includes interface instance klasses and arrays whose base element is an
+// interface (e.g., MyInterface[], MyInterface[][]). These types should not get
+// java-klass attributes, matching C2's ignore_interfaces behavior.
+bool JeandleFuncSig::is_unverified_interface(ciKlass* klass) {
+  if (klass->is_instance_klass())
+    return klass->is_interface();
+  if (klass->is_obj_array_klass())
+    return is_unverified_interface(klass->as_obj_array_klass()->base_element_klass());
+  return false;
+}
+
 // A klass is effectively final if no subtype can exist at runtime.
 // For instance klasses: final class.
 // For type array klasses (int[], byte[]): always (no subtypes).
@@ -78,7 +90,7 @@ llvm::Function* JeandleFuncSig::create_llvm_func(ciMethod* method, llvm::Module&
     // Skip interface types: the verifier does not enforce interface types,
     // so a parameter declared as an interface could hold any Object at runtime.
     // This matches C2's ignore_interfaces behavior (see type.cpp TypePtr::interfaces).
-    if (holder->is_loaded() && !holder->is_interface()) {
+    if (holder->is_loaded() && !is_unverified_interface(holder)) {
       Klass* holder_klass = (Klass*)(holder->constant_encoding());
       func->addParamAttr(arg_idx, llvm::Attribute::get(context,
           llvm::jeandle::Attribute::JavaKlass,
@@ -96,7 +108,7 @@ llvm::Function* JeandleFuncSig::create_llvm_func(ciMethod* method, llvm::Module&
     if (type->is_klass()) {
       ciKlass* klass = type->as_klass();
       // Skip interface types (see comment above for receiver).
-      if (klass->is_loaded() && !klass->is_interface()) {
+      if (klass->is_loaded() && !is_unverified_interface(klass)) {
         Klass* klass_enc = (Klass*)(klass->constant_encoding());
         func->addParamAttr(arg_idx, llvm::Attribute::get(context,
             llvm::jeandle::Attribute::JavaKlass,
@@ -114,7 +126,7 @@ llvm::Function* JeandleFuncSig::create_llvm_func(ciMethod* method, llvm::Module&
   if (ret_type->is_klass()) {
     ciKlass* ret_klass = ret_type->as_klass();
     // Skip interface types (see comment above for receiver).
-    if (ret_klass->is_loaded() && !ret_klass->is_interface()) {
+    if (ret_klass->is_loaded() && !is_unverified_interface(ret_klass)) {
       Klass* ret_klass_enc = (Klass*)(ret_klass->constant_encoding());
       func->addRetAttr(llvm::Attribute::get(context,
           llvm::jeandle::Attribute::JavaKlass,
