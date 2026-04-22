@@ -620,6 +620,60 @@ public class TestTypeCheckElimination {
     }
 
     // =========================================================================
+    // Group 26: LCA-based positive sharpening via PHI
+    // When a condition is a PHI of different type checks (Dog/Cat), the LCA
+    // (Animal) is valid for positive sharpening on the true-branch. If one
+    // check passed, the object IS at least the LCA type.
+    // =========================================================================
+
+    // 26a. PHI of different checks, true-branch SHOULD sharpen to LCA
+    static boolean testPhiLCAPositiveSharpening(Object obj, boolean flag) {
+        boolean check;
+        if (flag) {
+            check = obj instanceof Dog;
+        } else {
+            check = obj instanceof Cat;
+        }
+        // check = phi [instanceof Dog, ...], [instanceof Cat, ...]
+        // LCA(Dog, Cat) = Animal
+        if (check) {
+            // On true-branch: one of Dog/Cat check passed → obj IS Animal
+            return obj instanceof Animal; // Should be eliminated
+        }
+        return false;
+    }
+
+    // 26b. PHI of different checks with deeper hierarchy
+    static boolean testPhiLCADeeperHierarchy(Object obj, boolean flag) {
+        boolean check;
+        if (flag) {
+            check = obj instanceof Poodle;
+        } else {
+            check = obj instanceof Cat;
+        }
+        // LCA(Poodle, Cat) = Animal
+        if (check) {
+            return obj instanceof Animal; // Should be eliminated
+        }
+        return false;
+    }
+
+    // 26c. PHI of same-type checks (no LCA needed, should still work)
+    static boolean testPhiSameKlassPositiveSharpening(Object obj, boolean flag) {
+        boolean check;
+        if (flag) {
+            check = obj instanceof Dog;
+        } else {
+            check = obj instanceof Dog;
+        }
+        // Both incomings are Dog — no LCA needed
+        if (check) {
+            return obj instanceof Animal; // Should be eliminated
+        }
+        return false;
+    }
+
+    // =========================================================================
     // Helper: extract IR section between "IR Dump Before" and "IR Dump After"
     // for a specific function, and the section after "IR Dump After".
     // =========================================================================
@@ -905,6 +959,29 @@ public class TestTypeCheckElimination {
                 Asserts.assertTrue(testNoOverExcludingLCA(dog, false));
                 // flag=true, obj=String: Dog check fails, String is NOT Animal → should return false
                 Asserts.assertFalse(testNoOverExcludingLCA("hello", true));
+                break;
+            case "testPhiLCAPositiveSharpening":
+                // flag=true, obj=Dog: Dog check passes → obj IS Animal
+                Asserts.assertTrue(testPhiLCAPositiveSharpening(dog, true));
+                // flag=false, obj=Cat: Cat check passes → obj IS Animal
+                Asserts.assertTrue(testPhiLCAPositiveSharpening(cat, false));
+                // flag=true, obj=String: Dog check fails → false
+                Asserts.assertFalse(testPhiLCAPositiveSharpening("hello", true));
+                break;
+            case "testPhiLCADeeperHierarchy":
+                // flag=true, obj=Poodle: Poodle check passes → obj IS Animal
+                Asserts.assertTrue(testPhiLCADeeperHierarchy(poodle, true));
+                // flag=false, obj=Cat: Cat check passes → obj IS Animal
+                Asserts.assertTrue(testPhiLCADeeperHierarchy(cat, false));
+                // flag=true, obj=String: Poodle check fails → false
+                Asserts.assertFalse(testPhiLCADeeperHierarchy("hello", true));
+                break;
+            case "testPhiSameKlassPositiveSharpening":
+                // Both arms check Dog; obj=Dog → true
+                Asserts.assertTrue(testPhiSameKlassPositiveSharpening(dog, true));
+                Asserts.assertTrue(testPhiSameKlassPositiveSharpening(dog, false));
+                // obj=String → false
+                Asserts.assertFalse(testPhiSameKlassPositiveSharpening("hello", true));
                 break;
             default:
                 throw new IllegalArgumentException("Unknown test: " + testName);
@@ -1653,6 +1730,53 @@ public class TestTypeCheckElimination {
             // LCA(Dog,Cat)=Animal must NOT be excluded on the false-branch.
             Asserts.assertEquals(afterCount, beforeCount,
                 "25a: no check_instanceof should be eliminated; before=" + beforeCount + " after=" + afterCount);
+        }
+
+        // === 26a. PHI LCA positive sharpening: true-branch should eliminate Animal check ===
+        {
+            OutputAnalyzer output = runTestProcess("testPhiLCAPositiveSharpening", "testPhiLCAPositiveSharpening");
+            output.shouldHaveExitValue(0);
+            String fullOutput = output.getOutput();
+            String beforeIR = extractBeforeIR(fullOutput, "testPhiLCAPositiveSharpening");
+            String afterIR = extractAfterIR(fullOutput, "testPhiLCAPositiveSharpening");
+            int beforeCount = countOccurrences(beforeIR, "jeandle.check_instanceof");
+            int afterCount = countOccurrences(afterIR, "jeandle.check_instanceof");
+            // Before: Dog check + Cat check + Animal check = 3
+            // After: Dog + Cat stay (guards), Animal check eliminated on true-branch
+            Asserts.assertGTE(beforeCount, 3,
+                "26a: should have >= 3 check_instanceof before, got " + beforeCount);
+            Asserts.assertLT(afterCount, beforeCount,
+                "26a: instanceof Animal should be eliminated on true-branch via LCA; before=" + beforeCount + " after=" + afterCount);
+        }
+
+        // === 26b. PHI LCA deeper hierarchy: Poodle/Cat → Animal ===
+        {
+            OutputAnalyzer output = runTestProcess("testPhiLCADeeperHierarchy", "testPhiLCADeeperHierarchy");
+            output.shouldHaveExitValue(0);
+            String fullOutput = output.getOutput();
+            String beforeIR = extractBeforeIR(fullOutput, "testPhiLCADeeperHierarchy");
+            String afterIR = extractAfterIR(fullOutput, "testPhiLCADeeperHierarchy");
+            int beforeCount = countOccurrences(beforeIR, "jeandle.check_instanceof");
+            int afterCount = countOccurrences(afterIR, "jeandle.check_instanceof");
+            Asserts.assertGTE(beforeCount, 3,
+                "26b: should have >= 3 check_instanceof before, got " + beforeCount);
+            Asserts.assertLT(afterCount, beforeCount,
+                "26b: instanceof Animal should be eliminated on true-branch via LCA; before=" + beforeCount + " after=" + afterCount);
+        }
+
+        // === 26c. PHI same klass: both arms Dog, no LCA needed ===
+        {
+            OutputAnalyzer output = runTestProcess("testPhiSameKlassPositiveSharpening", "testPhiSameKlassPositiveSharpening");
+            output.shouldHaveExitValue(0);
+            String fullOutput = output.getOutput();
+            String beforeIR = extractBeforeIR(fullOutput, "testPhiSameKlassPositiveSharpening");
+            String afterIR = extractAfterIR(fullOutput, "testPhiSameKlassPositiveSharpening");
+            int beforeCount = countOccurrences(beforeIR, "jeandle.check_instanceof");
+            int afterCount = countOccurrences(afterIR, "jeandle.check_instanceof");
+            Asserts.assertGTE(beforeCount, 3,
+                "26c: should have >= 3 check_instanceof before, got " + beforeCount);
+            Asserts.assertLT(afterCount, beforeCount,
+                "26c: instanceof Animal should be eliminated on true-branch; before=" + beforeCount + " after=" + afterCount);
         }
 
         System.out.println("All TypeCheckElimination tests passed.");
