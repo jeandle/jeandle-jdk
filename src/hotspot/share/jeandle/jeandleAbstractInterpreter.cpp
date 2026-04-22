@@ -710,28 +710,34 @@ void JeandleAbstractInterpreter::initialize_VM_state() {
 void JeandleAbstractInterpreter::initialize_VM_state_from_osr_buffer(JeandleVMState* initial_jvm, llvm::Value* osr_buffer) {
   assert(is_osr(), "sanity");
 
-  // Do some special top-level things.
+  // Do type flow analysis.
   assert(_method != nullptr, "only for Java method compilations");
   ciTypeFlow* flow = _method->get_osr_flow_analysis(_entry_bci);
   assert(!flow->failing(), "type flow analysis failed for OSR compilation");
+  if (flow->failing()) {
+    JEANDLE_REPORT_ERROR_AND_RET_VOID("type flow analysis failed for OSR compilation");
+  }
 
   int max_locals = initial_jvm->max_locals();
   ciTypeFlow::Block* osr_entry_block = flow->rpo_at(0);
   assert(osr_entry_block->start() == _entry_bci, "the first rpo block must be osr entry block");
 
-  // Check bailouts.  We currently do not perform on stack replacement
-  // of loops in catch blocks or loops which branch with a non-empty stack.
+  // OSR Compilation Bailouts:
+  // In HotSpot, OSR is restricted to loop headers where the operand stack is empty.
+  // This is because SharedRuntime::OSR_migration_begin is designed to migrate 
+  // only locals and monitors from the interpreter frame; it does not currently account for 
+  // copying operand stack slots into the OSR buffer.
   if (osr_entry_block->stack_size() != 0) {
     JEANDLE_REPORT_ERROR_AND_RET_VOID("OSR starts with non-empty stack");
   }
 
   // Commute monitors from interpreter frame to compiler frame.
-  int mcnt = osr_entry_block->monitor_count();
-  if (mcnt != 0) {
-    int monitors_addr_offset = (max_locals + mcnt * 2 - 1) * wordSize;
+  int monitor_count = osr_entry_block->monitor_count();
+  if (monitor_count != 0) {
+    int monitors_addr_offset = (max_locals + monitor_count * 2 - 1) * wordSize;
     llvm::IRBuilder entry_block_ir_builder(_block_builder->entry_block()->header_llvm_block()->getTerminator());
-    llvm::SmallVector<llvm::Value*> locks(mcnt);
-    for (int index = 0; index < mcnt; index++) {
+    llvm::SmallVector<llvm::Value*> locks(monitor_count);
+    for (int index = 0; index < monitor_count; index++) {
       llvm::Value* lock_object_addr = _ir_builder.CreateInBoundsGEP(llvm::Type::getInt8Ty(*_context),
                                                                     osr_buffer,
                                                                     _ir_builder.getInt64(monitors_addr_offset - (index * 2) * wordSize));

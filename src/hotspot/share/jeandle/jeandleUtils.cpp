@@ -31,7 +31,7 @@
 #include "compiler/compilerThread.hpp"
 #include "runtime/thread.hpp"
 
-llvm::Function* JeandleFuncSig::create_llvm_func(ciMethod* method, llvm::Module& target_module, bool is_osr) {
+llvm::Function* JeandleFuncSig::create_llvm_func(ciMethod* method, llvm::Module& target_module, bool is_osr_entry) {
   llvm::SmallVector<llvm::Type*> args;
   llvm::LLVMContext& context = target_module.getContext();
 

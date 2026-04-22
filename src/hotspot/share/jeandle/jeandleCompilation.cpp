@@ -276,8 +276,6 @@ void JeandleCompilation::compile_java_method() {
     JeandleAbstractInterpreter interpret(_method, _entry_bci, *_llvm_module, _code);
   }
 
-  RETURN_VOID_ON_JEANDLE_ERROR();
-
   if (JeandleDumpIR) {
     dump_ir(false);
   }
