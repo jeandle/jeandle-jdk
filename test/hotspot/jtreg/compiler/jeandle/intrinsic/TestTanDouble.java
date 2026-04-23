@@ -83,7 +83,7 @@ public class TestTanDouble {
 
         ArrayList<String> command_args = new ArrayList<String>(List.of(
             "-Xbatch", "-XX:-TieredCompilation", "-XX:+UseJeandleCompiler", "-Xcomp",
-            "-Xlog:jeandle=debug", "-XX:+ForceUnreachable",
+            "-Xlog:jeandle=debug", "-XX:+UnlockDiagnosticVMOptions", "-XX:+ForceUnreachable",
             "-XX:CompileCommand=compileonly,"+TestWrapper.class.getName()+"::tan_double",
             "-XX:+JeandleUseHotspotIntrinsics"));
         if (is_x86) {

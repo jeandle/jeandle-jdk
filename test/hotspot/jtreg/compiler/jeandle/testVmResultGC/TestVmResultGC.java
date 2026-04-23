@@ -28,6 +28,14 @@ package compiler.jeandle.testVmResultGC;
  *    compiler.jeandle.testVmResultGC.TestVmResultGC
  */
 
+/* @test
+ * @requires os.arch=="aarch64"
+ * @summary Test return of JNI weak global refs from native calls with Neon disabled.
+ * @run main/othervm/native
+ *    -Xcomp -XX:-TieredCompilation -XX:+UseJeandleCompiler -XX:-UseNeon
+ *    compiler.jeandle.testVmResultGC.TestVmResultGC
+ */
+
 public final class TestVmResultGC {
 
     static {

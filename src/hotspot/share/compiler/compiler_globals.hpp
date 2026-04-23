@@ -383,7 +383,7 @@
           "Don't compile methods larger than this if "                      \
           "+DontCompileHugeMethods")                                        \
                                                                             \
-  product(bool, UseJeandleCompiler, true,                                  \
+  product(bool, UseJeandleCompiler, true,                                   \
           "Use Jeandle compiler")                                           \
                                                                             \
 

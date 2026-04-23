@@ -245,6 +245,8 @@ alloc_fast_path:
   ; Otherwise, the compiler may reorder the non-atomic stores. This is a conservative design. We may need
   ; to revisit this design to find a more efficient way.
   store atomic i64 %prototype_value, ptr addrspace(1) %mark_word_addr unordered, align 8
+  ; TODO: When UseCompressedClassPointers is enabled, klass should be stored as a 32-bit narrowKlass
+  ; instead of a full pointer. Currently this assumes uncompressed class pointers.
   store atomic ptr %klass, ptr addrspace(1) %klass_addr unordered, align 8
 
   %zero_tlab = load i1, ptr @VMOptions.ZeroTLAB
@@ -254,7 +256,8 @@ alloc_fast_path:
 clear_memory:
   %base_offset = load i32, ptr @instanceOopDesc.base_offset_in_bytes
   %base_addr = getelementptr i8, ptr addrspace(1) %tlab_old_top, i32 %base_offset
-  call void @llvm.memset.p1.i32(ptr addrspace(1) align 8 %base_addr, i8 0, i32 %size_in_bytes, i1 false)
+  %payload_size = sub i32 %size_in_bytes, %base_offset
+  call void @llvm.memset.p1.i32(ptr addrspace(1) align 8 %base_addr, i8 0, i32 %payload_size, i1 false)
   br label %initialization_membar
 
 initialization_membar:

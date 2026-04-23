@@ -21,6 +21,7 @@
 /*
  * @test
  * @library /test/lib
+ * @requires vm.debug == true
  * @run main/othervm -Xcomp -XX:-TieredCompilation -Xbatch -XX:+TraceCallFixup
  *      -XX:CompileCommand=compileonly,compiler.jeandle.bytecodeTranslate.calls.TestStaticBoundedCall::testFinalCall
  *      -XX:+UseJeandleCompiler compiler.jeandle.bytecodeTranslate.calls.TestStaticBoundedCall true
