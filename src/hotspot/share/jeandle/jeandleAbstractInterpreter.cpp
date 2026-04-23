@@ -875,9 +875,9 @@ void JeandleAbstractInterpreter::check_interpreter_type(ciTypeFlow::Block* osr_e
     llvm::Value* klass_value = _ir_builder.CreateIntToPtr(_ir_builder.getInt64((intptr_t)klass),
                                                           llvm::PointerType::get(*_context, llvm::jeandle::AddrSpace::CHeapAddrSpace));
 
-    llvm::CallInst* is_same_klass = call_java_op("jeandle.exact_instance_of", {klass_value, _jvm->locals_at(index)});
+    llvm::CallInst* is_subtype = call_java_op("jeandle.instanceof_or_null", {klass_value, _jvm->locals_at(index)});
 
-    _ir_builder.CreateCondBr(is_same_klass, next_block, osr_entry_trap_block);
+    _ir_builder.CreateCondBr(is_subtype, next_block, osr_entry_trap_block);
     _ir_builder.SetInsertPoint(next_block);
     _block_builder->entry_block()->set_tail_llvm_block(next_block);
 

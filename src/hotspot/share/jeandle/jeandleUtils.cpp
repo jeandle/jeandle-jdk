@@ -36,7 +36,7 @@ llvm::Function* JeandleFuncSig::create_llvm_func(ciMethod* method, llvm::Module&
   llvm::LLVMContext& context = target_module.getContext();
 
   ciSignature* sig = method->signature();
-  if (!is_osr) {
+  if (!is_osr_entry) {
     // Receiver is the first argument.
     if (!method->is_static()) {
       args.push_back(JeandleType::java2llvm(BasicType::T_OBJECT, context));
