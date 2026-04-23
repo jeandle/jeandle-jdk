@@ -792,6 +792,13 @@ void JeandleAbstractInterpreter::initialize_VM_state_from_osr_buffer(JeandleVMSt
       continue;
     }
 
+    // Special handling for non-alive oops.
+    if (is_reference_type(local_type) && !live_oops.at(index)) {
+      llvm::Value* null_oop = llvm::ConstantPointerNull::get(llvm::cast<llvm::PointerType>(JeandleType::java2llvm(BasicType::T_OBJECT, *_context)));
+      initial_jvm->set_locals_at(index, TypedValue(BasicType::T_OBJECT, null_oop));
+      continue;
+    }
+
     if (local_type == (BasicType)ciTypeFlow::StateVector::T_TOP ||
         local_type == (BasicType)ciTypeFlow::StateVector::T_BOTTOM) {
       continue;
@@ -799,11 +806,8 @@ void JeandleAbstractInterpreter::initialize_VM_state_from_osr_buffer(JeandleVMSt
 
     assert(local_type != T_NARROWOOP, "sanity");
 
-    // Special handling for null oop
-    if (local_type == (BasicType)ciTypeFlow::StateVector::T_NULL || (is_reference_type(local_type) && !live_oops.at(index))) {
-      llvm::Value* null_oop = llvm::ConstantPointerNull::get(llvm::cast<llvm::PointerType>(JeandleType::java2llvm(BasicType::T_OBJECT, *_context)));
-      initial_jvm->set_locals_at(index, TypedValue(BasicType::T_OBJECT, null_oop));
-      continue;
+    if (local_type == (BasicType)ciTypeFlow::StateVector::T_NULL) {
+      local_type = T_OBJECT;
     }
 
     assert(!is_subword_type(local_type), "subword types are treated as T_INT in calling sequences");
@@ -851,6 +855,12 @@ void JeandleAbstractInterpreter::check_interpreter_type(ciTypeFlow::Block* osr_e
   for (int index = 0; index < (int)(_jvm->max_locals()); index++) {
     BasicType local_type = osr_entry_block->local_type_at(index)->basic_type();
 
+    bool is_null_oop = false;
+    if (local_type == (BasicType)ciTypeFlow::StateVector::T_NULL) {
+      local_type = T_OBJECT;
+      is_null_oop = true;
+    }
+
     if (!live_locals->at(index) || !is_reference_type(local_type)) {
       continue;
     }
@@ -865,19 +875,25 @@ void JeandleAbstractInterpreter::check_interpreter_type(ciTypeFlow::Block* osr_e
       uncommon_trap(Deoptimization::Reason_constraint, Deoptimization::Action_reinterpret, osr_entry_trap_block);
     }
 
-    // Set the name of current_block
+    // Set the name of current_block.
     current_block->setName("osr_entry_check_local_" + std::to_string(index));
 
     // Create a block for the success path. 
     llvm::BasicBlock* next_block = llvm::BasicBlock::Create(*_context, "", _llvm_func);
 
-    Klass* klass = (Klass*)(osr_entry_block->local_type_at(index)->constant_encoding());
-    llvm::Value* klass_value = _ir_builder.CreateIntToPtr(_ir_builder.getInt64((intptr_t)klass),
-                                                          llvm::PointerType::get(*_context, llvm::jeandle::AddrSpace::CHeapAddrSpace));
+    llvm::Value* cond = nullptr;
+    if (is_null_oop || !osr_entry_block->local_type_at(index)->is_loaded()) {
+      llvm::Value* null_oop = llvm::ConstantPointerNull::get(llvm::cast<llvm::PointerType>(JeandleType::java2llvm(BasicType::T_OBJECT, *_context)));
+      cond = _ir_builder.CreateICmpEQ(_jvm->locals_at(index), null_oop);
+    } else {
+      Klass* klass = (Klass*)(osr_entry_block->local_type_at(index)->constant_encoding());
+      assert(klass != nullptr, "klass not loaded");
+      llvm::Value* klass_value = _ir_builder.CreateIntToPtr(_ir_builder.getInt64((intptr_t)klass),
+                                                            llvm::PointerType::get(*_context, llvm::jeandle::AddrSpace::CHeapAddrSpace));
+      cond = call_java_op("jeandle.instanceof_or_null", {klass_value, _jvm->locals_at(index)});
+    }
 
-    llvm::CallInst* is_subtype = call_java_op("jeandle.instanceof_or_null", {klass_value, _jvm->locals_at(index)});
-
-    _ir_builder.CreateCondBr(is_subtype, next_block, osr_entry_trap_block);
+    _ir_builder.CreateCondBr(cond, next_block, osr_entry_trap_block);
     _ir_builder.SetInsertPoint(next_block);
     _block_builder->entry_block()->set_tail_llvm_block(next_block);
 

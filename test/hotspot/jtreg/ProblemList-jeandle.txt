@@ -549,11 +549,6 @@ compiler/loopopts/superword/TestLargeScaleAndStride.java#vanilla                
 compiler/loopopts/superword/TestLargeScaleAndStride.java#AlignVector                           linux-aarch64,linux-x64
 
 ###
-# timeout due to missing safepoint
-###
-runtime/NMT/SummaryDiffThreadCount.java                                                        linux-aarch64,linux-x64
-
-###
 # fails due to `Math.log` (issue #424)
 ###
 compiler/interpreter/Test6539464.java                                                          linux-aarch64
