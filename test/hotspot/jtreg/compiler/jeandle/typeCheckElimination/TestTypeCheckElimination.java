@@ -674,6 +674,52 @@ public class TestTypeCheckElimination {
     }
 
     // =========================================================================
+    // Group 27: And with mixed negation (the bug fix)
+    // When a condition is And(instanceof A, NOT instanceof B), on the
+    // true-branch obj IS A AND obj IS NOT B. Both constraints should apply.
+    // =========================================================================
+
+    // 27a. And(instanceof Animal, NOT instanceof Dog): true-branch confirms
+    //      Animal and excludes Dog → subsequent instanceof Dog is false
+    static boolean testAndMixedNegation(Object obj) {
+        if (obj instanceof Animal && !(obj instanceof Dog)) {
+            // obj IS Animal AND obj IS NOT Dog
+            return obj instanceof Dog; // Eliminated to false: excluded Dog
+        }
+        return true;
+    }
+
+    // 27b. And(instanceof Animal, NOT instanceof Dog): the instanceof Animal
+    //      on the true-branch should still be confirmed (redundant check eliminated)
+    static boolean testAndMixedNegationPositive(Object obj) {
+        if (obj instanceof Animal && !(obj instanceof Dog)) {
+            // obj IS Animal AND obj IS NOT Dog
+            Animal a = (Animal) obj; // Eliminated: dominated by instanceof Animal
+            return a.id > 0;
+        }
+        return false;
+    }
+
+    // 27c. And of two negated checks (De Morgan): And(NOT instanceof Dog, NOT instanceof Cat)
+    //      On true-branch: both checks failed → obj IS NOT Dog AND obj IS NOT Cat
+    //      Subsequent instanceof Dog should be eliminated to false
+    static boolean testAndBothNegated(Object obj) {
+        if (!(obj instanceof Dog) && !(obj instanceof Cat)) {
+            // obj IS NOT Dog AND obj IS NOT Cat
+            return obj instanceof Dog; // Eliminated to false
+        }
+        return true;
+    }
+
+    // 27d. And of two negated checks: subsequent instanceof Cat also false
+    static boolean testAndBothNegatedCat(Object obj) {
+        if (!(obj instanceof Dog) && !(obj instanceof Cat)) {
+            return obj instanceof Cat; // Eliminated to false
+        }
+        return true;
+    }
+
+    // =========================================================================
     // Helper: extract IR section between "IR Dump Before" and "IR Dump After"
     // for a specific function, and the section after "IR Dump After".
     // =========================================================================
@@ -982,6 +1028,32 @@ public class TestTypeCheckElimination {
                 Asserts.assertTrue(testPhiSameKlassPositiveSharpening(dog, false));
                 // obj=String → false
                 Asserts.assertFalse(testPhiSameKlassPositiveSharpening("hello", true));
+                break;
+            case "testAndMixedNegation":
+                // obj=Cat: Cat IS Animal but NOT Dog → Dog check returns false
+                Asserts.assertFalse(testAndMixedNegation(cat));
+                // obj=Dog: instanceof Animal true, but instanceof Dog also true → guard fails
+                Asserts.assertTrue(testAndMixedNegation(dog));
+                // obj=String: instanceof Animal fails → guard fails
+                Asserts.assertTrue(testAndMixedNegation("hello"));
+                break;
+            case "testAndMixedNegationPositive":
+                Asserts.assertTrue(testAndMixedNegationPositive(cat));
+                Asserts.assertFalse(testAndMixedNegationPositive(dog));
+                Asserts.assertFalse(testAndMixedNegationPositive("hello"));
+                break;
+            case "testAndBothNegated":
+                // obj=String: not Dog, not Cat → guard true, Dog check false
+                Asserts.assertFalse(testAndBothNegated("hello"));
+                // obj=Dog: instanceof Dog true → guard fails
+                Asserts.assertTrue(testAndBothNegated(dog));
+                // obj=Cat: instanceof Cat true → guard fails
+                Asserts.assertTrue(testAndBothNegated(cat));
+                break;
+            case "testAndBothNegatedCat":
+                Asserts.assertFalse(testAndBothNegatedCat("hello"));
+                Asserts.assertTrue(testAndBothNegatedCat(dog));
+                Asserts.assertTrue(testAndBothNegatedCat(cat));
                 break;
             default:
                 throw new IllegalArgumentException("Unknown test: " + testName);
@@ -1777,6 +1849,69 @@ public class TestTypeCheckElimination {
                 "26c: should have >= 3 check_instanceof before, got " + beforeCount);
             Asserts.assertLT(afterCount, beforeCount,
                 "26c: instanceof Animal should be eliminated on true-branch; before=" + beforeCount + " after=" + afterCount);
+        }
+
+        // === 27a. And mixed negation: instanceof Animal && !(instanceof Dog) → Dog eliminated ===
+        {
+            OutputAnalyzer output = runTestProcess("testAndMixedNegation", "testAndMixedNegation");
+            output.shouldHaveExitValue(0);
+            String fullOutput = output.getOutput();
+            String beforeIR = extractBeforeIR(fullOutput, "testAndMixedNegation");
+            String afterIR = extractAfterIR(fullOutput, "testAndMixedNegation");
+            int beforeCount = countOccurrences(beforeIR, "jeandle.check_instanceof");
+            int afterCount = countOccurrences(afterIR, "jeandle.check_instanceof");
+            // instanceof Animal + instanceof Dog (guard) + instanceof Dog (inner) = 3
+            Asserts.assertGTE(beforeCount, 3,
+                "27a: should have >= 3 check_instanceof before, got " + beforeCount);
+            Asserts.assertLT(afterCount, beforeCount,
+                "27a: instanceof Dog after And guard should be eliminated; before=" + beforeCount + " after=" + afterCount);
+        }
+
+        // === 27b. And mixed negation positive: checkcast Animal eliminated ===
+        {
+            OutputAnalyzer output = runTestProcess("testAndMixedNegationPositive", "testAndMixedNegationPositive");
+            output.shouldHaveExitValue(0);
+            String fullOutput = output.getOutput();
+            String beforeIR = extractBeforeIR(fullOutput, "testAndMixedNegationPositive");
+            String afterIR = extractAfterIR(fullOutput, "testAndMixedNegationPositive");
+            int beforeCount = countOccurrences(beforeIR, "jeandle.check_instanceof");
+            int afterCount = countOccurrences(afterIR, "jeandle.check_instanceof");
+            // instanceof Animal + instanceof Dog (guard) + checkcast Animal = 3
+            Asserts.assertGTE(beforeCount, 3,
+                "27b: should have >= 3 check_instanceof before, got " + beforeCount);
+            Asserts.assertLT(afterCount, beforeCount,
+                "27b: checkcast Animal after And guard should be eliminated; before=" + beforeCount + " after=" + afterCount);
+        }
+
+        // === 27c. And both negated: !(instanceof Dog) && !(instanceof Cat) → Dog false ===
+        {
+            OutputAnalyzer output = runTestProcess("testAndBothNegated", "testAndBothNegated");
+            output.shouldHaveExitValue(0);
+            String fullOutput = output.getOutput();
+            String beforeIR = extractBeforeIR(fullOutput, "testAndBothNegated");
+            String afterIR = extractAfterIR(fullOutput, "testAndBothNegated");
+            int beforeCount = countOccurrences(beforeIR, "jeandle.check_instanceof");
+            int afterCount = countOccurrences(afterIR, "jeandle.check_instanceof");
+            // instanceof Dog (guard) + instanceof Cat (guard) + instanceof Dog (inner) = 3
+            Asserts.assertGTE(beforeCount, 3,
+                "27c: should have >= 3 check_instanceof before, got " + beforeCount);
+            Asserts.assertLT(afterCount, beforeCount,
+                "27c: instanceof Dog after double-negated And should be eliminated; before=" + beforeCount + " after=" + afterCount);
+        }
+
+        // === 27d. And both negated: instanceof Cat also false ===
+        {
+            OutputAnalyzer output = runTestProcess("testAndBothNegatedCat", "testAndBothNegatedCat");
+            output.shouldHaveExitValue(0);
+            String fullOutput = output.getOutput();
+            String beforeIR = extractBeforeIR(fullOutput, "testAndBothNegatedCat");
+            String afterIR = extractAfterIR(fullOutput, "testAndBothNegatedCat");
+            int beforeCount = countOccurrences(beforeIR, "jeandle.check_instanceof");
+            int afterCount = countOccurrences(afterIR, "jeandle.check_instanceof");
+            Asserts.assertGTE(beforeCount, 3,
+                "27d: should have >= 3 check_instanceof before, got " + beforeCount);
+            Asserts.assertLT(afterCount, beforeCount,
+                "27d: instanceof Cat after double-negated And should be eliminated; before=" + beforeCount + " after=" + afterCount);
         }
 
         System.out.println("All TypeCheckElimination tests passed.");
