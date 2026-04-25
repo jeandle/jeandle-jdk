@@ -720,6 +720,21 @@ public class TestTypeCheckElimination {
     }
 
     // =========================================================================
+    // Group 28: And with only one side matching 
+    // When only one operand of And traces to a type check, the false-branch
+    // constraints must be cleared — the And being false could be due to the
+    // non-type-check operand, not the matched one.
+    // =========================================================================
+
+    // 28a. And partial match: false-branch must NOT fold
+    static boolean testAndPartialMatchFalseBranch(Object obj, boolean sideCond) {
+        if ((obj instanceof Dog) && sideCond) {
+            return true;
+        }
+        return obj instanceof Dog; // Must NOT be eliminated to false
+    }
+
+    // =========================================================================
     // Helper: extract IR section between "IR Dump Before" and "IR Dump After"
     // for a specific function, and the section after "IR Dump After".
     // =========================================================================
@@ -1054,6 +1069,14 @@ public class TestTypeCheckElimination {
                 Asserts.assertFalse(testAndBothNegatedCat("hello"));
                 Asserts.assertTrue(testAndBothNegatedCat(dog));
                 Asserts.assertTrue(testAndBothNegatedCat(cat));
+                break;
+            case "testAndPartialMatchFalseBranch":
+                // obj=Dog, sideCond=false: Dog check passes but side fails → else, Dog check true
+                Asserts.assertTrue(testAndPartialMatchFalseBranch(dog, false));
+                // obj=String, sideCond=false: Dog check fails → else, Dog check false
+                Asserts.assertFalse(testAndPartialMatchFalseBranch("hello", false));
+                // obj=Dog, sideCond=true: guard passes → return true
+                Asserts.assertTrue(testAndPartialMatchFalseBranch(dog, true));
                 break;
             default:
                 throw new IllegalArgumentException("Unknown test: " + testName);
@@ -1912,6 +1935,23 @@ public class TestTypeCheckElimination {
                 "27d: should have >= 3 check_instanceof before, got " + beforeCount);
             Asserts.assertLT(afterCount, beforeCount,
                 "27d: instanceof Cat after double-negated And should be eliminated; before=" + beforeCount + " after=" + afterCount);
+        }
+
+        // === 28a. And partial match: false-branch must NOT fold ===
+        {
+            OutputAnalyzer output = runTestProcess("testAndPartialMatchFalseBranch", "testAndPartialMatchFalseBranch");
+            output.shouldHaveExitValue(0);
+            String fullOutput = output.getOutput();
+            String beforeIR = extractBeforeIR(fullOutput, "testAndPartialMatchFalseBranch");
+            String afterIR = extractAfterIR(fullOutput, "testAndPartialMatchFalseBranch");
+            int beforeCount = countOccurrences(beforeIR, "jeandle.check_instanceof");
+            int afterCount = countOccurrences(afterIR, "jeandle.check_instanceof");
+            // instanceof Dog (guard) + instanceof Dog (after else) = 2
+            // The second instanceof Dog must NOT be eliminated on the false-branch
+            Asserts.assertGTE(beforeCount, 2,
+                "28a: should have >= 2 check_instanceof before, got " + beforeCount);
+            Asserts.assertEquals(afterCount, beforeCount,
+                "28a: no check_instanceof should be eliminated; before=" + beforeCount + " after=" + afterCount);
         }
 
         System.out.println("All TypeCheckElimination tests passed.");
