@@ -735,6 +735,32 @@ public class TestTypeCheckElimination {
     }
 
     // =========================================================================
+    // Group 29: PHI with constant incoming on wrong branch (issue 3)
+    //
+    // Constant-false incomings must invalidate false-branch type info (could
+    // have been taken without any type check). Constant-true incomings must
+    // invalidate true-branch type info for the same reason.
+    // =========================================================================
+
+    // 29a. PHI constant-false: false-branch must NOT fold
+    static boolean testPhiConstantFalseBranch(Object obj, boolean flag) {
+        boolean b = flag ? (obj instanceof Dog) : false;
+        if (!b) {
+            return obj instanceof Dog; // Must NOT be eliminated
+        }
+        return true;
+    }
+
+    // 29b. PHI constant-true: true-branch must NOT fold
+    static boolean testPhiConstantTrueBranch(Object obj, boolean flag) {
+        boolean b = flag ? true : (obj instanceof Dog);
+        if (b) {
+            return obj instanceof Dog; // Must NOT be eliminated
+        }
+        return false;
+    }
+
+    // =========================================================================
     // Helper: extract IR section between "IR Dump Before" and "IR Dump After"
     // for a specific function, and the section after "IR Dump After".
     // =========================================================================
@@ -1077,6 +1103,26 @@ public class TestTypeCheckElimination {
                 Asserts.assertFalse(testAndPartialMatchFalseBranch("hello", false));
                 // obj=Dog, sideCond=true: guard passes → return true
                 Asserts.assertTrue(testAndPartialMatchFalseBranch(dog, true));
+                break;
+            case "testPhiConstantFalseBranch":
+                // obj=Dog, flag=true: instanceof Dog → true, !b → false, return true
+                Asserts.assertTrue(testPhiConstantFalseBranch(dog, true));
+                // obj=Dog, flag=false: b=false, !b → true, instanceof Dog → true
+                Asserts.assertTrue(testPhiConstantFalseBranch(dog, false));
+                // obj=String, flag=true: instanceof Dog → false, !b → true, instanceof Dog → false
+                Asserts.assertFalse(testPhiConstantFalseBranch("hello", true));
+                // obj=String, flag=false: b=false, !b → true, instanceof Dog → false
+                Asserts.assertFalse(testPhiConstantFalseBranch("hello", false));
+                break;
+            case "testPhiConstantTrueBranch":
+                // obj=Dog, flag=true: b=true, instanceof Dog → true
+                Asserts.assertTrue(testPhiConstantTrueBranch(dog, true));
+                // obj=Dog, flag=false: instanceof Dog → true, b → true, instanceof Dog → true
+                Asserts.assertTrue(testPhiConstantTrueBranch(dog, false));
+                // obj=String, flag=true: b=true, instanceof Dog → false
+                Asserts.assertFalse(testPhiConstantTrueBranch("hello", true));
+                // obj=String, flag=false: instanceof Dog → false, b → false, return false
+                Asserts.assertFalse(testPhiConstantTrueBranch("hello", false));
                 break;
             default:
                 throw new IllegalArgumentException("Unknown test: " + testName);
@@ -1952,6 +1998,36 @@ public class TestTypeCheckElimination {
                 "28a: should have >= 2 check_instanceof before, got " + beforeCount);
             Asserts.assertEquals(afterCount, beforeCount,
                 "28a: no check_instanceof should be eliminated; before=" + beforeCount + " after=" + afterCount);
+        }
+
+        // === 29a. PHI constant-false: false-branch must NOT fold ===
+        {
+            OutputAnalyzer output = runTestProcess("testPhiConstantFalseBranch", "testPhiConstantFalseBranch");
+            output.shouldHaveExitValue(0);
+            String fullOutput = output.getOutput();
+            String beforeIR = extractBeforeIR(fullOutput, "testPhiConstantFalseBranch");
+            String afterIR = extractAfterIR(fullOutput, "testPhiConstantFalseBranch");
+            int beforeCount = countOccurrences(beforeIR, "jeandle.check_instanceof");
+            int afterCount = countOccurrences(afterIR, "jeandle.check_instanceof");
+            Asserts.assertGTE(beforeCount, 2,
+                "29a: should have >= 2 check_instanceof before, got " + beforeCount);
+            Asserts.assertEquals(afterCount, beforeCount,
+                "29a: no check_instanceof should be eliminated on false-branch; before=" + beforeCount + " after=" + afterCount);
+        }
+
+        // === 29b. PHI constant-true: true-branch must NOT fold ===
+        {
+            OutputAnalyzer output = runTestProcess("testPhiConstantTrueBranch", "testPhiConstantTrueBranch");
+            output.shouldHaveExitValue(0);
+            String fullOutput = output.getOutput();
+            String beforeIR = extractBeforeIR(fullOutput, "testPhiConstantTrueBranch");
+            String afterIR = extractAfterIR(fullOutput, "testPhiConstantTrueBranch");
+            int beforeCount = countOccurrences(beforeIR, "jeandle.check_instanceof");
+            int afterCount = countOccurrences(afterIR, "jeandle.check_instanceof");
+            Asserts.assertGTE(beforeCount, 2,
+                "29b: should have >= 2 check_instanceof before, got " + beforeCount);
+            Asserts.assertEquals(afterCount, beforeCount,
+                "29b: no check_instanceof should be eliminated on true-branch; before=" + beforeCount + " after=" + afterCount);
         }
 
         System.out.println("All TypeCheckElimination tests passed.");
