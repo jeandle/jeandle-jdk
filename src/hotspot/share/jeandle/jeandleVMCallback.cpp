@@ -74,6 +74,18 @@ bool jeandle_is_object_klass(uintptr_t klass_ptr) {
   return (Klass*)klass_ptr == vmClasses::Object_klass();
 }
 
+bool jeandle_is_effectively_final(uintptr_t klass_ptr) {
+  Klass* klass = (Klass*)klass_ptr;
+  if (klass->is_instance_klass())
+    return InstanceKlass::cast(klass)->is_final();
+  if (klass->is_typeArray_klass())
+    return true;
+  if (klass->is_objArray_klass())
+    return jeandle_is_effectively_final(
+        (uintptr_t)ObjArrayKlass::cast(klass)->bottom_klass());
+  return false;
+}
+
 } // anonymous namespace
 
 void register_jeandle_vm_callbacks() {
@@ -83,5 +95,6 @@ void register_jeandle_vm_callbacks() {
   callbacks.GetFieldType = &jeandle_get_field_type;
   callbacks.IsInterface = &jeandle_is_interface;
   callbacks.IsObjectKlass = &jeandle_is_object_klass;
+  callbacks.IsEffectivelyFinal = &jeandle_is_effectively_final;
   llvm::jeandle::registerVMCallbacks(callbacks);
 }
