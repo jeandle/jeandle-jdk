@@ -28,6 +28,8 @@
 #include "jeandle/__hotspotHeadersBegin__.hpp"
 #include "ci/ciMethod.hpp"
 
+class Klass;
+
 namespace llvm {
 class SubtargetFeatures;
 }
@@ -39,14 +41,15 @@ class JeandleFuncSig : public AllStatic {
   static std::string method_name(ciMethod* method);
   static std::string method_name_with_signature(ciMethod* method);
   static void setup_description(llvm::Function* func, bool is_stub = false);
-
-  // Check if a klass is an interface type that the verifier does not enforce.
-  static bool is_unverified_interface(ciKlass* klass);
-
-  // A klass is effectively final if no subtype can exist at runtime.
-  // Handles instance klasses, primitive array klasses, and object array klasses.
-  static bool is_effectively_final(ciKlass* klass);
 };
+
+// Check if a klass is an interface type that the bytecode verifier does not enforce.
+bool is_unverified_interface(ciKlass* klass);
+bool is_unverified_interface(Klass* klass);
+
+// A klass is effectively final if no subtype can exist at runtime.
+bool is_effectively_final(ciKlass* klass);
+bool is_effectively_final(Klass* klass);
 
 void apply_vm_flag_feature_overrides(llvm::SubtargetFeatures& features);
 

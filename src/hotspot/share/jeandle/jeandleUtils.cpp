@@ -32,13 +32,15 @@
 #include "ci/ciObjArrayKlass.hpp"
 #include "compiler/abstractCompiler.hpp"
 #include "compiler/compilerThread.hpp"
+#include "oops/instanceKlass.hpp"
+#include "oops/objArrayKlass.hpp"
 #include "runtime/thread.hpp"
 
-// Check if a klass is an interface type that the verifier does not enforce.
+// Check if a klass is an interface type that the bytecode verifier does not enforce.
 // This includes interface instance klasses and arrays whose base element is an
 // interface (e.g., MyInterface[], MyInterface[][]). These types should not get
 // java-klass attributes, matching C2's ignore_interfaces behavior.
-bool JeandleFuncSig::is_unverified_interface(ciKlass* klass) {
+bool is_unverified_interface(ciKlass* klass) {
   if (klass->is_instance_klass())
     return klass->is_interface();
   if (klass->is_obj_array_klass())
@@ -46,17 +48,35 @@ bool JeandleFuncSig::is_unverified_interface(ciKlass* klass) {
   return false;
 }
 
+bool is_unverified_interface(Klass* klass) {
+  if (klass->is_instance_klass())
+    return klass->is_interface();
+  if (klass->is_objArray_klass())
+    return is_unverified_interface(ObjArrayKlass::cast(klass)->element_klass());
+  return false;
+}
+
 // A klass is effectively final if no subtype can exist at runtime.
 // For instance klasses: final class.
 // For type array klasses (int[], byte[]): always (no subtypes).
 // For obj array klasses (String[]): if the base element klass is effectively final.
-bool JeandleFuncSig::is_effectively_final(ciKlass* klass) {
+bool is_effectively_final(ciKlass* klass) {
   if (klass->is_instance_klass())
     return klass->as_instance_klass()->is_final();
   if (klass->is_type_array_klass())
     return true;
   if (klass->is_obj_array_klass())
     return is_effectively_final(klass->as_obj_array_klass()->base_element_klass());
+  return false;
+}
+
+bool is_effectively_final(Klass* klass) {
+  if (klass->is_instance_klass())
+    return klass->is_final();
+  if (klass->is_typeArray_klass())
+    return true;
+  if (klass->is_objArray_klass())
+    return is_effectively_final(ObjArrayKlass::cast(klass)->element_klass());
   return false;
 }
 

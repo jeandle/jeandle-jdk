@@ -720,7 +720,7 @@ public class TestTypeCheckElimination {
     }
 
     // =========================================================================
-    // Group 28: And with only one side matching 
+    // Group 28: And with only one side matching
     // When only one operand of And traces to a type check, the false-branch
     // constraints must be cleared — the And being false could be due to the
     // non-type-check operand, not the matched one.
@@ -830,6 +830,144 @@ public class TestTypeCheckElimination {
     static boolean testExactClassVsImplementedInterface() {
         Object obj = new Dog();
         return obj instanceof Barkable; // Eliminated to true: exact Dog IS subtype of Barkable
+    }
+
+    // =========================================================================
+    // Group 32: extractKlassConstant robustness regression tests
+    // =========================================================================
+
+    // 32a. Multiple sequential type checks with different klass constants.
+    // Exercises extractKlassConstant being called multiple times within one
+    // function, each with a different klass constant argument.
+    static int testMultipleKlassExtractions(Object obj) {
+        if (obj instanceof Animal) {
+            if (obj instanceof Dog) {
+                if (obj instanceof Poodle) {
+                    return 4;
+                }
+                if (obj instanceof Barkable) { // interface klass constant
+                    return 3;
+                }
+                return 2;
+            }
+            return 1;
+        }
+        return 0;
+    }
+
+    // 32b. Type check after method call returning typed value.
+    // The return value has klass attributes; combined with a subsequent
+    // instanceof, this tests klass extraction alongside attribute-based type.
+    static Dog createDog() { return new Dog(); }
+    static boolean testKlassExtractionAfterCall() {
+        Object obj = createDog();
+        return obj instanceof Animal; // Eliminated: Dog is subtype of Animal
+    }
+
+    // 32c. Type check on array element — array element loads carry type metadata.
+    // Animal[] element instanceof Animal → eliminated (element type is Animal).
+    static boolean testKlassExtractionWithArray(Animal[] animals) {
+        if (animals.length > 0) {
+            Object first = animals[0];
+            return first instanceof Animal; // Eliminated: Animal[] element IS Animal
+        }
+        return false;
+    }
+
+    // =========================================================================
+    // Group 33: Array element load type propagation (aaload metadata)
+    // =========================================================================
+
+    // 33a. Final element type: String[] element instanceof String → eliminated (exact)
+    static boolean testAaloadFinalElement(String[] arr) {
+        if (arr.length > 0) {
+            Object elem = arr[0];
+            return elem instanceof String;
+        }
+        return false;
+    }
+
+    // 33b. Final element type negative: String[] element instanceof Animal → eliminated (false)
+    static boolean testAaloadFinalElementNegative(String[] arr) {
+        if (arr.length > 0) {
+            Object elem = arr[0];
+            return elem instanceof Animal;
+        }
+        return false;
+    }
+
+    // 33c. Non-final element: Animal[] element instanceof Dog → preserved
+    //      Animal is not final, so element could be Dog or not.
+    static boolean testAaloadNonFinalElement(Animal[] arr) {
+        if (arr.length > 0) {
+            Object elem = arr[0];
+            return elem instanceof Dog;
+        }
+        return false;
+    }
+
+    // 33d. Subtype element: Dog[] element instanceof Animal → eliminated (true)
+    static boolean testAaloadSubtypeElement(Dog[] arr) {
+        if (arr.length > 0) {
+            Object elem = arr[0];
+            return elem instanceof Animal;
+        }
+        return false;
+    }
+
+    // 33e. Interface element: Dog[] element instanceof Barkable → eliminated (true)
+    static boolean testAaloadInterfaceElement(Dog[] arr) {
+        if (arr.length > 0) {
+            Object elem = arr[0];
+            return elem instanceof Barkable;
+        }
+        return false;
+    }
+
+    // 33f. Interface array: Barkable[] element instanceof Dog → preserved
+    //      Interface arrays have no reliable type metadata (is_unverified_interface).
+    static boolean testAaloadInterfaceArray(Barkable[] arr) {
+        if (arr.length > 0) {
+            Object elem = arr[0];
+            return elem instanceof Dog;
+        }
+        return false;
+    }
+
+    // 33g. Nested array: String[][] element instanceof String[] → eliminated (exact)
+    //      Element type of String[][] is String[], which is effectively final.
+    static boolean testAaloadNestedArray(String[][] arr) {
+        if (arr.length > 0) {
+            Object elem = arr[0];
+            return elem instanceof String[];
+        }
+        return false;
+    }
+
+    // 33h. Array element with dominating type check:
+    //      Animal[] param, guard on element instanceof Dog, then instanceof Animal → eliminated
+    static int testAaloadWithGuard(Animal[] arr) {
+        if (arr.length > 0) {
+            Object elem = arr[0];
+            if (elem instanceof Dog) {
+                return (elem instanceof Animal) ? 2 : 1; // Animal check eliminated
+            }
+            return 0;
+        }
+        return -1;
+    }
+
+    // 33i. Multiple loads from same array, different checks.
+    static int testAaloadMultipleElements(Animal[] arr) {
+        if (arr.length > 1) {
+            Object first = arr[0];
+            Object second = arr[1];
+            int r = 0;
+            if (first instanceof Animal) r += 1;  // eliminated: Animal[] element IS Animal
+            if (second instanceof Dog) r += 2;    // preserved: not all Animals are Dogs
+            return r;
+        }
+        return 0;
     }
 
     // =========================================================================
@@ -1216,6 +1354,51 @@ public class TestTypeCheckElimination {
                 break;
             case "testExactClassVsImplementedInterface":
                 Asserts.assertTrue(testExactClassVsImplementedInterface());
+                break;
+            case "testMultipleKlassExtractions":
+                Asserts.assertEquals(testMultipleKlassExtractions(new Poodle()), 4);
+                Asserts.assertEquals(testMultipleKlassExtractions(new Dog()), 3);
+                Asserts.assertEquals(testMultipleKlassExtractions(cat), 1);
+                Asserts.assertEquals(testMultipleKlassExtractions("hello"), 0);
+                break;
+            case "testKlassExtractionAfterCall":
+                Asserts.assertTrue(testKlassExtractionAfterCall());
+                break;
+            case "testKlassExtractionWithArray":
+                Asserts.assertTrue(testKlassExtractionWithArray(new Animal[]{dog}));
+                Asserts.assertTrue(testKlassExtractionWithArray(new Animal[]{cat}));
+                Asserts.assertFalse(testKlassExtractionWithArray(new Animal[]{}));
+                break;
+            case "testAaloadFinalElement":
+                Asserts.assertTrue(testAaloadFinalElement(new String[]{"a"}));
+                Asserts.assertFalse(testAaloadFinalElement(new String[]{}));
+                break;
+            case "testAaloadFinalElementNegative":
+                Asserts.assertFalse(testAaloadFinalElementNegative(new String[]{"a"}));
+                break;
+            case "testAaloadNonFinalElement":
+                Asserts.assertTrue(testAaloadNonFinalElement(new Animal[]{dog}));
+                Asserts.assertFalse(testAaloadNonFinalElement(new Animal[]{cat}));
+                break;
+            case "testAaloadSubtypeElement":
+                Asserts.assertTrue(testAaloadSubtypeElement(new Dog[]{dog}));
+                break;
+            case "testAaloadInterfaceElement":
+                Asserts.assertTrue(testAaloadInterfaceElement(new Dog[]{dog}));
+                break;
+            case "testAaloadInterfaceArray":
+                Asserts.assertTrue(testAaloadInterfaceArray(new Barkable[]{dog}));
+                break;
+            case "testAaloadNestedArray":
+                Asserts.assertTrue(testAaloadNestedArray(new String[][]{{"a"}}));
+                break;
+            case "testAaloadWithGuard":
+                Asserts.assertEquals(testAaloadWithGuard(new Animal[]{dog}), 2);
+                Asserts.assertEquals(testAaloadWithGuard(new Animal[]{cat}), 0);
+                break;
+            case "testAaloadMultipleElements":
+                Asserts.assertEquals(testAaloadMultipleElements(new Animal[]{dog, dog}), 3);
+                Asserts.assertEquals(testAaloadMultipleElements(new Animal[]{cat, cat}), 1);
                 break;
             default:
                 throw new IllegalArgumentException("Unknown test: " + testName);
@@ -2181,6 +2364,186 @@ public class TestTypeCheckElimination {
                 "31b: should have >= 1 check_instanceof before, got " + beforeCount);
             Asserts.assertEquals(afterCount, 0,
                 "31b: exact Dog instanceof Barkable should be eliminated to true, got " + afterCount);
+        }
+
+        // === 32a. Multiple sequential klass extractions ===
+        {
+            OutputAnalyzer output = runTestProcess("testMultipleKlassExtractions", "testMultipleKlassExtractions");
+            output.shouldHaveExitValue(0);
+            String fullOutput = output.getOutput();
+            String beforeIR = extractBeforeIR(fullOutput, "testMultipleKlassExtractions");
+            String afterIR = extractAfterIR(fullOutput, "testMultipleKlassExtractions");
+            int beforeCount = countOccurrences(beforeIR, "jeandle.check_instanceof");
+            int afterCount = countOccurrences(afterIR, "jeandle.check_instanceof");
+            // Animal + Dog + Poodle + Barkable + their checkcasts = many checks
+            // Dominated checks (after guards) should be eliminated
+            Asserts.assertGTE(beforeCount, 4,
+                "32a: should have >= 4 check_instanceof before, got " + beforeCount);
+            Asserts.assertLT(afterCount, beforeCount,
+                "32a: dominated checks should be eliminated; before=" + beforeCount + " after=" + afterCount);
+        }
+
+        // === 32b. Klass extraction after method call ===
+        {
+            OutputAnalyzer output = runTestProcess("testKlassExtractionAfterCall", "testKlassExtractionAfterCall");
+            output.shouldHaveExitValue(0);
+            String fullOutput = output.getOutput();
+            String beforeIR = extractBeforeIR(fullOutput, "testKlassExtractionAfterCall");
+            String afterIR = extractAfterIR(fullOutput, "testKlassExtractionAfterCall");
+            int beforeCount = countOccurrences(beforeIR, "jeandle.check_instanceof");
+            int afterCount = countOccurrences(afterIR, "jeandle.check_instanceof");
+            Asserts.assertGTE(beforeCount, 1,
+                "32b: should have >= 1 check_instanceof before, got " + beforeCount);
+            Asserts.assertEquals(afterCount, 0,
+                "32b: Dog return instanceof Animal should be eliminated, got " + afterCount);
+        }
+
+        // === 32c. Klass extraction with array element — now eliminated ===
+        {
+            OutputAnalyzer output = runTestProcess("testKlassExtractionWithArray", "testKlassExtractionWithArray");
+            output.shouldHaveExitValue(0);
+            String fullOutput = output.getOutput();
+            String beforeIR = extractBeforeIR(fullOutput, "testKlassExtractionWithArray");
+            String afterIR = extractAfterIR(fullOutput, "testKlassExtractionWithArray");
+            int beforeCount = countOccurrences(beforeIR, "jeandle.check_instanceof");
+            int afterCount = countOccurrences(afterIR, "jeandle.check_instanceof");
+            Asserts.assertGTE(beforeCount, 1,
+                "32c: should have >= 1 check_instanceof before, got " + beforeCount);
+            Asserts.assertEquals(afterCount, 0,
+                "32c: Animal[] element instanceof Animal should be eliminated, got " + afterCount);
+        }
+
+        // === 33a. Final element: String[] element instanceof String → eliminated ===
+        {
+            OutputAnalyzer output = runTestProcess("testAaloadFinalElement", "testAaloadFinalElement");
+            output.shouldHaveExitValue(0);
+            String fullOutput = output.getOutput();
+            String beforeIR = extractBeforeIR(fullOutput, "testAaloadFinalElement");
+            String afterIR = extractAfterIR(fullOutput, "testAaloadFinalElement");
+            int beforeCount = countOccurrences(beforeIR, "jeandle.check_instanceof");
+            int afterCount = countOccurrences(afterIR, "jeandle.check_instanceof");
+            Asserts.assertGTE(beforeCount, 1,
+                "33a: should have >= 1 check_instanceof before, got " + beforeCount);
+            Asserts.assertEquals(afterCount, 0,
+                "33a: String[] element instanceof String should be eliminated, got " + afterCount);
+        }
+
+        // === 33b. Final element negative: String[] element instanceof Animal → eliminated (false) ===
+        {
+            OutputAnalyzer output = runTestProcess("testAaloadFinalElementNegative", "testAaloadFinalElementNegative");
+            output.shouldHaveExitValue(0);
+            String fullOutput = output.getOutput();
+            String beforeIR = extractBeforeIR(fullOutput, "testAaloadFinalElementNegative");
+            String afterIR = extractAfterIR(fullOutput, "testAaloadFinalElementNegative");
+            int beforeCount = countOccurrences(beforeIR, "jeandle.check_instanceof");
+            int afterCount = countOccurrences(afterIR, "jeandle.check_instanceof");
+            Asserts.assertGTE(beforeCount, 1,
+                "33b: should have >= 1 check_instanceof before, got " + beforeCount);
+            Asserts.assertEquals(afterCount, 0,
+                "33b: String[] element instanceof Animal should be eliminated (false), got " + afterCount);
+        }
+
+        // === 33c. Non-final element: Animal[] element instanceof Dog → preserved ===
+        {
+            OutputAnalyzer output = runTestProcess("testAaloadNonFinalElement", "testAaloadNonFinalElement");
+            output.shouldHaveExitValue(0);
+            String fullOutput = output.getOutput();
+            String beforeIR = extractBeforeIR(fullOutput, "testAaloadNonFinalElement");
+            String afterIR = extractAfterIR(fullOutput, "testAaloadNonFinalElement");
+            int beforeCount = countOccurrences(beforeIR, "jeandle.check_instanceof");
+            int afterCount = countOccurrences(afterIR, "jeandle.check_instanceof");
+            Asserts.assertEquals(afterCount, beforeCount,
+                "33c: Animal[] element instanceof Dog should be preserved; before=" + beforeCount + " after=" + afterCount);
+        }
+
+        // === 33d. Subtype element: Dog[] element instanceof Animal → eliminated ===
+        {
+            OutputAnalyzer output = runTestProcess("testAaloadSubtypeElement", "testAaloadSubtypeElement");
+            output.shouldHaveExitValue(0);
+            String fullOutput = output.getOutput();
+            String beforeIR = extractBeforeIR(fullOutput, "testAaloadSubtypeElement");
+            String afterIR = extractAfterIR(fullOutput, "testAaloadSubtypeElement");
+            int beforeCount = countOccurrences(beforeIR, "jeandle.check_instanceof");
+            int afterCount = countOccurrences(afterIR, "jeandle.check_instanceof");
+            Asserts.assertGTE(beforeCount, 1,
+                "33d: should have >= 1 check_instanceof before, got " + beforeCount);
+            Asserts.assertEquals(afterCount, 0,
+                "33d: Dog[] element instanceof Animal should be eliminated, got " + afterCount);
+        }
+
+        // === 33e. Interface element: Dog[] element instanceof Barkable → eliminated ===
+        {
+            OutputAnalyzer output = runTestProcess("testAaloadInterfaceElement", "testAaloadInterfaceElement");
+            output.shouldHaveExitValue(0);
+            String fullOutput = output.getOutput();
+            String beforeIR = extractBeforeIR(fullOutput, "testAaloadInterfaceElement");
+            String afterIR = extractAfterIR(fullOutput, "testAaloadInterfaceElement");
+            int beforeCount = countOccurrences(beforeIR, "jeandle.check_instanceof");
+            int afterCount = countOccurrences(afterIR, "jeandle.check_instanceof");
+            Asserts.assertGTE(beforeCount, 1,
+                "33e: should have >= 1 check_instanceof before, got " + beforeCount);
+            Asserts.assertEquals(afterCount, 0,
+                "33e: Dog[] element instanceof Barkable should be eliminated, got " + afterCount);
+        }
+
+        // === 33f. Interface array: Barkable[] element instanceof Dog → preserved ===
+        {
+            OutputAnalyzer output = runTestProcess("testAaloadInterfaceArray", "testAaloadInterfaceArray");
+            output.shouldHaveExitValue(0);
+            String fullOutput = output.getOutput();
+            String beforeIR = extractBeforeIR(fullOutput, "testAaloadInterfaceArray");
+            String afterIR = extractAfterIR(fullOutput, "testAaloadInterfaceArray");
+            int beforeCount = countOccurrences(beforeIR, "jeandle.check_instanceof");
+            int afterCount = countOccurrences(afterIR, "jeandle.check_instanceof");
+            Asserts.assertEquals(afterCount, beforeCount,
+                "33f: Barkable[] element instanceof Dog should be preserved; before=" + beforeCount + " after=" + afterCount);
+        }
+
+        // === 33g. Nested array: String[][] element instanceof String[] → eliminated ===
+        {
+            OutputAnalyzer output = runTestProcess("testAaloadNestedArray", "testAaloadNestedArray");
+            output.shouldHaveExitValue(0);
+            String fullOutput = output.getOutput();
+            String beforeIR = extractBeforeIR(fullOutput, "testAaloadNestedArray");
+            String afterIR = extractAfterIR(fullOutput, "testAaloadNestedArray");
+            int beforeCount = countOccurrences(beforeIR, "jeandle.check_instanceof");
+            int afterCount = countOccurrences(afterIR, "jeandle.check_instanceof");
+            Asserts.assertGTE(beforeCount, 1,
+                "33g: should have >= 1 check_instanceof before, got " + beforeCount);
+            Asserts.assertEquals(afterCount, 0,
+                "33g: String[][] element instanceof String[] should be eliminated, got " + afterCount);
+        }
+
+        // === 33h. Array element with guard: Dog guard then instanceof Animal → eliminated ===
+        {
+            OutputAnalyzer output = runTestProcess("testAaloadWithGuard", "testAaloadWithGuard");
+            output.shouldHaveExitValue(0);
+            String fullOutput = output.getOutput();
+            String beforeIR = extractBeforeIR(fullOutput, "testAaloadWithGuard");
+            String afterIR = extractAfterIR(fullOutput, "testAaloadWithGuard");
+            int beforeCount = countOccurrences(beforeIR, "jeandle.check_instanceof");
+            int afterCount = countOccurrences(afterIR, "jeandle.check_instanceof");
+            Asserts.assertGTE(beforeCount, 2,
+                "33h: should have >= 2 check_instanceof before, got " + beforeCount);
+            Asserts.assertLT(afterCount, beforeCount,
+                "33h: instanceof Animal after Dog guard should be eliminated; before=" + beforeCount + " after=" + afterCount);
+        }
+
+        // === 33i. Multiple elements: Animal instanceof eliminated, Dog instanceof preserved ===
+        {
+            OutputAnalyzer output = runTestProcess("testAaloadMultipleElements", "testAaloadMultipleElements");
+            output.shouldHaveExitValue(0);
+            String fullOutput = output.getOutput();
+            String beforeIR = extractBeforeIR(fullOutput, "testAaloadMultipleElements");
+            String afterIR = extractAfterIR(fullOutput, "testAaloadMultipleElements");
+            int beforeCount = countOccurrences(beforeIR, "jeandle.check_instanceof");
+            int afterCount = countOccurrences(afterIR, "jeandle.check_instanceof");
+            Asserts.assertGTE(beforeCount, 2,
+                "33i: should have >= 2 check_instanceof before, got " + beforeCount);
+            Asserts.assertLT(afterCount, beforeCount,
+                "33i: Animal check should be eliminated but Dog check preserved; before=" + beforeCount + " after=" + afterCount);
+            Asserts.assertGTE(afterCount, 1,
+                "33i: Dog check should be preserved, got " + afterCount);
         }
 
         System.out.println("All TypeCheckElimination tests passed.");

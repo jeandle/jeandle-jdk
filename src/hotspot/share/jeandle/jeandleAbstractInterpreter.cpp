@@ -23,6 +23,7 @@
 #include "llvm/IR/Attributes.h"
 #include "llvm/IR/Jeandle/Attributes.h"
 #include "llvm/IR/Jeandle/GCStrategy.h"
+#include "llvm/IR/Jeandle/JavaType.h"
 #include "llvm/IR/Jeandle/Metadata.h"
 
 
@@ -36,6 +37,7 @@
 #include "ci/ciMethodBlocks.hpp"
 #include "ci/ciObjArrayKlass.hpp"
 #include "ci/ciSymbols.hpp"
+#include "oops/objArrayKlass.hpp"
 #include "classfile/javaClasses.hpp"
 #include "interpreter/interpreter.hpp"
 #include "logging/log.hpp"
@@ -1584,12 +1586,12 @@ void JeandleAbstractInterpreter::invoke() {
   ciType* ret_type = method_signature->return_type();
   if (ret_type->is_klass()) {
     ciKlass* ret_klass = ret_type->as_klass();
-    if (ret_klass->is_loaded() && !JeandleFuncSig::is_unverified_interface(ret_klass)) {
+    if (ret_klass->is_loaded() && !is_unverified_interface(ret_klass)) {
       Klass* ret_klass_enc = (Klass*)(ret_klass->constant_encoding());
       invoke->addRetAttr(llvm::Attribute::get(*_context,
           llvm::jeandle::Attribute::JavaKlass,
           std::to_string((uintptr_t)ret_klass_enc)));
-      if (JeandleFuncSig::is_effectively_final(ret_klass)) {
+      if (is_effectively_final(ret_klass)) {
         invoke->addRetAttr(llvm::Attribute::get(*_context,
             llvm::jeandle::Attribute::JavaKlassExact));
       }
@@ -2074,14 +2076,14 @@ void JeandleAbstractInterpreter::do_get_xxx(ciField* field, bool is_static) {
   // so a field declared as an interface could hold any Object at runtime.
   if (field->type()->is_klass()) {
     ciKlass* field_klass = field->type()->as_klass();
-    if (field_klass->is_loaded() && !JeandleFuncSig::is_unverified_interface(field_klass)) {
+    if (field_klass->is_loaded() && !is_unverified_interface(field_klass)) {
       Klass* klass_enc = (Klass*)(field_klass->constant_encoding());
       if (llvm::Instruction* load_inst = llvm::dyn_cast<llvm::Instruction>(value)) {
         llvm::MDNode* klass_md = llvm::MDNode::get(*_context, {
             llvm::ConstantAsMetadata::get(_ir_builder.getInt64((intptr_t)klass_enc))
         });
         load_inst->setMetadata(llvm::jeandle::Metadata::JavaKlass, klass_md);
-        if (JeandleFuncSig::is_effectively_final(field_klass)) {
+        if (is_effectively_final(field_klass)) {
           load_inst->setMetadata(llvm::jeandle::Metadata::JavaKlassExact,
                                  llvm::MDNode::get(*_context, {}));
         }
@@ -2259,6 +2261,29 @@ void JeandleAbstractInterpreter::do_array_load(BasicType basic_type) {
     case T_OBJECT: {
       llvm::Value* load_value = do_array_load_inner(
               T_OBJECT, llvm::PointerType::get(*_context, llvm::jeandle::AddrSpace::JavaHeapAddrSpace));
+
+      // Attach element type metadata if the array's type is known.
+      if (llvm::Instruction* load_inst = llvm::dyn_cast<llvm::Instruction>(load_value)) {
+        llvm::jeandle::JavaType array_type = llvm::jeandle::getJavaType(array_ref);
+        if (array_type.isKnown()) {
+          Klass* array_klass = (Klass*)array_type.Klass;
+          if (array_klass->is_objArray_klass()) {
+            Klass* elem_klass = ObjArrayKlass::cast(array_klass)->element_klass();
+            if (!is_unverified_interface(elem_klass)) {
+              llvm::MDNode* klass_md = llvm::MDNode::get(*_context, {
+                  llvm::ConstantAsMetadata::get(
+                      _ir_builder.getInt64((intptr_t)elem_klass))
+              });
+              load_inst->setMetadata(llvm::jeandle::Metadata::JavaKlass, klass_md);
+              if (is_effectively_final(elem_klass)) {
+                load_inst->setMetadata(llvm::jeandle::Metadata::JavaKlassExact,
+                                       llvm::MDNode::get(*_context, {}));
+              }
+            }
+          }
+        }
+      }
+
       _jvm->apush(load_value);
       break;
     }
