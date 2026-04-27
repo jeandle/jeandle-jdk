@@ -761,7 +761,78 @@ public class TestTypeCheckElimination {
     }
 
     // =========================================================================
-    // Helper: extract IR section between "IR Dump Before" and "IR Dump After"
+    // Group 30: typeUnion preserves exclusions across PHI with mixed
+    //           known-Klass/unknown-Klass incomings (issue 8 fix)
+    //
+    // Pattern: y = PHI[new Dog(), null] forces getPhiJavaType(y) to return {}
+    // (null incoming is unknown → bail). After a failed instanceof check on y,
+    // sharpening gives {Klass=0, ExcludedKlasses={...}}. A second PHI
+    // x = PHI[new Cat(), y] triggers typeUnion({Klass=Cat, Exact=true},
+    // {Klass=0, ExcludedKlasses={...}}). The fix preserves the exclusion when
+    // Cat is provably disjoint from the excluded type.
+    // =========================================================================
+
+    // 30a. PHI union preserves class exclusion
+    static boolean testPhiUnionExclusionPreserved(boolean flag1, boolean flag2) {
+        Object y;
+        if (flag1) {
+            y = new Dog();
+        } else {
+            y = null;
+        }
+        Object x;
+        if (flag2) {
+            x = new Cat();
+        } else {
+            if (y instanceof Dog) {
+                return true;
+            }
+            x = y; // NOT Dog, base Klass=0 (from null-containing PHI)
+        }
+        return x instanceof Dog; // Should fold to false: Cat is not Dog, y is not Dog
+    }
+
+    // 30b. PHI union preserves interface exclusion
+    static boolean testPhiUnionExclusionPreservedInterface(boolean flag1, boolean flag2) {
+        Object y;
+        if (flag1) {
+            y = new Dog();
+        } else {
+            y = null;
+        }
+        Object x;
+        if (flag2) {
+            x = new Cat(); // Cat does NOT implement Barkable
+        } else {
+            if (y instanceof Barkable) {
+                return true;
+            }
+            x = y; // NOT Barkable
+        }
+        return x instanceof Barkable; // Should fold to false: Cat is not Barkable, y is not Barkable
+    }
+
+    // =========================================================================
+    // Group 31: Exact non-interface class vs interface type checks
+    //
+    // Verifies that exact concrete class types correctly fold instanceof
+    // checks against interfaces — both implemented and unimplemented.
+    // Also guards against the TCE fix for interface+Exact soundness.
+    // =========================================================================
+
+    // 31a. Exact Cat (doesn't implement Barkable) instanceof Barkable → false
+    static boolean testExactClassVsUnimplementedInterface() {
+        Object obj = new Cat();
+        return obj instanceof Barkable; // Eliminated to false: exact Cat, not subtype of Barkable
+    }
+
+    // 31b. Exact Dog (implements Barkable) instanceof Barkable → true
+    static boolean testExactClassVsImplementedInterface() {
+        Object obj = new Dog();
+        return obj instanceof Barkable; // Eliminated to true: exact Dog IS subtype of Barkable
+    }
+
+    // =========================================================================
     // for a specific function, and the section after "IR Dump After".
     // =========================================================================
 
@@ -1123,6 +1194,28 @@ public class TestTypeCheckElimination {
                 Asserts.assertFalse(testPhiConstantTrueBranch("hello", true));
                 // obj=String, flag=false: instanceof Dog → false, b → false, return false
                 Asserts.assertFalse(testPhiConstantTrueBranch("hello", false));
+                break;
+            case "testPhiUnionExclusionPreserved":
+                // (true, true): x=Cat, not Dog → false
+                Asserts.assertFalse(testPhiUnionExclusionPreserved(true, true));
+                // (true, false): y=Dog, instanceof Dog → true (early return)
+                Asserts.assertTrue(testPhiUnionExclusionPreserved(true, false));
+                // (false, true): x=Cat, not Dog → false
+                Asserts.assertFalse(testPhiUnionExclusionPreserved(false, true));
+                // (false, false): y=null, instanceof false, x=null → false
+                Asserts.assertFalse(testPhiUnionExclusionPreserved(false, false));
+                break;
+            case "testPhiUnionExclusionPreservedInterface":
+                Asserts.assertFalse(testPhiUnionExclusionPreservedInterface(true, true));
+                Asserts.assertTrue(testPhiUnionExclusionPreservedInterface(true, false));
+                Asserts.assertFalse(testPhiUnionExclusionPreservedInterface(false, true));
+                Asserts.assertFalse(testPhiUnionExclusionPreservedInterface(false, false));
+                break;
+            case "testExactClassVsUnimplementedInterface":
+                Asserts.assertFalse(testExactClassVsUnimplementedInterface());
+                break;
+            case "testExactClassVsImplementedInterface":
+                Asserts.assertTrue(testExactClassVsImplementedInterface());
                 break;
             default:
                 throw new IllegalArgumentException("Unknown test: " + testName);
@@ -2028,6 +2121,66 @@ public class TestTypeCheckElimination {
                 "29b: should have >= 2 check_instanceof before, got " + beforeCount);
             Asserts.assertEquals(afterCount, beforeCount,
                 "29b: no check_instanceof should be eliminated on true-branch; before=" + beforeCount + " after=" + afterCount);
+        }
+
+        // === 30a. PHI union preserves class exclusion ===
+        {
+            OutputAnalyzer output = runTestProcess("testPhiUnionExclusionPreserved", "testPhiUnionExclusionPreserved");
+            output.shouldHaveExitValue(0);
+            String fullOutput = output.getOutput();
+            String beforeIR = extractBeforeIR(fullOutput, "testPhiUnionExclusionPreserved");
+            String afterIR = extractAfterIR(fullOutput, "testPhiUnionExclusionPreserved");
+            int beforeCount = countOccurrences(beforeIR, "jeandle.check_instanceof");
+            int afterCount = countOccurrences(afterIR, "jeandle.check_instanceof");
+            Asserts.assertGTE(beforeCount, 2,
+                "30a: should have >= 2 check_instanceof before, got " + beforeCount);
+            Asserts.assertLT(afterCount, beforeCount,
+                "30a: final instanceof Dog should be eliminated via preserved exclusion; before=" + beforeCount + " after=" + afterCount);
+        }
+
+        // === 30b. PHI union preserves interface exclusion ===
+        {
+            OutputAnalyzer output = runTestProcess("testPhiUnionExclusionPreservedInterface", "testPhiUnionExclusionPreservedInterface");
+            output.shouldHaveExitValue(0);
+            String fullOutput = output.getOutput();
+            String beforeIR = extractBeforeIR(fullOutput, "testPhiUnionExclusionPreservedInterface");
+            String afterIR = extractAfterIR(fullOutput, "testPhiUnionExclusionPreservedInterface");
+            int beforeCount = countOccurrences(beforeIR, "jeandle.check_instanceof");
+            int afterCount = countOccurrences(afterIR, "jeandle.check_instanceof");
+            Asserts.assertGTE(beforeCount, 2,
+                "30b: should have >= 2 check_instanceof before, got " + beforeCount);
+            Asserts.assertLT(afterCount, beforeCount,
+                "30b: final instanceof Barkable should be eliminated via preserved exclusion; before=" + beforeCount + " after=" + afterCount);
+        }
+
+        // === 31a. Exact Cat vs unimplemented Barkable → false ===
+        {
+            OutputAnalyzer output = runTestProcess("testExactClassVsUnimplementedInterface", "testExactClassVsUnimplementedInterface");
+            output.shouldHaveExitValue(0);
+            String fullOutput = output.getOutput();
+            String beforeIR = extractBeforeIR(fullOutput, "testExactClassVsUnimplementedInterface");
+            String afterIR = extractAfterIR(fullOutput, "testExactClassVsUnimplementedInterface");
+            int beforeCount = countOccurrences(beforeIR, "jeandle.check_instanceof");
+            int afterCount = countOccurrences(afterIR, "jeandle.check_instanceof");
+            Asserts.assertGTE(beforeCount, 1,
+                "31a: should have >= 1 check_instanceof before, got " + beforeCount);
+            Asserts.assertEquals(afterCount, 0,
+                "31a: exact Cat instanceof Barkable should be eliminated to false, got " + afterCount);
+        }
+
+        // === 31b. Exact Dog vs implemented Barkable → true ===
+        {
+            OutputAnalyzer output = runTestProcess("testExactClassVsImplementedInterface", "testExactClassVsImplementedInterface");
+            output.shouldHaveExitValue(0);
+            String fullOutput = output.getOutput();
+            String beforeIR = extractBeforeIR(fullOutput, "testExactClassVsImplementedInterface");
+            String afterIR = extractAfterIR(fullOutput, "testExactClassVsImplementedInterface");
+            int beforeCount = countOccurrences(beforeIR, "jeandle.check_instanceof");
+            int afterCount = countOccurrences(afterIR, "jeandle.check_instanceof");
+            Asserts.assertGTE(beforeCount, 1,
+                "31b: should have >= 1 check_instanceof before, got " + beforeCount);
+            Asserts.assertEquals(afterCount, 0,
+                "31b: exact Dog instanceof Barkable should be eliminated to true, got " + afterCount);
         }
 
         System.out.println("All TypeCheckElimination tests passed.");
