@@ -76,6 +76,11 @@ public class TestTypeCheckElimination {
         return (String) s;
     }
 
+    // 1e. instanceof Object: any obj instanceof Object -> eliminated (true)
+    static boolean testInstanceofObject(Object obj) {
+        return obj instanceof Object;
+    }
+
     // =========================================================================
     // Group 2: Complex dominator tree scenarios
     // =========================================================================
@@ -1073,6 +1078,11 @@ public class TestTypeCheckElimination {
             case "testSameTypeCast":
                 Asserts.assertEquals(testSameTypeCast("hello"), "hello");
                 break;
+            case "testInstanceofObject":
+                Asserts.assertTrue(testInstanceofObject(dog));
+                Asserts.assertTrue(testInstanceofObject("hello"));
+                Asserts.assertTrue(testInstanceofObject(42));
+                break;
             case "testDominatedCast":
                 Asserts.assertEquals(testDominatedCast(dog), dog);
                 Asserts.assertNull(testDominatedCast("not animal"));
@@ -1484,6 +1494,21 @@ public class TestTypeCheckElimination {
             int afterCount = countOccurrences(afterIR, "jeandle.check_instanceof");
             Asserts.assertEquals(afterCount, 0,
                 "1d: same-type checkcast should be eliminated, got " + afterCount);
+        }
+
+        // === 1e. instanceof Object: always true -> eliminated ===
+        {
+            OutputAnalyzer output = runTestProcess("testInstanceofObject", "testInstanceofObject");
+            output.shouldHaveExitValue(0);
+            String fullOutput = output.getOutput();
+            String beforeIR = extractBeforeIR(fullOutput, "testInstanceofObject");
+            String afterIR = extractAfterIR(fullOutput, "testInstanceofObject");
+            int beforeCount = countOccurrences(beforeIR, "jeandle.check_instanceof");
+            int afterCount = countOccurrences(afterIR, "jeandle.check_instanceof");
+            Asserts.assertGTE(beforeCount, 1,
+                "1e: should have >= 1 check_instanceof before, got " + beforeCount);
+            Asserts.assertEquals(afterCount, 0,
+                "1e: instanceof Object should be eliminated, got " + afterCount);
         }
 
         // === 2a. Simple dominated cast ===

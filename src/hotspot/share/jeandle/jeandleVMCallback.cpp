@@ -25,6 +25,7 @@
 
 #include "jeandle/__hotspotHeadersBegin__.hpp"
 #include "classfile/systemDictionary.hpp"
+#include "classfile/vmClasses.hpp"
 #include "oops/fieldInfo.inline.hpp"
 #include "oops/fieldStreams.inline.hpp"
 #include "oops/instanceKlass.hpp"
@@ -69,6 +70,10 @@ bool jeandle_is_interface(uintptr_t klass_ptr) {
   return ((Klass*)klass_ptr)->is_interface();
 }
 
+bool jeandle_is_object_klass(uintptr_t klass_ptr) {
+  return (Klass*)klass_ptr == vmClasses::Object_klass();
+}
+
 } // anonymous namespace
 
 void register_jeandle_vm_callbacks() {
@@ -77,5 +82,6 @@ void register_jeandle_vm_callbacks() {
   callbacks.GetCommonSuperKlass = &jeandle_get_common_super_klass;
   callbacks.GetFieldType = &jeandle_get_field_type;
   callbacks.IsInterface = &jeandle_is_interface;
+  callbacks.IsObjectKlass = &jeandle_is_object_klass;
   llvm::jeandle::registerVMCallbacks(callbacks);
 }
