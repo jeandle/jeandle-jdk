@@ -976,6 +976,68 @@ public class TestTypeCheckElimination {
     }
 
     // =========================================================================
+    // Group 34: Or with type checks (De Morgan dual of And)
+    // When a condition is Or(A, B), on the false-branch BOTH A AND B are false
+    // (AllOf semantics). On the true-branch at least one is true (OneOf — weak).
+    // =========================================================================
+
+    // 34a. Or(instanceof Dog, instanceof Cat): false-branch excludes both
+    //      → subsequent instanceof Dog is false
+    static boolean testOrBothPositive(Object obj) {
+        if (obj instanceof Dog || obj instanceof Cat) {
+            return true;
+        }
+        // obj IS NOT Dog AND obj IS NOT Cat
+        return obj instanceof Dog; // Eliminated to false: excluded Dog
+    }
+
+    // 34b. Or(instanceof Dog, instanceof Cat): false-branch also excludes Cat
+    static boolean testOrBothPositiveCat(Object obj) {
+        if (obj instanceof Dog || obj instanceof Cat) {
+            return true;
+        }
+        // obj IS NOT Dog AND obj IS NOT Cat
+        return obj instanceof Cat; // Eliminated to false: excluded Cat
+    }
+
+    // 34c. Or(NOT instanceof Dog, NOT instanceof Animal): false-branch means
+    //      both negated checks are false → instanceof Dog IS true AND
+    //      instanceof Animal IS true → obj IS Dog AND obj IS Animal
+    //      → checkcast Animal is safe, instanceof Dog confirmed
+    static boolean testOrBothNegated(Object obj) {
+        if (!(obj instanceof Dog) || !(obj instanceof Animal)) {
+            return false;
+        }
+        // obj IS Dog AND obj IS Animal
+        Animal a = (Animal) obj; // Eliminated: confirmed Animal
+        return a.id > 0;
+    }
+
+    // 34d. Or(instanceof Dog, instanceof Cat): true-branch has weak info
+    //      (OneOf — don't know which) → instanceof Animal NOT eliminated
+    static boolean testOrTrueBranchWeak(Object obj) {
+        if (obj instanceof Dog || obj instanceof Cat) {
+            return obj instanceof Animal; // Must NOT be eliminated
+        }
+        return false;
+    }
+
+    // =========================================================================
+    // Group 35: Or with only one side matching
+    // When only one operand of Or traces to a type check, the true-branch
+    // constraints must be cleared — the Or being true could be due to the
+    // non-type-check operand, not the matched one.
+    // =========================================================================
+
+    // 35a. Or partial match: true-branch must NOT fold
+    static boolean testOrPartialMatchTrueBranch(Object obj, boolean sideCond) {
+        if ((obj instanceof Dog) || sideCond) {
+            return obj instanceof Dog; // Must NOT be eliminated to true
+        }
+        return false;
+    }
+
+    // =========================================================================
     // for a specific function, and the section after "IR Dump After".
     // =========================================================================
 
@@ -1409,6 +1471,43 @@ public class TestTypeCheckElimination {
             case "testAaloadMultipleElements":
                 Asserts.assertEquals(testAaloadMultipleElements(new Animal[]{dog, dog}), 3);
                 Asserts.assertEquals(testAaloadMultipleElements(new Animal[]{cat, cat}), 1);
+                break;
+            case "testOrBothPositive":
+                // not Dog, not Cat → guard false, instanceof Dog → false
+                Asserts.assertFalse(testOrBothPositive("hello"));
+                // Dog → guard true
+                Asserts.assertTrue(testOrBothPositive(dog));
+                // Cat → guard true
+                Asserts.assertTrue(testOrBothPositive(cat));
+                break;
+            case "testOrBothPositiveCat":
+                Asserts.assertFalse(testOrBothPositiveCat("hello"));
+                Asserts.assertTrue(testOrBothPositiveCat(dog));
+                Asserts.assertTrue(testOrBothPositiveCat(cat));
+                break;
+            case "testOrBothNegated":
+                // IS Dog AND IS Animal → a.id > 0 → true
+                Asserts.assertTrue(testOrBothNegated(dog));
+                // NOT Dog → guard true (first arm), returns false
+                Asserts.assertFalse(testOrBothNegated(cat));
+                // NOT Animal → guard true, returns false
+                Asserts.assertFalse(testOrBothNegated("hello"));
+                break;
+            case "testOrTrueBranchWeak":
+                // Dog → guard true, instanceof Animal → true
+                Asserts.assertTrue(testOrTrueBranchWeak(dog));
+                // Cat → guard true, instanceof Animal → true
+                Asserts.assertTrue(testOrTrueBranchWeak(cat));
+                // not Dog, not Cat → guard false
+                Asserts.assertFalse(testOrTrueBranchWeak("hello"));
+                break;
+            case "testOrPartialMatchTrueBranch":
+                // Dog → guard true (first arm), instanceof Dog → true
+                Asserts.assertTrue(testOrPartialMatchTrueBranch(dog, false));
+                // sideCond true, not Dog → instanceof Dog false
+                Asserts.assertFalse(testOrPartialMatchTrueBranch("hello", true));
+                // both true
+                Asserts.assertTrue(testOrPartialMatchTrueBranch(dog, true));
                 break;
             default:
                 throw new IllegalArgumentException("Unknown test: " + testName);
@@ -2569,6 +2668,84 @@ public class TestTypeCheckElimination {
                 "33i: Animal check should be eliminated but Dog check preserved; before=" + beforeCount + " after=" + afterCount);
             Asserts.assertGTE(afterCount, 1,
                 "33i: Dog check should be preserved, got " + afterCount);
+        }
+
+        // === 34a. Or both positive: instanceof Dog || instanceof Cat → Dog eliminated on false-branch ===
+        {
+            OutputAnalyzer output = runTestProcess("testOrBothPositive", "testOrBothPositive");
+            output.shouldHaveExitValue(0);
+            String fullOutput = output.getOutput();
+            String beforeIR = extractBeforeIR(fullOutput, "testOrBothPositive");
+            String afterIR = extractAfterIR(fullOutput, "testOrBothPositive");
+            int beforeCount = countOccurrences(beforeIR, "jeandle.check_instanceof");
+            int afterCount = countOccurrences(afterIR, "jeandle.check_instanceof");
+            // instanceof Dog (guard) + instanceof Cat (guard) + instanceof Dog (inner) = 3
+            Asserts.assertGTE(beforeCount, 3,
+                "34a: should have >= 3 check_instanceof before, got " + beforeCount);
+            Asserts.assertLT(afterCount, beforeCount,
+                "34a: instanceof Dog after Or guard should be eliminated on false-branch; before=" + beforeCount + " after=" + afterCount);
+        }
+
+        // === 34b. Or both positive: instanceof Dog || instanceof Cat → Cat eliminated on false-branch ===
+        {
+            OutputAnalyzer output = runTestProcess("testOrBothPositiveCat", "testOrBothPositiveCat");
+            output.shouldHaveExitValue(0);
+            String fullOutput = output.getOutput();
+            String beforeIR = extractBeforeIR(fullOutput, "testOrBothPositiveCat");
+            String afterIR = extractAfterIR(fullOutput, "testOrBothPositiveCat");
+            int beforeCount = countOccurrences(beforeIR, "jeandle.check_instanceof");
+            int afterCount = countOccurrences(afterIR, "jeandle.check_instanceof");
+            Asserts.assertGTE(beforeCount, 3,
+                "34b: should have >= 3 check_instanceof before, got " + beforeCount);
+            Asserts.assertLT(afterCount, beforeCount,
+                "34b: instanceof Cat after Or guard should be eliminated on false-branch; before=" + beforeCount + " after=" + afterCount);
+        }
+
+        // === 34c. Or both negated: !(instanceof Dog) || !(instanceof Animal) → checkcast Animal eliminated ===
+        {
+            OutputAnalyzer output = runTestProcess("testOrBothNegated", "testOrBothNegated");
+            output.shouldHaveExitValue(0);
+            String fullOutput = output.getOutput();
+            String beforeIR = extractBeforeIR(fullOutput, "testOrBothNegated");
+            String afterIR = extractAfterIR(fullOutput, "testOrBothNegated");
+            int beforeCount = countOccurrences(beforeIR, "jeandle.check_instanceof");
+            int afterCount = countOccurrences(afterIR, "jeandle.check_instanceof");
+            // instanceof Dog (guard) + instanceof Animal (guard) + checkcast Animal = 3
+            Asserts.assertGTE(beforeCount, 3,
+                "34c: should have >= 3 check_instanceof before, got " + beforeCount);
+            Asserts.assertLT(afterCount, beforeCount,
+                "34c: checkcast Animal after Or guard should be eliminated on false-branch; before=" + beforeCount + " after=" + afterCount);
+        }
+
+        // === 34d. Or true-branch weak: instanceof Animal must NOT be eliminated ===
+        {
+            OutputAnalyzer output = runTestProcess("testOrTrueBranchWeak", "testOrTrueBranchWeak");
+            output.shouldHaveExitValue(0);
+            String fullOutput = output.getOutput();
+            String beforeIR = extractBeforeIR(fullOutput, "testOrTrueBranchWeak");
+            String afterIR = extractAfterIR(fullOutput, "testOrTrueBranchWeak");
+            int beforeCount = countOccurrences(beforeIR, "jeandle.check_instanceof");
+            int afterCount = countOccurrences(afterIR, "jeandle.check_instanceof");
+            Asserts.assertGTE(beforeCount, 3,
+                "34d: should have >= 3 check_instanceof before, got " + beforeCount);
+            Asserts.assertEquals(afterCount, beforeCount,
+                "34d: no check_instanceof should be eliminated on true-branch; before=" + beforeCount + " after=" + afterCount);
+        }
+
+        // === 35a. Or partial match: true-branch must NOT fold ===
+        {
+            OutputAnalyzer output = runTestProcess("testOrPartialMatchTrueBranch", "testOrPartialMatchTrueBranch");
+            output.shouldHaveExitValue(0);
+            String fullOutput = output.getOutput();
+            String beforeIR = extractBeforeIR(fullOutput, "testOrPartialMatchTrueBranch");
+            String afterIR = extractAfterIR(fullOutput, "testOrPartialMatchTrueBranch");
+            int beforeCount = countOccurrences(beforeIR, "jeandle.check_instanceof");
+            int afterCount = countOccurrences(afterIR, "jeandle.check_instanceof");
+            // instanceof Dog (guard) + instanceof Dog (inner) = 2
+            Asserts.assertGTE(beforeCount, 2,
+                "35a: should have >= 2 check_instanceof before, got " + beforeCount);
+            Asserts.assertEquals(afterCount, beforeCount,
+                "35a: no check_instanceof should be eliminated on true-branch; before=" + beforeCount + " after=" + afterCount);
         }
 
         System.out.println("All TypeCheckElimination tests passed.");
