@@ -52,7 +52,7 @@ bool is_unverified_interface(Klass* klass) {
   if (klass->is_instance_klass())
     return klass->is_interface();
   if (klass->is_objArray_klass())
-    return is_unverified_interface(ObjArrayKlass::cast(klass)->element_klass());
+    return is_unverified_interface(ObjArrayKlass::cast(klass)->bottom_klass());
   return false;
 }
 
@@ -76,7 +76,7 @@ bool is_effectively_final(Klass* klass) {
   if (klass->is_typeArray_klass())
     return true;
   if (klass->is_objArray_klass())
-    return is_effectively_final(ObjArrayKlass::cast(klass)->element_klass());
+    return is_effectively_final(ObjArrayKlass::cast(klass)->bottom_klass());
   return false;
 }
 
