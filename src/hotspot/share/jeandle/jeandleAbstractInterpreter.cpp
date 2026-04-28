@@ -2170,7 +2170,11 @@ void JeandleAbstractInterpreter::store_to_address(llvm::Value* addr, llvm::Value
   assert(value->getType() == expected_ty, "Value type must match field type");
 
   switch (type) {
-    case T_BOOLEAN: // fall through
+    case T_BOOLEAN: {
+      value = _ir_builder.CreateTrunc(value, llvm::Type::getInt8Ty(*_context));
+      value = _ir_builder.CreateAnd(value, _ir_builder.getInt8(1));
+      break;
+    }
     case T_BYTE: {
       value = _ir_builder.CreateTrunc(value, llvm::Type::getInt8Ty(*_context));
       break;
