@@ -20,6 +20,7 @@
 
 #include "jeandle/__llvmHeadersBegin__.hpp"
 #include "llvm/ADT/SmallVector.h"
+#include "llvm/Analysis/Jeandle/PartialEscapeAnalysis.h"
 #include "llvm/Bitcode/BitcodeReader.h"
 #include "llvm/Jeandle/Jeandle.h"
 #include "llvm/IR/CallingConv.h"
@@ -51,6 +52,7 @@
 #include "jeandle/jeandleCompiler.hpp"
 #include "jeandle/jeandleType.hpp"
 #include "jeandle/jeandleUtils.hpp"
+#include "jeandle/jeandle_globals.hpp"
 
 #include "jeandle/__hotspotHeadersBegin__.hpp"
 #include "ci/ciUtilities.inline.hpp"
@@ -291,6 +293,8 @@ void JeandleCompilation::compile_java_method() {
   // Optimize.
   {
     JeandleTraceTime tt_optimize("Jeandle LLVM Optimize", llvm_optimizer_timer);
+    llvm::jeandle::PEAConfig::setEnabled(JeandleDoPartialEscapeAnalysis);
+    llvm::jeandle::PEAConfig::setMaxArrayLength(JeandlePEAMaxArrayLength);
     llvm::jeandle::optimize(*_llvm_module, llvm::OptimizationLevel::O3);
   }
 

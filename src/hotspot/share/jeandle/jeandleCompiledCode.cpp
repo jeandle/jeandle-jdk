@@ -586,6 +586,23 @@ JeandleStackMap* JeandleCompiledCode::parse_stackmap(StackMapParser& stackmaps, 
 
   }
 
+  // TODO(PEA-Deopt): Parse lazy_object operand bundles and materialize virtual objects
+  // When deoptimization occurs with scalar-replaced (virtual) objects:
+  // 1. Check for "lazy_object" operand bundles in the call instruction
+  // 2. For each lazy_object bundle:
+  //    - Extract: alloc_id, klass (uintptr_t), field_count, field_values
+  //    - Allocate new object using klass (invoke interpreter's new_instance logic)
+  //    - Initialize object fields with recorded field_values
+  //    - Create ScopeValue representing the materialized object
+  // 3. Replace lazy_object reference in ScopeValue with real object pointer
+  // 4. Resume execution in interpreter with fully materialized objects
+  //
+  // Implementation steps:
+  // - Modify deopt bundle format to include lazy_object metadata
+  // - Add DeoptValueEncoding::LazyObjectType for lazy_object references
+  // - Implement materialization logic in deoptimization handler
+  // - Coordinate with LLVM PEATransformer for bundle generation
+
   // build oop map
   OopMap* oop_map = new OopMap(frame_size_in_slots(), 0);
   for (; location != record->location_end(); location++) {

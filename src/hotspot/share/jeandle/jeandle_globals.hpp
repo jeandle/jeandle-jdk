@@ -56,7 +56,13 @@
   product(ccstr, JeandleLLVMOptions, nullptr,                               \
           "Additional LLVM command line options")                           \
                                                                             \
-
+  product(bool, JeandleDoPartialEscapeAnalysis, true,                       \
+          "Enable partial escape analysis optimization")                    \
+                                                                            \
+  product(int, JeandlePEAMaxArrayLength, 32,                                \
+          "Maximum array length for PEA")                                   \
+          range(0, 256)                                                     \
+                                                                            \
 // end of JEANDLE_FLAGS
 
 DECLARE_FLAGS(JEANDLE_FLAGS)
