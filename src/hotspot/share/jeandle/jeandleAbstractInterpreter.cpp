@@ -33,14 +33,15 @@
 #include "jeandle/jeandleType.hpp"
 #include "jeandle/jeandleUtils.hpp"
 
-#include "jeandle/__hotspotHeadersBegin__.hpp"
 #include "ci/ciMethodBlocks.hpp"
+#include "ci/ciMethodData.hpp"
 #include "ci/ciObjArrayKlass.hpp"
 #include "ci/ciSymbols.hpp"
-#include "oops/objArrayKlass.hpp"
 #include "classfile/javaClasses.hpp"
 #include "interpreter/interpreter.hpp"
+#include "jeandle/__hotspotHeadersBegin__.hpp"
 #include "logging/log.hpp"
+#include "oops/objArrayKlass.hpp"
 #include "runtime/sharedRuntime.hpp"
 #include "runtime/stubRoutines.hpp"
 #include "utilities/ostream.hpp"
@@ -667,6 +668,9 @@ void JeandleAbstractInterpreter::initialize_VM_state() {
   }
 
   _block_builder->entry_block()->set_VM_state(initial_jvm);
+
+  Copy::zero_to_bytes(_trap_hist, sizeof(_trap_hist));
+  accumulate_trap_counts_from_mdo(_method);
 }
 
 void JeandleAbstractInterpreter::interpret() {
@@ -1395,6 +1399,7 @@ void JeandleAbstractInterpreter::invoke() {
       return;
     }
   }
+  accumulate_trap_counts_from_mdo(target);
 
   const int receiver =
   bc == Bytecodes::_invokespecial   ||
@@ -1877,9 +1882,7 @@ void JeandleAbstractInterpreter::checkcast() {
 
   _ir_builder.CreateCondBr(call, checkcast_pass, checkcast_fail);
 
-  // TODO: When too many traps occur, throw exception directly
-  // instead of deoptimizing, similar to GraphKit::builtin_throw.
-  uncommon_trap(Deoptimization::Reason_class_check, Deoptimization::Action_maybe_recompile, checkcast_fail);
+  builtin_throw(Deoptimization::Reason_class_check, checkcast_fail);
 
   _ir_builder.SetInsertPoint(checkcast_pass);
   _block->set_tail_llvm_block(checkcast_pass);
@@ -2404,7 +2407,7 @@ void JeandleAbstractInterpreter::array_store_check(llvm::Value* value, llvm::Val
 
   _ir_builder.CreateCondBr(call, array_store_check_pass, array_store_check_fail);
 
-  uncommon_trap(Deoptimization::Reason_array_check, Deoptimization::Action_maybe_recompile, array_store_check_fail);
+  builtin_throw(Deoptimization::Reason_array_check, array_store_check_fail);
 
   _ir_builder.SetInsertPoint(array_store_check_pass);
   _block->set_tail_llvm_block(array_store_check_pass);
@@ -2620,6 +2623,86 @@ void JeandleAbstractInterpreter::throw_exception(llvm::Value* exception_oop) {
   } else {
     ShouldNotReachHere();
   }
+}
+
+
+void JeandleAbstractInterpreter::builtin_throw(Deoptimization::DeoptReason reason,
+                                               llvm::BasicBlock* insert_block) {
+  bool treat_throw_as_hot = false, has_ex_handler = false;
+  int bci = _bytecodes.cur_bci();
+  ciMethod* method = _bytecodes.method();
+
+  if (too_many_traps(method, bci, reason)) {
+    treat_throw_as_hot = true;
+  }
+
+  for (ciExceptionHandlerStream handlers(method, bci); !handlers.is_done(); handlers.next()) {
+    ciExceptionHandler* handler = handlers.handler();
+    if (!handler->is_rethrow()) {
+      has_ex_handler =  true;
+      break ;
+    }
+  }
+
+  // Also, if there is a local exception handler, treat all throws
+  // as hot if there has been at least one in this method.
+  if (trap_count(reason) != 0 &&
+      method->method_data()->trap_count(reason) != 0 &&
+      has_ex_handler) {
+    treat_throw_as_hot = true;
+  }
+
+  if (treat_throw_as_hot && method->can_omit_stack_trace()) {
+    ciEnv* env = CURRENT_ENV;
+    ciInstance* ex_obj = nullptr;
+
+    switch (reason) {
+      case Deoptimization::Reason_null_check:
+        ex_obj = env->NullPointerException_instance();
+        break;
+      case Deoptimization::Reason_div0_check:
+        ex_obj = env->ArithmeticException_instance();
+        break;
+      case Deoptimization::Reason_range_check:
+        ex_obj = env->ArrayIndexOutOfBoundsException_instance();
+        break;
+      case Deoptimization::Reason_class_check:
+        ex_obj = env->ClassCastException_instance();
+        break;
+      case Deoptimization::Reason_array_check:
+        ex_obj = env->ArrayStoreException_instance();
+        break;
+      default:
+        break;
+    }
+
+    if (ex_obj != nullptr) {
+      auto saved_insert_block = _ir_builder.GetInsertBlock();
+      auto saved_insert_point = _ir_builder.GetInsertPoint();
+      if (insert_block != nullptr) {
+        _ir_builder.SetInsertPoint(insert_block);
+      }
+
+      llvm::Value* oop_handle = find_or_insert_oop(ex_obj);
+      llvm::Value* value = _ir_builder.CreateLoad(JeandleType::java2llvm(BasicType::T_OBJECT, *_context), oop_handle);
+
+      int offset = java_lang_Throwable::get_detailMessage_offset();
+      llvm::Value* exception_oop_field_addr = compute_instance_field_address(value, offset);
+
+      llvm::StoreInst* store_inst = _ir_builder.CreateStore(llvm::ConstantPointerNull::get(llvm::cast<llvm::PointerType>(JeandleType::java2llvm(BasicType::T_OBJECT, *_context))),
+          exception_oop_field_addr, true /* is_volatile */);
+
+      store_inst->setAtomic(llvm::AtomicOrdering::SequentiallyConsistent);
+      dispatch_exception_to_handler(value);
+
+      if (insert_block != nullptr) {
+        // Recover insert point.
+        _ir_builder.SetInsertPoint(saved_insert_block, saved_insert_point);
+      }
+      return;
+    }
+  }
+  uncommon_trap(reason, Deoptimization::Action_maybe_recompile, insert_block);
 }
 
 void JeandleAbstractInterpreter::newarray(int element_type) {
@@ -2866,14 +2949,19 @@ void JeandleAbstractInterpreter::null_check(llvm::Value* obj) {
   llvm::Value* if_null = _ir_builder.CreateICmp(llvm::CmpInst::ICMP_EQ,
                                                 obj,
                                                 llvm::ConstantPointerNull::get(llvm::cast<llvm::PointerType>(obj->getType())));
-  llvm::BranchInst* null_check_br = _ir_builder.CreateCondBr(if_null, null_check_fail, null_check_pass);
+  llvm::BranchInst *null_check_br = _ir_builder.CreateCondBr(if_null, null_check_fail, null_check_pass);
 
   // Add make.implicit metadata, and the ImplicitNullChecksPass will transform it into an implicit check.
   llvm::MDNode* make_implicit = llvm::MDNode::get(*_context, {});
   null_check_br->setMetadata(llvm::LLVMContext::MD_make_implicit, make_implicit);
 
-  // Uncommon trap on null check fail.
-  uncommon_trap(Deoptimization::Reason_null_check, Deoptimization::Action_maybe_recompile, null_check_fail);
+  llvm::jeandle::JavaType obj_type = llvm::jeandle::getJavaType(obj);
+  if (obj_type.isKnown()) {
+    builtin_throw(Deoptimization::Reason_null_check, null_check_fail);
+  } else {
+    uncommon_trap(Deoptimization::Reason_null_check,
+                  Deoptimization::Action_maybe_recompile, null_check_fail);
+  }
 
   _ir_builder.SetInsertPoint(null_check_pass);
   _block->set_tail_llvm_block(null_check_pass);
@@ -2896,8 +2984,7 @@ void JeandleAbstractInterpreter::zero_check(llvm::Value* divisor) {
                                                 llvm::ConstantInt::get(divisor_type, 0));
   _ir_builder.CreateCondBr(if_zero, zero_check_fail, zero_check_pass);
 
-  // Uncommon trap on zero check fail.
-  uncommon_trap(Deoptimization::Reason_div0_check, Deoptimization::Action_maybe_recompile, zero_check_fail);
+  builtin_throw(Deoptimization::Reason_div0_check, zero_check_fail);
 
   _ir_builder.SetInsertPoint(zero_check_pass);
   _block->set_tail_llvm_block(zero_check_pass);
@@ -2917,7 +3004,7 @@ void JeandleAbstractInterpreter::boundary_check(llvm::Value* array_oop, llvm::Va
   llvm::Value* if_out_of_bounds = _ir_builder.CreateICmp(llvm::CmpInst::ICMP_UGE, index, call);
   _ir_builder.CreateCondBr(if_out_of_bounds, boundary_check_fail, boundary_check_pass);
 
-  uncommon_trap(Deoptimization::Reason_range_check, Deoptimization::Action_maybe_recompile, boundary_check_fail);
+  builtin_throw(Deoptimization::Reason_range_check, boundary_check_fail);
 
   _ir_builder.SetInsertPoint(boundary_check_pass);
   _block->set_tail_llvm_block(boundary_check_pass);
@@ -3025,5 +3112,52 @@ void JeandleAbstractInterpreter::clinit_barrier(ciInstanceKlass* ik, ciMethod* c
   } else {
     uncommon_trap(Deoptimization::Reason_uninitialized, Deoptimization::Action_reinterpret);
     _block->set(JeandleBasicBlock::always_uncommon_trap);
+  }
+}
+bool JeandleAbstractInterpreter::too_many_traps(ciMethod* method, int bci, Deoptimization::DeoptReason reason) {
+  ciMethodData* md = method->method_data();
+  if (method->is_empty()) {
+    // Assume the trap has not occurred, or that it occurred only
+    // because of a transient condition during start-up in the interpreter.
+    return false;
+  }
+  ciMethod* m = Deoptimization::reason_is_speculate(reason) ? _method : nullptr;
+  if (md->has_trap_at(bci, m, reason) != 0) {
+    // Assume PerBytecodeTrapLimit==0, for a more conservative heuristic.
+    // Also, if there are multiple reasons, or if there is no per-BCI record,
+    // assume the worst.
+    return true;
+  }
+  // Ignore method/bci and see if there have been too many globally.
+  return too_many_traps(reason);
+}
+
+bool JeandleAbstractInterpreter::too_many_traps(Deoptimization::DeoptReason reason) {
+  if (trap_count(reason) >= Deoptimization::per_method_trap_limit(reason)) {
+    // Too many traps globally.
+    // Note that we use cumulative trap_count, not just md->trap_count.
+    return true;
+  }
+  return false;
+}
+
+void JeandleAbstractInterpreter::accumulate_trap_counts_from_mdo(ciMethod* method) {
+  ciMethodData* md = method->method_data();
+
+  for (uint reason = 0; reason < md->trap_reason_limit(); reason++) {
+    uint md_count = md->trap_count(reason);
+    if (md_count != 0) {
+      if (md_count >= md->trap_count_limit()) {
+        md_count = md->trap_count_limit() + md->overflow_trap_count();
+      }
+      uint total_count = trap_count(reason);
+      uint old_count = total_count;
+      total_count += md_count;
+      // Saturate the add if it overflows.
+      if (total_count < old_count || total_count < md_count) {
+        total_count = uint(-1);
+      }
+      set_trap_count(reason, total_count);
+    }
   }
 }
