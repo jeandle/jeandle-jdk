@@ -125,10 +125,9 @@ void Relocation::pd_set_jeandle_data_value(address x, int addend, bool verify_on
     // LDR Q (128-bit SIMD): v=1, opc=11, size=00 encodes shift=4 (not size field)
     uint32_t shift = (v == 1 && opc == 3 && size == 0) ? 4 : size;
     uintptr_t aligned_target = target + addend;
-    if (((aligned_target >> shift) << shift) == aligned_target) {
-      int offset_lo = (aligned_target & 0xfff) >> shift;
-      Instruction_aarch64::patch(insn_addr, 21, 10, offset_lo);
-    }
+    int offset_lo = (aligned_target & 0xfff) >> shift;
+    Instruction_aarch64::patch(insn_addr, 21, 10, offset_lo);
+    guarantee((((target + addend) >> shift) << shift) == (target + addend), "misaligned target");
   } else if (NativeInstruction::is_add_imm_at(insn_addr)) {
     int offset_lo = (target + addend) & 0xfff;
     Instruction_aarch64::patch(insn_addr, 21, 10, offset_lo);
