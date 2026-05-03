@@ -32,6 +32,7 @@
 #include "jeandle/jeandleRuntimeRoutine.hpp"
 #include "jeandle/jeandleType.hpp"
 #include "jeandle/jeandleUtils.hpp"
+#include "jeandle/jeandleVMCallback.hpp"
 #include "jeandle/templatemodule/jeandleRuntimeDefinedJavaOps.hpp"
 
 #include "jeandle/__hotspotHeadersBegin__.hpp"
@@ -128,6 +129,7 @@ void JeandleCompiler::initialize() {
       assert(DynamicLibrary::SearchForAddressOfSymbol(routine_entry.first().data()) == nullptr, "overlapping symbol");
     }
 #endif
+    register_jeandle_vm_callbacks();
     set_state(initialized);
   }
 }
@@ -182,6 +184,18 @@ bool JeandleCompiler::initialize_commandline_options() {
       "-enable-implicit-null-checks",
       "-imp-null-check-page-size=" + std::to_string(os::vm_page_size())
     };
+
+    if (JeandleLLVMOptions != nullptr) {
+      // Tokenize the user-provided LLVM options string.
+      const char* p = JeandleLLVMOptions;
+      while (*p != '\0') {
+        while (*p == ' ') p++;
+        if (*p == '\0') break;
+        const char* start = p;
+        while (*p != ' ' && *p != '\0') p++;
+        argv_string.emplace_back(start, p);
+      }
+    }
 
     std::vector<const char*> argv;
     for (const auto& s : argv_string) {

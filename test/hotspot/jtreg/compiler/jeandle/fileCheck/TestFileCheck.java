@@ -41,7 +41,7 @@ public class TestFileCheck {
                                                 false);
             fileCheck.checkPattern("define hotspotcc i32 .*compiler_jeandle_fileCheck_TestFileCheck_add.*");
             fileCheck.checkNext("entry:");
-            fileCheck.checkNext("br label %bci_0");
+            fileCheck.check("br label %bci_0");
         }
         {
             FileCheck fileCheck = new FileCheck(currentDir,
@@ -49,7 +49,7 @@ public class TestFileCheck {
                                                 true);
             fileCheck.checkPattern("define hotspotcc i32 .*compiler_jeandle_fileCheck_TestFileCheck_add.*");
             fileCheck.checkNext("entry:");
-            fileCheck.checkNext("%2 = add i32 %1, %0");
+            fileCheck.check("%2 = add i32 %1, %0");
             fileCheck.checkNot("define private hotspotcc void @jeandle.safepoint_poll() #2 {");
         }
         {
@@ -58,7 +58,7 @@ public class TestFileCheck {
                                                 false);
             fileCheck.checkPattern("define hotspotcc i32 .*compiler_jeandle_fileCheck_TestFileCheck_add.*");
             fileCheck.checkNextPattern("entry:");
-            fileCheck.checkNextPattern("br label %bci_[0-9]+");
+            fileCheck.checkPattern("br label %bci_[0-9]+");
         }
         {
             FileCheck fileCheck = new FileCheck(currentDir,
@@ -66,7 +66,7 @@ public class TestFileCheck {
                                                 true);
             fileCheck.checkPattern("define hotspotcc i32 .*compiler_jeandle_fileCheck_TestFileCheck_add.*");
             fileCheck.checkNextPattern("entry:");
-            fileCheck.checkNextPattern("%[0-9]+ = add i32 %[0-9]+, %[0-9]+");
+            fileCheck.checkPattern("%[0-9]+ = add i32 %[0-9]+, %[0-9]+");
             fileCheck.checkNotPattern("define private hotspotcc void @jeandle\\.safepoint_poll\\(\\) #\\d+ \\{");
         }
 

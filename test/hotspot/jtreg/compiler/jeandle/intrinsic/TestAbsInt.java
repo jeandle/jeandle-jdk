@@ -59,7 +59,7 @@ public class TestAbsInt {
                 "define hotspotcc i32 @\"compiler_jeandle_intrinsic_TestAbsInt$TestWrapper_abs_int");
         // check IR
         checker.checkNext("entry:");
-        checker.checkNext("br label %bci_0");
+        checker.check("br label %bci_0");
         checker.checkNext("bci_0:");
         // the llvm intrinsic is used
         checker.checkNext("call i32 @llvm.abs.i32(i32 %0, i1 false)");

@@ -8,12 +8,15 @@ Similar to OpenJDK, jeandle-jdk uses the jtreg test harness. For more informatio
 
 All tests specific to jeandle-jdk are located in the directory `jeandle-jdk/test/hotspot/jtreg/compiler/jeandle`.
 
-Typically, test cases are designed to verify specific functionalities of Jeandle by compiling and executing certain methods with Jeandle. Therefore, it is necessary to ensure that the test cases are executed with Jeandle enabled. These JVM flags are usually used: ```-XX:+UseJeandleCompiler -Xcomp -XX:-TieredCompilation -XX:CompileCommand,compileonly=${MethodToCompile}```.
+Typically, test cases are designed to verify specific functionalities of Jeandle by compiling and executing certain methods with Jeandle. Therefore, it is necessary to ensure that the test cases are executed with Jeandle enabled. These JVM flags are usually used: ```-Xcomp -XX:-TieredCompilation -XX:CompileCommand,compileonly=${MethodToCompile}```.
 
 ### Testing LLVM
 Testing for jeandle-llvm follows upstream LLVM practices. For details, refer to the [LLVM Testing Guide](https://llvm.org/docs/TestingGuide.html).
 
 All tests specific to jeandle-llvm are located in the directory `jeandle-llvm/llvm/test/Jeandle`.
+
+## Debugging
+For guidance on debugging Jeandle, including dumping IR, inspecting compiled code, setting breakpoints, and running Jeandle-LLVM independently, refer to the [Debugging Guide](debugging-guide.md).
 
 ## Coding Style
 To create high-quality code, please read [hotspot-coding-style](https://github.com/openjdk/jdk/blob/master/doc/hotspot-style.md) and [llvm-coding-standards](https://llvm.org/docs/CodingStandards.html).

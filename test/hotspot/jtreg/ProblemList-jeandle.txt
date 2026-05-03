@@ -514,9 +514,6 @@ serviceability/sa/ClhsdbScanOops.java#id0                                       
 ###
 # Bug - JVM crash or wrong result in Jeandle implementation
 ###
-# Wrong result in implicit narrowing conversion at putfield
-compiler/conversions/TestPrimitiveConversions.java                                             linux-aarch64,linux-x64
-
 # JVM crash (SIGSEGV): PHI node predecessor mismatch in exception dispatch
 compiler/parsing/TestExceptionBlockWithPredecessorsMain.java                                   linux-aarch64,linux-x64
 

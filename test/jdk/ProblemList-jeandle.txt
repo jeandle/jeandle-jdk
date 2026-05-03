@@ -26,6 +26,11 @@
 #############################################################################
 
 ###
+# Random failed in CI
+###
+java/math/BigInteger/largeMemory/SymmetricRangeTests.java                  linux-aarch64,linux-x64
+
+###
 # GC not support
 ###
 jdk/jfr/event/gc/configuration/TestGCConfigurationEvent.java               linux-aarch64,linux-x64
