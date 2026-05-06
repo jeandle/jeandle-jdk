@@ -99,12 +99,12 @@ The same debug level should be configured for both jeandle-llvm and jeandle-jdk.
 ```
 
 ## Supported Platforms
-Jeandle currently supports X86 and AArch64 architectures. Support for RISC-V architecture is planned for the future. Moreover, by leveraging the powerful ecosystem and well-developed backends of LLVM, other backends may also be supported on demand.
+Jeandle currently supports X86 and AArch64 architectures. Support for RISC-V architecture is in progress. Moreover, by leveraging the powerful ecosystem and well-developed backends of LLVM, other backends may also be supported on demand.
 | OS | Arch | Status |
 | :---: | :---: | :---: |
 | Linux | X86 | Supported |
 | Linux | AArch64 | Supported |
-| Linux | RISC-V | Planned |
+| Linux | RISC-V | In Progress |
 
 ## Cross-compiling
 
@@ -179,7 +179,7 @@ make images
 ```
 
 ## Using Jeandle
-To enable Jeandle, use the JVM flag ```-XX:+UseJeandleCompiler```.
+Jeandle is enabled by default. If you want to disable it, use the JVM flag ```-XX:-UseJeandleCompiler```.
 
 An example of `Fibonacci` is as follows:
 
@@ -210,7 +210,7 @@ To skip the interpreter and control which methods are compiled, run Jeandle with
 javac Main.java
 java -XX:-TieredCompilation -Xcomp \
      -XX:CompileCommand=compileonly,Main::fibonacci \
-     -XX:+UseJeandleCompiler Main
+     Main
 ```
 
 Output:
