@@ -1706,19 +1706,11 @@ bool JeandleAbstractInterpreter::inline_intrinsic(const ciMethod* target) {
       llvm::Value* is_less = _ir_builder.CreateICmpULT(arg1, arg2);
       llvm::Value* is_greater = _ir_builder.CreateICmpUGT(arg1, arg2);
 
-      llvm::Value* select_greater = _ir_builder.CreateSelect(
-      is_greater,
-      JeandleType::int_const(_ir_builder, 1),
-      JeandleType::int_const(_ir_builder, 0)
-      );
+      llvm::Value* select_greater = _ir_builder.CreateSelect(is_greater, JeandleType::int_const(_ir_builder, 1), JeandleType::int_const(_ir_builder, 0));
 
-      llvm::Value* result = _ir_builder.CreateSelect(
-      is_less,
-      JeandleType::int_const(_ir_builder, -1),
-      select_greater
-      );
+      llvm::Value* result = _ir_builder.CreateSelect(is_less, JeandleType::int_const(_ir_builder, -1), select_greater);
       _jvm->ipush(result);
-      break ;
+      break;
     }
     default:
       return false;
