@@ -174,6 +174,13 @@ return_false:
   ret i1 false
 }
 
+define hotspotcc i1 @jeandle.check_instanceof(ptr addrspace(0) nocapture %super_klass, ptr addrspace(1) nocapture nonnull %oop) noinline "lower-phase"="1" {
+entry:
+  %sub_klass = call hotspotcc ptr addrspace(0) @jeandle.load_klass(ptr addrspace(1) nonnull %oop)
+  %is_subtype = call hotspotcc i1 @jeandle.check_klass_subtype(ptr addrspace(0) %sub_klass, ptr addrspace(0) %super_klass)
+  ret i1 %is_subtype
+}
+
 ; Implementation of Java instanceof operation.
 define hotspotcc i32 @jeandle.instanceof(ptr addrspace(0) nocapture %super_klass, ptr addrspace(1) nocapture %oop) noinline "lower-phase"="0" {
 entry:
@@ -184,9 +191,7 @@ return_false:
   ret i32 0
 
 check_subtype:
-  %sub_klass = call hotspotcc ptr addrspace(0) @jeandle.load_klass(ptr addrspace(1) %oop)
-  %is_subtype = call hotspotcc i1 @jeandle.check_klass_subtype(ptr addrspace(0) %sub_klass, ptr addrspace(0) %super_klass)
-
+  %is_subtype = call hotspotcc i1 @jeandle.check_instanceof(ptr addrspace(0) %super_klass, ptr addrspace(1) nocapture nonnull %oop)
   %is_subtype_ext = zext i1 %is_subtype to i32
   ret i32 %is_subtype_ext
 }
@@ -219,7 +224,7 @@ declare hotspotcc ptr @jeandle.current_thread()
 declare hotspotcc ptr addrspace(1) @new_array(ptr, i32, ptr)
 
 ; Implementation of Java anewarray and newarray operation
-define private hotspotcc ptr addrspace(1) @jeandle.newarray(ptr %array_klass, i32 %length) noinline "lower-phase"="0"  {
+define private hotspotcc ptr addrspace(1) @jeandle.newarray(ptr %array_klass, i32 %length) noinline "lower-phase"="1"  {
 entry:
   %current_thread = call hotspotcc ptr @jeandle.current_thread()
   %array_oop = call hotspotcc ptr addrspace(1) @new_array(ptr %array_klass, i32 %length, ptr %current_thread) [ "deopt"() ]
@@ -239,8 +244,7 @@ return_true:
   ret i1 true
 
 check_subtype:
-  %sub_klass = call hotspotcc ptr addrspace(0) @jeandle.load_klass(ptr addrspace(1) %oop)
-  %is_subtype = call hotspotcc i1 @jeandle.check_klass_subtype(ptr addrspace(0) %sub_klass, ptr addrspace(0) %super_klass)
+  %is_subtype = call hotspotcc i1 @jeandle.check_instanceof(ptr addrspace(0) %super_klass, ptr addrspace(1) nocapture nonnull %oop)
 
   ret i1 %is_subtype
 }
@@ -259,8 +263,7 @@ check_subtype:
   %element_klass_offset = load i32, ptr @ObjArrayKlass.element_klass_offset;
   %element_klass_addr = getelementptr inbounds i8, ptr addrspace(0) %array_klass, i32 %element_klass_offset
   %element_klass = load atomic ptr addrspace(0), ptr addrspace(0) %element_klass_addr unordered, align 8
-  %sub_klass = call hotspotcc ptr addrspace(0) @jeandle.load_klass(ptr addrspace(1) %oop)
-  %is_subtype = call hotspotcc i1 @jeandle.check_klass_subtype(ptr addrspace(0) %sub_klass, ptr addrspace(0) %element_klass)
+  %is_subtype = call hotspotcc i1 @jeandle.check_instanceof(ptr addrspace(0) %element_klass, ptr addrspace(1) nocapture nonnull %oop)
 
   ret i1 %is_subtype
 }

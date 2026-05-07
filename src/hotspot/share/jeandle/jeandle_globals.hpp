@@ -53,6 +53,9 @@
   product(bool, JeandleUseHotspotIntrinsics, false,                         \
           "Prefer Hotspot intrinsics over LLVM intrinsics")                 \
                                                                             \
+  product(ccstr, JeandleLLVMOptions, nullptr,                               \
+          "Additional LLVM command line options")                           \
+                                                                            \
 
 // end of JEANDLE_FLAGS
 
