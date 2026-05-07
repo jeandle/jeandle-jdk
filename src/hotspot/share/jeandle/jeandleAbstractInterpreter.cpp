@@ -123,7 +123,9 @@ bool JeandleVMState::update_phi_nodes(JeandleVMState* income_jvm, llvm::BasicBlo
   llvm::SmallVector<TypedValue>& income_stack = income_jvm->_stack;
 
   if (is_osr) {
-    // Create phi nodes for locks.
+    // For OSR compilation, monitor objects may originate from multiple incoming 
+    // control flow paths (e.g., the OSR entry and the outer loop). 
+    // We create PHI nodes to ensure monitor object consistency across these paths.
     for (size_t i = 0; i < income_jvm->locks_size(); i++) {
       assert(!income_jvm->lock_at(i).is_null(), "null lock");
       assert(!lock_at(i).is_null(), "null lock");
@@ -481,7 +483,7 @@ void BasicBlockBuilder::setup_control_flow() {
   if (!is_osr()) {
     connect_block(_bci2block[0], entry_block());
   } else {
-    connect_block(_bci2block[_entry_bci], osr_entry_block());
+    connect_block(_bci2block[_entry_bci], entry_block());
   }
 
   JeandleBasicBlock* current = nullptr;
@@ -737,6 +739,8 @@ void JeandleAbstractInterpreter::initialize_VM_state_from_osr_buffer(JeandleVMSt
   // Commute monitors from interpreter frame to compiler frame.
   int monitor_count = osr_entry_block->monitor_count();
   if (monitor_count != 0) {
+    JeandleCompilation::current()->set_has_monitors(true);
+
     int monitors_addr_offset = (max_locals + monitor_count * 2 - 1) * wordSize;
     llvm::IRBuilder entry_block_ir_builder(_block_builder->entry_block()->header_llvm_block()->getTerminator());
     llvm::SmallVector<llvm::Value*> locks(monitor_count);
@@ -759,7 +763,6 @@ void JeandleAbstractInterpreter::initialize_VM_state_from_osr_buffer(JeandleVMSt
       store_to_address(lock, displaced_hdr, T_ADDRESS, false);
 
       if (index == 0 && _method->is_synchronized()) {
-        JeandleCompilation::current()->set_has_monitors(true);
         _sync_lock.set_object(TypedValue(BasicType::T_OBJECT, lock_object));
         _sync_lock.set_lock(lock);
       }
@@ -835,7 +838,7 @@ void JeandleAbstractInterpreter::initialize_VM_state_from_osr_buffer(JeandleVMSt
   llvm::CallInst* call_OSR_migration_end = _ir_builder.CreateCall(OSR_migration_end_callee, {osr_buffer});
   call_OSR_migration_end->setCallingConv(llvm::CallingConv::C);
 
-  // Initilaize vm_state for incoming uncommon_trap
+  // Initialize vm_state for incoming uncommon_trap.
   _jvm = initial_jvm;
 
   // Now that the interpreter state is loaded, make sure it will match

@@ -224,7 +224,6 @@ class BasicBlockBuilder : public JeandleCompilationResourceObj {
   llvm::SmallVector<JeandleBasicBlock*>& bci2block() { return _bci2block; }
 
   JeandleBasicBlock* entry_block() { return _entry_block; }
-  JeandleBasicBlock* osr_entry_block() { assert(is_osr(), "sanity"); return _entry_block; }
 
   static void connect_block(JeandleBasicBlock* child_block, JeandleBasicBlock* parent_block) {
     assert(child_block != nullptr && parent_block != nullptr, "connecting nullptr");
