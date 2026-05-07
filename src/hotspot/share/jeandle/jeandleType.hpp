@@ -28,6 +28,7 @@
 
 #include "jeandle/__hotspotHeadersBegin__.hpp"
 #include "ci/compilerInterface.hpp"
+#include "jeandle/jeandleCompilation.hpp"
 
 class JeandleType : public AllStatic {
  public:
