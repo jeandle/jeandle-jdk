@@ -75,6 +75,12 @@ static elapsedTimer jeandle_timers[max_phase_timers];
 // Counts how many methods have been compiled by Jeandle (optional)
 static int jeandle_compilation_count = 0;
 
+int JeandleCompilation::_const_section_alignment = -1;
+
+int jeandle_const_section_alignment() {
+  return JeandleCompilation::const_section_alignment();
+}
+
 class JeandleTraceTime : public TraceTime {
  private:
   JeandleTimerName _timer;

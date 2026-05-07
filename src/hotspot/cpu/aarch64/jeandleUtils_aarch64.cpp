@@ -37,7 +37,7 @@ void apply_vm_flag_feature_overrides(llvm::SubtargetFeatures& features) {
     features.AddFeature("sha2", false);
     features.AddFeature("sha3", false);
   }
-  if ((FLAG_IS_CMDLINE(UseNeon) && !UseNeon)) {
+  if (FLAG_IS_CMDLINE(UseNeon) && !UseNeon) {
     features.AddFeature("neon", false);
   }
   if (!UseCRC32) {

@@ -246,17 +246,14 @@ alloc_fast_path:
 
   %prototype_value = load i64, ptr @markWord.prototype_value
 
-  ; TODO: Mark word and klass are written atomically, to enable the object initialization barrier below.
-  ; Otherwise, the compiler may reorder the non-atomic stores. This is a conservative design. We may need
-  ; to revisit this design to find a more efficient way.
   store atomic i64 %prototype_value, ptr addrspace(1) %mark_word_addr unordered, align 8
   ; TODO: When UseCompressedClassPointers is enabled, klass should be stored as a 32-bit narrowKlass
   ; instead of a full pointer. Currently this assumes uncompressed class pointers.
   store atomic ptr %klass, ptr addrspace(1) %klass_addr unordered, align 8
 
   %zero_tlab = load i1, ptr @VMOptions.ZeroTLAB
-  %not_clear = and i1 %use_tlab, %zero_tlab
-  br i1 %not_clear, label %initialization_membar, label %clear_memory
+  %skip_clear = and i1 %use_tlab, %zero_tlab
+  br i1 %skip_clear, label %initialization_membar, label %clear_memory
 
 clear_memory:
   %base_offset = load i32, ptr @instanceOopDesc.base_offset_in_bytes
@@ -266,6 +263,10 @@ clear_memory:
   br label %initialization_membar
 
 initialization_membar:
+  ; TODO: The current approach uses atomic stores for mark word and klass initialization,
+  ; and relies on this fence release as a temporary solution to ensure publication semantics.
+  ; The goal is to replace the atomic stores with plain stores and implement a custom lightweight
+  ; membar instead of this fence.
   fence release
   br label %return_block
 
