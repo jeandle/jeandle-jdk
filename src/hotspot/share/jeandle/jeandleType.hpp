@@ -123,6 +123,9 @@ public:
 
   bool equals(const LockValue& rhs) {
     if (JeandleCompilation::current()->is_osr_compilation()) {
+      // During OSR compilation, identical logical monitors may be associated with distinct
+      // LLVM SSA values due to state merging from the OSR entry and loop predecessors.
+      // Comparing types and basic lock indices ensures semantic equivalence.
       return _object.value()->getType() == rhs._object.value()->getType() && _basic_lock == rhs._basic_lock;
     }
     return _object.value() == rhs._object.value() && _basic_lock == rhs._basic_lock;

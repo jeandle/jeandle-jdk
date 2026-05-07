@@ -206,8 +206,7 @@ return_true:
   ret i1 true
 
 check_subtype:
-  %sub_klass = call hotspotcc ptr addrspace(0) @jeandle.load_klass(ptr addrspace(1) %oop)
-  %is_subtype = call hotspotcc i1 @jeandle.check_klass_subtype(ptr addrspace(0) %sub_klass, ptr addrspace(0) %super_klass)
+  %is_subtype = call hotspotcc i1 @jeandle.check_instanceof(ptr addrspace(0) %super_klass, ptr addrspace(1) nocapture nonnull %oop)
   ret i1 %is_subtype
 }
 
