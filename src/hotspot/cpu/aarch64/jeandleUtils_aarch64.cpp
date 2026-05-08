@@ -46,12 +46,10 @@ void apply_vm_flag_feature_overrides(llvm::SubtargetFeatures& features) {
   if (!UseLSE) {
     features.AddFeature("lse", false);
   }
-  if (UseSVE < 2) {
-    features.AddFeature("sve2", false);
-  }
-  if (UseSVE < 1) {
-    features.AddFeature("sve", false);
-  }
+  // Disable SVE: HotSpot frame_size must be a compile-time constant,
+  // incompatible with SVE's variable-length stack allocation (addvl).
+  features.AddFeature("sve2", false);
+  features.AddFeature("sve", false);
 }
 
 void JeandleFuncSig::setup_description(llvm::Function* func, bool is_stub) {
