@@ -287,6 +287,7 @@ class JeandleAbstractInterpreter : public StackObj {
 
   // Object & Lock for synchronized method
   LockValue _sync_lock;
+
   // Cumulative traps
   enum { trapHistLength = MethodData::_trap_hist_limit };
   uint _trap_hist[trapHistLength];
@@ -416,11 +417,11 @@ class JeandleAbstractInterpreter : public StackObj {
 
   void accumulate_trap_counts_from_mdo(ciMethod *method);
   uint trap_count(uint r) const {
-    assert(r < trapHistLength, "oob");
+    assert(r < trapHistLength, "trap reason overflow");
     return _trap_hist[r];
   }
   void set_trap_count(uint r, uint c) {
-    assert(r < trapHistLength, "oob");
+    assert(r < trapHistLength, "trap reason overflow");
     _trap_hist[r] = c;
   }
   bool too_many_traps(ciMethod *method, int bci, Deoptimization::DeoptReason reason);

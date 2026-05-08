@@ -668,9 +668,6 @@ void JeandleAbstractInterpreter::initialize_VM_state() {
   }
 
   _block_builder->entry_block()->set_VM_state(initial_jvm);
-
-  Copy::zero_to_bytes(_trap_hist, sizeof(_trap_hist));
-  accumulate_trap_counts_from_mdo(_method);
 }
 
 void JeandleAbstractInterpreter::interpret() {
@@ -680,6 +677,9 @@ void JeandleAbstractInterpreter::interpret() {
   add_to_work_list(current);
 
   initialize_VM_state();
+
+  Copy::zero_to_bytes(_trap_hist, sizeof(_trap_hist));
+  accumulate_trap_counts_from_mdo(_method);
 
   if (_method && _method->is_synchronized()) {
     JeandleCompilation::current()->set_has_monitors(true);
@@ -2632,8 +2632,16 @@ void JeandleAbstractInterpreter::builtin_throw(Deoptimization::DeoptReason reaso
   int bci = _bytecodes.cur_bci();
   ciMethod* method = _bytecodes.method();
 
-  if (too_many_traps(method, bci, reason)) {
-    treat_throw_as_hot = true;
+  if (ProfileTraps) {
+    if (too_many_traps(method, bci, reason)) {
+      treat_throw_as_hot = true;
+    }
+
+    if (trap_count(reason) != 0 &&
+        method->method_data()->trap_count(reason) != 0 &&
+        has_ex_handler) {
+      treat_throw_as_hot = true;
+    }
   }
 
   for (ciExceptionHandlerStream handlers(method, bci); !handlers.is_done(); handlers.next()) {
@@ -2642,14 +2650,6 @@ void JeandleAbstractInterpreter::builtin_throw(Deoptimization::DeoptReason reaso
       has_ex_handler =  true;
       break ;
     }
-  }
-
-  // Also, if there is a local exception handler, treat all throws
-  // as hot if there has been at least one in this method.
-  if (trap_count(reason) != 0 &&
-      method->method_data()->trap_count(reason) != 0 &&
-      has_ex_handler) {
-    treat_throw_as_hot = true;
   }
 
   if (treat_throw_as_hot && method->can_omit_stack_trace()) {
@@ -3114,6 +3114,7 @@ void JeandleAbstractInterpreter::clinit_barrier(ciInstanceKlass* ik, ciMethod* c
     _block->set(JeandleBasicBlock::always_uncommon_trap);
   }
 }
+
 bool JeandleAbstractInterpreter::too_many_traps(ciMethod* method, int bci, Deoptimization::DeoptReason reason) {
   ciMethodData* md = method->method_data();
   if (method->is_empty()) {
