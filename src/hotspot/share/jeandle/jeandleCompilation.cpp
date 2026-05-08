@@ -56,6 +56,7 @@
 #include "ci/ciUtilities.inline.hpp"
 #include "logging/log.hpp"
 #include "runtime/sharedRuntime.hpp"
+#include "runtime/thread.hpp"
 #include "runtime/timer.hpp"
 #include "runtime/timerTrace.hpp"
 #include "compiler/compiler_globals.hpp"
@@ -75,10 +76,19 @@ static elapsedTimer jeandle_timers[max_phase_timers];
 // Counts how many methods have been compiled by Jeandle (optional)
 static int jeandle_compilation_count = 0;
 
-int JeandleCompilation::_const_section_alignment = -1;
-
+// Returns the const section alignment for the current Jeandle compilation.
+// Only returns a valid value when running inside a Jeandle compilation thread;
+// returns -1 otherwise (e.g., non-compiler threads, or C1/C2 compiler threads
+// even when UseJeandleCompiler is enabled).
 int jeandle_const_section_alignment() {
-  return JeandleCompilation::const_section_alignment();
+  Thread* t = Thread::current_or_null();
+  if (is_jeandle_compiler_thread(t)) {
+    JeandleCompilation* comp = JeandleCompilation::current();
+    if (comp != nullptr) {
+      return comp->const_section_alignment();
+    }
+  }
+  return -1;
 }
 
 class JeandleTraceTime : public TraceTime {
@@ -111,7 +121,8 @@ JeandleCompilation::JeandleCompilation(llvm::TargetMachine* target_machine,
                                        _entry_bci(entry_bci),
                                        _context(std::make_unique<llvm::LLVMContext>()),
                                        _code(env, method),
-                                       _error_msg(nullptr) {
+                                       _error_msg(nullptr),
+                                       _const_section_alignment(-1) {
   if (entry_bci != InvocationEntryBci) {
     env->record_method_not_compilable("OSR not supported");
     return;
@@ -164,7 +175,8 @@ JeandleCompilation::JeandleCompilation(llvm::TargetMachine* target_machine,
                                        _context(std::move(context)),
                                        _llvm_module(std::make_unique<llvm::Module>(name, *_context)),
                                        _code(_env, name),
-                                       _error_msg(nullptr) {
+                                       _error_msg(nullptr),
+                                       _const_section_alignment(-1) {
   initialize();
 
   _llvm_module->setDataLayout(*_data_layout);

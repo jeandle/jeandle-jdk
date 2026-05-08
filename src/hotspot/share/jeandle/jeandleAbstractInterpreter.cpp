@@ -2443,28 +2443,28 @@ void JeandleAbstractInterpreter::do_new() {
   llvm::Value* klass_addr = _ir_builder.getInt64((int64_t)klass_enc);
   llvm::Value* klass_ptr = _ir_builder.CreateIntToPtr(klass_addr, klass_type);
 
-if (Klass::layout_helper_needs_slow_path(layout_helper)) {
+  llvm::InvokeInst* new_inst;
+  if (Klass::layout_helper_needs_slow_path(layout_helper)) {
     // Must go slow path: class has finalizer, is abstract, too large, etc.
     llvm::Value* current_thread = call_java_op("jeandle.current_thread", {});
-    llvm::InvokeInst* result = create_call_ex(JeandleRuntimeRoutine::new_instance_callee(_module),
-                                              {klass_ptr, current_thread},
-                                              llvm::CallingConv::Hotspot_JIT,
-                                              {create_current_deopt_bundle()});
-    _jvm->apush(result);
+    new_inst = create_call_ex(JeandleRuntimeRoutine::new_instance_callee(_module),
+                              {klass_ptr, current_thread},
+                              llvm::CallingConv::Hotspot_JIT,
+                              {create_current_deopt_bundle()});
   } else {
     llvm::Value* size_in_bytes = _ir_builder.getInt32(Klass::layout_helper_size_in_bytes(layout_helper));
-    llvm::InvokeInst* new_inst = llvm::cast<llvm::InvokeInst>(
+    new_inst = llvm::cast<llvm::InvokeInst>(
         call_java_op_ex("jeandle.new_instance", {klass_ptr, size_in_bytes}, {create_current_deopt_bundle()}));
-
-    // new always produces an exact type.
-    new_inst->addRetAttr(llvm::Attribute::get(*_context,
-        llvm::jeandle::Attribute::JavaKlass,
-        std::to_string((uintptr_t)klass_enc)));
-    new_inst->addRetAttr(llvm::Attribute::get(*_context,
-        llvm::jeandle::Attribute::JavaKlassExact));
-
-    _jvm->apush(new_inst);
   }
+
+  // new always produces an exact type.
+  new_inst->addRetAttr(llvm::Attribute::get(*_context,
+      llvm::jeandle::Attribute::JavaKlass,
+      std::to_string((uintptr_t)klass_enc)));
+  new_inst->addRetAttr(llvm::Attribute::get(*_context,
+      llvm::jeandle::Attribute::JavaKlassExact));
+
+  _jvm->apush(new_inst);
 }
 
 JeandleAbstractInterpreter::DispatchedDest JeandleAbstractInterpreter::dispatch_exception_for_invoke() {

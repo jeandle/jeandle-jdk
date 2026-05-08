@@ -73,8 +73,8 @@ class JeandleCompilation : public StackObj {
 
   void set_has_monitors(bool v) { _has_monitors = v; }
 
-  static int const_section_alignment() { return _const_section_alignment; }
-  static void set_const_section_alignment(int align) {
+  int const_section_alignment() { return _const_section_alignment; }
+  void set_const_section_alignment(int align) {
     if (align > _const_section_alignment) {
       _const_section_alignment = align;
     }
@@ -104,7 +104,7 @@ class JeandleCompilation : public StackObj {
 
   bool _has_monitors;
 
-  static int _const_section_alignment;
+  int _const_section_alignment;
 
   const char* check_can_parse(ciMethod* method);
 
