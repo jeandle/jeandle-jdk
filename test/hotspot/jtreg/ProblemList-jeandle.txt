@@ -514,9 +514,6 @@ serviceability/sa/ClhsdbScanOops.java#id0                                       
 ###
 # Bug - JVM crash or wrong result in Jeandle implementation
 ###
-# JVM crash (SIGSEGV): failed to update handler's VM state in exception dispatch
-compiler/parsing/TestMissingSafepointOnTryCatch.java                                           linux-aarch64,linux-x64
-
 # JVM crash (SIGABRT): assert(_stack_guard_state == stack_guard_reserved_disabled) failed
 runtime/ReservedStack/ReservedStackTest.java                                                   linux-aarch64,linux-x64
 
