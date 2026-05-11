@@ -46,8 +46,11 @@ void apply_vm_flag_feature_overrides(llvm::SubtargetFeatures& features) {
   if (!UseLSE) {
     features.AddFeature("lse", false);
   }
-  // Disable SVE: HotSpot frame_size must be a compile-time constant,
-  // incompatible with SVE's variable-length stack allocation (addvl).
+  // TODO: SVE is disabled as a workaround. When LLVM uses SVE registers, it
+  // generates `addvl sp, sp, #-N` in the prologue to allocate variable-length
+  // spill space. But HotSpot's frame_size is a compile-time constant and cannot
+  // include the addvl portion, causing GC stack walks to miscalculate sender_sp
+  // and crash (SIGSEGV or heap assertion failures).
   features.AddFeature("sve2", false);
   features.AddFeature("sve", false);
 }
