@@ -24,11 +24,10 @@
  * @build jdk.test.lib.Asserts jdk.test.whitebox.WhiteBox
  * @run driver jdk.test.lib.helpers.ClassFileInstaller jdk.test.whitebox.WhiteBox
  * @run main/othervm -Xbootclasspath/a:. -XX:+UnlockDiagnosticVMOptions -XX:+WhiteBoxAPI
- *                   -XX:CompileCommand=compileonly,compiler.jeandle.TestOSR::testAllTypes
- *                   -XX:CompileCommand=compileonly,compiler.jeandle.TestOSR::testNestedLoop
- *                   -XX:CompileCommand=compileonly,compiler.jeandle.TestOSR::testTryCatch
+ *                   -XX:CompileCommand=compileonly,compiler.jeandle.TestOSR::test*
+ *                   -XX:CompileCommand=dontinline,compiler.jeandle.TestOSR::blackHole
  *                   -XX:CompileCommand=dontinline,compiler.jeandle.TestOSR::throwRuntimeException
- *                   -XX:-TieredCompilation -XX:+UseOnStackReplacement -Xbatch -XX:+JeandleDumpIR
+ *                   -XX:-TieredCompilation -XX:+UseOnStackReplacement -Xbatch
  *                   -XX:+UseJeandleCompiler compiler.jeandle.TestOSR
  */
 
@@ -51,6 +50,8 @@ public class TestOSR {
     private static int iterations = 30_000;
     private static int outerIterations = 20;
 
+    private static boolean loadCustomClass = false;
+
     public static void main(String[] args) throws Exception {
 
         testAllTypes();
@@ -64,6 +65,37 @@ public class TestOSR {
         testTryCatch();
         Method testTryCatchMethod = TestOSR.class.getDeclaredMethod("testTryCatch");
         Asserts.assertTrue(wb.isMethodCompiled(testTryCatchMethod, true /* isOsr */));
+
+        testSynchronizedBlock();
+        Method testSyncBlockMethod = TestOSR.class.getDeclaredMethod("testSynchronizedBlock");
+        Asserts.assertTrue(wb.isMethodCompiled(testSyncBlockMethod, true /* isOsr */));
+
+        testSynchronizedMethod();
+        Method testSyncMethodMethod = TestOSR.class.getDeclaredMethod("testSynchronizedMethod");
+        Asserts.assertTrue(wb.isMethodCompiled(testSyncMethodMethod, true /* isOsr */));
+
+        testSynchronizedWithException();
+        Method testSyncExcMethod = TestOSR.class.getDeclaredMethod("testSynchronizedWithException");
+        Asserts.assertTrue(wb.isMethodCompiled(testSyncExcMethod, true /* isOsr */));
+
+        testLoopWithReturn();
+        Method testReturnMethod = TestOSR.class.getDeclaredMethod("testLoopWithReturn");
+        Asserts.assertTrue(wb.isMethodCompiled(testReturnMethod, true /* isOsr */));
+
+        testLoopWithBreak();
+        Method testBreakMethod = TestOSR.class.getDeclaredMethod("testLoopWithBreak");
+        Asserts.assertTrue(wb.isMethodCompiled(testBreakMethod, true /* isOsr */));
+
+        testNestedSynchronizedLoop();
+        Method testNestedSyncLoopMethod = TestOSR.class.getDeclaredMethod("testNestedSynchronizedLoop");
+        Asserts.assertTrue(wb.isMethodCompiled(testNestedSyncLoopMethod, true /* isOsr */));
+
+        testOSRTypeState();
+        Thread.sleep(500);
+        loadCustomClass = true;
+        testOSRTypeState();
+        Method testOSRTypeStateMethod = TestOSR.class.getDeclaredMethod("testOSRTypeState");
+        Asserts.assertEquals(wb.getMethodTrapCount(testOSRTypeStateMethod, "constraint"), 1);
     }
 
     public static void testAllTypes() {
@@ -142,4 +174,116 @@ public class TestOSR {
     public static void throwRuntimeException() {
         throw new RuntimeException();
     }
+
+    public static void testSynchronizedBlock() {
+        Object lock = new Object();
+        long longVal = longValue;
+
+        for (int i = 0; i < iterations; i++) {
+            synchronized (lock) {
+                longVal += 1;
+            }
+        }
+
+        Asserts.assertEquals(longVal, longValue + iterations);
+    }
+
+    public static synchronized void testSynchronizedMethod() {
+        long longVal = longValue;
+
+        for (int i = 0; i < iterations; i++) {
+            longVal += 1;
+        }
+
+        Asserts.assertEquals(longVal, longValue + iterations);
+    }
+
+    public static void testSynchronizedWithException() {
+        Object lock = new Object();
+        boolean exceptionCatched = false;
+        long longVal = longValue;
+
+        try {
+            for (int i = 0; i < iterations; i++) {
+                synchronized (lock) {
+                    longVal += 1;
+                    if (i == iterations - 1) {
+                        throwRuntimeException();
+                    }
+                }
+            }
+        } catch (RuntimeException e) {
+            exceptionCatched = true;
+        }
+
+        Asserts.assertTrue(exceptionCatched);
+        Asserts.assertEquals(longVal, longValue + iterations);
+    }
+
+    public static int testLoopWithReturn() {
+        long longVal = longValue;
+
+        for (int i = 0; i < iterations; i++) {
+            longVal += 1;
+            if (i == iterations - 1) {
+                return (int) longVal;
+            }
+        }
+
+        return -1;
+    }
+
+    public static void testLoopWithBreak() {
+        long longVal = longValue;
+        int breakAt = iterations - intValue;
+
+        for (int i = 0; i < iterations; i++) {
+            longVal += 1;
+            if (i == breakAt) {
+                break;
+            }
+        }
+
+        Asserts.assertEquals(longVal, longValue + breakAt + 1);
+    }
+
+    public static void testNestedSynchronizedLoop() {
+        Object objA = new Object();
+        boolean flagA = true;
+        boolean flagB = true;
+        long longVal = longValue;
+
+        while (flagA) {
+            synchronized (objA) {
+                while (flagB) {
+                    longVal += 1;
+                    if (longVal >= longValue + iterations) {
+                        flagB = false;
+                    }
+                }
+                flagA = false;
+            }
+        }
+
+        Asserts.assertEquals(longVal, longValue + iterations);
+    }
+
+    public static Object testOSRTypeState() {
+        Object o = null;
+        for (int i = 0; i < 10; i++) {
+            // When loadCustomClass is false, ciTypeFlow sees only the String branch (CustomClass is unloaded),
+            // so 'o' is typed as String. At runtime with loadCustomClass=true, 'o' becomes CustomClass,
+            // triggering check_interpreter_type mismatch → uncommon_trap(Reason_constraint).
+            o = loadCustomClass ? new CustomClass() : new String();
+            // Loop Header: OSR will trigger here
+            for (int j = 0; j < 6000; j++) {
+                blackHole();
+            }
+        }
+        return o;
+    }
+
+    public static void blackHole() {}
+
+    public static class CustomClass {}
 }

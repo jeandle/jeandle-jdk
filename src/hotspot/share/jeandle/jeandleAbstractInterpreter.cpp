@@ -899,6 +899,11 @@ void JeandleAbstractInterpreter::check_interpreter_type(ciTypeFlow::Block* osr_e
       cond = call_java_op("jeandle.instanceof_or_null", {klass_value, _jvm->locals_at(index)});
     }
 
+    // The unexpected type happens because a new edge is active
+    // in the CFG, which typeflow had previously ignored.
+    // E.g., Object x = cond ? new CustomClass() : new String().
+    // This x will be typed as String if CustomClass not loaded yet.
+    // It could also happen due to a problem in ciTypeFlow analysis.
     _ir_builder.CreateCondBr(cond, next_block, osr_entry_trap_block);
     _ir_builder.SetInsertPoint(next_block);
     _block_builder->entry_block()->set_tail_llvm_block(next_block);

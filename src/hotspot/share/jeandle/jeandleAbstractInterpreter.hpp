@@ -292,7 +292,11 @@ class JeandleAbstractInterpreter : public StackObj {
   // Object & Lock for synchronized method
   LockValue _sync_lock;
 
-  // Reuse stack allocation for monitor
+  // Reuse stack allocation for monitor: each monitor nesting level maps to a
+  // fixed BasicLock slot on the stack. When the same nesting level is entered
+  // again, the existing slot is reused rather than allocating a new one, so
+  // that phi nodes and deopt info can consistently reference the same stack
+  // location for a given monitor depth.
   llvm::SmallVector<llvm::Value*> _allocated_basic_lock;
 
   bool need_alloc_for(int monitor_nest_level) {
