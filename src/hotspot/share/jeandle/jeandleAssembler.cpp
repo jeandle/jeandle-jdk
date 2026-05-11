@@ -38,6 +38,9 @@ int JeandleAssembler::emit_consts(address consts_start, uint64_t consts_size, ui
     __ code()->consts()->set_end(__ code()->consts()->end() + padding);
   }
 
+  // Record the maximum alignment seen across all const emissions.
+  JeandleCompilation::current()->set_const_section_alignment((int)alignment);
+
   // Copy constants.
   llvm::copy(llvm::ArrayRef(consts_start, consts_size), __ code()->consts()->end());
   __ code()->consts()->set_end(__ code()->consts()->end() + consts_size);

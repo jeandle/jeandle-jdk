@@ -48,6 +48,8 @@ class Label;
 class ciMethod;
 class SharedStubToInterpRequest;
 
+extern int jeandle_const_section_alignment();
+
 class CodeOffsets: public StackObj {
 public:
   enum Entries { Entry,
@@ -467,7 +469,15 @@ class CodeBuffer: public StackObj DEBUG_ONLY(COMMA private Scrubber) {
 
     // Default is to align on 8 bytes. A compiler can change this
     // if larger alignment (e.g., 32-byte vector masks) is required.
-    _const_section_alignment = (int) sizeof(jdouble);
+    if (UseJeandleCompiler) {
+      // jeandle_const_section_alignment() returns -1 when not in a Jeandle
+      // compilation thread (e.g., C1/C2 threads), in which case MAX2 falls
+      // back to sizeof(jdouble).
+      int align = jeandle_const_section_alignment();
+      _const_section_alignment = MAX2(align, (int) sizeof(jdouble));
+    } else {
+      _const_section_alignment = (int) sizeof(jdouble);
+    }
 
 #ifndef PRODUCT
     _decode_begin    = nullptr;

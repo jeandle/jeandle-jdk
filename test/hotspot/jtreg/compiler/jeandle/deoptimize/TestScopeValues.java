@@ -20,6 +20,7 @@
 
 /*
  * @test
+ * @requires vm.debug == true
  * @library /test/lib /
  * @build jdk.test.lib.Asserts
  * @run main/othervm compiler.jeandle.deoptimize.TestScopeValues

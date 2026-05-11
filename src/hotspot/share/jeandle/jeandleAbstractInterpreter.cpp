@@ -896,7 +896,7 @@ void JeandleAbstractInterpreter::check_interpreter_type(ciTypeFlow::Block* osr_e
       assert(klass != nullptr, "klass not loaded");
       llvm::Value* klass_value = _ir_builder.CreateIntToPtr(_ir_builder.getInt64((intptr_t)klass),
                                                             llvm::PointerType::get(*_context, llvm::jeandle::AddrSpace::CHeapAddrSpace));
-      cond = call_java_op("jeandle.instanceof_or_null", {klass_value, _jvm->locals_at(index)});
+      cond = call_java_op("jeandle.checkcast", {klass_value, _jvm->locals_at(index)});
     }
 
     // The unexpected type happens because a new edge is active
@@ -1492,9 +1492,17 @@ void JeandleAbstractInterpreter::if_icmp(llvm::CmpInst::Predicate p) {
   llvm::Value* r = _jvm->ipop();
   llvm::Value* l = _jvm->ipop();
   llvm::Value* cond = _ir_builder.CreateICmp(p, l, r);
+  JeandleBasicBlock* true_succ = bci2block()[_bytecodes.get_dest()];
+  JeandleBasicBlock* false_succ = bci2block()[_bytecodes.next_bci()];
+  if (true_succ->is_exception_handler()) {
+    merge_into_exception_handler(true_succ);
+  }
+  if (false_succ->is_exception_handler()) {
+    merge_into_exception_handler(false_succ);
+  }
   _ir_builder.CreateCondBr(cond,
-                           bci2block()[_bytecodes.get_dest()]->header_llvm_block(),
-                           bci2block()[_bytecodes.next_bci()]->header_llvm_block());
+                           true_succ->header_llvm_block(),
+                           false_succ->header_llvm_block());
 }
 
 void JeandleAbstractInterpreter::lcmp() {
@@ -1555,11 +1563,27 @@ void JeandleAbstractInterpreter::fcmp(BasicType type, bool true_if_unordered) {
   _jvm->ipush(_ir_builder.CreateSelect(negative_case, JeandleType::int_const(_ir_builder, -1), non_negative_case));
 }
 
+void JeandleAbstractInterpreter::merge_into_exception_handler(JeandleBasicBlock* handler_block) {
+  // The bytecode verifier guarantees that all paths reaching the same BCI have
+  // consistent stack depth and types. So a normal flow branch (goto/if) targeting
+  // a handler block has the same stack layout as the exception path. We just need
+  // to merge the current VMState into the handler, bypassing the is_exception_handler()
+  // skip in the successor loop of interpret_block().
+  JeandleVMState* adjusted_state = _jvm->copy();
+  if (!handler_block->merge_VM_state_from(adjusted_state, _ir_builder.GetInsertBlock(), _method)) {
+    JEANDLE_ERROR_ASSERT_AND_RET_VOID_ON_FAIL(false, "failed to merge VM state into exception handler block from normal flow");
+  }
+}
+
 void JeandleAbstractInterpreter::goto_bci(int bci) {
   if (bci <= _bytecodes.cur_bci()) {
     add_safepoint_poll();
   }
-  _ir_builder.CreateBr(bci2block()[bci]->header_llvm_block());
+  JeandleBasicBlock* succ = bci2block()[bci];
+  if (succ->is_exception_handler()) {
+    merge_into_exception_handler(succ);
+  }
+  _ir_builder.CreateBr(succ->header_llvm_block());
 }
 
 void JeandleAbstractInterpreter::lookup_switch() {
@@ -1581,12 +1605,19 @@ void JeandleAbstractInterpreter::lookup_switch() {
   }
 
   llvm::Value* key = _jvm->ipop();
-  llvm::BasicBlock* default_block = bci2block()[cur_bci + sw.default_offset()]->header_llvm_block();
-  llvm::SwitchInst* switch_inst = _ir_builder.CreateSwitch(key, default_block, length);
+  JeandleBasicBlock* default_block = bci2block()[cur_bci + sw.default_offset()];
+  if (default_block->is_exception_handler()) {
+    merge_into_exception_handler(default_block);
+  }
+  llvm::SwitchInst* switch_inst = _ir_builder.CreateSwitch(key, default_block->header_llvm_block(), length);
 
   for (int i = 0; i < length; i++) {
     LookupswitchPair pair = sw.pair_at(i);
-    switch_inst->addCase(JeandleType::int_const(_ir_builder, pair.match()), bci2block()[cur_bci + pair.offset()]->header_llvm_block());
+    JeandleBasicBlock* case_block = bci2block()[cur_bci + pair.offset()];
+    if (case_block->is_exception_handler()) {
+      merge_into_exception_handler(case_block);
+    }
+    switch_inst->addCase(JeandleType::int_const(_ir_builder, pair.match()), case_block->header_llvm_block());
   }
 }
 
@@ -1609,12 +1640,18 @@ void JeandleAbstractInterpreter::table_switch() {
   }
 
   llvm::Value* idx = _jvm->ipop();
-  llvm::BasicBlock* default_block = bci2block()[cur_bci + sw.default_offset()]->header_llvm_block();
-  llvm::SwitchInst* switch_inst = _ir_builder.CreateSwitch(idx, default_block, length);
+  JeandleBasicBlock* default_block = bci2block()[cur_bci + sw.default_offset()];
+  if (default_block->is_exception_handler()) {
+    merge_into_exception_handler(default_block);
+  }
+  llvm::SwitchInst* switch_inst = _ir_builder.CreateSwitch(idx, default_block->header_llvm_block(), length);
 
   for (int i = 0; i < length; i++) {
-    llvm::BasicBlock* case_block = bci2block()[cur_bci + sw.dest_offset_at(i)]->header_llvm_block();
-    switch_inst->addCase(JeandleType::int_const(_ir_builder, i + low), case_block);
+    JeandleBasicBlock* case_block = bci2block()[cur_bci + sw.dest_offset_at(i)];
+    if (case_block->is_exception_handler()) {
+      merge_into_exception_handler(case_block);
+    }
+    switch_inst->addCase(JeandleType::int_const(_ir_builder, i + low), case_block->header_llvm_block());
   }
 }
 
@@ -2694,15 +2731,25 @@ void JeandleAbstractInterpreter::do_new() {
 
   jint layout_helper = klass->layout_helper();
   assert(Klass::layout_helper_is_instance(layout_helper), "Unexpected klass");
-  llvm::Value* size_in_bytes = _ir_builder.getInt32(Klass::layout_helper_size_in_bytes(layout_helper));
 
   Klass* klass_enc = (Klass*)(klass->constant_encoding());
   llvm::PointerType* klass_type = llvm::PointerType::get(*_context, llvm::jeandle::AddrSpace::CHeapAddrSpace);
   llvm::Value* klass_addr = _ir_builder.getInt64((int64_t)klass_enc);
   llvm::Value* klass_ptr = _ir_builder.CreateIntToPtr(klass_addr, klass_type);
 
-  llvm::InvokeInst* new_inst = llvm::cast<llvm::InvokeInst>(
-      call_java_op_ex("jeandle.new_instance", {klass_ptr, size_in_bytes}, {create_current_deopt_bundle()}));
+  llvm::InvokeInst* new_inst;
+  if (Klass::layout_helper_needs_slow_path(layout_helper)) {
+    // Must go slow path: class has finalizer, is abstract, too large, etc.
+    llvm::Value* current_thread = call_java_op("jeandle.current_thread", {});
+    new_inst = create_call_ex(JeandleRuntimeRoutine::new_instance_callee(_module),
+                              {klass_ptr, current_thread},
+                              llvm::CallingConv::Hotspot_JIT,
+                              {create_current_deopt_bundle()});
+  } else {
+    llvm::Value* size_in_bytes = _ir_builder.getInt32(Klass::layout_helper_size_in_bytes(layout_helper));
+    new_inst = llvm::cast<llvm::InvokeInst>(
+        call_java_op_ex("jeandle.new_instance", {klass_ptr, size_in_bytes}, {create_current_deopt_bundle()}));
+  }
 
   // new always produces an exact type.
   new_inst->addRetAttr(llvm::Attribute::get(*_context,

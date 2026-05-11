@@ -119,8 +119,13 @@ void Relocation::pd_set_jeandle_data_value(address x, int addend, bool verify_on
     Instruction_aarch64::spatch(insn_addr, 23, 5, offset);
     Instruction_aarch64::patch(insn_addr, 30, 29, offset_lo);
   } else if (NativeInstruction::is_ldr_unsigned_at(insn_addr)) {
-    uint32_t shift = Instruction_aarch64::extract(*(uint32_t*)insn_addr, 31, 30);
-    int offset_lo = ((target + addend) & 0xfff) >> shift;
+    uint32_t size = Instruction_aarch64::extract(*(uint32_t*)insn_addr, 31, 30);
+    uint32_t v = Instruction_aarch64::extract(*(uint32_t*)insn_addr, 26, 26);
+    uint32_t opc = Instruction_aarch64::extract(*(uint32_t*)insn_addr, 23, 22);
+    // LDR Q (128-bit SIMD): v=1, opc=11, size=00 encodes shift=4 (not size field)
+    uint32_t shift = (v == 1 && opc == 3 && size == 0) ? 4 : size;
+    uintptr_t aligned_target = target + addend;
+    int offset_lo = (aligned_target & 0xfff) >> shift;
     Instruction_aarch64::patch(insn_addr, 21, 10, offset_lo);
     guarantee((((target + addend) >> shift) << shift) == (target + addend), "misaligned target");
   } else if (NativeInstruction::is_add_imm_at(insn_addr)) {

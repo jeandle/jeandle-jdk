@@ -335,6 +335,7 @@ class JeandleAbstractInterpreter : public StackObj {
   void if_null(llvm::CmpInst::Predicate p);
   void fcmp(BasicType type, bool true_if_unordered);
   void lcmp();
+  void merge_into_exception_handler(JeandleBasicBlock* handler_block);
   void goto_bci(int bci);
   void lookup_switch();
   void table_switch();
