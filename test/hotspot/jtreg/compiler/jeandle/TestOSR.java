@@ -95,6 +95,7 @@ public class TestOSR {
         loadCustomClass = true;
         testOSRTypeState();
         Method testOSRTypeStateMethod = TestOSR.class.getDeclaredMethod("testOSRTypeState");
+        Asserts.assertTrue(wb.isMethodCompiled(testOSRTypeStateMethod, true /* isOsr */));
         Asserts.assertEquals(wb.getMethodTrapCount(testOSRTypeStateMethod, "constraint"), 1);
     }
 

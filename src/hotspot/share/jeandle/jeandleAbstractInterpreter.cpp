@@ -1570,7 +1570,7 @@ void JeandleAbstractInterpreter::merge_into_exception_handler(JeandleBasicBlock*
   // to merge the current VMState into the handler, bypassing the is_exception_handler()
   // skip in the successor loop of interpret_block().
   JeandleVMState* adjusted_state = _jvm->copy();
-  if (!handler_block->merge_VM_state_from(adjusted_state, _ir_builder.GetInsertBlock(), _method)) {
+  if (!handler_block->merge_VM_state_from(adjusted_state, _ir_builder.GetInsertBlock(), _method, is_osr())) {
     JEANDLE_ERROR_ASSERT_AND_RET_VOID_ON_FAIL(false, "failed to merge VM state into exception handler block from normal flow");
   }
 }
