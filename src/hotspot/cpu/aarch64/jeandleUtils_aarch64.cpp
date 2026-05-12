@@ -27,6 +27,7 @@
 
 #include "jeandle/__hotspotHeadersBegin__.hpp"
 #include "runtime/arguments.hpp"
+#include "runtime/globals_extension.hpp"
 
 void apply_vm_flag_feature_overrides(llvm::SubtargetFeatures& features) {
   if (!UseAES) {
@@ -36,7 +37,7 @@ void apply_vm_flag_feature_overrides(llvm::SubtargetFeatures& features) {
     features.AddFeature("sha2", false);
     features.AddFeature("sha3", false);
   }
-  if (!UseNeon) {
+  if (FLAG_IS_CMDLINE(UseNeon) && !UseNeon) {
     features.AddFeature("neon", false);
   }
   if (!UseCRC32) {

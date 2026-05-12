@@ -28,6 +28,7 @@
 
 #include "jeandle/__hotspotHeadersBegin__.hpp"
 #include "ci/compilerInterface.hpp"
+#include "jeandle/jeandleCompilation.hpp"
 
 class JeandleType : public AllStatic {
  public:
@@ -76,6 +77,8 @@ class JeandleType : public AllStatic {
       case T_ARRAY  :
       case T_OBJECT :
         return T_OBJECT;
+      case T_ADDRESS:
+        return T_ADDRESS;
       default       :
         ShouldNotReachHere();
     }
@@ -119,6 +122,12 @@ public:
   LockValue() : _object(TypedValue()), _basic_lock(nullptr) { }
 
   bool equals(const LockValue& rhs) {
+    if (JeandleCompilation::current()->is_osr_compilation()) {
+      // During OSR compilation, identical logical monitors may be associated with distinct
+      // LLVM SSA values due to state merging from the OSR entry and loop predecessors.
+      // Comparing types and basic lock indices ensures semantic equivalence.
+      return _object.value()->getType() == rhs._object.value()->getType() && _basic_lock == rhs._basic_lock;
+    }
     return _object.value() == rhs._object.value() && _basic_lock == rhs._basic_lock;
   }
 

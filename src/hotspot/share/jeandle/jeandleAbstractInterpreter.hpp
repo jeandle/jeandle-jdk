@@ -34,6 +34,7 @@
 
 #include "jeandle/__hotspotHeadersBegin__.hpp"
 #include "ci/ciMethodBlocks.hpp"
+#include "ci/ciTypeFlow.hpp"
 #include "ci/compilerInterface.hpp"
 #include "memory/allocation.hpp"
 #include "memory/universe.hpp"
@@ -53,7 +54,7 @@ class JeandleVMState : public JeandleCompilationResourceObj {
   bool match(JeandleVMState* jvm);
 
   // Add incoming values for phi nodes. Return false if type check fails.
-  bool update_phi_nodes(JeandleVMState* income_jvm, llvm::BasicBlock* income_block);
+  bool update_phi_nodes(JeandleVMState* income_jvm, llvm::BasicBlock* income_block, bool is_osr);
 
   // Stack operations:
 
@@ -144,7 +145,7 @@ class JeandleBasicBlock : public JeandleCompilationResourceObj {
   JeandleBasicBlock(int block_id, int start_bci, int limit_bci, llvm::BasicBlock* llvm_block, ciBlock* ci_block);
 
   // Update the JeandleVMState according to the predecessor block's stack values and locals.
-  bool merge_VM_state_from(JeandleVMState* vm_state, llvm::BasicBlock* incoming, ciMethod* method);
+  bool merge_VM_state_from(JeandleVMState* vm_state, llvm::BasicBlock* incoming, ciMethod* method, bool is_osr);
 
   enum Flag {
     no_flag                       = 0,
@@ -213,12 +214,12 @@ class JeandleBasicBlock : public JeandleCompilationResourceObj {
   // phi nodes. Use this variable to find the right phi nodes to update.
   JeandleVMState* _initial_jvm;
 
-  void initialize_VM_state_from(JeandleVMState* incoming_state, llvm::BasicBlock* incoming_block, MethodLivenessResult liveness);
+  void initialize_VM_state_from(JeandleVMState* incoming_state, llvm::BasicBlock* incoming_block, MethodLivenessResult liveness, bool is_osr);
 };
 
 class BasicBlockBuilder : public JeandleCompilationResourceObj {
  public:
-  BasicBlockBuilder(ciMethod* method, llvm::LLVMContext* context, llvm::Function* llvm_func);
+  BasicBlockBuilder(ciMethod* method, int entry_bci, llvm::LLVMContext* context, llvm::Function* llvm_func);
 
   llvm::SmallVector<JeandleBasicBlock*>& bci2block() { return _bci2block; }
 
@@ -244,6 +245,7 @@ class BasicBlockBuilder : public JeandleCompilationResourceObj {
   ResourceBitMap _active;
   ResourceBitMap _visited;
   int _next_block_order;
+  int _entry_bci;
 
   void generate_blocks();
   void setup_exception_handlers();
@@ -254,6 +256,8 @@ class BasicBlockBuilder : public JeandleCompilationResourceObj {
   void mark_loops(JeandleBasicBlock* block);
 
   void mark_unloaded_catch_klass();
+
+  bool is_osr() { return _entry_bci != InvocationEntryBci; }
 };
 
 // Convert java bytecodes to llvm ir.
@@ -288,7 +292,34 @@ class JeandleAbstractInterpreter : public StackObj {
   // Object & Lock for synchronized method
   LockValue _sync_lock;
 
+  // Reuse stack allocation for monitor: each monitor nesting level maps to a
+  // fixed BasicLock slot on the stack. When the same nesting level is entered
+  // again, the existing slot is reused rather than allocating a new one, so
+  // that phi nodes and deopt info can consistently reference the same stack
+  // location for a given monitor depth.
+  llvm::SmallVector<llvm::Value*> _allocated_basic_lock;
+
+  bool need_alloc_for(int monitor_nest_level) {
+    return (int)_allocated_basic_lock.size() <= monitor_nest_level;
+  };
+
+  void push_allocated_basic_lock(llvm::Value* basic_lock) {
+    assert(basic_lock != nullptr, "basic_lock should not be nullptr");
+    return _allocated_basic_lock.push_back(basic_lock);
+  };
+
+  llvm::Value* allocated_basic_lock_at(int index) {
+    assert(index >= 0 && index < (int)_allocated_basic_lock.size(), "index out of bound");
+    return _allocated_basic_lock[index];
+  };
+
+  bool is_osr() { return _entry_bci != InvocationEntryBci; }
+
   void initialize_VM_state();
+  void initialize_VM_state_from_osr_buffer(JeandleVMState* initial_jvm, llvm::Value* osr_buffer);
+  void check_interpreter_type(ciTypeFlow::Block* osr_entry_block,
+                              MethodLivenessResult* live_locals,
+                              const ResourceBitMap* live_oops);
   llvm::Value* ensure_orig_pc_slot();
   void interpret();
   void interpret_block(JeandleBasicBlock* block);
@@ -304,6 +335,7 @@ class JeandleAbstractInterpreter : public StackObj {
   void if_null(llvm::CmpInst::Predicate p);
   void fcmp(BasicType type, bool true_if_unordered);
   void lcmp();
+  void merge_into_exception_handler(JeandleBasicBlock* handler_block);
   void goto_bci(int bci);
   void lookup_switch();
   void table_switch();

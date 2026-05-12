@@ -404,7 +404,7 @@ runtime/ClassUnload/UnloadTestWithVerifyDuringGC.java                           
 compiler/loopopts/TestDivZeroCheckControl.java#id0                                             linux-aarch64,linux-x64
 
  # intermittent timeout on linux-aarch64
-compiler/loopopts/TestPartialPeelAtUnsignedTestsNegativeLimit.java#Xbatch                      linux-aarch64,linux-x64
+compiler/loopopts/TestPartialPeelAtUnsignedTestsNegativeLimit.java                             linux-aarch64,linux-x64
 
 compiler/loopopts/TestRemoveEmptyLoop.java                                                     linux-aarch64,linux-x64
 
@@ -514,12 +514,6 @@ serviceability/sa/ClhsdbScanOops.java#id0                                       
 ###
 # Bug - JVM crash or wrong result in Jeandle implementation
 ###
-# JVM crash (SIGSEGV): PHI node predecessor mismatch in exception dispatch
-compiler/parsing/TestExceptionBlockWithPredecessorsMain.java                                   linux-aarch64,linux-x64
-
-# JVM crash (SIGSEGV): failed to update handler's VM state in exception dispatch
-compiler/parsing/TestMissingSafepointOnTryCatch.java                                           linux-aarch64,linux-x64
-
 # JVM crash (SIGABRT): assert(_stack_guard_state == stack_guard_reserved_disabled) failed
 runtime/ReservedStack/ReservedStackTest.java                                                   linux-aarch64,linux-x64
 
@@ -538,3 +532,14 @@ serviceability/sa/TestHeapDumpForInvokeDynamic.java                             
 # Core dump written to non-standard location (/home/admin/logs/core.%p); test can't find core file
 serviceability/sa/TestJmapCore.java                                                            linux-aarch64,linux-x64
 serviceability/sa/TestJmapCoreMetaspace.java                                                   linux-aarch64,linux-x64
+
+###
+# timeout due to unimplemented vm option `InlineUnsafeOps`
+###
+compiler/loopopts/superword/TestLargeScaleAndStride.java#vanilla                               linux-aarch64,linux-x64
+compiler/loopopts/superword/TestLargeScaleAndStride.java#AlignVector                           linux-aarch64,linux-x64
+
+###
+# fails due to `Math.log` (issue #424)
+###
+compiler/interpreter/Test6539464.java                                                          linux-aarch64

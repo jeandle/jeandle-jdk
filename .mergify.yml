@@ -54,8 +54,5 @@ commands_restrictions:
   requeue:
     conditions:
       - sender-permission >= maintain
-  unqueue:
-    conditions:
-      - sender-permission >= maintain
 merge_protections_settings:
   reporting_method: check-runs
