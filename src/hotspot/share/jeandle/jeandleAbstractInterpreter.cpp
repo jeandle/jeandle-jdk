@@ -38,6 +38,7 @@
 #include "ci/ciMethodData.hpp"
 #include "ci/ciObjArrayKlass.hpp"
 #include "ci/ciSymbols.hpp"
+#include "ci/ciTypeFlow.hpp"
 #include "oops/objArrayKlass.hpp"
 #include "classfile/javaClasses.hpp"
 #include "interpreter/interpreter.hpp"
@@ -114,13 +115,28 @@ bool JeandleVMState::match(JeandleVMState* to_match) {
   return true;
 }
 
-bool JeandleVMState::update_phi_nodes(JeandleVMState* income_jvm, llvm::BasicBlock* income_block) {
+bool JeandleVMState::update_phi_nodes(JeandleVMState* income_jvm, llvm::BasicBlock* income_block, bool is_osr) {
   if (!match(income_jvm)) {
     return false;
   }
 
   llvm::SmallVector<TypedValue>& income_locals = income_jvm->_locals;
   llvm::SmallVector<TypedValue>& income_stack = income_jvm->_stack;
+
+  if (is_osr) {
+    // For OSR compilation, monitor objects may originate from multiple incoming 
+    // control flow paths (e.g., the OSR entry and the outer loop). 
+    // We create PHI nodes to ensure monitor object consistency across these paths.
+    for (size_t i = 0; i < income_jvm->locks_size(); i++) {
+      assert(!income_jvm->lock_at(i).is_null(), "null lock");
+      assert(!lock_at(i).is_null(), "null lock");
+      assert(lock_at(i).lock() == income_jvm->lock_at(i).lock(), "unbalanced monitors");
+
+      llvm::PHINode* phi_node = llvm::cast<llvm::PHINode>(lock_at(i).object().value());
+
+      phi_node->addIncoming(income_jvm->lock_at(i).object().value(), income_block);
+    }
+  }
 
   // Create phi nodes for locals.
   for (size_t i = 0; i < _locals.size(); i++) {
@@ -304,7 +320,7 @@ JeandleBasicBlock::JeandleBasicBlock(int block_id,
                                      _ci_block(ci_block),
                                      _initial_jvm(nullptr) {}
 
-bool JeandleBasicBlock::merge_VM_state_from(JeandleVMState* vm_state, llvm::BasicBlock* incoming, ciMethod* method) {
+bool JeandleBasicBlock::merge_VM_state_from(JeandleVMState* vm_state, llvm::BasicBlock* incoming, ciMethod* method, bool is_osr) {
   if (_jvm == nullptr) {
     if (is_set(is_compiled)) {
       // A compiled block with null JeandleVMState.
@@ -319,27 +335,27 @@ bool JeandleBasicBlock::merge_VM_state_from(JeandleVMState* vm_state, llvm::Basi
       // More than one predecessors. Set up phi nodes.
       // NOTE: Since we don't know exactly how many predecessor blocks an exception handler will have, we create
       // phi nodes for every exception handler conservatively.
-      initialize_VM_state_from(vm_state, incoming, method->liveness_at_bci(_start_bci));
+      initialize_VM_state_from(vm_state, incoming, method->liveness_at_bci(_start_bci), is_osr);
     }
 
     return true;
 
   } else if (!is_set(is_compiled) && !is_set(is_loop_header)) {
     assert(_predecessors.size() > 1 || is_exception_handler(), "more than one predecessors are needed for phi nodes");
-    return _jvm->update_phi_nodes(vm_state, incoming);
+    return _jvm->update_phi_nodes(vm_state, incoming, is_osr);
   } else if (is_set(is_loop_header)) {
     if (_initial_jvm == nullptr) {
-      return _jvm->update_phi_nodes(vm_state, incoming);
+      return _jvm->update_phi_nodes(vm_state, incoming, is_osr);
     }
     assert(_initial_jvm != nullptr, "loop header initial JeandleVMState is needed");
-    return _initial_jvm->update_phi_nodes(vm_state, incoming);
+    return _initial_jvm->update_phi_nodes(vm_state, incoming, is_osr);
   }
 
   // Bad bytecodes.
   return false;
 }
 
-void JeandleBasicBlock::initialize_VM_state_from(JeandleVMState* incoming_state, llvm::BasicBlock* incoming_block, MethodLivenessResult liveness) {
+void JeandleBasicBlock::initialize_VM_state_from(JeandleVMState* incoming_state, llvm::BasicBlock* incoming_block, MethodLivenessResult liveness, bool is_osr) {
   assert(_jvm == nullptr, "cannot initialize twice");
 
   llvm::IRBuilder<> ir_builder(_header_llvm_block);
@@ -349,7 +365,13 @@ void JeandleBasicBlock::initialize_VM_state_from(JeandleVMState* incoming_state,
   for (size_t i = 0; i < incoming_state->locks_size(); i++) {
     LockValue lock = incoming_state->lock_at(i);
     assert(!lock.is_null(), "null lock");
-    _jvm->push_lock(lock);
+    if (!is_osr) {
+      _jvm->push_lock(lock);
+    } else {
+      llvm::PHINode* phi_node = ir_builder.CreatePHI(lock.object().value()->getType(), 2);
+      phi_node->addIncoming(lock.object().value(), incoming_block);
+      _jvm->push_lock(LockValue(T_OBJECT, phi_node, lock.lock()));
+    }
   }
 
   for (size_t i = 0; i < incoming_state->locals_size(); i++) {
@@ -380,6 +402,7 @@ void JeandleBasicBlock::initialize_VM_state_from(JeandleVMState* incoming_state,
 }
 
 BasicBlockBuilder::BasicBlockBuilder(ciMethod* method,
+                                     int entry_bci,
                                      llvm::LLVMContext* context,
                                      llvm::Function* llvm_func) :
                                      _bci2block(method->code_size()),
@@ -390,7 +413,8 @@ BasicBlockBuilder::BasicBlockBuilder(ciMethod* method,
                                      _entry_block(new JeandleBasicBlock(-1, -1, -1, llvm::BasicBlock::Create(*_context, "entry", _llvm_func), nullptr)),
                                      _active(),
                                      _visited(),
-                                     _next_block_order(-1) {
+                                     _next_block_order(-1),
+                                     _entry_bci(entry_bci) {
   generate_blocks();
   setup_exception_handlers();
   setup_control_flow();
@@ -457,7 +481,13 @@ void BasicBlockBuilder::setup_control_flow() {
   // Connect all basic blocks according to control flow transfer instructions.
   ciBytecodeStream codes(_method);
 
-  JeandleBasicBlock* current = _entry_block;
+  if (!is_osr()) {
+    connect_block(_bci2block[0], entry_block());
+  } else {
+    connect_block(_bci2block[_entry_bci], entry_block());
+  }
+
+  JeandleBasicBlock* current = nullptr;
   int limit_bci = _method->code_size();
 
   while (codes.next() != ciBytecodeStream::EOBC()) {
@@ -577,7 +607,11 @@ void BasicBlockBuilder::mark_loops() {
   _visited.initialize(num_blocks);
   _next_block_order = num_blocks - 1;
 
-  mark_loops(_bci2block[0]);
+  if(!is_osr()) {
+    mark_loops(_bci2block[0]);
+  } else {
+    mark_loops(_bci2block[_entry_bci]);
+  }
 
   // Remove dangling Resource pointers before the ResourceMark goes out-of-scope.
   _active.resize(0);
@@ -629,13 +663,13 @@ JeandleAbstractInterpreter::JeandleAbstractInterpreter(ciMethod* method,
                                                        llvm::Module& target_module,
                                                        JeandleCompiledCode& code) :
                                                        _method(method),
-                                                       _llvm_func(JeandleFuncSig::create_llvm_func(method, target_module)),
+                                                       _llvm_func(JeandleFuncSig::create_llvm_func(method, target_module, entry_bci != InvocationEntryBci)),
                                                        _entry_bci(entry_bci),
                                                        _context(&target_module.getContext()),
                                                        _bytecodes(_method),
                                                        _module(target_module),
                                                        _compiled_code(code),
-                                                       _block_builder(new BasicBlockBuilder(method, _context, _llvm_func)),
+                                                       _block_builder(new BasicBlockBuilder(method, entry_bci, _context, _llvm_func)),
                                                        _ir_builder(_block_builder->entry_block()->header_llvm_block()),
                                                        _oops(),
                                                        _block(nullptr),
@@ -652,83 +686,306 @@ void JeandleAbstractInterpreter::initialize_VM_state() {
   int locals_idx = 0; // next index in locals
   int arg_idx = 0;  // next index in arguments
 
-  // Store the receiver into locals.
-  if (!_method->is_static()) {
-    initial_jvm->store(BasicType::T_OBJECT, 0, _llvm_func->getArg(0));
-    locals_idx = 1;
-    arg_idx = 1;
-  }
+  if (!is_osr()) {
+    // Store the receiver into locals.
+    if (!_method->is_static()) {
+      initial_jvm->store(BasicType::T_OBJECT, 0, _llvm_func->getArg(0));
+      locals_idx = 1;
+      arg_idx = 1;
+    }
+  
+    // Set up locals for incoming arguments.
+    ciSignature* sig = _method->signature();
+    for (int i = 0; i < sig->count(); ++i, ++arg_idx) {
+      ciType* type = sig->type_at(i);
+      initial_jvm->store(type->basic_type(), locals_idx, _llvm_func->getArg(arg_idx));
+      locals_idx += type->size();
+    }
+  } else {
+    llvm::BasicBlock* osr_migration = llvm::BasicBlock::Create(*_context, "osr_migration", _llvm_func);
+    _ir_builder.CreateBr(osr_migration);
+    _ir_builder.SetInsertPoint(osr_migration);
+    _block_builder->entry_block()->set_tail_llvm_block(osr_migration);
 
-  // Set up locals for incoming arguments.
-  ciSignature* sig = _method->signature();
-  for (int i = 0; i < sig->count(); ++i, ++arg_idx) {
-    ciType* type = sig->type_at(i);
-    initial_jvm->store(type->basic_type(), locals_idx, _llvm_func->getArg(arg_idx));
-    locals_idx += type->size();
+    initialize_VM_state_from_osr_buffer(initial_jvm, _llvm_func->getArg(0));
   }
 
   _block_builder->entry_block()->set_VM_state(initial_jvm);
 }
 
+void JeandleAbstractInterpreter::initialize_VM_state_from_osr_buffer(JeandleVMState* initial_jvm, llvm::Value* osr_buffer) {
+  assert(is_osr(), "sanity");
+
+  // Do type flow analysis.
+  assert(_method != nullptr, "only for Java method compilations");
+  ciTypeFlow* flow = _method->get_osr_flow_analysis(_entry_bci);
+  assert(!flow->failing(), "type flow analysis failed for OSR compilation");
+  if (flow->failing()) {
+    JEANDLE_REPORT_ERROR_AND_RET_VOID("type flow analysis failed for OSR compilation");
+  }
+
+  int max_locals = initial_jvm->max_locals();
+  ciTypeFlow::Block* osr_entry_block = flow->rpo_at(0);
+  assert(osr_entry_block->start() == _entry_bci, "the first rpo block must be osr entry block");
+
+  // OSR Compilation Bailouts:
+  // In HotSpot, OSR is restricted to loop headers where the operand stack is empty.
+  // This is because SharedRuntime::OSR_migration_begin is designed to migrate 
+  // only locals and monitors from the interpreter frame; it does not currently account for 
+  // copying operand stack slots into the OSR buffer.
+  if (osr_entry_block->stack_size() != 0) {
+    JEANDLE_REPORT_ERROR_AND_RET_VOID("OSR starts with non-empty stack");
+  }
+
+  // Commute monitors from interpreter frame to compiler frame.
+  int monitor_count = osr_entry_block->monitor_count();
+  if (monitor_count != 0) {
+    JeandleCompilation::current()->set_has_monitors(true);
+
+    int monitors_addr_offset = (max_locals + monitor_count * 2 - 1) * wordSize;
+    llvm::IRBuilder entry_block_ir_builder(_block_builder->entry_block()->header_llvm_block()->getTerminator());
+    llvm::SmallVector<llvm::Value*> locks(monitor_count);
+    for (int index = 0; index < monitor_count; index++) {
+      llvm::Value* lock_object_addr = _ir_builder.CreateInBoundsGEP(llvm::Type::getInt8Ty(*_context),
+                                                                    osr_buffer,
+                                                                    _ir_builder.getInt64(monitors_addr_offset - (index * 2) * wordSize));
+      llvm::Value* lock_object = load_from_address(lock_object_addr, T_OBJECT, false);
+      llvm::Value* displaced_hdr_addr = _ir_builder.CreateInBoundsGEP(llvm::Type::getInt8Ty(*_context),
+                                                                      osr_buffer,
+                                                                      _ir_builder.getInt64(monitors_addr_offset - (index * 2 + 1) * wordSize));
+      llvm::Value* displaced_hdr = load_from_address(displaced_hdr_addr, T_ADDRESS, false);
+
+      llvm::Value* lock = entry_block_ir_builder.CreateAlloca(_ir_builder.getIntPtrTy(_module.getDataLayout()),
+                                                              llvm::jeandle::AddrSpace::CHeapAddrSpace,
+                                                              nullptr,
+                                                              "BasicLock");
+      push_allocated_basic_lock(lock);
+      assert(allocated_basic_lock_at(initial_jvm->locks_size()) == lock, "unbalanced monitors");
+      store_to_address(lock, displaced_hdr, T_ADDRESS, false);
+
+      if (index == 0 && _method->is_synchronized()) {
+        _sync_lock.set_object(TypedValue(BasicType::T_OBJECT, lock_object));
+        _sync_lock.set_lock(lock);
+      }
+      initial_jvm->push_lock(LockValue(T_OBJECT, lock_object, lock));
+    }
+  }
+
+  // Use the raw liveness computation to make sure that unexpected
+  // values don't propagate into the OSR frame.
+  MethodLivenessResult live_locals = _method->liveness_at_bci(_entry_bci);
+  if (!live_locals.is_valid()) {
+    // Degenerate or breakpointed method.
+    assert(false, "OSR in empty or breakpointed method");
+    JEANDLE_REPORT_ERROR_AND_RET_VOID("OSR in empty or breakpointed method");
+  }
+
+  // find all the locals that the interpreter thinks contain live oops
+  const ResourceBitMap live_oops = _method->live_local_oops_at_bci(_entry_bci);
+
+  // Extract the needed locals from the interpreter frame.
+  int locals_addr_offset = (max_locals - 1) * wordSize;
+  bool skip_next_slot = false; // skip next slot for double word type.
+  for (int index = 0; index < max_locals; index++) {
+    BasicType local_type = osr_entry_block->local_type_at(index)->basic_type();
+
+    if (skip_next_slot) {
+      assert(local_type == (BasicType)ciTypeFlow::StateVector::T_LONG2 || local_type == (BasicType)ciTypeFlow::StateVector::T_DOUBLE2, "sanity");
+      skip_next_slot = false; // reset to false
+      continue;
+    }
+
+    if (!live_locals.at(index)) {
+      continue;
+    }
+
+    // Special handling for non-alive oops.
+    if (is_reference_type(local_type) && !live_oops.at(index)) {
+      llvm::Value* null_oop = llvm::ConstantPointerNull::get(llvm::cast<llvm::PointerType>(JeandleType::java2llvm(BasicType::T_OBJECT, *_context)));
+      initial_jvm->set_locals_at(index, TypedValue(BasicType::T_OBJECT, null_oop));
+      continue;
+    }
+
+    if (local_type == (BasicType)ciTypeFlow::StateVector::T_TOP ||
+        local_type == (BasicType)ciTypeFlow::StateVector::T_BOTTOM) {
+      continue;
+    }
+
+    assert(local_type != T_NARROWOOP, "sanity");
+
+    if (local_type == (BasicType)ciTypeFlow::StateVector::T_NULL) {
+      local_type = T_OBJECT;
+    }
+
+    assert(!is_subword_type(local_type), "subword types are treated as T_INT in calling sequences");
+
+    int index_offset = 0;
+    if (is_double_word_type(local_type)) {
+      index_offset = 1;
+      skip_next_slot = true;
+    }
+
+    llvm::Value* local_addr = _ir_builder.CreateInBoundsGEP(llvm::Type::getInt8Ty(*_context),
+                                                            osr_buffer,
+                                                            _ir_builder.getInt64(locals_addr_offset - (index + index_offset) * wordSize));
+    llvm::Value* local = load_from_address(local_addr, local_type, false);
+    initial_jvm->set_locals_at(index, TypedValue(local_type, local));
+  }
+
+  assert(!skip_next_slot, "broken double word");
+
+  // Release osr buffer
+  llvm::FunctionCallee OSR_migration_end_callee = JeandleRuntimeRoutine::SharedRuntime_OSR_migration_end_callee(_module);
+  llvm::CallInst* call_OSR_migration_end = _ir_builder.CreateCall(OSR_migration_end_callee, {osr_buffer});
+  call_OSR_migration_end->setCallingConv(llvm::CallingConv::C);
+
+  // Initialize vm_state for incoming uncommon_trap.
+  _jvm = initial_jvm;
+
+  // Now that the interpreter state is loaded, make sure it will match
+  // at execution time what the compiler is expecting now:
+  check_interpreter_type(osr_entry_block, &live_locals, &live_oops);
+}
+
+void JeandleAbstractInterpreter::check_interpreter_type(ciTypeFlow::Block* osr_entry_block,
+                                                        MethodLivenessResult* live_locals,
+                                                        const ResourceBitMap* live_oops) {
+  // Initialize the active block pointer.
+  // Create an anonymous block as the starting point for OSR type checks.
+  llvm::BasicBlock* current_block = llvm::BasicBlock::Create(*_context, "", _llvm_func);
+  _ir_builder.CreateBr(current_block);
+  _ir_builder.SetInsertPoint(current_block);
+  _block_builder->entry_block()->set_tail_llvm_block(current_block);
+
+  llvm::BasicBlock* osr_entry_trap_block = nullptr;
+
+  for (int index = 0; index < (int)(_jvm->max_locals()); index++) {
+    BasicType local_type = osr_entry_block->local_type_at(index)->basic_type();
+
+    bool is_null_oop = false;
+    if (local_type == (BasicType)ciTypeFlow::StateVector::T_NULL) {
+      local_type = T_OBJECT;
+      is_null_oop = true;
+    }
+
+    if (!live_locals->at(index) || !is_reference_type(local_type)) {
+      continue;
+    }
+
+    if (!live_oops->at(index)) {
+      continue;
+    }
+
+    if (osr_entry_trap_block == nullptr) {
+      osr_entry_trap_block = llvm::BasicBlock::Create(*_context, "osr_entry_trap_block", _llvm_func);
+      _bytecodes.force_bci(_entry_bci);
+      uncommon_trap(Deoptimization::Reason_constraint, Deoptimization::Action_reinterpret, osr_entry_trap_block);
+    }
+
+    // Set the name of current_block.
+    current_block->setName("osr_entry_check_local_" + std::to_string(index));
+
+    // Create a block for the success path. 
+    llvm::BasicBlock* next_block = llvm::BasicBlock::Create(*_context, "", _llvm_func);
+
+    llvm::Value* cond = nullptr;
+    if (is_null_oop || !osr_entry_block->local_type_at(index)->is_loaded()) {
+      llvm::Value* null_oop = llvm::ConstantPointerNull::get(llvm::cast<llvm::PointerType>(JeandleType::java2llvm(BasicType::T_OBJECT, *_context)));
+      cond = _ir_builder.CreateICmpEQ(_jvm->locals_at(index), null_oop);
+    } else {
+      Klass* klass = (Klass*)(osr_entry_block->local_type_at(index)->constant_encoding());
+      assert(klass != nullptr, "klass not loaded");
+      llvm::Value* klass_value = _ir_builder.CreateIntToPtr(_ir_builder.getInt64((intptr_t)klass),
+                                                            llvm::PointerType::get(*_context, llvm::jeandle::AddrSpace::CHeapAddrSpace));
+      cond = call_java_op("jeandle.checkcast", {klass_value, _jvm->locals_at(index)});
+    }
+
+    // The unexpected type happens because a new edge is active
+    // in the CFG, which typeflow had previously ignored.
+    // E.g., Object x = cond ? new CustomClass() : new String().
+    // This x will be typed as String if CustomClass not loaded yet.
+    // It could also happen due to a problem in ciTypeFlow analysis.
+    _ir_builder.CreateCondBr(cond, next_block, osr_entry_trap_block);
+    _ir_builder.SetInsertPoint(next_block);
+    _block_builder->entry_block()->set_tail_llvm_block(next_block);
+
+    current_block = next_block;
+  }
+
+  current_block->setName("osr_entry_check_locals_done");
+}
+
 void JeandleAbstractInterpreter::interpret() {
-  JeandleBasicBlock* current = bci2block()[0];
+  assert(_method != nullptr, "only for Java method compilations");
+  JeandleBasicBlock* current;
+  if (!is_osr()) {
+    current = bci2block()[0];
+  } else {
+    current = bci2block()[_entry_bci];
+    assert(current->is_set(JeandleBasicBlock::is_loop_header), "sanity");
+  }
 
   // Prepare work list. Push the first block.
   add_to_work_list(current);
 
   initialize_VM_state();
-
+  RETURN_VOID_ON_JEANDLE_ERROR();
+  
   Copy::zero_to_bytes(_trap_hist, sizeof(_trap_hist));
   accumulate_trap_counts_from_mdo(_method);
 
-  if (_method && _method->is_synchronized()) {
-    JeandleCompilation::current()->set_has_monitors(true);
-    _jvm = _block_builder->entry_block()->VM_state();
-    _block = _block_builder->entry_block();
+  if (!is_osr()) {
+    if (_method->is_synchronized()) {
+      JeandleCompilation::current()->set_has_monitors(true);
+      _jvm = _block_builder->entry_block()->VM_state();
+      _block = _block_builder->entry_block();
 
-    // Strictly reserve 'entry' for allocas to ensure static stack allocation.
-    // This prevents dynamic RSP adjustments and ensures valid StackMap generation for GC.
-    llvm::BasicBlock* sync_method_lock = llvm::BasicBlock::Create(*_context, "sync_method_lock", _llvm_func);
-    _ir_builder.CreateBr(sync_method_lock);
-    _ir_builder.SetInsertPoint(sync_method_lock);
-    _block->set_tail_llvm_block(sync_method_lock);
+      // Strictly reserve 'entry' for allocas to ensure static stack allocation.
+      // This prevents dynamic RSP adjustments and ensures valid StackMap generation for GC.
+      llvm::BasicBlock* sync_method_lock = llvm::BasicBlock::Create(*_context, "sync_method_lock", _llvm_func);
+      _ir_builder.CreateBr(sync_method_lock);
+      _ir_builder.SetInsertPoint(sync_method_lock);
+      _block->set_tail_llvm_block(sync_method_lock);
 
-    // Setup Object Pointer
-    llvm::Value* lock_obj = nullptr;
-    if (_method->is_static()) {
-      llvm::Value* oop_handle = find_or_insert_oop(_method->holder()->java_mirror());
-      lock_obj = _ir_builder.CreateLoad(JeandleType::java2llvm(BasicType::T_OBJECT, *_context), oop_handle);
-    } else {
-      // Lock the "this" pointer, which is the first parameter
-      lock_obj = _jvm->locals_at(0);
+      // Setup Object Pointer
+      llvm::Value* lock_obj = nullptr;
+      if (_method->is_static()) {
+        llvm::Value* oop_handle = find_or_insert_oop(_method->holder()->java_mirror());
+        lock_obj = _ir_builder.CreateLoad(JeandleType::java2llvm(BasicType::T_OBJECT, *_context), oop_handle);
+      } else {
+        // Lock the "this" pointer, which is the first parameter
+        lock_obj = _jvm->locals_at(0);
+      }
+
+      // Allocate a BasicLock on stack.
+      // Alloca insts should be in the entry block to be 'StaticAlloca'. Then they could be folded into prologue code.
+      llvm::IRBuilder entry_block_ir_builder(_block_builder->entry_block()->header_llvm_block()->getTerminator());
+      llvm::Value* lock = entry_block_ir_builder.CreateAlloca(_ir_builder.getIntPtrTy(_module.getDataLayout()),
+                                                              llvm::jeandle::AddrSpace::CHeapAddrSpace, nullptr, "BasicLock");
+      push_allocated_basic_lock(lock);
+      assert(allocated_basic_lock_at(_jvm->locks_size()) == lock, "unbalanced monitors");
+      // record object and lock for synchronized method
+      TypedValue obj(BasicType::T_OBJECT, lock_obj);
+      _sync_lock.set_object(obj);
+      _sync_lock.set_lock(lock);
+
+      shared_lock(LockValue(obj, lock));
     }
 
-    // Allocate a BasicLock on stack.
-    // Alloca insts should be in the entry block to be 'StaticAlloca'. Then they could be folded into prologue code.
-    llvm::IRBuilder entry_block_ir_builder(_block_builder->entry_block()->header_llvm_block()->getTerminator());
-    llvm::Value* lock = entry_block_ir_builder.CreateAlloca(_ir_builder.getIntPtrTy(_module.getDataLayout()),
-                                                            llvm::jeandle::AddrSpace::CHeapAddrSpace, nullptr, "BasicLock");
-    // record object and lock for synchronized method
-    TypedValue obj(BasicType::T_OBJECT, lock_obj);
-    _sync_lock.set_object(obj);
-    _sync_lock.set_lock(lock);
+    if (_compiled_code.needs_clinit_barrier_on_entry()) {
+      assert(_method != nullptr, "only for Java method compilations");
+      assert(!_method->holder()->is_not_initialized(), "initialization should have been started");
 
-    shared_lock(LockValue(obj, lock));
-  }
+      _jvm = _block_builder->entry_block()->VM_state();
+      _block = _block_builder->entry_block();
+      _bytecodes.force_bci(0); // to get cur_bci for uncommon trap
 
-  if (_compiled_code.needs_clinit_barrier_on_entry()) {
-    assert(_method != nullptr, "only for Java method compilations");
-    assert(!_method->holder()->is_not_initialized(), "initialization should have been started");
-
-    _jvm = _block_builder->entry_block()->VM_state();
-    _block = _block_builder->entry_block();
-    _bytecodes.force_bci(0); // to get cur_bci for uncommon trap
-
-    Klass* klass = (Klass*)_method->holder()->constant_encoding();
-    llvm::PointerType* klass_type = llvm::PointerType::get(*_context, llvm::jeandle::AddrSpace::CHeapAddrSpace);
-    llvm::Value* klass_addr = _ir_builder.getInt64((intptr_t)klass);
-    llvm::Value* klass_ptr = _ir_builder.CreateIntToPtr(klass_addr, klass_type);
-    guard_klass_being_initialized(klass_ptr);
+      Klass* klass = (Klass*)_method->holder()->constant_encoding();
+      llvm::PointerType* klass_type = llvm::PointerType::get(*_context, llvm::jeandle::AddrSpace::CHeapAddrSpace);
+      llvm::Value* klass_addr = _ir_builder.getInt64((intptr_t)klass);
+      llvm::Value* klass_ptr = _ir_builder.CreateIntToPtr(klass_addr, klass_type);
+      guard_klass_being_initialized(klass_ptr);
+    }
   }
 
   // Create branch from the entry block.
@@ -737,7 +994,7 @@ void JeandleAbstractInterpreter::interpret() {
 
   bool merged = current->merge_VM_state_from(_block_builder->entry_block()->VM_state(),
                                              _block_builder->entry_block()->tail_llvm_block(),
-                                             _method);
+                                             _method, is_osr());
   JEANDLE_ERROR_ASSERT_AND_RET_VOID_ON_FAIL(merged, "failed to create initial VM state");
 
   // Iterate all blocks
@@ -1115,7 +1372,7 @@ void JeandleAbstractInterpreter::interpret_block(JeandleBasicBlock* block) {
   // Add all successors to work list and set up their JeandleVMStates.
   for (JeandleBasicBlock* suc : block->successors()) {
     // Don't update handlers' VM state here. They are updated by exception throwers.
-    if (!suc->is_exception_handler() && !suc->merge_VM_state_from(block->VM_state(), block->tail_llvm_block(), _method)) {
+    if (!suc->is_exception_handler() && !suc->merge_VM_state_from(block->VM_state(), block->tail_llvm_block(), _method, is_osr())) {
       JEANDLE_ERROR_ASSERT_AND_RET_VOID_ON_FAIL(false, "failed to merge VM state into successor block");
     }
 
@@ -1239,9 +1496,17 @@ void JeandleAbstractInterpreter::if_icmp(llvm::CmpInst::Predicate p) {
   llvm::Value* r = _jvm->ipop();
   llvm::Value* l = _jvm->ipop();
   llvm::Value* cond = _ir_builder.CreateICmp(p, l, r);
+  JeandleBasicBlock* true_succ = bci2block()[_bytecodes.get_dest()];
+  JeandleBasicBlock* false_succ = bci2block()[_bytecodes.next_bci()];
+  if (true_succ->is_exception_handler()) {
+    merge_into_exception_handler(true_succ);
+  }
+  if (false_succ->is_exception_handler()) {
+    merge_into_exception_handler(false_succ);
+  }
   _ir_builder.CreateCondBr(cond,
-                           bci2block()[_bytecodes.get_dest()]->header_llvm_block(),
-                           bci2block()[_bytecodes.next_bci()]->header_llvm_block());
+                           true_succ->header_llvm_block(),
+                           false_succ->header_llvm_block());
 }
 
 void JeandleAbstractInterpreter::lcmp() {
@@ -1302,11 +1567,27 @@ void JeandleAbstractInterpreter::fcmp(BasicType type, bool true_if_unordered) {
   _jvm->ipush(_ir_builder.CreateSelect(negative_case, JeandleType::int_const(_ir_builder, -1), non_negative_case));
 }
 
+void JeandleAbstractInterpreter::merge_into_exception_handler(JeandleBasicBlock* handler_block) {
+  // The bytecode verifier guarantees that all paths reaching the same BCI have
+  // consistent stack depth and types. So a normal flow branch (goto/if) targeting
+  // a handler block has the same stack layout as the exception path. We just need
+  // to merge the current VMState into the handler, bypassing the is_exception_handler()
+  // skip in the successor loop of interpret_block().
+  JeandleVMState* adjusted_state = _jvm->copy();
+  if (!handler_block->merge_VM_state_from(adjusted_state, _ir_builder.GetInsertBlock(), _method, is_osr())) {
+    JEANDLE_ERROR_ASSERT_AND_RET_VOID_ON_FAIL(false, "failed to merge VM state into exception handler block from normal flow");
+  }
+}
+
 void JeandleAbstractInterpreter::goto_bci(int bci) {
   if (bci <= _bytecodes.cur_bci()) {
     add_safepoint_poll();
   }
-  _ir_builder.CreateBr(bci2block()[bci]->header_llvm_block());
+  JeandleBasicBlock* succ = bci2block()[bci];
+  if (succ->is_exception_handler()) {
+    merge_into_exception_handler(succ);
+  }
+  _ir_builder.CreateBr(succ->header_llvm_block());
 }
 
 void JeandleAbstractInterpreter::lookup_switch() {
@@ -1328,12 +1609,19 @@ void JeandleAbstractInterpreter::lookup_switch() {
   }
 
   llvm::Value* key = _jvm->ipop();
-  llvm::BasicBlock* default_block = bci2block()[cur_bci + sw.default_offset()]->header_llvm_block();
-  llvm::SwitchInst* switch_inst = _ir_builder.CreateSwitch(key, default_block, length);
+  JeandleBasicBlock* default_block = bci2block()[cur_bci + sw.default_offset()];
+  if (default_block->is_exception_handler()) {
+    merge_into_exception_handler(default_block);
+  }
+  llvm::SwitchInst* switch_inst = _ir_builder.CreateSwitch(key, default_block->header_llvm_block(), length);
 
   for (int i = 0; i < length; i++) {
     LookupswitchPair pair = sw.pair_at(i);
-    switch_inst->addCase(JeandleType::int_const(_ir_builder, pair.match()), bci2block()[cur_bci + pair.offset()]->header_llvm_block());
+    JeandleBasicBlock* case_block = bci2block()[cur_bci + pair.offset()];
+    if (case_block->is_exception_handler()) {
+      merge_into_exception_handler(case_block);
+    }
+    switch_inst->addCase(JeandleType::int_const(_ir_builder, pair.match()), case_block->header_llvm_block());
   }
 }
 
@@ -1356,12 +1644,18 @@ void JeandleAbstractInterpreter::table_switch() {
   }
 
   llvm::Value* idx = _jvm->ipop();
-  llvm::BasicBlock* default_block = bci2block()[cur_bci + sw.default_offset()]->header_llvm_block();
-  llvm::SwitchInst* switch_inst = _ir_builder.CreateSwitch(idx, default_block, length);
+  JeandleBasicBlock* default_block = bci2block()[cur_bci + sw.default_offset()];
+  if (default_block->is_exception_handler()) {
+    merge_into_exception_handler(default_block);
+  }
+  llvm::SwitchInst* switch_inst = _ir_builder.CreateSwitch(idx, default_block->header_llvm_block(), length);
 
   for (int i = 0; i < length; i++) {
-    llvm::BasicBlock* case_block = bci2block()[cur_bci + sw.dest_offset_at(i)]->header_llvm_block();
-    switch_inst->addCase(JeandleType::int_const(_ir_builder, i + low), case_block);
+    JeandleBasicBlock* case_block = bci2block()[cur_bci + sw.dest_offset_at(i)];
+    if (case_block->is_exception_handler()) {
+      merge_into_exception_handler(case_block);
+    }
+    switch_inst->addCase(JeandleType::int_const(_ir_builder, i + low), case_block->header_llvm_block());
   }
 }
 
@@ -2440,15 +2734,25 @@ void JeandleAbstractInterpreter::do_new() {
 
   jint layout_helper = klass->layout_helper();
   assert(Klass::layout_helper_is_instance(layout_helper), "Unexpected klass");
-  llvm::Value* size_in_bytes = _ir_builder.getInt32(Klass::layout_helper_size_in_bytes(layout_helper));
 
   Klass* klass_enc = (Klass*)(klass->constant_encoding());
   llvm::PointerType* klass_type = llvm::PointerType::get(*_context, llvm::jeandle::AddrSpace::CHeapAddrSpace);
   llvm::Value* klass_addr = _ir_builder.getInt64((int64_t)klass_enc);
   llvm::Value* klass_ptr = _ir_builder.CreateIntToPtr(klass_addr, klass_type);
 
-  llvm::InvokeInst* new_inst = llvm::cast<llvm::InvokeInst>(
-      call_java_op_ex("jeandle.new_instance", {klass_ptr, size_in_bytes}, {create_current_deopt_bundle()}));
+  llvm::InvokeInst* new_inst;
+  if (Klass::layout_helper_needs_slow_path(layout_helper)) {
+    // Must go slow path: class has finalizer, is abstract, too large, etc.
+    llvm::Value* current_thread = call_java_op("jeandle.current_thread", {});
+    new_inst = create_call_ex(JeandleRuntimeRoutine::new_instance_callee(_module),
+                              {klass_ptr, current_thread},
+                              llvm::CallingConv::Hotspot_JIT,
+                              {create_current_deopt_bundle()});
+  } else {
+    llvm::Value* size_in_bytes = _ir_builder.getInt32(Klass::layout_helper_size_in_bytes(layout_helper));
+    new_inst = llvm::cast<llvm::InvokeInst>(
+        call_java_op_ex("jeandle.new_instance", {klass_ptr, size_in_bytes}, {create_current_deopt_bundle()}));
+  }
 
   // new always produces an exact type.
   new_inst->addRetAttr(llvm::Attribute::get(*_context,
@@ -2537,7 +2841,7 @@ void JeandleAbstractInterpreter::dispatch_exception_to_handler(llvm::Value* exce
       }
       bool merged = handler_block->merge_VM_state_from(_jvm->copy_for_exception_handler(exception_oop),
                                                        _ir_builder.GetInsertBlock(),
-                                                       _method);
+                                                       _method, is_osr());
       JEANDLE_ERROR_ASSERT_AND_RET_VOID_ON_FAIL(merged, "failed to update handler's VM state");
       _ir_builder.CreateBr(handler_block->header_llvm_block());
       return;
@@ -2587,13 +2891,13 @@ void JeandleAbstractInterpreter::dispatch_exception_to_handler(llvm::Value* exce
 
       bool merged = handler_block->merge_VM_state_from(_jvm->copy_for_exception_handler(exception_oop),
                                                      _ir_builder.GetInsertBlock(),
-                                                     _method);
+                                                     _method, is_osr());
       JEANDLE_ERROR_ASSERT_AND_RET_VOID_ON_FAIL(merged, "failed to update handler's VM state");
       _ir_builder.CreateBr(match_dest);
     } else {
       bool merged = handler_block->merge_VM_state_from(_jvm->copy_for_exception_handler(exception_oop),
                                                      _ir_builder.GetInsertBlock(),
-                                                     _method);
+                                                     _method, is_osr());
       JEANDLE_ERROR_ASSERT_AND_RET_VOID_ON_FAIL(merged, "failed to update handler's VM state");
       _ir_builder.CreateCondBr(cond, match_dest, next_dest);
     }
@@ -2845,10 +3149,20 @@ void JeandleAbstractInterpreter::shared_lock(LockValue lock) {
   assert(_block != nullptr, "sanity");
 
   if (lock.lock() == nullptr) {
-    // Allocate a BasicLock on stack.
-    // Alloca insts should be in the entry block to be 'StaticAlloca'. Then they could be folded into prologue code.
-    llvm::IRBuilder entry_block_ir_builder(_block_builder->entry_block()->header_llvm_block()->getTerminator());
-    llvm::Value* basic_lock = entry_block_ir_builder.CreateAlloca(_ir_builder.getIntPtrTy(_module.getDataLayout()), llvm::jeandle::AddrSpace::CHeapAddrSpace, nullptr, "BasicLock");
+    llvm::Value* basic_lock = nullptr;
+    int monitor_nest_level = _jvm->locks_size();
+    if (need_alloc_for(monitor_nest_level)) {
+      // Allocate a BasicLock on stack.
+      // Alloca insts should be in the entry block to be 'StaticAlloca'. Then they could be folded into prologue code.
+      llvm::IRBuilder entry_block_ir_builder(_block_builder->entry_block()->header_llvm_block()->getTerminator());
+      basic_lock = entry_block_ir_builder.CreateAlloca(_ir_builder.getIntPtrTy(_module.getDataLayout()),
+                                                       llvm::jeandle::AddrSpace::CHeapAddrSpace, nullptr, "BasicLock");
+      // Save the basic_lock for later reuse.
+      push_allocated_basic_lock(basic_lock);
+      assert(allocated_basic_lock_at(monitor_nest_level) == basic_lock, "unbalanced monitors");
+    } else {
+      basic_lock = allocated_basic_lock_at(monitor_nest_level);
+    }
     lock.set_lock(basic_lock);
   }
 
@@ -2933,6 +3247,8 @@ void JeandleAbstractInterpreter::monitorexit() {
   llvm::Value* obj = _jvm->apop();
 
   LockValue lock = _jvm->pop_lock();
+  assert(allocated_basic_lock_at(_jvm->locks_size()) == lock.lock(), "unbalanced monitors");
+
   shared_unlock(lock);
 }
 

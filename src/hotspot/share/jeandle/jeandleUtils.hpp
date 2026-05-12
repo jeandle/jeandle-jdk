@@ -37,7 +37,7 @@ class SubtargetFeatures;
 class JeandleFuncSig : public AllStatic {
  public:
   // Create a llvm function according to the Java method.
-  static llvm::Function* create_llvm_func(ciMethod* method, llvm::Module& target_module);
+  static llvm::Function* create_llvm_func(ciMethod* method, llvm::Module& target_module, bool is_osr_entry);
   static std::string method_name(ciMethod* method);
   static std::string method_name_with_signature(ciMethod* method);
   static void setup_description(llvm::Function* func, bool is_stub = false);

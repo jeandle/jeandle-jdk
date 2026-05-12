@@ -30,6 +30,7 @@
 #include "ci/ciUtilities.hpp"
 #include "gc/shared/cardTable.hpp"
 #include "gc/shared/gc_globals.hpp"
+#include "gc/shared/tlab_globals.hpp"
 #include "oops/arrayOop.hpp"
 #include "oops/array.hpp"
 #include "oops/klass.hpp"
@@ -156,28 +157,6 @@ DEF_JAVA_OP(card_table_barrier, 1, llvm::Type::getVoidTy(context), llvm::Pointer
   ir_builder.CreateRetVoid();
 JAVA_OP_END
 
-DEF_JAVA_OP(new_instance, 1, llvm::PointerType::get(context, llvm::jeandle::AddrSpace::JavaHeapAddrSpace),
-            llvm::PointerType::get(context, llvm::jeandle::AddrSpace::CHeapAddrSpace), // klass
-            llvm::Type::getInt32Ty(context)) // size_in_bytes
-  llvm::Value* klass = func->getArg(0);
-  llvm::Value* size = func->getArg(1);
-  // Get current thread pointer using jeandle.current_thread JavaOp
-  llvm::Function* current_thread_func = template_module.getFunction("jeandle.current_thread");
-  if (!current_thread_func) {
-    RuntimeDefinedJavaOps::set_failed("jeandle.current_thread is not found in template module");
-    return;
-  }
-  llvm::CallInst* current_thread = ir_builder.CreateCall(current_thread_func);
-  current_thread->setCallingConv(llvm::CallingConv::Hotspot_JIT);
-
-  // slow path allocation, TODO: implement fast path allocation
-  llvm::CallInst* call_inst = ir_builder.CreateCall(JeandleRuntimeRoutine::new_instance_callee(template_module), {klass, current_thread},
-                                                    {create_empty_deopt_bundle()});
-  call_inst->setCallingConv(llvm::CallingConv::Hotspot_JIT);
-
-  ir_builder.CreateRet(call_inst);
-JAVA_OP_END
-
 } // anonymous namespace
 
 const char* RuntimeDefinedJavaOps::_error_msg = nullptr;
@@ -195,7 +174,6 @@ bool RuntimeDefinedJavaOps::define_all(llvm::Module& template_module) {
   define_current_thread(template_module);
   define_safepoint_poll(template_module);
   define_card_table_barrier(template_module);
-  define_new_instance(template_module);
 
   return failed();
 }
@@ -262,15 +240,23 @@ void RuntimeDefinedJavaOps::define_global_variables(llvm::Module& template_modul
   define_global("ObjectMonitor.owner_offset_no_monitor_value",      int32_type, static_cast<uint64_t>(OM_OFFSET_NO_MONITOR_VALUE_TAG(owner)));
   define_global("ObjectMonitor.recursions_offset_no_monitor_value", int32_type, static_cast<uint64_t>(OM_OFFSET_NO_MONITOR_VALUE_TAG(recursions)));
   define_global("ObjectMonitor.succ_offset_no_monitor_value",       int32_type, static_cast<uint64_t>(OM_OFFSET_NO_MONITOR_VALUE_TAG(succ)));
+  define_global("instanceOopDesc.base_offset_in_bytes",             int32_type, static_cast<uint64_t>(instanceOopDesc::base_offset_in_bytes()));
+
   
   define_global("markWord.clear_lock_mask",                         int64_type, static_cast<uint64_t>(~(int32_t)markWord::lock_mask_in_place));
   define_global("markWord.monitor_value",                           int64_type, static_cast<uint64_t>(markWord::monitor_value));
   define_global("markWord.unlocked_value",                          int64_type, static_cast<uint64_t>(markWord::unlocked_value));
   define_global("markWord.unused_mark_value",                       int64_type, static_cast<uint64_t>(markWord::unused_mark().value()));
   define_global("ObjectMonitor.ANONYMOUS_OWNER",                    int64_type, static_cast<uint64_t>(ObjectMonitor::ANONYMOUS_OWNER));
+  define_global("JavaThread.tlab_end_offset",                       int64_type, static_cast<uint64_t>(JavaThread::tlab_end_offset()));
+  define_global("JavaThread.tlab_top_offset",                       int64_type, static_cast<uint64_t>(JavaThread::tlab_top_offset()));
+  define_global("markWord.prototype_value",                         int64_type, static_cast<uint64_t>(markWord::prototype().value()));
   
   define_global("JVM_ACC_IS_VALUE_BASED_CLASS",                     int32_type, static_cast<uint64_t>(JVM_ACC_IS_VALUE_BASED_CLASS));
   define_global("oopSize",                                          int32_type, static_cast<uint64_t>(oopSize));
 
   define_global("check_recursive_mask_value",                       int64_type, static_cast<uint64_t>(7 - (int)os::vm_page_size()));
+
+  define_global("VMOptions.UseTLAB",                                int1_type, static_cast<uint64_t>(UseTLAB));
+  define_global("VMOptions.ZeroTLAB",                               int1_type, static_cast<uint64_t>(ZeroTLAB));
 }

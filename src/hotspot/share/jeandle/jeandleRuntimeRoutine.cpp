@@ -177,6 +177,11 @@ JRT_BLOCK_ENTRY(void, JeandleRuntimeRoutine::new_instance(InstanceKlass* klass, 
 #endif
     assert(check_jeandle_compiled_frame(current), "incorrect caller");
 
+    if (log_is_enabled(Debug, jeandle, alloc)) {
+      ResourceMark rm;
+      log_debug(jeandle, alloc)("Slow path allocation for %s", klass->external_name());
+    }
+
     // These checks are cheap to make and support reflective allocation.
     int lh = klass->layout_helper();
     if (Klass::layout_helper_needs_slow_path(lh) || !InstanceKlass::cast(klass)->is_initialized()) {
