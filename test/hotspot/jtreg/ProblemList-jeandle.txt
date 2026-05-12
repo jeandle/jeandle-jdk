@@ -401,7 +401,6 @@ runtime/ClassUnload/UnloadTestWithVerifyDuringGC.java                           
 ###
 # timeout
 ###
-compiler/loopopts/TestDivZeroCheckControl.java#id0                                             linux-aarch64,linux-x64
 
  # intermittent timeout on linux-aarch64
 compiler/loopopts/TestPartialPeelAtUnsignedTestsNegativeLimit.java                             linux-aarch64,linux-x64
