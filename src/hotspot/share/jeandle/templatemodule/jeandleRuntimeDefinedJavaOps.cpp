@@ -169,6 +169,8 @@ DEF_JAVA_OP(pre_barrier, 1, llvm::Type::getVoidTy(context), llvm::PointerType::g
     assert(g1_pre_barrier_func != nullptr, "g1_pre_barrier function not found");
     llvm::CallInst* call_inst = ir_builder.CreateCall(g1_pre_barrier_func, {func->getArg(0)});
     call_inst->setCallingConv(llvm::CallingConv::Hotspot_JIT);
+  } else {
+    assert(UseSerialGC, "only Serial and G1 GC are supported");
   }
   ir_builder.CreateRetVoid();
 JAVA_OP_END
@@ -184,6 +186,7 @@ DEF_JAVA_OP(post_barrier, 1, llvm::Type::getVoidTy(context),
     llvm::CallInst* call_inst = ir_builder.CreateCall(g1_post_barrier_func, {func->getArg(0), func->getArg(1)});
     call_inst->setCallingConv(llvm::CallingConv::Hotspot_JIT);
   } else {
+    assert(UseSerialGC, "only Serial and G1 GC are supported");
     llvm::Function* card_table_barrier_func = template_module.getFunction("jeandle.card_table_barrier");
     assert(card_table_barrier_func != nullptr, "card_table_barrier function not found");
     llvm::CallInst* call_inst = ir_builder.CreateCall(card_table_barrier_func, {func->getArg(0)});

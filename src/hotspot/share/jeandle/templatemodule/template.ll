@@ -368,6 +368,49 @@ store_in_buffer:
   br label %pre_barrier_done
 }
 
+
+; Implementation of Java g1 pre barrier loaded.
+define private hotspotcc void @jeandle.g1_pre_barrier_loaded(ptr addrspace(1) %pre_val) noinline "lower-phase"="1" {
+entry:
+  %marking_offset = load i32, ptr @G1ThreadLocalData.satb_mark_queue_active_offset
+  %index_offset = load i32, ptr @G1ThreadLocalData.satb_mark_queue_index_offset
+  %buffer_offset = load i32, ptr @G1ThreadLocalData.satb_mark_queue_buffer_offset
+  %marking_adr = inttoptr i32 %marking_offset to ptr addrspace(2)
+  %index_adr = inttoptr i32 %index_offset to ptr addrspace(2)
+  %buffer_adr = inttoptr i32 %buffer_offset to ptr addrspace(2)
+  %marking = load i8, ptr addrspace(2) %marking_adr
+  %is_already_marked = icmp eq i8 %marking, 0
+  br i1 %is_already_marked, label %pre_barrier_done, label %check_null
+
+pre_barrier_done:
+  ret void
+
+check_null:
+  %index = load i64, ptr addrspace(2) %index_adr
+  %is_null = icmp eq ptr addrspace(1) %pre_val, null
+  br i1 %is_null, label %pre_barrier_done, label %load_stab_queue
+
+load_stab_queue:
+  %buffer = load ptr, ptr addrspace(2) %buffer_adr
+  %is_zero = icmp eq i64 %index, 0
+  br i1 %is_zero, label %buffer_is_full, label %store_in_buffer
+
+buffer_is_full:
+  %callee_addr = load i64, ptr @G1BarrierSetRuntime.write_ref_field_pre_entry
+  %callee = inttoptr i64 %callee_addr to ptr
+  %current_thread = call hotspotcc ptr @jeandle.current_thread()
+  call void %callee(ptr addrspace(1) %pre_val, ptr %current_thread) #0
+  br label %pre_barrier_done
+
+store_in_buffer:
+  %wordsize = load i64, ptr @WordSize
+  %next_index = sub i64 %index, %wordsize
+  %log_addr = getelementptr inbounds i8, ptr %buffer, i64 %next_index
+  store atomic ptr addrspace(1) %pre_val, ptr %log_addr unordered, align 8
+  store atomic i64 %next_index, ptr addrspace(2) %index_adr unordered, align 8
+  br label %pre_barrier_done
+}
+
 ; Implementation of Java g1 post barrier.
 define private hotspotcc void @jeandle.g1_post_barrier(ptr addrspace(1) %addr, ptr addrspace(1) captures(none) %oop) noinline "lower-phase"="1" {
 entry:

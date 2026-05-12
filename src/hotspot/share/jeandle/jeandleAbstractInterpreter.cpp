@@ -2366,6 +2366,13 @@ void JeandleAbstractInterpreter::do_get_xxx(ciField* field, bool is_static) {
   bool is_volatile = field->is_volatile();
   llvm::Value* value = load_from_address(addr, field->layout_type(), is_volatile);
 
+  if (UseG1GC && !is_static && is_reference_type(field->layout_type()) &&
+      field->holder()->is_subclass_of(ciEnv::current()->Reference_klass()) &&
+      field->offset_in_bytes() == java_lang_ref_Reference::referent_offset()) {
+    assert(value != nullptr, "must be loaded already");
+    call_java_op("jeandle.g1_pre_barrier_loaded", {value});
+  }
+
   // Attach java-klass metadata to loads of object/array fields.
   // Skip interface types: the verifier does not enforce interface types,
   // so a field declared as an interface could hold any Object at runtime.
