@@ -52,6 +52,9 @@ public class TestOSR {
 
     private static boolean loadCustomClass = false;
 
+    private static long contendedCounter = 0;
+    private static final Object contendedLock = new Object();
+
     public static void main(String[] args) throws Exception {
 
         testAllTypes();
@@ -89,6 +92,10 @@ public class TestOSR {
         testNestedSynchronizedLoop();
         Method testNestedSyncLoopMethod = TestOSR.class.getDeclaredMethod("testNestedSynchronizedLoop");
         Asserts.assertTrue(wb.isMethodCompiled(testNestedSyncLoopMethod, true /* isOsr */));
+
+        contendedMonitor();
+        Method testContendedMethod = TestOSR.class.getDeclaredMethod("testContendedMonitorLoop");
+        Asserts.assertTrue(wb.isMethodCompiled(testContendedMethod, true /* isOsr */));
 
         testOSRTypeState();
         Thread.sleep(500);
@@ -269,12 +276,37 @@ public class TestOSR {
         Asserts.assertEquals(longVal, longValue + iterations);
     }
 
+    public static void testContendedMonitorLoop() {
+        for (int j = 0; j < iterations; j++) {
+            synchronized (contendedLock) {
+                contendedCounter++;
+            }
+        }
+    }
+
+    public static void contendedMonitor() throws Exception {
+        contendedCounter = 0;
+        int numThreads = 4;
+
+        Thread[] contenders = new Thread[numThreads];
+        for (int i = 0; i < numThreads; i++) {
+            contenders[i] = new Thread(TestOSR::testContendedMonitorLoop);
+            contenders[i].start();
+        }
+
+        for (Thread t : contenders) {
+            t.join();
+        }
+
+        Asserts.assertEquals(contendedCounter, (long) numThreads * iterations);
+    }
+
     public static Object testOSRTypeState() {
         Object o = null;
         for (int i = 0; i < 10; i++) {
             // When loadCustomClass is false, ciTypeFlow sees only the String branch (CustomClass is unloaded),
             // so 'o' is typed as String. At runtime with loadCustomClass=true, 'o' becomes CustomClass,
-            // triggering check_interpreter_type mismatch → uncommon_trap(Reason_constraint).
+            // triggering check_interpreter_type mismatch -> uncommon_trap(Reason_constraint).
             o = loadCustomClass ? new CustomClass() : new String();
             // Loop Header: OSR will trigger here
             for (int j = 0; j < 6000; j++) {
