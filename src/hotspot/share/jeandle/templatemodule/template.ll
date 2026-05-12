@@ -325,50 +325,6 @@ entry:
 ; Declaration of Java card table barrier.
 declare hotspotcc void @jeandle.card_table_barrier(ptr addrspace(1) %addr) noinline "lower-phase"="1";
 
-; Implementation of Java g1 pre barrier.
-define private hotspotcc void @jeandle.g1_pre_barrier(ptr addrspace(1) %addr) noinline "lower-phase"="1" {
-entry:
-  %marking_offset = load i32, ptr @G1ThreadLocalData.satb_mark_queue_active_offset
-  %index_offset = load i32, ptr @G1ThreadLocalData.satb_mark_queue_index_offset
-  %buffer_offset = load i32, ptr @G1ThreadLocalData.satb_mark_queue_buffer_offset
-  %marking_adr = inttoptr i32 %marking_offset to ptr addrspace(2)
-  %index_adr = inttoptr i32 %index_offset to ptr addrspace(2)
-  %buffer_adr = inttoptr i32 %buffer_offset to ptr addrspace(2)
-  %marking = load i8, ptr addrspace(2) %marking_adr
-  %is_already_marked = icmp eq i8 %marking, 0
-  br i1 %is_already_marked, label %pre_barrier_done, label %store_original_value
-
-pre_barrier_done:
-  ret void
-
-store_original_value:
-  %index = load i64, ptr addrspace(2) %index_adr
-  %pre_val = load atomic ptr addrspace(1), ptr addrspace(1) %addr unordered, align 8
-  %is_null = icmp eq ptr addrspace(1) %pre_val, null
-  br i1 %is_null, label %pre_barrier_done, label %load_stab_queue
-
-load_stab_queue:
-  %buffer = load ptr, ptr addrspace(2) %buffer_adr
-  %is_zero = icmp eq i64 %index, 0
-  br i1 %is_zero, label %buffer_is_full, label %store_in_buffer
-
-buffer_is_full:
-  %callee_addr = load i64, ptr @G1BarrierSetRuntime.write_ref_field_pre_entry
-  %callee = inttoptr i64 %callee_addr to ptr
-  %current_thread = call hotspotcc ptr @jeandle.current_thread()
-  call void %callee(ptr addrspace(1) %pre_val, ptr %current_thread) #0
-  br label %pre_barrier_done
-
-store_in_buffer:
-  %wordsize = load i64, ptr @WordSize
-  %next_index = sub i64 %index, %wordsize
-  %log_addr = getelementptr inbounds i8, ptr %buffer, i64 %next_index
-  store atomic ptr addrspace(1) %pre_val, ptr %log_addr unordered, align 8
-  store atomic i64 %next_index, ptr addrspace(2) %index_adr unordered, align 8
-  br label %pre_barrier_done
-}
-
-
 ; Implementation of Java g1 pre barrier loaded.
 define private hotspotcc void @jeandle.g1_pre_barrier_loaded(ptr addrspace(1) %pre_val) noinline "lower-phase"="1" {
 entry:
@@ -379,18 +335,18 @@ entry:
   %index_adr = inttoptr i32 %index_offset to ptr addrspace(2)
   %buffer_adr = inttoptr i32 %buffer_offset to ptr addrspace(2)
   %marking = load i8, ptr addrspace(2) %marking_adr
-  %is_already_marked = icmp eq i8 %marking, 0
-  br i1 %is_already_marked, label %pre_barrier_done, label %check_null
+  %is_not_marking = icmp eq i8 %marking, 0
+  br i1 %is_not_marking, label %pre_barrier_done, label %check_null
 
 pre_barrier_done:
   ret void
 
 check_null:
-  %index = load i64, ptr addrspace(2) %index_adr
   %is_null = icmp eq ptr addrspace(1) %pre_val, null
   br i1 %is_null, label %pre_barrier_done, label %load_stab_queue
 
 load_stab_queue:
+  %index = load i64, ptr addrspace(2) %index_adr
   %buffer = load ptr, ptr addrspace(2) %buffer_adr
   %is_zero = icmp eq i64 %index, 0
   br i1 %is_zero, label %buffer_is_full, label %store_in_buffer
@@ -411,6 +367,14 @@ store_in_buffer:
   br label %pre_barrier_done
 }
 
+; Implementation of Java g1 pre barrier.
+define private hotspotcc void @jeandle.g1_pre_barrier(ptr addrspace(1) %addr) noinline "lower-phase"="1" {
+entry:
+  %pre_val = load atomic ptr addrspace(1), ptr addrspace(1) %addr unordered, align 8
+  call hotspotcc void @jeandle.g1_pre_barrier_loaded(ptr addrspace(1) %pre_val)
+  ret void
+}
+
 ; Implementation of Java g1 post barrier.
 define private hotspotcc void @jeandle.g1_post_barrier(ptr addrspace(1) %addr, ptr addrspace(1) captures(none) %oop) noinline "lower-phase"="1" {
 entry:
@@ -418,33 +382,33 @@ entry:
   %buffer_offset = load i32, ptr @G1ThreadLocalData.dirty_card_queue_buffer_offset
   %index_adr = inttoptr i32 %index_offset to ptr addrspace(2)
   %buffer_adr = inttoptr i32 %buffer_offset to ptr addrspace(2)
-  %obj_ptr = ptrtoint ptr addrspace(1) %addr to i64
+  %addr.int = ptrtoint ptr addrspace(1) %addr to i64
   %card_shift = load i64, ptr @CardTable.card_shift
-  %card_offset = lshr i64 %obj_ptr, %card_shift
+  %card_offset = lshr i64 %addr.int, %card_shift
   %ci_card_table_address = load i64, ptr @ci_card_table_address
   %card_base_addr = inttoptr i64 %ci_card_table_address to ptr
   %card_adr = getelementptr inbounds i8, ptr %card_base_addr, i64 %card_offset
-  %val_ptr = ptrtoint ptr addrspace(1) %oop to i64
-  %xor_val = xor i64 %obj_ptr, %val_ptr
-  %hrgrainbytes = load i64, ptr @HeapRegion.LogOfHRGrainBytes
-  %xor_res = lshr i64 %xor_val, %hrgrainbytes
+  %oop.int = ptrtoint ptr addrspace(1) %oop to i64
+  %xor_val = xor i64 %addr.int, %oop.int
+  %hr_grain_bytes = load i64, ptr @HeapRegion.LogOfHRGrainBytes
+  %xor_res = lshr i64 %xor_val, %hr_grain_bytes
   %is_zero = icmp eq i64 %xor_res, 0
-  br i1 %is_zero, label %post_barrier_done, label %filter_same_region
+  br i1 %is_zero, label %post_barrier_done, label %same_region_filtered
 
 post_barrier_done:
   ret void
 
-filter_same_region:
+same_region_filtered:
   %is_null = icmp eq ptr addrspace(1) %oop, null
-  br i1 %is_null, label %post_barrier_done, label %filter_val_nullptr
+  br i1 %is_null, label %post_barrier_done, label %val_nullptr_filtered
 
-filter_val_nullptr:
+val_nullptr_filtered:
   %card_value = load atomic i8, ptr %card_adr unordered, align 1
   %young_card = load i8, ptr @G1CardTable.g1_young_card_val
   %is_young = icmp eq i8 %card_value, %young_card
-  br i1 %is_young, label %post_barrier_done, label %filter_young_card
+  br i1 %is_young, label %post_barrier_done, label %young_card_filtered
 
-filter_young_card:
+young_card_filtered:
   fence seq_cst
   %card_val_reload = load atomic i8, ptr %card_adr unordered, align 1
   %dirty_card = load i8, ptr @G1CardTable.dirty_card_val

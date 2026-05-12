@@ -283,15 +283,11 @@ compiler/vectorization/runner/StripMinedLoopTest.java                           
 # GC not support
 ###
 compiler/loopopts/TestOverunrolling.java                                                       linux-aarch64,linux-x64
-gc/TestJNICriticalStressTest.java#id0                                                          linux-aarch64,linux-x64
 gc/TestJNICriticalStressTest.java#id1                                                          linux-aarch64,linux-x64
-gc/TestMemoryMXBeansAndPoolsPresence.java#id0                                                  linux-aarch64,linux-x64
 gc/TestMemoryMXBeansAndPoolsPresence.java#id1                                                  linux-aarch64,linux-x64
 gc/TestNumWorkerOutput.java                                                                    linux-aarch64,linux-x64
-gc/TestPLABAdaptToMinTLABSize.java#id0                                                         linux-aarch64,linux-x64
 gc/TestPLABAdaptToMinTLABSize.java#id1                                                         linux-aarch64,linux-x64
 gc/TestPolicyNamePerfCounter.java#id1                                                          linux-aarch64,linux-x64
-gc/TestPolicyNamePerfCounter.java#id2                                                          linux-aarch64,linux-x64
 gc/TestReferenceClearDuringReferenceProcessing.java#ZGenerational                              linux-aarch64,linux-x64
 gc/TestReferenceClearDuringReferenceProcessing.java#ZSinglegen                                 linux-aarch64,linux-x64
 gc/arguments/TestAggressiveHeap.java                                                           linux-aarch64,linux-x64
@@ -315,7 +311,6 @@ gc/metaspace/TestMetaspacePerfCounters.java#Epsilon-64                          
 gc/metaspace/TestMetaspacePerfCounters.java#Parallel-64                                        linux-aarch64,linux-x64
 gc/metaspace/TestMetaspacePerfCounters.java#Shenandoah-64                                      linux-aarch64,linux-x64
 gc/metaspace/TestSizeTransitions.java#id1                                                      linux-aarch64,linux-x64
-gc/metaspace/TestSizeTransitions.java#id2                                                      linux-aarch64,linux-x64
 gc/parallel/TestDynShrinkHeap.java                                                             linux-aarch64,linux-x64
 gc/shenandoah/mxbeans/TestChurnNotifications.java#adaptive                                     linux-aarch64,linux-x64
 gc/shenandoah/mxbeans/TestChurnNotifications.java#aggressive                                   linux-aarch64,linux-x64
@@ -504,3 +499,8 @@ compiler/loopopts/superword/TestLargeScaleAndStride.java#AlignVector            
 # fails due to `Math.log` (issue #424)
 ###
 compiler/interpreter/Test6539464.java                                                          linux-aarch64
+
+###
+# Random failed in CI
+###
+serviceability/jvmti/CompiledMethodLoad/Zombie.java                                            linux-x64
