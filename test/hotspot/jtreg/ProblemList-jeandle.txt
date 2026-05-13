@@ -234,6 +234,7 @@ gc/metaspace/TestMetaspacePerfCounters.java#G1-64                               
 gc/metaspace/TestMetaspacePerfCounters.java#Serial-64                                          linux-aarch64,linux-x64
 gc/metaspace/TestPerfCountersAndMemoryPools.java#id0                                           linux-aarch64,linux-x64
 gc/metaspace/TestSizeTransitions.java#id0                                                      linux-aarch64,linux-x64
+gc/metaspace/TestSizeTransitions.java#id2                                                      linux-aarch64,linux-x64
 runtime/Metaspace/PrintMetaspaceDcmd.java#test-64bit-ccs                                       linux-aarch64,linux-x64
 runtime/Metaspace/PrintMetaspaceDcmd.java#test-64bit-ccs-guarded                               linux-aarch64,linux-x64
 runtime/logging/CompressedOopsTest.java                                                        linux-aarch64,linux-x64

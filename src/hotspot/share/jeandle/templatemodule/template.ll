@@ -409,6 +409,8 @@ val_nullptr_filtered:
   br i1 %is_young, label %post_barrier_done, label %young_card_filtered
 
 young_card_filtered:
+  ; TODO: fence seq_cst is overly strict here. We only need StoreStore
+  ; ordering between the oop store and the card table read/write
   fence seq_cst
   %card_val_reload = load atomic i8, ptr %card_adr unordered, align 1
   %dirty_card = load i8, ptr @G1CardTable.dirty_card_val
