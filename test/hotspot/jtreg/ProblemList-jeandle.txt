@@ -502,6 +502,6 @@ compiler/loopopts/superword/TestLargeScaleAndStride.java#AlignVector            
 compiler/interpreter/Test6539464.java                                                          linux-aarch64
 
 ###
-# Random failed in CI
+# Fails because Jeandle does not support nmethod entry barrier
 ###
 serviceability/jvmti/CompiledMethodLoad/Zombie.java                                            linux-x64
