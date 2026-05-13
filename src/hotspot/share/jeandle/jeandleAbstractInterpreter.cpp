@@ -1693,7 +1693,6 @@ void JeandleAbstractInterpreter::invoke() {
       return;
     }
   }
-  accumulate_trap_counts_from_mdo(target);
 
   const int receiver =
   bc == Bytecodes::_invokespecial   ||
