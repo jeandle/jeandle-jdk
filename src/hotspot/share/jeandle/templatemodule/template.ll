@@ -325,27 +325,12 @@ entry:
 ; Declaration of Java card table barrier.
 declare hotspotcc void @jeandle.card_table_barrier(ptr addrspace(1) %addr) noinline "lower-phase"="1";
 
-; Implementation of Java g1 pre barrier loaded.
-define private hotspotcc void @jeandle.g1_pre_barrier_loaded(ptr addrspace(1) %pre_val) noinline "lower-phase"="1" {
+define private hotspotcc void @jeandle.g1_satb_enqueue(ptr addrspace(1) %pre_val) "lower-phase"="1" {
 entry:
-  %marking_offset = load i32, ptr @G1ThreadLocalData.satb_mark_queue_active_offset
   %index_offset = load i32, ptr @G1ThreadLocalData.satb_mark_queue_index_offset
   %buffer_offset = load i32, ptr @G1ThreadLocalData.satb_mark_queue_buffer_offset
-  %marking_adr = inttoptr i32 %marking_offset to ptr addrspace(2)
   %index_adr = inttoptr i32 %index_offset to ptr addrspace(2)
   %buffer_adr = inttoptr i32 %buffer_offset to ptr addrspace(2)
-  %marking = load i8, ptr addrspace(2) %marking_adr
-  %is_not_marking = icmp eq i8 %marking, 0
-  br i1 %is_not_marking, label %pre_barrier_done, label %check_null
-
-pre_barrier_done:
-  ret void
-
-check_null:
-  %is_null = icmp eq ptr addrspace(1) %pre_val, null
-  br i1 %is_null, label %pre_barrier_done, label %load_stab_queue
-
-load_stab_queue:
   %index = load i64, ptr addrspace(2) %index_adr
   %buffer = load ptr, ptr addrspace(2) %buffer_adr
   %is_zero = icmp eq i64 %index, 0
@@ -356,7 +341,7 @@ buffer_is_full:
   %callee = inttoptr i64 %callee_addr to ptr
   %current_thread = call hotspotcc ptr @jeandle.current_thread()
   call void %callee(ptr addrspace(1) %pre_val, ptr %current_thread) #0
-  br label %pre_barrier_done
+  br label %done
 
 store_in_buffer:
   %wordsize = load i64, ptr @WordSize
@@ -364,14 +349,52 @@ store_in_buffer:
   %log_addr = getelementptr inbounds i8, ptr %buffer, i64 %next_index
   store atomic ptr addrspace(1) %pre_val, ptr %log_addr unordered, align 8
   store atomic i64 %next_index, ptr addrspace(2) %index_adr unordered, align 8
-  br label %pre_barrier_done
+  br label %done
+
+done:
+  ret void
 }
 
 ; Implementation of Java g1 pre barrier.
 define private hotspotcc void @jeandle.g1_pre_barrier(ptr addrspace(1) %addr) noinline "lower-phase"="1" {
 entry:
+  %marking_offset = load i32, ptr @G1ThreadLocalData.satb_mark_queue_active_offset
+  %marking_adr = inttoptr i32 %marking_offset to ptr addrspace(2)
+  %marking = load i8, ptr addrspace(2) %marking_adr
+  %is_not_marking = icmp eq i8 %marking, 0
+  br i1 %is_not_marking, label %done, label %check_null
+
+done:
+  ret void
+
+check_null:
   %pre_val = load atomic ptr addrspace(1), ptr addrspace(1) %addr unordered, align 8
-  call hotspotcc void @jeandle.g1_pre_barrier_loaded(ptr addrspace(1) %pre_val)
+  %is_null = icmp eq ptr addrspace(1) %pre_val, null
+  br i1 %is_null, label %done, label %enqueue
+
+enqueue:
+  call hotspotcc void @jeandle.g1_satb_enqueue(ptr addrspace(1) %pre_val)
+  ret void
+}
+
+; Implementation of Java g1 pre barrier loaded.
+define private hotspotcc void @jeandle.g1_pre_barrier_loaded(ptr addrspace(1) %pre_val) noinline "lower-phase"="1" {
+entry:
+  %marking_offset = load i32, ptr @G1ThreadLocalData.satb_mark_queue_active_offset
+  %marking_adr = inttoptr i32 %marking_offset to ptr addrspace(2)
+  %marking = load i8, ptr addrspace(2) %marking_adr
+  %is_not_marking = icmp eq i8 %marking, 0
+  br i1 %is_not_marking, label %done, label %check_null
+
+done:
+  ret void
+
+check_null:
+  %is_null = icmp eq ptr addrspace(1) %pre_val, null
+  br i1 %is_null, label %done, label %enqueue
+
+enqueue:
+  call hotspotcc void @jeandle.g1_satb_enqueue(ptr addrspace(1) %pre_val)
   ret void
 }
 
