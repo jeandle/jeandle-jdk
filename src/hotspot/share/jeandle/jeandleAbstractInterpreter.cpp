@@ -2928,18 +2928,30 @@ void JeandleAbstractInterpreter::throw_exception(llvm::Value* exception_oop) {
   }
 }
 
-
 void JeandleAbstractInterpreter::builtin_throw(Deoptimization::DeoptReason reason,
                                                llvm::BasicBlock* insert_block) {
-  bool treat_throw_as_hot = false, has_ex_handler = false;
+  bool treat_throw_as_hot = false;
   int bci = _bytecodes.cur_bci();
   ciMethod* method = _bytecodes.method();
 
   if (ProfileTraps) {
+    // If we have already hit too many traps at this exact method and bci for this reason,
+    // we should treat it as a hot throw.
     if (too_many_traps(method, bci, reason)) {
       treat_throw_as_hot = true;
     }
 
+    bool has_ex_handler = false;
+    for (ciExceptionHandlerStream handlers(method, bci); !handlers.is_done(); handlers.next()) {
+      ciExceptionHandler* handler = handlers.handler();
+      if (!handler->is_rethrow()) {
+        has_ex_handler =  true;
+        break ;
+      }
+    }
+
+    // Alternatively, if there's a history of traps for this reason, and there is a local
+    // exception handler that can catch it, we also treat it as hot.
     if (trap_count(reason) != 0 &&
         method->method_data()->trap_count(reason) != 0 &&
         has_ex_handler) {
@@ -2947,14 +2959,7 @@ void JeandleAbstractInterpreter::builtin_throw(Deoptimization::DeoptReason reaso
     }
   }
 
-  for (ciExceptionHandlerStream handlers(method, bci); !handlers.is_done(); handlers.next()) {
-    ciExceptionHandler* handler = handlers.handler();
-    if (!handler->is_rethrow()) {
-      has_ex_handler =  true;
-      break ;
-    }
-  }
-
+  // Fast-Path
   if (treat_throw_as_hot && method->can_omit_stack_trace()) {
     ciEnv* env = CURRENT_ENV;
     ciInstance* ex_obj = nullptr;
@@ -2980,6 +2985,11 @@ void JeandleAbstractInterpreter::builtin_throw(Deoptimization::DeoptReason reaso
     }
 
     if (ex_obj != nullptr) {
+      // TODO: To keep consistent with C2, but no suitable test case for now.
+      // if (env->jvmti_can_post_on_exceptions()) {
+      //   // Check whether exception events must be posted; if so, take an uncommon trap.
+      //   uncommon_trap_if_should_post_on_exceptions(reason, insert_block);
+      // }
       auto saved_insert_block = _ir_builder.GetInsertBlock();
       auto saved_insert_point = _ir_builder.GetInsertPoint();
       if (insert_block != nullptr) {
@@ -3005,7 +3015,18 @@ void JeandleAbstractInterpreter::builtin_throw(Deoptimization::DeoptReason reaso
       return;
     }
   }
-  uncommon_trap(reason, Deoptimization::Action_maybe_recompile, insert_block);
+  // Slow path: Bail to interpreter
+  // When inline is implemented, m should be the root method (refer to C->method()).
+  ciMethod* m = Deoptimization::reason_is_speculate(reason) ? _method : nullptr;
+  Deoptimization::DeoptAction action = Deoptimization::Action_maybe_recompile;
+  // If we have triggered deoptimization too many times,
+  // Immediately invalidate the code using Deoptimization::Action_none.
+  if (treat_throw_as_hot && (method->method_data()->trap_recompiled_at(bci, m) || too_many_traps(reason))) {
+    action = Deoptimization::Action_none;
+  }
+
+  // 4. 生成最终的 Uncommon Trap
+  uncommon_trap(reason, action, insert_block);
 }
 
 void JeandleAbstractInterpreter::newarray(int element_type) {
@@ -3264,7 +3285,7 @@ void JeandleAbstractInterpreter::null_check(llvm::Value* obj) {
   llvm::Value* if_null = _ir_builder.CreateICmp(llvm::CmpInst::ICMP_EQ,
                                                 obj,
                                                 llvm::ConstantPointerNull::get(llvm::cast<llvm::PointerType>(obj->getType())));
-  llvm::BranchInst *null_check_br = _ir_builder.CreateCondBr(if_null, null_check_fail, null_check_pass);
+  llvm::BranchInst* null_check_br = _ir_builder.CreateCondBr(if_null, null_check_fail, null_check_pass);
 
   // Add make.implicit metadata, and the ImplicitNullChecksPass will transform it into an implicit check.
   llvm::MDNode* make_implicit = llvm::MDNode::get(*_context, {});

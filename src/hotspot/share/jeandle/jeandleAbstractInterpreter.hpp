@@ -293,8 +293,7 @@ class JeandleAbstractInterpreter : public StackObj {
   LockValue _sync_lock;
   
   // Cumulative traps
-  enum { trapHistLength = MethodData::_trap_hist_limit };
-  uint _trap_hist[trapHistLength];
+  uint _trap_hist[MethodData::_trap_hist_limit];
 
   // Reuse stack allocation for monitor: each monitor nesting level maps to a
   // fixed BasicLock slot on the stack. When the same nesting level is entered
@@ -415,6 +414,7 @@ class JeandleAbstractInterpreter : public StackObj {
   DispatchedDest dispatch_exception_for_invoke(); // Dispatch exceptions raised by invoke.
   void dispatch_exception_to_handler(llvm::Value* exception_oop); // Generate a series of IR to dispatch an exception to its handler.
   void throw_exception(llvm::Value* exception_oop);
+  void uncommon_trap_if_should_post_on_exceptions(Deoptimization::DeoptReason reason, llvm::BasicBlock* insert_block);
   void builtin_throw(Deoptimization::DeoptReason reason, llvm::BasicBlock *insert_block);
 
   void newarray(int element_type);
@@ -449,11 +449,11 @@ class JeandleAbstractInterpreter : public StackObj {
 
   void accumulate_trap_counts_from_mdo(ciMethod *method);
   uint trap_count(uint r) const {
-    assert(r < trapHistLength, "trap reason overflow");
+    assert(r < MethodData::_trap_hist_limit, "trap reason overflow");
     return _trap_hist[r];
   }
   void set_trap_count(uint r, uint c) {
-    assert(r < trapHistLength, "trap reason overflow");
+    assert(r < MethodData::_trap_hist_limit, "trap reason overflow");
     _trap_hist[r] = c;
   }
   bool too_many_traps(ciMethod *method, int bci, Deoptimization::DeoptReason reason);
