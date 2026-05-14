@@ -3016,7 +3016,7 @@ void JeandleAbstractInterpreter::builtin_throw(Deoptimization::DeoptReason reaso
     }
   }
   // Slow path: Bail to interpreter
-  // When inline is implemented, m should be the root method (refer to C->method()).
+  // TODO: When inline is implemented, _method should be the root method (refer to C->method()).
   ciMethod* m = Deoptimization::reason_is_speculate(reason) ? _method : nullptr;
   Deoptimization::DeoptAction action = Deoptimization::Action_maybe_recompile;
   // If we have triggered deoptimization too many times,
