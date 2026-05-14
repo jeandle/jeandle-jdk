@@ -48,14 +48,12 @@ llvm::Type* JeandleType::java2llvm(BasicType java_type, llvm::LLVMContext& conte
     case BasicType::T_ADDRESS:
       return llvm::PointerType::get(context, llvm::jeandle::AddrSpace::CHeapAddrSpace);
     case BasicType::T_NARROWOOP:
-      Unimplemented();
-      return nullptr;
+      return llvm::PointerType::get(context, llvm::jeandle::AddrSpace::NarrowOopAddrSpace);
     case BasicType::T_METADATA:
       Unimplemented();
       return nullptr;
     case BasicType::T_NARROWKLASS:
-      Unimplemented();
-      return nullptr;
+      return llvm::Type::getInt32Ty(context);
     case BasicType::T_CONFLICT:
       Unimplemented();
       return nullptr;
