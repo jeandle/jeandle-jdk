@@ -3024,8 +3024,7 @@ void JeandleAbstractInterpreter::builtin_throw(Deoptimization::DeoptReason reaso
   if (treat_throw_as_hot && (method->method_data()->trap_recompiled_at(bci, m) || too_many_traps(reason))) {
     action = Deoptimization::Action_none;
   }
-
-  // 4. 生成最终的 Uncommon Trap
+  
   uncommon_trap(reason, action, insert_block);
 }
 
