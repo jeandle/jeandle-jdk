@@ -530,6 +530,13 @@ JeandleStackMap* JeandleCompiledCode::parse_stackmap(StackMapParser& stackmaps, 
   assert(third.getKind() == StackMapParser::LocationKind::Constant, "unexpected kind");
 
   int num_deopts = third.getSmallConstant();
+  int total_locations = record->getNumLocations();
+  int oop_tail = total_locations - num_deopts - 3;
+  assert(oop_tail % 2 == 0, "oop pair tail must be even");
+  int oop_pair_count = oop_tail / 2;
+  int chunk_count = (oop_pair_count + 63) / 64;
+  num_deopts = num_deopts - chunk_count;
+
   bool reexecute = false;
   if (num_deopts > 0) {
     assert(this->_method != nullptr, "must be method compilation");
@@ -602,8 +609,19 @@ JeandleStackMap* JeandleCompiledCode::parse_stackmap(StackMapParser& stackmaps, 
 
   }
 
+GrowableArray<uint64_t> narrowoop_mask((int)chunk_count);
+for (int i = 0; i < chunk_count; i++) {
+  assert(location != record->location_end(), "must be in range");
+  auto loc = *(location++);
+  assert(loc.getKind() == StackMapParser::LocationKind::Constant ||
+           loc.getKind() == StackMapParser::LocationKind::ConstantIndex,
+           "narrow-oop mask chunk must be a constant");
+  narrowoop_mask.append(StackMapUtil::getConstantUlong(stackmaps, loc));
+}
+
   // build oop map
   OopMap* oop_map = new OopMap(frame_size_in_slots(), 0);
+  unsigned pair_idx = 0;
   for (; location != record->location_end(); location++) {
     // Extract location of base pointer.
     auto base_location = *location;
@@ -623,14 +641,20 @@ JeandleStackMap* JeandleCompiledCode::parse_stackmap(StackMapParser& stackmaps, 
 
     VMReg reg_base = resolve_vmreg(base_location, base_kind);
     VMReg reg_derived = resolve_vmreg(derived_location, derived_kind);
-
+    bool is_narrowoop = (narrowoop_mask.at((int)(pair_idx / 64)) >> (pair_idx % 64)) & 1;
     if(reg_base == reg_derived) {
       // No derived pointer.
-      oop_map->set_oop(reg_base);
+      if (is_narrowoop) {
+        assert(UseCompressedOops, "narrowoop only valid with CompressedOops");
+        oop_map->set_narrowoop(reg_base);
+      } else {
+        oop_map->set_oop(reg_base);
+      }
     } else {
       // Derived pointer.
       oop_map->set_derived_oop(reg_derived, reg_base);
     }
+    pair_idx++;
   }
   return new JeandleStackMap(oop_map, locals, stack, monitors, reexecute);
 }
