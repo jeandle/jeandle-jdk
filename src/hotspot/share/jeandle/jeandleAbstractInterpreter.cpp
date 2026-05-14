@@ -3292,6 +3292,9 @@ void JeandleAbstractInterpreter::null_check(llvm::Value* obj) {
   null_check_br->setMetadata(llvm::LLVMContext::MD_make_implicit, make_implicit);
 
   llvm::jeandle::JavaType obj_type = llvm::jeandle::getJavaType(obj);
+
+  // Directly trigger an uncommon trap for null checks on an unloaded oop type,
+  // and let the interpreter handle the subsequent loading and initialization.
   if (obj_type.isKnown()) {
     builtin_throw(Deoptimization::Reason_null_check, null_check_fail);
   } else {
