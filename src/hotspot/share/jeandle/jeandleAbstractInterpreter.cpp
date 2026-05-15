@@ -2928,6 +2928,15 @@ void JeandleAbstractInterpreter::throw_exception(llvm::Value* exception_oop) {
   }
 }
 
+
+bool JeandleAbstractInterpreter::has_ex_handler() {
+  // TODO: When inline is implemented, the caller chain should also be traversed
+  // to check whether any caller has exception handlers,
+  // similar to C2 GraphKit::has_ex_handler().
+
+  return _method -> has_exception_handlers();
+}
+
 void JeandleAbstractInterpreter::builtin_throw(Deoptimization::DeoptReason reason,
                                                llvm::BasicBlock* insert_block) {
   bool treat_throw_as_hot = false;
@@ -2941,20 +2950,11 @@ void JeandleAbstractInterpreter::builtin_throw(Deoptimization::DeoptReason reaso
       treat_throw_as_hot = true;
     }
 
-    bool has_ex_handler = false;
-    for (ciExceptionHandlerStream handlers(method, bci); !handlers.is_done(); handlers.next()) {
-      ciExceptionHandler* handler = handlers.handler();
-      if (!handler->is_rethrow()) {
-        has_ex_handler =  true;
-        break ;
-      }
-    }
-
     // Alternatively, if there's a history of traps for this reason, and there is a local
     // exception handler that can catch it, we also treat it as hot.
     if (trap_count(reason) != 0 &&
         method->method_data()->trap_count(reason) != 0 &&
-        has_ex_handler) {
+        has_ex_handler()) {
       treat_throw_as_hot = true;
     }
   }
