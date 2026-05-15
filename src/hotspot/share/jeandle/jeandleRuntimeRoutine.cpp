@@ -140,6 +140,11 @@ JRT_BLOCK_ENTRY(void, JeandleRuntimeRoutine::new_array(Klass* array_type, int le
 #endif
   assert(check_jeandle_compiled_frame(current), "incorrect caller");
 
+  if (log_is_enabled(Debug, jeandle, alloc)) {
+    ResourceMark rm;
+    log_debug(jeandle, alloc)("Slow path allocation for %s (length=%d)", array_type->external_name(), len);
+  }
+
   // Scavenge and allocate an instance.
   oop result;
 

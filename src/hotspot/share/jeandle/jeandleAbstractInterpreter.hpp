@@ -447,6 +447,11 @@ class JeandleAbstractInterpreter : public StackObj {
   void do_unified_newarray(Klass* array_klass);
   void multianewarray();
 
+  // Builds the call to the jeandle.newarray JavaOp, computing the size/base/max args from
+  // array_klass->layout_helper() so the fast path in template.ll receives them as constants.
+  // Used both by do_unified_newarray and by multianewarray's dimensions-array allocation.
+  llvm::InvokeInst* emit_jeandle_newarray(Klass* array_klass, llvm::Value* length);
+
   // Implementation of _new
   void do_new();
 
