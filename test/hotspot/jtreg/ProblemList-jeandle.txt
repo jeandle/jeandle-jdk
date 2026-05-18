@@ -227,9 +227,14 @@ compiler/unsafe/UnsafeGetStableArrayElement.java                                
 gc/arguments/TestMaxRAMFlags.java                                                              linux-aarch64,linux-x64
 gc/arguments/TestUseCompressedOopsErgo.java#id0                                                linux-aarch64,linux-x64
 gc/arguments/TestUseCompressedOopsFlagsWithUlimit.java                                         linux-aarch64,linux-x64
+gc/g1/TestFromCardCacheIndex.java                                                              linux-aarch64,linux-x64
+gc/g1/TestMixedGCLiveThreshold.java#25percent                                                  linux-aarch64,linux-x64
+gc/g1/TestSkipRebuildRemsetPhase.java                                                          linux-aarch64,linux-x64
+gc/metaspace/TestMetaspacePerfCounters.java#G1-64                                              linux-aarch64,linux-x64
 gc/metaspace/TestMetaspacePerfCounters.java#Serial-64                                          linux-aarch64,linux-x64
 gc/metaspace/TestPerfCountersAndMemoryPools.java#id0                                           linux-aarch64,linux-x64
 gc/metaspace/TestSizeTransitions.java#id0                                                      linux-aarch64,linux-x64
+gc/metaspace/TestSizeTransitions.java#id2                                                      linux-aarch64,linux-x64
 runtime/Metaspace/PrintMetaspaceDcmd.java#test-64bit-ccs                                       linux-aarch64,linux-x64
 runtime/Metaspace/PrintMetaspaceDcmd.java#test-64bit-ccs-guarded                               linux-aarch64,linux-x64
 runtime/logging/CompressedOopsTest.java                                                        linux-aarch64,linux-x64
@@ -278,18 +283,15 @@ compiler/vectorization/runner/StripMinedLoopTest.java                           
 ###
 # GC not support
 ###
-gc/TestJNICriticalStressTest.java#id0                                                          linux-aarch64,linux-x64
+compiler/loopopts/TestOverunrolling.java                                                       linux-aarch64,linux-x64
 gc/TestJNICriticalStressTest.java#id1                                                          linux-aarch64,linux-x64
-gc/TestMemoryMXBeansAndPoolsPresence.java#id0                                                  linux-aarch64,linux-x64
 gc/TestMemoryMXBeansAndPoolsPresence.java#id1                                                  linux-aarch64,linux-x64
 gc/TestNumWorkerOutput.java                                                                    linux-aarch64,linux-x64
-gc/TestPLABAdaptToMinTLABSize.java#id0                                                         linux-aarch64,linux-x64
 gc/TestPLABAdaptToMinTLABSize.java#id1                                                         linux-aarch64,linux-x64
 gc/TestPolicyNamePerfCounter.java#id1                                                          linux-aarch64,linux-x64
-gc/TestPolicyNamePerfCounter.java#id2                                                          linux-aarch64,linux-x64
+gc/TestReferenceClearDuringReferenceProcessing.java#ZGenerational                              linux-aarch64,linux-x64
+gc/TestReferenceClearDuringReferenceProcessing.java#ZSinglegen                                 linux-aarch64,linux-x64
 gc/arguments/TestAggressiveHeap.java                                                           linux-aarch64,linux-x64
-gc/arguments/TestG1HeapRegionSize.java                                                         linux-aarch64,linux-x64
-gc/arguments/TestG1RemSetFlags.java                                                            linux-aarch64,linux-x64
 gc/arguments/TestInitialTenuringThreshold.java                                                 linux-aarch64,linux-x64
 gc/arguments/TestObjectTenuringFlags.java                                                      linux-aarch64,linux-x64
 gc/arguments/TestParallelGCThreads.java                                                        linux-aarch64,linux-x64
@@ -298,7 +300,6 @@ gc/arguments/TestSelectDefaultGC.java                                           
 gc/arguments/TestUseCompressedOopsErgo.java#id1                                                linux-aarch64,linux-x64
 gc/arguments/TestUseCompressedOopsErgo.java#id2                                                linux-aarch64,linux-x64
 gc/arguments/TestUseCompressedOopsErgo.java#id3                                                linux-aarch64,linux-x64
-gc/class_unloading/TestG1ClassUnloadingHWM.java                                                linux-aarch64,linux-x64
 gc/epsilon/TestDieDefault.java                                                                 linux-aarch64,linux-x64
 gc/epsilon/TestDieWithHeapDump.java                                                            linux-aarch64,linux-x64
 gc/epsilon/TestDieWithOnError.java                                                             linux-aarch64,linux-x64
@@ -306,57 +307,11 @@ gc/epsilon/TestEnoughUnusedSpace.java                                           
 gc/epsilon/TestEpsilonEnabled.java                                                             linux-aarch64,linux-x64
 gc/ergonomics/TestDynamicNumberOfGCThreads.java                                                linux-aarch64,linux-x64
 gc/ergonomics/TestInitialGCThreadLogging.java                                                  linux-aarch64,linux-x64
-gc/g1/TestEvacuationFailure.java                                                               linux-aarch64,linux-x64
-gc/g1/TestFromCardCacheIndex.java                                                              linux-aarch64,linux-x64
-gc/g1/TestG1SkipCompaction.java                                                                linux-aarch64,linux-x64
-gc/g1/TestG1TraceEagerReclaimHumongousObjects.java                                             linux-aarch64,linux-x64
-gc/g1/TestGCLogMessages.java                                                                   linux-aarch64,linux-x64
-gc/g1/TestHumongousAllocConcurrentStart.java                                                   linux-aarch64,linux-x64
-gc/g1/TestHumongousAllocNearlyFullRegion.java                                                  linux-aarch64,linux-x64
-gc/g1/TestHumongousConcurrentStartUndo.java                                                    linux-aarch64,linux-x64
-gc/g1/TestHumongousRemsetsMatch.java                                                           linux-aarch64,linux-x64
-gc/g1/TestHumongousShrinkHeap.java                                                             linux-aarch64,linux-x64
-gc/g1/TestLargePageUseForAuxMemory.java                                                        linux-aarch64,linux-x64
-gc/g1/TestMarkStackSizes.java                                                                  linux-aarch64,linux-x64
-gc/g1/TestMixedGCLiveThreshold.java#0percent                                                   linux-aarch64,linux-x64
-gc/g1/TestMixedGCLiveThreshold.java#100percent                                                 linux-aarch64,linux-x64
-gc/g1/TestMixedGCLiveThreshold.java#25percent                                                  linux-aarch64,linux-x64
-gc/g1/TestNoEagerReclaimOfHumongousRegions.java                                                linux-aarch64,linux-x64
-gc/g1/TestOneEdenRegionAfterGC.java                                                            linux-aarch64,linux-x64
-gc/g1/TestPLABOutput.java                                                                      linux-aarch64,linux-x64
-gc/g1/TestPLABSizeBounds.java                                                                  linux-aarch64,linux-x64
-gc/g1/TestPeriodicCollection.java                                                              linux-aarch64,linux-x64
-gc/g1/TestPeriodicLogMessages.java                                                             linux-aarch64,linux-x64
-gc/g1/TestPrintRegionRememberedSetInfo.java                                                    linux-aarch64,linux-x64
-gc/g1/TestRegionLivenessPrint.java                                                             linux-aarch64,linux-x64
-gc/g1/TestRemarkCleanupMXBean.java                                                             linux-aarch64,linux-x64
-gc/g1/TestRemsetLogging.java                                                                   linux-aarch64,linux-x64
-gc/g1/TestRemsetLoggingPerRegion.java                                                          linux-aarch64,linux-x64
-gc/g1/TestRemsetLoggingThreads.java                                                            linux-aarch64,linux-x64
-gc/g1/TestShrinkAuxiliaryDataRunner.java                                                       linux-aarch64,linux-x64
-gc/g1/TestShrinkDefragmentedHeap.java                                                          linux-aarch64,linux-x64
-gc/g1/TestSkipRebuildRemsetPhase.java                                                          linux-aarch64,linux-x64
-gc/g1/TestVerificationInConcurrentCycle.java#id0                                               linux-aarch64,linux-x64
-gc/g1/TestVerifyGCType.java                                                                    linux-aarch64,linux-x64
-gc/g1/humongousObjects/TestHumongousClassLoader.java                                           linux-aarch64,linux-x64
-gc/g1/humongousObjects/TestHumongousMovement.java                                              linux-aarch64,linux-x64
-gc/g1/humongousObjects/TestHumongousNonArrayAllocation.java                                    linux-aarch64,linux-x64
-gc/g1/humongousObjects/TestHumongousThreshold.java                                             linux-aarch64,linux-x64
-gc/g1/humongousObjects/TestNoAllocationsInHRegions.java                                        linux-aarch64,linux-x64
-gc/g1/humongousObjects/TestObjectCollected.java                                                linux-aarch64,linux-x64
-gc/g1/ihop/TestIHOPStatic.java                                                                 linux-aarch64,linux-x64
-gc/g1/mixedgc/TestLogging.java                                                                 linux-aarch64,linux-x64
-gc/g1/mixedgc/TestOldGenCollectionUsage.java                                                   linux-aarch64,linux-x64
-gc/g1/plab/TestPLABEvacuationFailure.java                                                      linux-aarch64,linux-x64
-gc/g1/plab/TestPLABPromotion.java                                                              linux-aarch64,linux-x64
-gc/g1/plab/TestPLABResize.java                                                                 linux-aarch64,linux-x64
 gc/logging/TestPrintReferences.java                                                            linux-aarch64,linux-x64
 gc/metaspace/TestMetaspacePerfCounters.java#Epsilon-64                                         linux-aarch64,linux-x64
-gc/metaspace/TestMetaspacePerfCounters.java#G1-64                                              linux-aarch64,linux-x64
 gc/metaspace/TestMetaspacePerfCounters.java#Parallel-64                                        linux-aarch64,linux-x64
 gc/metaspace/TestMetaspacePerfCounters.java#Shenandoah-64                                      linux-aarch64,linux-x64
 gc/metaspace/TestSizeTransitions.java#id1                                                      linux-aarch64,linux-x64
-gc/metaspace/TestSizeTransitions.java#id2                                                      linux-aarch64,linux-x64
 gc/parallel/TestDynShrinkHeap.java                                                             linux-aarch64,linux-x64
 gc/shenandoah/mxbeans/TestChurnNotifications.java#adaptive                                     linux-aarch64,linux-x64
 gc/shenandoah/mxbeans/TestChurnNotifications.java#aggressive                                   linux-aarch64,linux-x64
@@ -386,12 +341,14 @@ gc/x/TestGarbageCollectorMXBean.java                                            
 gc/x/TestHighUsage.java                                                                        linux-aarch64,linux-x64
 gc/x/TestMemoryMXBean.java                                                                     linux-aarch64,linux-x64
 gc/x/TestMemoryManagerMXBean.java                                                              linux-aarch64,linux-x64
+gc/x/TestNoUncommit.java                                                                       linux-aarch64,linux-x64
 gc/x/TestPageCacheFlush.java                                                                   linux-aarch64,linux-x64
 gc/x/TestUncommit.java                                                                         linux-aarch64,linux-x64
 gc/z/TestAllocateHeapAt.java                                                                   linux-aarch64,linux-x64
 gc/z/TestGarbageCollectorMXBean.java                                                           linux-aarch64,linux-x64
 gc/z/TestMemoryMXBean.java                                                                     linux-aarch64,linux-x64
 gc/z/TestMemoryManagerMXBean.java                                                              linux-aarch64,linux-x64
+gc/z/TestNoUncommit.java                                                                       linux-aarch64,linux-x64
 gc/z/TestPageCacheFlush.java                                                                   linux-aarch64,linux-x64
 gc/z/TestUncommit.java                                                                         linux-aarch64,linux-x64
 gc/z/TestZForceDiscontiguousHeapReservations.java                                              linux-aarch64,linux-x64
@@ -403,7 +360,7 @@ runtime/ClassUnload/UnloadTestWithVerifyDuringGC.java                           
 ###
 
  # intermittent timeout on linux-aarch64
-compiler/loopopts/TestPartialPeelAtUnsignedTestsNegativeLimit.java                             linux-aarch64,linux-x64
+compiler/loopopts/TestPartialPeelAtUnsignedTestsNegativeLimit.java#Xbatch                      linux-aarch64,linux-x64
 
 compiler/loopopts/TestRemoveEmptyLoop.java                                                     linux-aarch64,linux-x64
 
@@ -542,3 +499,8 @@ compiler/loopopts/superword/TestLargeScaleAndStride.java#AlignVector            
 # fails due to `Math.log` (issue #424)
 ###
 compiler/interpreter/Test6539464.java                                                          linux-aarch64
+
+###
+# Fails because Jeandle does not support nmethod entry barrier
+###
+serviceability/jvmti/CompiledMethodLoad/Zombie.java                                            linux-x64

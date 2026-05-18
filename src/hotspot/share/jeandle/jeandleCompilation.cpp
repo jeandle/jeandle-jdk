@@ -26,6 +26,7 @@
 #include "llvm/IR/Jeandle/Attributes.h"
 #include "llvm/IR/Jeandle/GCStrategy.h"
 #include "llvm/IR/Jeandle/Metadata.h"
+#include "llvm/IR/Jeandle/VMCallbackLog.h"
 #include "llvm/IR/LLVMContext.h"
 #include "llvm/IR/LegacyPassManager.h"
 #include "llvm/IR/IRBuilder.h"
@@ -42,6 +43,7 @@
 #include <algorithm>
 #include <filesystem>
 #include <iomanip>
+#include <optional>
 #include <sstream>
 #include <string>
 
@@ -287,6 +289,20 @@ void JeandleCompilation::setup_llvm_module(llvm::MemoryBuffer* template_buffer) 
   assert(metadata_node != nullptr, "invalid metadata node");
 }
 
+static std::string construct_dump_path(const std::string& method_name,
+                                       const std::string& timestamp,
+                                       const std::string& suffix) {
+  assert(suffix == ".ll" || suffix == "_optimized.ll" || suffix == ".o" || suffix == ".cblog", "invalid suffix for dump file of Jeandle compiler");
+  std::string dump_dir = JeandleDumpDirectory ? std::string(JeandleDumpDirectory) : std::string("./");
+
+  // Full name.
+  std::string file_name = dump_dir + '/' + method_name + '_' + timestamp + suffix;
+  // Normalize the path and remove redundant separators.
+  std::filesystem::path clean_path(std::move(file_name));
+
+  return clean_path.lexically_normal().string();
+}
+
 void JeandleCompilation::compile_java_method() {
   // Build basic blocks. Then fill basic blocks with LLVM IR.
   {
@@ -304,10 +320,30 @@ void JeandleCompilation::compile_java_method() {
   bool is_failed = llvm::verifyModule(*_llvm_module, &llvm::errs());
   JEANDLE_ERROR_ASSERT_AND_RET_VOID_ON_FAIL(!is_failed, "module verify failed in Jeandle compilation");
 
+  // Scope the VM callback recorder to the optimization step.
+  // Each concurrent compilation gets its own recorder via thread-local storage.
+  std::optional<llvm::jeandle::VMCallbackLogRecorder> recorder;
+  if (JeandleRecordVMCallbacks) {
+    recorder.emplace();
+  }
+
   // Optimize.
   {
     JeandleTraceTime tt_optimize("Jeandle LLVM Optimize", llvm_optimizer_timer);
     llvm::jeandle::optimize(*_llvm_module, llvm::OptimizationLevel::O3);
+  }
+
+  // Dump the VM callback log for this compilation.
+  if (JeandleRecordVMCallbacks) {
+    std::string dump_path = construct_dump_path(_llvm_module->getModuleIdentifier(), _comp_start_time, ".cblog");
+    if (llvm::Error Err = recorder->dump(dump_path)) {
+      log_warning(jeandle)("Could not dump VM callback log: %s",
+                           llvm::toString(std::move(Err)).c_str());
+    }
+    // Destroy the recorder early to clear the thread-local ActiveRecorder,
+    // so that any VM callbacks invoked during subsequent steps (dump_ir,
+    // compile_module, etc.) are not incorrectly recorded.
+    recorder.reset();
   }
 
   if (JeandleDumpIR) {
@@ -355,20 +391,6 @@ void JeandleCompilation::compile_module() {
                                                                 _llvm_module->getModuleIdentifier(),
                                                                 false);
   _code.install_obj(std::move(object));
-}
-
-static std::string construct_dump_path(const std::string& method_name,
-                                       const std::string& timestamp,
-                                       const std::string& suffix) {
-  assert(suffix == ".ll" || suffix == "_optimized.ll" || suffix == ".o", "invalid suffix for dump file of Jeandle compiler");
-  std::string dump_dir = JeandleDumpDirectory ? std::string(JeandleDumpDirectory) : std::string("./");
-
-  // Full name.
-  std::string file_name = dump_dir + '/' + method_name + '_' + timestamp + suffix;
-  // Normalize the path and remove redundant separators.
-  std::filesystem::path clean_path(std::move(file_name));
-
-  return clean_path.lexically_normal().string();
 }
 
 void JeandleCompilation::dump_obj() {

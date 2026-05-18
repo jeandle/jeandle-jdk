@@ -79,7 +79,8 @@ public class TestAllocVMOptions {
         runWithOptions("-UseTLAB +ZeroTLAB", List.of("-XX:-UseTLAB", "-XX:+ZeroTLAB"));
 
         // Test 6: Large TLAB - fewer refills, objects mostly in fast path
-        runWithOptions("large TLAB", List.of("-XX:TLABSize=4m", "-XX:-ResizeTLAB"));
+        runWithOptions("large TLAB (SerialGC)", List.of("-XX:+UseSerialGC", "-XX:TLABSize=4m", "-XX:-ResizeTLAB"));
+        runWithOptions("large TLAB (G1GC)", List.of("-XX:+UseG1GC", "-XX:TLABSize=512k", "-XX:-ResizeTLAB"));
 
         System.out.println("All TestAllocVMOptions tests passed.");
     }

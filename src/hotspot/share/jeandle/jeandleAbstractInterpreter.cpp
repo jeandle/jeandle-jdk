@@ -41,6 +41,7 @@
 #include "ci/ciTypeFlow.hpp"
 #include "oops/objArrayKlass.hpp"
 #include "classfile/javaClasses.hpp"
+#include "gc/shared/gc_globals.hpp"
 #include "interpreter/interpreter.hpp"
 #include "logging/log.hpp"
 #include "runtime/sharedRuntime.hpp"
@@ -2367,6 +2368,17 @@ void JeandleAbstractInterpreter::do_get_xxx(ciField* field, bool is_static) {
   bool is_volatile = field->is_volatile();
   llvm::Value* value = load_from_address(addr, field->layout_type(), is_volatile);
 
+  // TODO: Move to a late-insertion pass (like InsertGCBarriers)
+  // rather than inserting the barrier here in the frontend.
+  // Late insertion is preferred for GC barriers as it preserves
+  // optimization opportunities in earlier passes.
+  if (UseG1GC && !is_static && is_reference_type(field->layout_type()) &&
+      field->holder()->is_subclass_of(ciEnv::current()->Reference_klass()) &&
+      field->offset_in_bytes() == java_lang_ref_Reference::referent_offset()) {
+    assert(value != nullptr, "must be loaded already");
+    call_java_op("jeandle.g1_pre_barrier_loaded", {value});
+  }
+
   // Attach java-klass metadata to loads of object/array fields.
   // Skip interface types: the verifier does not enforce interface types,
   // so a field declared as an interface could hold any Object at runtime.
@@ -2615,7 +2627,7 @@ void JeandleAbstractInterpreter::do_array_store_inner(BasicType basic_type, llvm
   // Currently, we can't get array type in LLVM pass. Once a clearer design is available, the barrier
   // insertion operation will be moved to the LLVM pass.
   if (basic_type == T_OBJECT) {
-    call_java_op("jeandle.card_table_barrier", {element_address});
+    call_java_op("jeandle.post_barrier", {element_address, value});
   }
 }
 

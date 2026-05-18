@@ -28,6 +28,10 @@
 
 #include "jeandle/__hotspotHeadersBegin__.hpp"
 #include "ci/ciUtilities.hpp"
+#include "gc/g1/g1BarrierSetRuntime.hpp"
+#include "gc/g1/g1CardTable.hpp"
+#include "gc/g1/g1ThreadLocalData.hpp"
+#include "gc/g1/heapRegion.hpp"
 #include "gc/shared/cardTable.hpp"
 #include "gc/shared/gc_globals.hpp"
 #include "gc/shared/tlab_globals.hpp"
@@ -157,6 +161,40 @@ DEF_JAVA_OP(card_table_barrier, 1, llvm::Type::getVoidTy(context), llvm::Pointer
   ir_builder.CreateRetVoid();
 JAVA_OP_END
 
+DEF_JAVA_OP(pre_barrier, 1, llvm::Type::getVoidTy(context), llvm::PointerType::get(context, llvm::jeandle::AddrSpace::JavaHeapAddrSpace))
+  // Only serial/G1 GC is supported on jeandle for now
+  if (UseG1GC) {
+    // TODO: implement ReduceInitialCardMarks
+    llvm::Function* g1_pre_barrier_func = template_module.getFunction("jeandle.g1_pre_barrier");
+    assert(g1_pre_barrier_func != nullptr, "g1_pre_barrier function not found");
+    llvm::CallInst* call_inst = ir_builder.CreateCall(g1_pre_barrier_func, {func->getArg(0)});
+    call_inst->setCallingConv(llvm::CallingConv::Hotspot_JIT);
+  } else {
+    assert(UseSerialGC, "only Serial and G1 GC are supported");
+  }
+  ir_builder.CreateRetVoid();
+JAVA_OP_END
+
+DEF_JAVA_OP(post_barrier, 1, llvm::Type::getVoidTy(context),
+            llvm::PointerType::get(context, llvm::jeandle::AddrSpace::JavaHeapAddrSpace),
+            llvm::PointerType::get(context, llvm::jeandle::AddrSpace::JavaHeapAddrSpace))
+  // Only serial/G1 GC is supported on jeandle for now
+  if (UseG1GC) {
+    // TODO: implement ReduceInitialCardMarks
+    llvm::Function* g1_post_barrier_func = template_module.getFunction("jeandle.g1_post_barrier");
+    assert(g1_post_barrier_func != nullptr, "g1_post_barrier function not found");
+    llvm::CallInst* call_inst = ir_builder.CreateCall(g1_post_barrier_func, {func->getArg(0), func->getArg(1)});
+    call_inst->setCallingConv(llvm::CallingConv::Hotspot_JIT);
+  } else {
+    assert(UseSerialGC, "only Serial and G1 GC are supported");
+    llvm::Function* card_table_barrier_func = template_module.getFunction("jeandle.card_table_barrier");
+    assert(card_table_barrier_func != nullptr, "card_table_barrier function not found");
+    llvm::CallInst* call_inst = ir_builder.CreateCall(card_table_barrier_func, {func->getArg(0)});
+    call_inst->setCallingConv(llvm::CallingConv::Hotspot_JIT);
+  }
+  ir_builder.CreateRetVoid();
+JAVA_OP_END
+
 } // anonymous namespace
 
 const char* RuntimeDefinedJavaOps::_error_msg = nullptr;
@@ -174,6 +212,8 @@ bool RuntimeDefinedJavaOps::define_all(llvm::Module& template_module) {
   define_current_thread(template_module);
   define_safepoint_poll(template_module);
   define_card_table_barrier(template_module);
+  define_pre_barrier(template_module);
+  define_post_barrier(template_module);
 
   return failed();
 }
@@ -211,6 +251,7 @@ void RuntimeDefinedJavaOps::define_global_variables(llvm::Module& template_modul
   };
 
   llvm::Type* int1_type  = llvm::Type::getInt1Ty(context);
+  llvm::Type* int8_type  = llvm::Type::getInt8Ty(context);
   llvm::Type* int32_type = llvm::Type::getInt32Ty(context);
   llvm::Type* int64_type = llvm::Type::getInt64Ty(context);
 
@@ -256,6 +297,20 @@ void RuntimeDefinedJavaOps::define_global_variables(llvm::Module& template_modul
   define_global("oopSize",                                          int32_type, static_cast<uint64_t>(oopSize));
 
   define_global("check_recursive_mask_value",                       int64_type, static_cast<uint64_t>(7 - (int)os::vm_page_size()));
+
+  define_global("G1ThreadLocalData.satb_mark_queue_active_offset",  int32_type, static_cast<uint64_t>(G1ThreadLocalData::satb_mark_queue_active_offset()));
+  define_global("G1ThreadLocalData.satb_mark_queue_index_offset",   int32_type, static_cast<uint64_t>(G1ThreadLocalData::satb_mark_queue_index_offset()));
+  define_global("G1ThreadLocalData.satb_mark_queue_buffer_offset",  int32_type, static_cast<uint64_t>(G1ThreadLocalData::satb_mark_queue_buffer_offset()));
+  define_global("G1ThreadLocalData.dirty_card_queue_index_offset",  int32_type, static_cast<uint64_t>(G1ThreadLocalData::dirty_card_queue_index_offset()));
+  define_global("G1ThreadLocalData.dirty_card_queue_buffer_offset", int32_type, static_cast<uint64_t>(G1ThreadLocalData::dirty_card_queue_buffer_offset()));
+  define_global("CardTable.card_shift",                             int64_type, static_cast<uint64_t>(CardTable::card_shift()));
+  define_global("HeapRegion.LogOfHRGrainBytes",                     int64_type, static_cast<uint64_t>(HeapRegion::LogOfHRGrainBytes));
+  define_global("WordSize",                                         int64_type, static_cast<uint64_t>(sizeof(intptr_t)));
+  define_global("G1CardTable.g1_young_card_val",                    int8_type,  static_cast<uint64_t>(G1CardTable::g1_young_card_val()));
+  define_global("G1CardTable.dirty_card_val",                       int8_type,  static_cast<uint64_t>(G1CardTable::dirty_card_val()));
+  define_global("ci_card_table_address",                            int64_type, static_cast<uint64_t>(p2i(ci_card_table_address())));
+  define_global("G1BarrierSetRuntime.write_ref_field_pre_entry",    int64_type, static_cast<uint64_t>(p2i(CAST_FROM_FN_PTR(address, G1BarrierSetRuntime::write_ref_field_pre_entry))));
+  define_global("G1BarrierSetRuntime.write_ref_field_post_entry",   int64_type, static_cast<uint64_t>(p2i(CAST_FROM_FN_PTR(address, G1BarrierSetRuntime::write_ref_field_post_entry))));
 
   define_global("VMOptions.UseTLAB",                                int1_type, static_cast<uint64_t>(UseTLAB));
   define_global("VMOptions.ZeroTLAB",                               int1_type, static_cast<uint64_t>(ZeroTLAB));

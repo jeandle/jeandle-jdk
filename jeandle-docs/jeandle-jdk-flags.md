@@ -8,3 +8,4 @@
 | ```JeandleDumpRuntimeStubs``` | bool | Dump all runtime stubs of Jeandle in the form of LLVM IR and object files. | ```false``` |
 | ```JeandleUseHotspotIntrinsics``` | bool | Prefer HotSpot intrinsics over LLVM intrinsics. | ```false``` |
 | ```JeandleLLVMOptions``` | string | Additional LLVM command line options. | ```null``` |
+| ```JeandleRecordVMCallbacks``` | bool | Record VM callback invocations for standalone LLVM testing. | ```false``` |
