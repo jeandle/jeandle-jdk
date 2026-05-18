@@ -2971,7 +2971,10 @@ void JeandleAbstractInterpreter::builtin_throw(Deoptimization::DeoptReason reaso
     }
   }
 
-  // Fast-Path
+  // If this throw happens frequently, an uncommon trap might cause
+  // a performance pothole.  If there is a local exception handler,
+  // and if this particular bytecode appears to be deoptimizing often,
+  // let us handle the throw inline, with a preconstructed instance.
   if (treat_throw_as_hot && method->can_omit_stack_trace()) {
     ciEnv* env = CURRENT_ENV;
     ciInstance* ex_obj = nullptr;
