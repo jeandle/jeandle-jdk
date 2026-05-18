@@ -2941,7 +2941,7 @@ void JeandleAbstractInterpreter::throw_exception(llvm::Value* exception_oop) {
 }
 
 
-bool JeandleAbstractInterpreter::has_ex_handler() {
+bool JeandleAbstractInterpreter::has_exception_handler() {
   // TODO: When inline is implemented, the caller chain should also be traversed
   // to check whether any caller has exception handlers,
   // similar to C2 GraphKit::has_ex_handler().
