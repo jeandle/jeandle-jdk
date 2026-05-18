@@ -3000,11 +3000,11 @@ void JeandleAbstractInterpreter::builtin_throw(Deoptimization::DeoptReason reaso
     }
 
     if (ex_obj != nullptr) {
-      // TODO: To keep consistent with C2, but no suitable test case for now.
-      // if (env->jvmti_can_post_on_exceptions()) {
-      //   // Check whether exception events must be posted; if so, take an uncommon trap.
-      //   uncommon_trap_if_should_post_on_exceptions(reason, insert_block);
-      // }
+
+       if (env->jvmti_can_post_on_exceptions()) {
+       // Check whether exception events must be posted; if so, take an uncommon trap.
+         uncommon_trap_if_should_post_on_exceptions(reason, insert_block);
+       }
       auto saved_insert_block = _ir_builder.GetInsertBlock();
       auto saved_insert_point = _ir_builder.GetInsertPoint();
       if (insert_block != nullptr) {
