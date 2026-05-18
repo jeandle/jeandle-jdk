@@ -2949,6 +2949,8 @@ bool JeandleAbstractInterpreter::has_exception_handler() {
   return _method -> has_exception_handlers();
 }
 
+// This is a logical copy of GraphKit::builtin_throw
+// TODO: may need to adjust it for Jeandle's featrures.
 void JeandleAbstractInterpreter::builtin_throw(Deoptimization::DeoptReason reason,
                                                llvm::BasicBlock* insert_block) {
   bool treat_throw_as_hot = false;
