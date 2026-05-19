@@ -3030,7 +3030,7 @@ void JeandleAbstractInterpreter::builtin_throw(Deoptimization::DeoptReason reaso
       auto saved_insert_point = _ir_builder.GetInsertPoint();
 
        if (env->jvmti_can_post_on_exceptions()) {
-       // Check whether exception events must be posted; if so, take an uncommon trap.
+         // Check whether exception events must be posted; if so, take an uncommon trap.
          uncommon_trap_if_should_post_on_exceptions(reason, insert_block);
        } else if (insert_block != nullptr) {
          _ir_builder.SetInsertPoint(insert_block);
