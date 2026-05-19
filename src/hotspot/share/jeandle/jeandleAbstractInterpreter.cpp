@@ -2941,11 +2941,7 @@ void JeandleAbstractInterpreter::throw_exception(llvm::Value* exception_oop) {
   }
 }
 
-void JeandleAbstractInterpreter::uncommon_trap_if_should_post_on_exceptions(Deoptimization::DeoptReason reason, llvm::BasicBlock* insert_block) {
-  if (insert_block != nullptr) {
-    _ir_builder.SetInsertPoint(insert_block);
-  }
-
+void JeandleAbstractInterpreter::uncommon_trap_if_should_post_on_exceptions(Deoptimization::DeoptReason reason) {
   int cur_bci = _bytecodes.cur_bci();
   llvm::BasicBlock* should_post_block = llvm::BasicBlock::Create(*_context,
                                                                  "bci_" + std::to_string(cur_bci) + "_should_post_on_exceptions",
@@ -3029,12 +3025,13 @@ void JeandleAbstractInterpreter::builtin_throw(Deoptimization::DeoptReason reaso
       auto saved_insert_block = _ir_builder.GetInsertBlock();
       auto saved_insert_point = _ir_builder.GetInsertPoint();
 
-       if (env->jvmti_can_post_on_exceptions()) {
+      if (insert_block != nullptr) {
+        _ir_builder.SetInsertPoint(insert_block);
+      }
+      if (env->jvmti_can_post_on_exceptions()) {
          // Check whether exception events must be posted; if so, take an uncommon trap.
-         uncommon_trap_if_should_post_on_exceptions(reason, insert_block);
-       } else if (insert_block != nullptr) {
-         _ir_builder.SetInsertPoint(insert_block);
-       }
+        uncommon_trap_if_should_post_on_exceptions(reason);
+      }
 
       llvm::Value* oop_handle = find_or_insert_oop(ex_obj);
       llvm::Value* value = _ir_builder.CreateLoad(JeandleType::java2llvm(BasicType::T_OBJECT, *_context), oop_handle);
