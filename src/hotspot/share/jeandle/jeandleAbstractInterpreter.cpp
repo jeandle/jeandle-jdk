@@ -733,8 +733,8 @@ void JeandleAbstractInterpreter::initialize_VM_state_from_osr_buffer(JeandleVMSt
 
   // OSR Compilation Bailouts:
   // In HotSpot, OSR is restricted to loop headers where the operand stack is empty.
-  // This is because SharedRuntime::OSR_migration_begin is designed to migrate
-  // only locals and monitors from the interpreter frame; it does not currently account for
+  // This is because SharedRuntime::OSR_migration_begin is designed to migrate 
+  // only locals and monitors from the interpreter frame; it does not currently account for 
   // copying operand stack slots into the OSR buffer.
   if (osr_entry_block->stack_size() != 0) {
     JEANDLE_REPORT_ERROR_AND_RET_VOID("OSR starts with non-empty stack");
@@ -888,7 +888,7 @@ void JeandleAbstractInterpreter::check_interpreter_type(ciTypeFlow::Block* osr_e
     // Set the name of current_block.
     current_block->setName("osr_entry_check_local_" + std::to_string(index));
 
-    // Create a block for the success path.
+    // Create a block for the success path. 
     llvm::BasicBlock* next_block = llvm::BasicBlock::Create(*_context, "", _llvm_func);
 
     llvm::Value* cond = nullptr;
