@@ -3495,7 +3495,7 @@ void JeandleAbstractInterpreter::clinit_barrier(ciInstanceKlass* ik, ciMethod* c
 
 bool JeandleAbstractInterpreter::too_many_traps(ciMethod* method, int bci, Deoptimization::DeoptReason reason) {
   ciMethodData* md = method->method_data();
-  if (method->is_empty()) {
+  if (md->is_empty()) {
     // Assume the trap has not occurred, or that it occurred only
     // because of a transient condition during start-up in the interpreter.
     return false;
