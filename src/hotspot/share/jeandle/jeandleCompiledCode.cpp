@@ -36,6 +36,7 @@
 #include "asm/macroAssembler.hpp"
 #include "ci/ciEnv.hpp"
 #include "code/vmreg.inline.hpp"
+#include "gc/shared/barrierSet.hpp"
 #include "gc/shared/barrierSetAssembler.hpp"
 #include "interpreter/interpreter.hpp"
 #include "logging/log.hpp"

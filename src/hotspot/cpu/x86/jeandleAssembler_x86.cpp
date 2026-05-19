@@ -27,6 +27,7 @@
 
 #include "jeandle/__hotspotHeadersBegin__.hpp"
 #include "code/nativeInst.hpp"
+#include "gc/shared/barrierSet.hpp"
 #include "gc/shared/barrierSetAssembler.hpp"
 #include "runtime/sharedRuntime.hpp"
 
@@ -309,6 +310,6 @@ void JeandleAssembler::emit_nmethod_entry_stub() {
 #ifdef _LP64
   __ bind(_barrier_slow_path);
   __ call(RuntimeAddress(StubRoutines::x86::method_entry_barrier()));
-  __ jmp(continuation(), false /* maybe_short */);
+  __ jmp(_barrier_continuation, false /* maybe_short */);
 #endif
 }
