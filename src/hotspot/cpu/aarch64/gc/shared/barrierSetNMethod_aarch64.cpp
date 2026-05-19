@@ -43,7 +43,7 @@
 
 static int slow_path_size(nmethod* nm) {
   // The slow path code is out of line with C2
-  return nm->is_compiled_by_c2() ? 0 : 6;
+  return (nm->is_compiled_by_c2() || nm->is_compiled_by_jeandle()) ? 0 : 6;
 }
 
 // This is the offset of the entry barrier relative to where the frame is completed.
@@ -97,7 +97,7 @@ public:
 #endif
       {
         _instruction_address = nm->code_begin() + nm->frame_complete_offset() + entry_barrier_offset(nm);
-        if (nm->is_compiled_by_c2()) {
+        if (nm->is_compiled_by_c2() || nm->is_compiled_by_jeandle()) {
           // With c2 compiled code, the guard is out-of-line in a stub
           // We find it using the RelocIterator.
           RelocIterator iter(nm);

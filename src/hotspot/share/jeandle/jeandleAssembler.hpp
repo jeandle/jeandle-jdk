@@ -46,6 +46,8 @@ class JeandleAssembler : public StackObj {
   void emit_verified_entry();
   void emit_poisoned_osr_entry();
   void emit_clinit_barrier_on_entry(Klass* klass);
+  void emit_nmethod_entry_barrier();
+  void emit_nmethod_entry_stub();
 
   int emit_exception_handler();
 
@@ -81,6 +83,9 @@ class JeandleAssembler : public StackObj {
 
  private:
   MacroAssembler* _masm;
+  Label _barrier_slow_path;
+  Label _barrier_continuation;
+  Label _barrier_guard;
 
 #include CPU_HEADER(jeandleAssembler)
 };

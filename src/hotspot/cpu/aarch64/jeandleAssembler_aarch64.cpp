@@ -27,6 +27,7 @@
 
 #include "jeandle/__hotspotHeadersBegin__.hpp"
 #include "code/nativeInst.hpp"
+#include "gc/shared/barrierSetAssembler.hpp"
 #include "runtime/sharedRuntime.hpp"
 
 #define __ _masm->
@@ -316,4 +317,22 @@ bool JeandleAssembler::is_external_call_reloc(LinkSymbol& target, LinkKind kind)
 bool JeandleAssembler::is_section_word_reloc(LinkSymbol& target, LinkKind kind) {
   return target.isDefined() &&
          (kind == LinkKind_aarch64::Page21 || kind == LinkKind_aarch64::PageOffset12);
+}
+
+void JeandleAssembler::emit_nmethod_entry_barrier() {
+  BarrierSetAssembler* bs = BarrierSet::barrier_set()->barrier_set_assembler();
+  bs->nmethod_entry_barrier(_masm, &_barrier_slow_path, &_barrier_continuation, &_barrier_guard);
+}
+
+void JeandleAssembler::emit_nmethod_entry_stub() {
+  __ bind(_barrier_slow_path);
+  __ str(lr, Address(__ pre(sp, -16)));
+  __ movptr(rscratch1, (uintptr_t) StubRoutines::aarch64::method_entry_barrier());
+  __ blr(rscratch1);
+  __ ldr(lr, Address(__ post(sp, 16)));
+  __ b(_barrier_continuation);
+
+  __ bind(_barrier_guard);
+  __ relocate(entry_guard_Relocation::spec());
+  __ emit_int32(0);   // nmethod guard value
 }

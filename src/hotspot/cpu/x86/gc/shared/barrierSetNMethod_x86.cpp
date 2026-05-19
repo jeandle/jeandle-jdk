@@ -171,7 +171,7 @@ void BarrierSetNMethod::deoptimize(nmethod* nm, address* return_address_ptr) {
 // Note that this offset is invariant of PreserveFramePointer.
 static const int entry_barrier_offset(nmethod* nm) {
 #ifdef _LP64
-  if (nm->is_compiled_by_c2()) {
+  if (nm->is_compiled_by_c2() || nm->is_compiled_by_jeandle()) {
     return -14;
   } else {
     return -15;

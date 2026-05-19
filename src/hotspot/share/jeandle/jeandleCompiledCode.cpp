@@ -36,6 +36,7 @@
 #include "asm/macroAssembler.hpp"
 #include "ci/ciEnv.hpp"
 #include "code/vmreg.inline.hpp"
+#include "gc/shared/barrierSetAssembler.hpp"
 #include "interpreter/interpreter.hpp"
 #include "logging/log.hpp"
 #include "runtime/os.hpp"
@@ -101,6 +102,13 @@ bool JeandleCompiledCode::needs_clinit_barrier(ciInstanceKlass* holder, ciMethod
     }
   }
   return true;
+}
+
+bool JeandleCompiledCode::needs_nmethod_entry_barrier() {
+  if (_method == nullptr) {
+    return false;
+  }
+  return BarrierSet::barrier_set()->barrier_set_nmethod() != nullptr;
 }
 
 void JeandleCompiledCode::install_obj(std::unique_ptr<ObjectBuffer> obj) {
@@ -170,6 +178,12 @@ void JeandleCompiledCode::finalize() {
     assembler.emit_clinit_barrier_on_entry(klass);
   }
 
+  if (needs_nmethod_entry_barrier()) {
+    assembler.emit_nmethod_entry_barrier();
+  }
+
+  _offsets.set_value(CodeOffsets::Frame_Complete, masm->offset());
+
   int frame_size_in_bytes = _frame_size * BytesPerWord;
   bool is_method_compilation = _method != nullptr;
   bool has_java_calls = !_non_routine_call_sites.empty();
@@ -211,6 +225,10 @@ void JeandleCompiledCode::finalize() {
       _offsets.set_value(CodeOffsets::DeoptMH, assembler.emit_deopt_handler());
       RETURN_VOID_ON_JEANDLE_ERROR();
     }
+  }
+
+  if (needs_nmethod_entry_barrier()) {
+    assembler.emit_nmethod_entry_stub();
   }
 }
 

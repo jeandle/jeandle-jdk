@@ -245,6 +245,7 @@ class JeandleCompiledCode : public StackObj {
   bool needs_clinit_barrier(ciMethod* ik,        ciMethod* accessing_method);
   bool needs_clinit_barrier(ciInstanceKlass* ik, ciMethod* accessing_method);
   bool needs_clinit_barrier_on_entry();
+  bool needs_nmethod_entry_barrier();
   void update_interpreter_frame_size_in_bytes(int frame_size) { _interpreter_frame_size_in_bytes = MAX2(frame_size, _interpreter_frame_size_in_bytes); }
   int interpreter_frame_size_in_bytes() { return _interpreter_frame_size_in_bytes; }
 

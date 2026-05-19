@@ -499,8 +499,3 @@ compiler/loopopts/superword/TestLargeScaleAndStride.java#AlignVector            
 # fails due to `Math.log` (issue #424)
 ###
 compiler/interpreter/Test6539464.java                                                          linux-aarch64
-
-###
-# Fails because Jeandle does not support nmethod entry barrier
-###
-serviceability/jvmti/CompiledMethodLoad/Zombie.java                                            linux-x64
