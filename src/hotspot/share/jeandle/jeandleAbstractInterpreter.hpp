@@ -266,7 +266,8 @@ class JeandleAbstractInterpreter : public StackObj {
   JeandleAbstractInterpreter(ciMethod* method,
                              int entry_bci,
                              llvm::Module& target_module,
-                             JeandleCompiledCode& code);
+                             JeandleCompiledCode& code,
+                             uint* trap_hist);
 
  private:
   ciMethod* _method;
@@ -293,7 +294,7 @@ class JeandleAbstractInterpreter : public StackObj {
   LockValue _sync_lock;
   
   // Cumulative traps
-  uint _trap_hist[MethodData::_trap_hist_limit];
+  uint* _trap_hist;
 
   // Reuse stack allocation for monitor: each monitor nesting level maps to a
   // fixed BasicLock slot on the stack. When the same nesting level is entered
@@ -415,7 +416,7 @@ class JeandleAbstractInterpreter : public StackObj {
   void dispatch_exception_to_handler(llvm::Value* exception_oop); // Generate a series of IR to dispatch an exception to its handler.
   void throw_exception(llvm::Value* exception_oop);
   void uncommon_trap_if_should_post_on_exceptions(Deoptimization::DeoptReason reason, llvm::BasicBlock* insert_block);
-  bool has_ex_handler();
+  bool has_exception_handler();
   void builtin_throw(Deoptimization::DeoptReason reason, llvm::BasicBlock *insert_block);
 
   void newarray(int element_type);

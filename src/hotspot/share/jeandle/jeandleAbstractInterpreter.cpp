@@ -662,7 +662,8 @@ void BasicBlockBuilder::mark_unloaded_catch_klass() {
 JeandleAbstractInterpreter::JeandleAbstractInterpreter(ciMethod* method,
                                                        int entry_bci,
                                                        llvm::Module& target_module,
-                                                       JeandleCompiledCode& code) :
+                                                       JeandleCompiledCode& code,
+                                                       uint* trap_hist) :
                                                        _method(method),
                                                        _llvm_func(JeandleFuncSig::create_llvm_func(method, target_module, entry_bci != InvocationEntryBci)),
                                                        _entry_bci(entry_bci),
@@ -677,6 +678,7 @@ JeandleAbstractInterpreter::JeandleAbstractInterpreter(ciMethod* method,
                                                        _jvm(nullptr),
                                                        _work_list(),
                                                        _sync_lock(LockValue()),
+                                                       _trap_hist(trap_hist),
                                                        _oop_idx(0) {
   // Fill basic blocks with LLVM IR.
   interpret();
@@ -694,7 +696,7 @@ void JeandleAbstractInterpreter::initialize_VM_state() {
       locals_idx = 1;
       arg_idx = 1;
     }
-  
+
     // Set up locals for incoming arguments.
     ciSignature* sig = _method->signature();
     for (int i = 0; i < sig->count(); ++i, ++arg_idx) {
@@ -731,8 +733,8 @@ void JeandleAbstractInterpreter::initialize_VM_state_from_osr_buffer(JeandleVMSt
 
   // OSR Compilation Bailouts:
   // In HotSpot, OSR is restricted to loop headers where the operand stack is empty.
-  // This is because SharedRuntime::OSR_migration_begin is designed to migrate 
-  // only locals and monitors from the interpreter frame; it does not currently account for 
+  // This is because SharedRuntime::OSR_migration_begin is designed to migrate
+  // only locals and monitors from the interpreter frame; it does not currently account for
   // copying operand stack slots into the OSR buffer.
   if (osr_entry_block->stack_size() != 0) {
     JEANDLE_REPORT_ERROR_AND_RET_VOID("OSR starts with non-empty stack");
@@ -886,7 +888,7 @@ void JeandleAbstractInterpreter::check_interpreter_type(ciTypeFlow::Block* osr_e
     // Set the name of current_block.
     current_block->setName("osr_entry_check_local_" + std::to_string(index));
 
-    // Create a block for the success path. 
+    // Create a block for the success path.
     llvm::BasicBlock* next_block = llvm::BasicBlock::Create(*_context, "", _llvm_func);
 
     llvm::Value* cond = nullptr;
@@ -931,8 +933,7 @@ void JeandleAbstractInterpreter::interpret() {
 
   initialize_VM_state();
   RETURN_VOID_ON_JEANDLE_ERROR();
-  
-  Copy::zero_to_bytes(_trap_hist, sizeof(_trap_hist));
+
   accumulate_trap_counts_from_mdo(_method);
 
   if (!is_osr()) {
@@ -2940,35 +2941,58 @@ void JeandleAbstractInterpreter::throw_exception(llvm::Value* exception_oop) {
   }
 }
 
+void JeandleAbstractInterpreter::uncommon_trap_if_should_post_on_exceptions(Deoptimization::DeoptReason reason, llvm::BasicBlock* insert_block) {
+  if (insert_block != nullptr) {
+    _ir_builder.SetInsertPoint(insert_block);
+  }
+
+  int cur_bci = _bytecodes.cur_bci();
+  llvm::BasicBlock* should_post_block = llvm::BasicBlock::Create(*_context,
+                                                                 "bci_" + std::to_string(cur_bci) + "_should_post_on_exceptions",
+                                                                 _llvm_func);
+  llvm::BasicBlock* fallthrough_block = llvm::BasicBlock::Create(*_context,
+                                                                 "bci_" + std::to_string(cur_bci) + "_no_exception_post",
+                                                                 _llvm_func);
+
+  llvm::Value* should_post_flag_addr = _ir_builder.CreateIntToPtr(_ir_builder.getInt64((uint64_t)in_bytes(JavaThread::should_post_on_exceptions_flag_offset())),
+                                                               llvm::PointerType::get(*_context, llvm::jeandle::AddrSpace::TLSAddrSpace));
+  llvm::Value* should_post_flag = _ir_builder.CreateLoad(_ir_builder.getInt32Ty(), should_post_flag_addr, true /* is_volatile */);
+
+  llvm::Value* should_post = _ir_builder.CreateICmpNE(should_post_flag, _ir_builder.getInt32(0));
+  _ir_builder.CreateCondBr(should_post, should_post_block, fallthrough_block);
+
+  uncommon_trap(reason, Deoptimization::Action_none, should_post_block);
+
+  _ir_builder.SetInsertPoint(fallthrough_block);
+  _block->set_tail_llvm_block(fallthrough_block);
+}
 
 bool JeandleAbstractInterpreter::has_exception_handler() {
   // TODO: When inline is implemented, the caller chain should also be traversed
   // to check whether any caller has exception handlers,
   // similar to C2 GraphKit::has_ex_handler().
 
-  return _method -> has_exception_handlers();
+  return _method->has_exception_handlers();
 }
 
 // This is a logical copy of GraphKit::builtin_throw
 // TODO: may need to adjust it for Jeandle's featrures.
-void JeandleAbstractInterpreter::builtin_throw(Deoptimization::DeoptReason reason,
-                                               llvm::BasicBlock* insert_block) {
+void JeandleAbstractInterpreter::builtin_throw(Deoptimization::DeoptReason reason, llvm::BasicBlock* insert_block) {
   bool treat_throw_as_hot = false;
-  int bci = _bytecodes.cur_bci();
-  ciMethod* method = _bytecodes.method();
+  int cur_bci = _bytecodes.cur_bci();
 
   if (ProfileTraps) {
     // If we have already hit too many traps at this exact method and bci for this reason,
     // we should treat it as a hot throw.
-    if (too_many_traps(method, bci, reason)) {
+    if (too_many_traps(_method, cur_bci, reason)) {
       treat_throw_as_hot = true;
     }
 
     // Alternatively, if there's a history of traps for this reason, and there is a local
     // exception handler that can catch it, we also treat it as hot.
     if (trap_count(reason) != 0 &&
-        method->method_data()->trap_count(reason) != 0 &&
-        has_ex_handler()) {
+        _method->method_data()->trap_count(reason) != 0 &&
+        has_exception_handler()) {
       treat_throw_as_hot = true;
     }
   }
@@ -2977,7 +3001,7 @@ void JeandleAbstractInterpreter::builtin_throw(Deoptimization::DeoptReason reaso
   // a performance pothole.  If there is a local exception handler,
   // and if this particular bytecode appears to be deoptimizing often,
   // let us handle the throw inline, with a preconstructed instance.
-  if (treat_throw_as_hot && method->can_omit_stack_trace()) {
+  if (treat_throw_as_hot && _method->can_omit_stack_trace()) {
     ciEnv* env = CURRENT_ENV;
     ciInstance* ex_obj = nullptr;
 
@@ -3002,16 +3026,15 @@ void JeandleAbstractInterpreter::builtin_throw(Deoptimization::DeoptReason reaso
     }
 
     if (ex_obj != nullptr) {
+      auto saved_insert_block = _ir_builder.GetInsertBlock();
+      auto saved_insert_point = _ir_builder.GetInsertPoint();
 
        if (env->jvmti_can_post_on_exceptions()) {
        // Check whether exception events must be posted; if so, take an uncommon trap.
          uncommon_trap_if_should_post_on_exceptions(reason, insert_block);
+       } else if (insert_block != nullptr) {
+         _ir_builder.SetInsertPoint(insert_block);
        }
-      auto saved_insert_block = _ir_builder.GetInsertBlock();
-      auto saved_insert_point = _ir_builder.GetInsertPoint();
-      if (insert_block != nullptr) {
-        _ir_builder.SetInsertPoint(insert_block);
-      }
 
       llvm::Value* oop_handle = find_or_insert_oop(ex_obj);
       llvm::Value* value = _ir_builder.CreateLoad(JeandleType::java2llvm(BasicType::T_OBJECT, *_context), oop_handle);
@@ -3022,7 +3045,7 @@ void JeandleAbstractInterpreter::builtin_throw(Deoptimization::DeoptReason reaso
       llvm::StoreInst* store_inst = _ir_builder.CreateStore(llvm::ConstantPointerNull::get(llvm::cast<llvm::PointerType>(JeandleType::java2llvm(BasicType::T_OBJECT, *_context))),
           exception_oop_field_addr, true /* is_volatile */);
 
-      store_inst->setAtomic(llvm::AtomicOrdering::SequentiallyConsistent);
+      store_inst->setAtomic(llvm::AtomicOrdering::Unordered);
       dispatch_exception_to_handler(value);
 
       if (insert_block != nullptr) {
@@ -3038,10 +3061,10 @@ void JeandleAbstractInterpreter::builtin_throw(Deoptimization::DeoptReason reaso
   Deoptimization::DeoptAction action = Deoptimization::Action_maybe_recompile;
   // If we have triggered deoptimization too many times,
   // Immediately invalidate the code using Deoptimization::Action_none.
-  if (treat_throw_as_hot && (method->method_data()->trap_recompiled_at(bci, m) || too_many_traps(reason))) {
+  if (treat_throw_as_hot && (_method->method_data()->trap_recompiled_at(cur_bci, m) || too_many_traps(reason))) {
     action = Deoptimization::Action_none;
   }
-  
+
   uncommon_trap(reason, action, insert_block);
 }
 

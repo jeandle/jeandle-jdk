@@ -265,6 +265,8 @@ void JeandleCompilation::initialize() {
   _env->debug_info()->set_oopmaps(new OopMapSet());
   _env->set_dependencies(new Dependencies(_env));
 
+  Copy::zero_to_bytes(_trap_hist, sizeof(_trap_hist));
+
   set_has_monitors(false);
 
   // Get timestamp to mark dump files.
@@ -307,7 +309,7 @@ void JeandleCompilation::compile_java_method() {
   // Build basic blocks. Then fill basic blocks with LLVM IR.
   {
     JeandleTraceTime tt_abstract_interpreter("Jeandle Abstract Interpret", abstract_interpreter_timer);
-    JeandleAbstractInterpreter interpret(_method, _entry_bci, *_llvm_module, _code);
+    JeandleAbstractInterpreter interpret(_method, _entry_bci, *_llvm_module, _code, _trap_hist);
   }
 
   if (JeandleDumpIR) {
