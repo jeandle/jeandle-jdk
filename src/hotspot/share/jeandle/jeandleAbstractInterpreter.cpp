@@ -2976,7 +2976,7 @@ bool JeandleAbstractInterpreter::has_exception_handler() {
 }
 
 // This is a logical copy of GraphKit::builtin_throw
-// TODO: may need to adjust it for Jeandle's featrures.
+// TODO: may need to adjust it for Jeandle's features.
 void JeandleAbstractInterpreter::builtin_throw(Deoptimization::DeoptReason reason, llvm::BasicBlock* insert_block) {
   bool treat_throw_as_hot = false;
   int cur_bci = _bytecodes.cur_bci();
