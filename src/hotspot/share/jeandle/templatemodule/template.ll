@@ -124,13 +124,12 @@
 @G1BarrierSetRuntime.write_ref_field_post_entry = external global i64
 
 ; Keep use to lately-used java operations, until it is lowered.
-@llvm.used = appending addrspace(1) global [6 x ptr] [
+@llvm.used = appending addrspace(1) global [5 x ptr] [
   ptr @jeandle.card_table_barrier,
   ptr @jeandle.g1_pre_barrier,
   ptr @jeandle.g1_post_barrier,
   ptr @jeandle.pre_barrier,
-  ptr @jeandle.post_barrier,
-  ptr @jeandle.decode_heap_oop
+  ptr @jeandle.post_barrier
 ], section "llvm.metadata"
 
 declare hotspotcc ptr addrspace(0) @jeandle.decode_klass(i32)

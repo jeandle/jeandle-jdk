@@ -306,6 +306,8 @@ void JeandleCompiledCode::resolve_reloc_info(JeandleAssembler& assembler) {
     }
   }
 
+  build_narrowoop_mask_table();
+
   // Step 2: Resolve stackmaps.
   SectionInfo section_info(".llvm_stackmaps");
   if (ReadELF::findSection(*_elf, section_info)) {
@@ -530,13 +532,9 @@ JeandleStackMap* JeandleCompiledCode::parse_stackmap(StackMapParser& stackmaps, 
   assert(third.getKind() == StackMapParser::LocationKind::Constant, "unexpected kind");
 
   int num_deopts = third.getSmallConstant();
-  int total_locations = record->getNumLocations();
-  int oop_tail = total_locations - num_deopts - 3;
-  assert(oop_tail % 2 == 0, "oop pair tail must be even");
-  int oop_pair_count = oop_tail / 2;
-  int chunk_count = (oop_pair_count + 63) / 64;
-  num_deopts = num_deopts - chunk_count;
-
+  if (UseCompressedOops) {
+    num_deopts = num_deopts - 1;
+  }
   bool reexecute = false;
   if (num_deopts > 0) {
     assert(this->_method != nullptr, "must be method compilation");
@@ -609,15 +607,23 @@ JeandleStackMap* JeandleCompiledCode::parse_stackmap(StackMapParser& stackmaps, 
 
   }
 
-GrowableArray<uint64_t> narrowoop_mask((int)chunk_count);
-for (int i = 0; i < chunk_count; i++) {
-  assert(location != record->location_end(), "must be in range");
-  auto loc = *(location++);
-  assert(loc.getKind() == StackMapParser::LocationKind::Constant ||
-           loc.getKind() == StackMapParser::LocationKind::ConstantIndex,
-           "narrow-oop mask chunk must be a constant");
-  narrowoop_mask.append(StackMapUtil::getConstantUlong(stackmaps, loc));
-}
+  uint64_t mask_id = 0;
+  if (UseCompressedOops && location != record->location_end()) {
+    auto mask_id_loc = *(location++);
+    assert(mask_id_loc.getKind() == StackMapParser::LocationKind::Constant ||
+           mask_id_loc.getKind() == StackMapParser::LocationKind::ConstantIndex,
+           "mask ID must be a constant");
+    mask_id = StackMapUtil::getConstantUlong(stackmaps, mask_id_loc);
+  }
+
+  GrowableArray<uint64_t> narrowoop_mask;
+  if (mask_id > 0) {
+    auto it = _narrowoop_mask_table.find(mask_id);
+    assert(it != _narrowoop_mask_table.end(), "mask ID not found in table");
+    for (uint64_t chunk : it->second) {
+      narrowoop_mask.append(chunk);
+    }
+  }
 
   // build oop map
   OopMap* oop_map = new OopMap(frame_size_in_slots(), 0);
@@ -641,7 +647,11 @@ for (int i = 0; i < chunk_count; i++) {
 
     VMReg reg_base = resolve_vmreg(base_location, base_kind);
     VMReg reg_derived = resolve_vmreg(derived_location, derived_kind);
-    bool is_narrowoop = (narrowoop_mask.at((int)(pair_idx / 64)) >> (pair_idx % 64)) & 1;
+    bool is_narrowoop = false;
+    int chunk_idx = (int)(pair_idx / 64);
+    if (chunk_idx < narrowoop_mask.length()) {
+      is_narrowoop = (narrowoop_mask.at(chunk_idx) >> (pair_idx % 64)) & 1;
+    }
     if(reg_base == reg_derived) {
       // No derived pointer.
       if (is_narrowoop) {
@@ -737,6 +747,32 @@ void JeandleCompiledCode::build_implicit_exception_table() {
     auto handler_offset = fault_info.getHandlerPCOffset() + _prolog_length;
 
     _implicit_exception_table.append(faulting_offset, handler_offset);
+  }
+}
+
+void JeandleCompiledCode::build_narrowoop_mask_table() {
+  SectionInfo section_info(".jeandle_narrowoop_masks");
+  if (!ReadELF::findSection(*_elf, section_info)) {
+    return;
+  }
+
+  const uint64_t *data = reinterpret_cast<const uint64_t *>(
+      object_start() + section_info._offset);
+  size_t count = section_info._size / sizeof(uint64_t);
+  size_t i = 0;
+
+  while (i < count) {
+    uint64_t id = data[i++];
+    assert(i < count, "truncated mask table");
+    uint64_t chunk_count = data[i++];
+    assert(i + chunk_count <= count, "truncated mask table");
+
+    llvm::SmallVector<uint64_t, 1> mask;
+    mask.reserve(chunk_count);
+    for (uint64_t c = 0; c < chunk_count; c++) {
+      mask.push_back(data[i++]);
+    }
+    _narrowoop_mask_table[id] = std::move(mask);
   }
 }
 
