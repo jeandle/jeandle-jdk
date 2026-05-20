@@ -319,20 +319,20 @@ bool JeandleAssembler::is_section_word_reloc(LinkSymbol& target, LinkKind kind) 
          (kind == LinkKind_aarch64::Page21 || kind == LinkKind_aarch64::PageOffset12);
 }
 
-void JeandleAssembler::emit_nmethod_entry_barrier() {
+void JeandleAssembler::emit_nmethod_entry_barrier(JeandleEntryBarrierStub* stub) {
   BarrierSetAssembler* bs = BarrierSet::barrier_set()->barrier_set_assembler();
-  bs->nmethod_entry_barrier(_masm, &_barrier_slow_path, &_barrier_continuation, &_barrier_guard);
+  bs->nmethod_entry_barrier(_masm, &stub->entry(), &stub->continuation(), &stub->guard());
 }
 
-void JeandleAssembler::emit_nmethod_entry_stub() {
-  __ bind(_barrier_slow_path);
+void JeandleEntryBarrierStub::emit(MacroAssembler* _masm) {
+  __ bind(entry());
   __ str(lr, Address(__ pre(sp, -16)));
   __ movptr(rscratch1, (uintptr_t) StubRoutines::aarch64::method_entry_barrier());
   __ blr(rscratch1);
   __ ldr(lr, Address(__ post(sp, 16)));
-  __ b(_barrier_continuation);
+  __ b(continuation());
 
-  __ bind(_barrier_guard);
+  __ bind(guard());
   __ relocate(entry_guard_Relocation::spec());
   __ emit_int32(0);   // nmethod guard value
 }

@@ -174,6 +174,7 @@ using LinkSymbol     = llvm::jitlink::Symbol;
 using StackMapParser = llvm::StackMapParser<ELFT::Endianness>;
 using DynamicLibrary = llvm::sys::DynamicLibrary;
 
+class JeandleEntryBarrierStub;
 class JeandleAssembler;
 class JeandleCompiledCode : public StackObj {
  public:
@@ -278,6 +279,7 @@ class JeandleCompiledCode : public StackObj {
   int _orig_pc_offset_in_bytes;
   int _interpreter_frame_size_in_bytes;
   bool _has_method_handle_invoke;
+  JeandleEntryBarrierStub* _entry_barrier_stub = nullptr;
 
   void setup_frame_size();
 

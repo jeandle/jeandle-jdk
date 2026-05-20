@@ -180,7 +180,8 @@ void JeandleCompiledCode::finalize() {
   }
 
   if (needs_nmethod_entry_barrier()) {
-    assembler.emit_nmethod_entry_barrier();
+    _entry_barrier_stub = new (_env->arena()) JeandleEntryBarrierStub();
+    assembler.emit_nmethod_entry_barrier(_entry_barrier_stub);
   }
 
   _offsets.set_value(CodeOffsets::Frame_Complete, masm->offset());
@@ -208,6 +209,10 @@ void JeandleCompiledCode::finalize() {
     JEANDLE_REPORT_ERROR_AND_RET_VOID("shared stub overflow");
   }
 
+  if (_entry_barrier_stub != nullptr) {
+    _entry_barrier_stub->emit(masm);
+  }
+
   if (_method) {
     // For Java method compilation.
     if (!pd_build_exception_handler_table()) {
@@ -226,10 +231,6 @@ void JeandleCompiledCode::finalize() {
       _offsets.set_value(CodeOffsets::DeoptMH, assembler.emit_deopt_handler());
       RETURN_VOID_ON_JEANDLE_ERROR();
     }
-  }
-
-  if (needs_nmethod_entry_barrier()) {
-    assembler.emit_nmethod_entry_stub();
   }
 }
 
