@@ -26,6 +26,8 @@
 #include "jeandle/jeandleRuntimeRoutine.hpp"
 
 #include "jeandle/__hotspotHeadersBegin__.hpp"
+#include "gc/shared/barrierSet.hpp"
+#include "gc/shared/barrierSetAssembler.hpp"
 #include "runtime/sharedRuntime.hpp"
 
 #define __ _masm->
@@ -347,3 +349,23 @@ bool JeandleAssembler::is_oop_reloc(LinkSymbol& target, LinkKind kind) { return 
 bool JeandleAssembler::is_oop_addr_reloc(LinkSymbol& target, LinkKind kind) { return false; }
 
 bool JeandleAssembler::is_section_word_reloc(LinkSymbol& target, LinkKind kind) { return false; }
+
+void JeandleAssembler::emit_nmethod_entry_barrier(JeandleEntryBarrierStub* stub) {
+  BarrierSetAssembler* bs = BarrierSet::barrier_set()->barrier_set_assembler();
+  bs->nmethod_entry_barrier(_masm, &stub->entry(), &stub->continuation(), &stub->guard());
+}
+
+void JeandleEntryBarrierStub::emit(MacroAssembler* _masm) {
+  __ bind(entry());
+
+  int32_t offset = 0;
+  __ movptr(t0, StubRoutines::riscv::method_entry_barrier(), offset);
+  __ jalr(ra, t0, offset);
+  __ j(continuation());
+
+  // Guard value must be 4-byte aligned for atomic instructions on RISC-V
+  __ align(4);
+  __ bind(guard());
+  __ relocate(entry_guard_Relocation::spec());
+  __ emit_int32(0);   // nmethod guard value
+}
