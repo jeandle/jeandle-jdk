@@ -23,4 +23,6 @@ Join the Jeandle community discussions on [Slack](https://join.slack.com/t/jeand
 
 [Debugging Guide](https://github.com/jeandle/jeandle-jdk/blob/main/jeandle-docs/debugging-guide.md)
 
-[JVM Flags of Jeandle](https://github.com/jeandle/jeandle-jdk/blob/main/jeandle-docs/jeandle-flags.md)
+[JVM Flags of Jeandle](https://github.com/jeandle/jeandle-jdk/blob/main/jeandle-docs/jeandle-jdk-flags.md)
+
+[Command Line Options of Jeandle-LLVM](https://github.com/jeandle/jeandle-jdk/blob/main/jeandle-docs/jeandle-llvm-options.md)

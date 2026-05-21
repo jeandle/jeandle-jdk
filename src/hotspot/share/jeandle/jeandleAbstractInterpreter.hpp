@@ -266,7 +266,8 @@ class JeandleAbstractInterpreter : public StackObj {
   JeandleAbstractInterpreter(ciMethod* method,
                              int entry_bci,
                              llvm::Module& target_module,
-                             JeandleCompiledCode& code);
+                             JeandleCompiledCode& code,
+                             uint* trap_hist);
 
  private:
   ciMethod* _method;
@@ -291,6 +292,9 @@ class JeandleAbstractInterpreter : public StackObj {
 
   // Object & Lock for synchronized method
   LockValue _sync_lock;
+  
+  // Cumulative traps
+  uint* _trap_hist;
 
   // Reuse stack allocation for monitor: each monitor nesting level maps to a
   // fixed BasicLock slot on the stack. When the same nesting level is entered
@@ -411,6 +415,9 @@ class JeandleAbstractInterpreter : public StackObj {
   DispatchedDest dispatch_exception_for_invoke(); // Dispatch exceptions raised by invoke.
   void dispatch_exception_to_handler(llvm::Value* exception_oop); // Generate a series of IR to dispatch an exception to its handler.
   void throw_exception(llvm::Value* exception_oop);
+  void uncommon_trap_if_should_post_on_exceptions(Deoptimization::DeoptReason reason);
+  bool has_exception_handler();
+  void builtin_throw(Deoptimization::DeoptReason reason, llvm::BasicBlock *insert_block);
 
   void newarray(int element_type);
   void anewarray(int klass_index);
@@ -441,6 +448,18 @@ class JeandleAbstractInterpreter : public StackObj {
   void clinit_barrier(ciInstanceKlass* ik, ciMethod* context);
   void guard_klass_being_initialized(llvm::Value* klass);
   void guard_init_thread(llvm::Value* klass);
+
+  void accumulate_trap_counts_from_mdo(ciMethod *method);
+  uint trap_count(uint r) const {
+    assert(r < MethodData::_trap_hist_limit, "trap reason overflow");
+    return _trap_hist[r];
+  }
+  void set_trap_count(uint r, uint c) {
+    assert(r < MethodData::_trap_hist_limit, "trap reason overflow");
+    _trap_hist[r] = c;
+  }
+  bool too_many_traps(ciMethod *method, int bci, Deoptimization::DeoptReason reason);
+  bool too_many_traps(Deoptimization::DeoptReason reason);
 };
 
 #endif // SHARE_JEANDLE_ABSTRACT_INTERPRETER_HPP

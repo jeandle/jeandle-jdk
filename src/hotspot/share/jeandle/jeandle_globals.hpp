@@ -56,6 +56,9 @@
   product(ccstr, JeandleLLVMOptions, nullptr,                               \
           "Additional LLVM command line options")                           \
                                                                             \
+  product(bool, JeandleRecordVMCallbacks, false,                            \
+          "Record VM callback invocations for standalone LLVM testing")     \
+                                                                            \
 
 // end of JEANDLE_FLAGS
 

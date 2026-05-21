@@ -20,6 +20,7 @@
 
 #include "jeandle/__llvmHeadersBegin__.hpp"
 #include "llvm/IR/Jeandle/VMCallback.h"
+#include "llvm/IR/Jeandle/VMCallbackLog.h"
 
 #include "jeandle/jeandleVMCallback.hpp"
 
@@ -97,4 +98,8 @@ void register_jeandle_vm_callbacks() {
   callbacks.IsObjectKlass = &jeandle_is_object_klass;
   callbacks.IsEffectivelyFinal = &jeandle_is_effectively_final;
   llvm::jeandle::registerVMCallbacks(callbacks);
+
+  if (JeandleRecordVMCallbacks) {
+    llvm::jeandle::enableVMCallbackRecording();
+  }
 }
