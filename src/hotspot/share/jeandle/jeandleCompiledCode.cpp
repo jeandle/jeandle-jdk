@@ -287,13 +287,17 @@ void JeandleCompiledCode::resolve_reloc_info(JeandleAssembler& assembler) {
         } else if (JeandleAssembler::is_oop_reloc(target, edge.getKind())) {
           // Oop relocations.
           assert((target_name).starts_with("oop_handle"), "invalid oop relocation name");
+          auto oop_it = _oop_handles.find(target_name);
+          JEANDLE_ERROR_ASSERT_AND_RET_VOID_ON_FAIL(oop_it != _oop_handles.end(), "missing oop handle in relocation");
           relocs.push_back(new JeandleOopReloc(static_cast<int>(block->getAddress().getValue() + edge.getOffset()),
-                                               _oop_handles[(target_name)],
+                                               oop_it->getValue(),
                                                edge.getAddend()));
         } else if (JeandleAssembler::is_oop_addr_reloc(target, edge.getKind())) {
           // Oop addr relocations.
           assert((target_name).starts_with("oop_handle"), "invalid oop relocation name");
-          relocs.push_back(new JeandleOopAddrReloc(static_cast<int>(block->getAddress().getValue() + edge.getOffset()), _oop_handles[(target_name)]));
+          auto oop_it = _oop_handles.find(target_name);
+          JEANDLE_ERROR_ASSERT_AND_RET_VOID_ON_FAIL(oop_it != _oop_handles.end(), "missing oop handle in relocation");
+          relocs.push_back(new JeandleOopAddrReloc(static_cast<int>(block->getAddress().getValue() + edge.getOffset()), oop_it->getValue()));
         } else {
           // Unhandled relocations
           ShouldNotReachHere();
