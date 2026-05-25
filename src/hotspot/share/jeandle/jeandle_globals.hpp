@@ -59,6 +59,10 @@
   product(bool, JeandleRecordVMCallbacks, false,                            \
           "Record VM callback invocations for standalone LLVM testing")     \
                                                                             \
+  product(bool, JeandleUseProfile, false,                                   \
+          "Use interpreter/C1 profile (MDO) for branch/switch weights, "    \
+          "function entry count, and unstable-if branch pruning")           \
+                                                                            \
 
 // end of JEANDLE_FLAGS
 

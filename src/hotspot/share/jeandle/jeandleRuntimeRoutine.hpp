@@ -200,6 +200,13 @@
       llvm::Type::getVoidTy(context),                                               \
       llvm::Type::getInt32Ty(context))                                              \
                                                                                     \
+  def(__llvm_deoptimize,                                                            \
+      SharedRuntime::uncommon_trap_blob()->entry_point(),                           \
+      true,                                                                         \
+      false,                                                                        \
+      llvm::Type::getVoidTy(context),                                               \
+      llvm::Type::getInt32Ty(context))                                              \
+                                                                                    \
   def(SharedRuntime_dsin,                                                           \
       SharedRuntime::dsin,                                                          \
       false,                                                                        \
