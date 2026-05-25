@@ -125,6 +125,7 @@ JeandleCompilation::JeandleCompilation(llvm::TargetMachine* target_machine,
                                        _context(std::make_unique<llvm::LLVMContext>()),
                                        _code(env, method),
                                        _error_msg(nullptr),
+                                       _has_monitors(false),
                                        _const_section_alignment(-1) {
 
   const char* reason = check_can_parse(method);
@@ -175,6 +176,7 @@ JeandleCompilation::JeandleCompilation(llvm::TargetMachine* target_machine,
                                        _llvm_module(std::make_unique<llvm::Module>(name, *_context)),
                                        _code(_env, name),
                                        _error_msg(nullptr),
+                                       _has_monitors(false),
                                        _const_section_alignment(-1) {
   initialize();
 
