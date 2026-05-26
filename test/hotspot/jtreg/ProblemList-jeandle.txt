@@ -398,7 +398,6 @@ compiler/loopstripmining/TestNoWarningLoopStripMiningIterSet.java#ZSinglegen    
 ###
 # Range Check optimizations - C2-specific deoptimization not implemented
 ###
-compiler/rangechecks/TestExplicitRangeChecks.java                                              linux-aarch64,linux-x64
 compiler/rangechecks/TestLongRangeCheck.java                                                   linux-aarch64,linux-x64
 compiler/rangechecks/TestRangeCheckHoistingScaledIV.java                                       linux-aarch64,linux-x64
 compiler/rangechecks/TestRangeCheckSmearing.java                                               linux-aarch64,linux-x64

@@ -260,6 +260,13 @@ class BasicBlockBuilder : public JeandleCompilationResourceObj {
   bool is_osr() { return _entry_bci != InvocationEntryBci; }
 };
 
+// Return the cold successor for the current branch, if profile is decisive.
+enum ColdPathKind {
+  ColdNone            = 0,
+  ColdTakenSucc       = 1,
+  ColdFallthroughSucc = 2
+};
+
 // Convert java bytecodes to llvm ir.
 class JeandleAbstractInterpreter : public StackObj {
  public:
@@ -295,6 +302,10 @@ class JeandleAbstractInterpreter : public StackObj {
   
   // Cumulative traps
   uint* _trap_hist;
+
+  // Cached MethodData pointer for the current method, initialized before
+  // bytecode iteration and only used during IR generation.
+  ciMethodData* const _cached_mdo;
 
   // Reuse stack allocation for monitor: each monitor nesting level maps to a
   // fixed BasicLock slot on the stack. When the same nesting level is entered
@@ -439,6 +450,16 @@ class JeandleAbstractInterpreter : public StackObj {
   void boundary_check(llvm::Value* array_oop, llvm::Value* index);
 
   void uncommon_trap(Deoptimization::DeoptReason, Deoptimization::DeoptAction, llvm::BasicBlock* insert_block = nullptr);
+
+  // Return the cold successor for the current branch, if profile is decisive.
+  ColdPathKind branch_profile_uncommon();
+
+  // True if current bci can still deopt with Reason_unstable_if.
+  bool can_speculate_unstable_if();
+
+  // Mark the cold successor of a conditional branch for uncommon trap.
+  void mark_cold_branch_successor(JeandleBasicBlock* taken_succ,
+                                  JeandleBasicBlock* fallthrough_succ);
 
   void return_current(llvm::Value* value);
 
