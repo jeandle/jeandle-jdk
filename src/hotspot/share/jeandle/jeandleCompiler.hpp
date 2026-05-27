@@ -47,14 +47,20 @@ class JeandleCompiler : public AbstractCompiler {
   // Compilation entry point for methods.
   virtual void compile_method(ciEnv* env, ciMethod* target, int entry_bci, bool install_code, DirectiveSet* directive);
 
-  virtual void stopping_compiler_thread(CompilerThread* current) { delete _target_machine; }
+  virtual void stopping_compiler_thread(CompilerThread* current) { 
+    delete _target_machine;
+    _target_machine = nullptr;
+  }
 
   // Print compilation timers and statistics.
   virtual void print_timers();
 
   bool initialize_target_machine();
 
-  static llvm::TargetMachine* target_machine() { return _target_machine; }
+  static llvm::TargetMachine* target_machine() { 
+    assert(_target_machine != nullptr, "target machine must not be null");
+    return _target_machine; 
+  }
 
   llvm::DataLayout* data_layout() { return &_data_layout; }
 
