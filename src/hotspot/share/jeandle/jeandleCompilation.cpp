@@ -247,7 +247,7 @@ void JeandleCompilation::install_code() {
                         _code.exception_handler_table(),
                         _code.implicit_exception_table(),
                         CompilerThread::current()->compiler(),
-                        _has_unsafe_access,
+                        false, // temporary value
                         false, // temporary value
                         _has_monitors,
                         0); // temporary value
