@@ -107,8 +107,6 @@ class JeandleCompilation : public StackObj {
 
   bool _has_monitors;
 
-  bool _has_unsafe_access;
-
   int _const_section_alignment;
 
   const char* check_can_parse(ciMethod* method);
