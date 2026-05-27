@@ -268,7 +268,6 @@ void JeandleCompilation::initialize() {
   Copy::zero_to_bytes(_trap_hist, sizeof(_trap_hist));
 
   set_has_monitors(false);
-  set_has_unsafe_access(false); 
 
   // Get timestamp to mark dump files.
   auto now = std::chrono::system_clock::now();
