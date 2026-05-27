@@ -1996,6 +1996,22 @@ bool JeandleAbstractInterpreter::inline_intrinsic(const ciMethod* target) {
       }
       break;
     }
+    case vmIntrinsics::_compareUnsigned_i:
+    case vmIntrinsics::_compareUnsigned_l: {
+      bool is_long = (target->intrinsic_id() == vmIntrinsics::_compareUnsigned_l);
+
+      llvm::Value* arg2 = is_long ? _jvm->lpop() : _jvm->ipop();
+      llvm::Value* arg1 = is_long ? _jvm->lpop() : _jvm->ipop();
+
+      llvm::Value* is_less = _ir_builder.CreateICmpULT(arg1, arg2);
+      llvm::Value* is_greater = _ir_builder.CreateICmpUGT(arg1, arg2);
+
+      llvm::Value* select_greater = _ir_builder.CreateSelect(is_greater, JeandleType::int_const(_ir_builder, 1), JeandleType::int_const(_ir_builder, 0));
+
+      llvm::Value* result = _ir_builder.CreateSelect(is_less, JeandleType::int_const(_ir_builder, -1), select_greater);
+      _jvm->ipush(result);
+      break;
+    }
     default:
       return false;
   }

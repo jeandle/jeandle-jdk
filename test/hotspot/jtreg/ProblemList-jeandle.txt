@@ -359,8 +359,6 @@ runtime/ClassUnload/UnloadTestWithVerifyDuringGC.java                           
 # timeout
 ###
 
- # intermittent timeout on linux-aarch64
-compiler/loopopts/TestPartialPeelAtUnsignedTestsNegativeLimit.java#Xbatch                      linux-aarch64,linux-x64
 
 compiler/loopopts/TestRemoveEmptyLoop.java                                                     linux-aarch64,linux-x64
 
