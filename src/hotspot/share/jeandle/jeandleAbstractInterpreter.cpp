@@ -1732,11 +1732,6 @@ void JeandleAbstractInterpreter::invoke() {
     return;
   }
 
-  // Track unsafe access for signal handler SIGBUS handling
-  if (target->is_loaded() && is_unsafe_access_intrinsic(target->intrinsic_id())) {
-    JeandleCompilation::current()->set_has_unsafe_access(true);
-  }
-
   // Push appendix argument (MethodType, CallSite, etc.), if one.
   if (_bytecodes.has_appendix()) {
     assert(Bytecodes::has_optional_appendix(bc), "appendix only valid for invokedynamic or invokehandle");
