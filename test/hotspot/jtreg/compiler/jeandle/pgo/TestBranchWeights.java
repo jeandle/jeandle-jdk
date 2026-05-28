@@ -188,6 +188,14 @@ public class TestBranchWeights {
         Method hotIf = TestBranchWeights.class.getDeclaredMethod("hotIf", int.class);
         Method hotSwitch = TestBranchWeights.class.getDeclaredMethod("hotSwitch", int.class);
         String dir = System.getProperty("user.dir");
+        System.out.println("[setup] user.dir=" + dir);
+        // Log any pre-existing .ll files (from warmup auto-compilation) to
+        // confirm the dump directory is the one Jeandle writes to.
+        try (Stream<Path> s = Files.list(Paths.get(dir))) {
+            java.util.List<String> pre = s.map(p -> p.getFileName().toString())
+                .filter(n -> n.endsWith(".ll")).collect(Collectors.toList());
+            System.out.println("[setup] pre-existing .ll files: " + pre);
+        }
 
         compileAndAwaitDump(hotIf, dir);
         FileCheck ifPre = new FileCheck(dir, hotIf, /*optimized=*/false);
