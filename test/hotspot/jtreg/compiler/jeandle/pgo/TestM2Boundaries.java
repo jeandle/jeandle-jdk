@@ -92,50 +92,82 @@ public class TestM2Boundaries {
         sink = (int) acc;
     }
 
+    // Force a fresh tier-4 (Jeandle) compile and wait until its IR dump appears on disk.
+    //
+    // Design note: we do NOT rely on clearDumps to guarantee freshness because there
+    // is a race between the warmup compilation (which writes the pre-opt dump first
+    // and the optimized dump second, asynchronously) and our clearDumps call.  In the
+    // worst case clearDumps runs between the two writes, deleting only the pre-opt dump
+    // while the optimized dump is written afterwards; then dumpPresent can never return
+    // true.  Instead we record `since` just before the first deoptimize+enqueue call and
+    // only accept dump files whose on-disk mtime >= since.  We also re-deoptimize every
+    // 5 s because WB.deoptimizeMethod is not guaranteed to drop the compilation level
+    // synchronously for Jeandle-compiled methods; retrying is safe because each new
+    // Jeandle compilation writes fresh files with a new timestamp.
     private static void compileAndAwaitDump(Method m, String dir) throws Exception {
         String prefix = m.getDeclaringClass().getName().replace('.', '_') + "_" + m.getName();
-        clearDumps(dir, prefix);
+        // Give 100 ms of slack so mtime comparisons survive low-resolution fs clocks.
+        long since = System.currentTimeMillis() - 100;
         WB.deoptimizeMethod(m);
         WB.enqueueMethodForCompilation(m, TIER4);
-        long deadline = System.currentTimeMillis() + 300_000;
-        while (!dumpPresent(dir, prefix)) {
-            if (System.currentTimeMillis() > deadline) {
-                throw new RuntimeException("Timeout: no Jeandle IR dump for " + m.getName());
+        long start = System.currentTimeMillis();
+        long deadline = start + 300_000;
+        long nextLog = start + 1_000;
+        long nextRetry = start + 5_000;
+        while (!dumpPresent(dir, prefix, since)) {
+            long now = System.currentTimeMillis();
+            if (now > deadline) {
+                int lvl = WB.getMethodCompilationLevel(m);
+                java.util.List<String> llFiles = java.util.Collections.emptyList();
+                try (java.util.stream.Stream<Path> s = Files.list(Paths.get(dir))) {
+                    llFiles = s.map(p -> p.getFileName().toString())
+                               .filter(n -> n.endsWith(".ll"))
+                               .collect(Collectors.toList());
+                } catch (Exception ignored) {}
+                throw new RuntimeException("Timeout: no Jeandle IR dump for " + m.getName()
+                        + " (final level=" + lvl + ", elapsed=" + (now - start) + "ms"
+                        + ", ll-files=" + llFiles + ")");
             }
-            if (WB.getMethodCompilationLevel(m) != TIER4) {
+            if (now >= nextLog) {
+                int lvl = WB.getMethodCompilationLevel(m);
+                boolean queued = WB.isMethodQueuedForCompilation(m);
+                System.out.println("[await-dump] t=" + (now - start) + "ms level=" + lvl
+                        + " queued=" + queued + " dumpPresent=" + dumpPresent(dir, prefix, since));
+                nextLog = now + 1_000;
+            }
+            if (now >= nextRetry) {
+                // deoptimize may have been a no-op; force another cycle
+                System.out.println("[await-dump] retry deopt+enqueue at t=" + (now - start) + "ms");
+                since = System.currentTimeMillis() - 100;
+                WB.deoptimizeMethod(m);
+                WB.enqueueMethodForCompilation(m, TIER4);
+                nextRetry = now + 5_000;
+            } else if (WB.getMethodCompilationLevel(m) != TIER4) {
                 WB.enqueueMethodForCompilation(m, TIER4);
             }
             Thread.sleep(20);
         }
+        System.out.println("[await-dump] done in " + (System.currentTimeMillis() - start) + "ms");
     }
 
-    private static boolean dumpPresent(String dir, String prefix) throws Exception {
-        // Await both the pre- and post-opt dumps. The unoptimized .ll is
-        // written before optimization, the _optimized.ll after; under high
-        // jtreg concurrency the dirent for the unoptimized file can lag.
+    private static boolean dumpPresent(String dir, String prefix, long since) throws Exception {
+        // Accept only dump files written on or after `since` (ms) to avoid
+        // treating warmup-time dumps as the result of our deoptimize+enqueue.
         try (Stream<Path> s = Files.list(Paths.get(dir))) {
             boolean[] seen = new boolean[2];
             s.forEach(p -> {
-                String n = p.getFileName().toString();
-                if (!n.startsWith(prefix)) return;
-                if (n.endsWith("_optimized.ll")) seen[1] = true;
-                else if (n.endsWith(".ll")) seen[0] = true;
+                try {
+                    String n = p.getFileName().toString();
+                    if (!n.startsWith(prefix)) return;
+                    if (Files.getLastModifiedTime(p).toMillis() < since) return;
+                    if (n.endsWith("_optimized.ll")) seen[1] = true;
+                    else if (n.endsWith(".ll")) seen[0] = true;
+                } catch (java.io.IOException ignored) {}
             });
             return seen[0] && seen[1];
         }
     }
 
-    private static void clearDumps(String dir, String prefix) throws Exception {
-        try (Stream<Path> s = Files.list(Paths.get(dir))) {
-            List<Path> dumps = s.filter(p -> {
-                String n = p.getFileName().toString();
-                return n.startsWith(prefix) && n.endsWith(".ll");
-            }).collect(Collectors.toList());
-            for (Path p : dumps) {
-                Files.deleteIfExists(p);
-            }
-        }
-    }
 
     public static void main(String[] args) throws Exception {
         // `immature` is intentionally not warmed.
