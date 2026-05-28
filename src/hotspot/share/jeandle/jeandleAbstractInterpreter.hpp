@@ -366,8 +366,6 @@ class JeandleAbstractInterpreter : public StackObj {
   void interpret();
   void interpret_block(JeandleBasicBlock* block);
 
-  void insert_loop_carried_reassociate_barriers();
-
   void add_to_work_list(JeandleBasicBlock* block);
 
   // Bytecode related process:
