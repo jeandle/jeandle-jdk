@@ -326,10 +326,10 @@ void JeandleAssembler::emit_nmethod_entry_barrier(JeandleEntryBarrierStub* stub)
 
 void JeandleEntryBarrierStub::emit(MacroAssembler* _masm) {
   __ bind(entry());
-  __ str(lr, Address(__ pre(sp, -16)));
+  __ str(lr, Address(__ pre(sp, -2 * wordSize)));
   __ movptr(rscratch1, (uintptr_t) StubRoutines::aarch64::method_entry_barrier());
   __ blr(rscratch1);
-  __ ldr(lr, Address(__ post(sp, 16)));
+  __ ldr(lr, Address(__ post(sp, 2 * wordSize)));
   __ b(continuation());
 
   __ bind(guard());

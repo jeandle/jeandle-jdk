@@ -179,13 +179,6 @@ void JeandleCompiledCode::finalize() {
     assembler.emit_clinit_barrier_on_entry(klass);
   }
 
-  if (needs_nmethod_entry_barrier()) {
-    _entry_barrier_stub = new (_env->arena()) JeandleEntryBarrierStub();
-    assembler.emit_nmethod_entry_barrier(_entry_barrier_stub);
-  }
-
-  _offsets.set_value(CodeOffsets::Frame_Complete, masm->offset());
-
   int frame_size_in_bytes = _frame_size * BytesPerWord;
   bool is_method_compilation = _method != nullptr;
   bool has_java_calls = !_non_routine_call_sites.empty();
@@ -200,6 +193,11 @@ void JeandleCompiledCode::finalize() {
   _prolog_length = masm->offset();
 
   assembler.emit_insts(((address) _obj->getBufferStart()) + offset, code_size);
+
+  if (needs_nmethod_entry_barrier()) {
+    _entry_barrier_stub = new (_env->arena()) JeandleEntryBarrierStub();
+    assembler.emit_nmethod_entry_barrier(_entry_barrier_stub);
+  }
 
   resolve_reloc_info(assembler);
   RETURN_VOID_ON_JEANDLE_ERROR();

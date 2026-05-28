@@ -358,9 +358,16 @@ void JeandleAssembler::emit_nmethod_entry_barrier(JeandleEntryBarrierStub* stub)
 void JeandleEntryBarrierStub::emit(MacroAssembler* _masm) {
   __ bind(entry());
 
+  __ addi(sp, sp, -wordSize);
+  __ sd(ra, Address(sp, 0));
+
   int32_t offset = 0;
   __ movptr(t0, StubRoutines::riscv::method_entry_barrier(), offset);
   __ jalr(ra, t0, offset);
+
+  __ ld(ra, Address(sp, 0));
+  __ addi(sp, sp, wordSize);
+
   __ j(continuation());
 
   // Guard value must be 4-byte aligned for atomic instructions on RISC-V
