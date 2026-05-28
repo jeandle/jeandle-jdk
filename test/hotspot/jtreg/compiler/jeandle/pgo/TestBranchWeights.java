@@ -29,6 +29,7 @@
  *      -XX:+UseJeandleCompiler -XX:+JeandleUseProfile -XX:+JeandleDumpIR
  *      -XX:CompileCommand=compileonly,compiler.jeandle.pgo.TestBranchWeights::hotIf
  *      -XX:CompileCommand=compileonly,compiler.jeandle.pgo.TestBranchWeights::hotSwitch
+ *      -Xlog:compilation*=info
  *      compiler.jeandle.pgo.TestBranchWeights
  */
 
@@ -89,20 +90,41 @@ public class TestBranchWeights {
     // deoptimizeMethod, would otherwise let the wait fall through before the Jeandle dump exists.
     private static void compileAndAwaitDump(Method m, String dir) throws Exception {
         String prefix = m.getDeclaringClass().getName().replace('.', '_') + "_" + m.getName();
-        clearDumps(dir);
+        clearDumps(dir, prefix);
         WB.deoptimizeMethod(m);
         WB.enqueueMethodForCompilation(m, TIER4);
-        long deadline = System.currentTimeMillis() + 300_000;
+        long start = System.currentTimeMillis();
+        long deadline = start + 300_000;
+        long nextLog = start + 1_000;
         // The optimized dump is written last, so its presence implies the pre-opt dump exists too.
         while (!dumpPresent(dir, prefix)) {
-            if (System.currentTimeMillis() > deadline) {
-                throw new RuntimeException("Timeout: no Jeandle IR dump for " + m.getName());
+            long now = System.currentTimeMillis();
+            if (now > deadline) {
+                int lvl = WB.getMethodCompilationLevel(m);
+                // Collect directory snapshot for post-mortem
+                java.util.List<String> llFiles = java.util.Collections.emptyList();
+                try (java.util.stream.Stream<Path> s = Files.list(Paths.get(dir))) {
+                    llFiles = s.map(p -> p.getFileName().toString())
+                               .filter(n -> n.endsWith(".ll"))
+                               .collect(Collectors.toList());
+                } catch (Exception ignored) {}
+                throw new RuntimeException("Timeout: no Jeandle IR dump for " + m.getName()
+                        + " (final level=" + lvl + ", elapsed=" + (now - start) + "ms"
+                        + ", ll-files=" + llFiles + ")");
+            }
+            if (now >= nextLog) {
+                int lvl = WB.getMethodCompilationLevel(m);
+                boolean queued = WB.isMethodQueuedForCompilation(m);
+                System.out.println("[await-dump] t=" + (now - start) + "ms level=" + lvl
+                        + " queued=" + queued + " dumpPresent=" + dumpPresent(dir, prefix));
+                nextLog = now + 1_000;
             }
             if (WB.getMethodCompilationLevel(m) != TIER4) {
                 WB.enqueueMethodForCompilation(m, TIER4);  // re-enqueue if it raced/dropped
             }
             Thread.sleep(20);
         }
+        System.out.println("[await-dump] done in " + (System.currentTimeMillis() - start) + "ms");
     }
 
     // Parse the first branch_weights node in the method's pre-opt dump and assert the
@@ -148,10 +170,12 @@ public class TestBranchWeights {
         }
     }
 
-    private static void clearDumps(String dir) throws Exception {
+    private static void clearDumps(String dir, String prefix) throws Exception {
         try (Stream<Path> s = Files.list(Paths.get(dir))) {
-            List<Path> dumps = s.filter(p -> p.getFileName().toString().endsWith(".ll"))
-                                .collect(Collectors.toList());
+            List<Path> dumps = s.filter(p -> {
+                String n = p.getFileName().toString();
+                return n.startsWith(prefix) && n.endsWith(".ll");
+            }).collect(Collectors.toList());
             for (Path p : dumps) {
                 Files.deleteIfExists(p);
             }
