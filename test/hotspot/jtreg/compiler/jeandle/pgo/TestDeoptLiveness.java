@@ -193,6 +193,56 @@ public class TestDeoptLiveness {
         }
     }
 
+    // Decode the trap's deopt bundle and assert exactly which local slots are
+    // encoded as T_ILLEGAL placeholders. The i64 operand of each (encode, value)
+    // pair packs |index:32|value_type:16|basic_type:16| (DeoptValueEncoding);
+    // LocalType==0, T_ILLEGAL==99. A dead two-word local must yield two illegal
+    // slots with DISTINCT consecutive indices (i, i+1) -- the earlier code reused
+    // index i for both, which this check would catch.
+    private static void assertIllegalLocalSlots(String dir, Method m,
+                                                long... expectedIndices) throws Exception {
+        String prefix = m.getDeclaringClass().getName().replace('.', '_') + "_" + m.getName();
+        Path ll;
+        try (Stream<Path> s = Files.list(Paths.get(dir))) {
+            ll = s.filter(p -> {
+                    String n = p.getFileName().toString();
+                    return n.startsWith(prefix) && n.endsWith(".ll") && !n.endsWith("_optimized.ll");
+                }).findFirst().orElseThrow(() -> new RuntimeException("no pre-opt dump"));
+        }
+
+        Pattern trapDeoptStart = Pattern.compile("call.*@llvm\\.experimental\\.deoptimize.*\\[\\s*\"deopt\"\\((.*?)\\)\\s*\\]");
+        Pattern i64Const = Pattern.compile("i64 (-?\\d+)");
+        List<Long> illegal = null;
+        int trapsScanned = 0;
+        for (String line : Files.readAllLines(ll)) {
+            Matcher mm = trapDeoptStart.matcher(line);
+            if (!mm.find()) continue;
+            trapsScanned++;
+            List<Long> found = new java.util.ArrayList<>();
+            Matcher cm = i64Const.matcher(mm.group(1));
+            while (cm.find()) {
+                long enc = Long.parseLong(cm.group(1));
+                long index     = enc >>> 32;
+                long valueType = (enc >>> 16) & 0xffff;
+                long basicType = enc & 0xffff;
+                if (valueType == 0 /*LocalType*/ && basicType == 99 /*T_ILLEGAL*/) {
+                    found.add(index);
+                }
+            }
+            illegal = found;
+            break; // exactly one trap (the implicit null check) in these methods
+        }
+        if (trapsScanned == 0) {
+            throw new RuntimeException("no uncommon_trap deopt bundles found");
+        }
+        java.util.Collections.sort(illegal);
+        List<Long> expected = new java.util.ArrayList<>();
+        for (long e : expectedIndices) expected.add(e);
+        if (!illegal.equals(expected)) {
+            throw new RuntimeException("illegal local slots " + illegal + " != expected " + expected);
+        }
+    }
+
     public static void main(String[] args) throws Exception {
         warmup();
 
@@ -206,6 +256,10 @@ public class TestDeoptLiveness {
         pre.checkPattern("@llvm.experimental.deoptimize");
 
         assertDeadParamsAbsentFromTrapDeopt(dir, m, "i32 %1", "i32 %2");
+        // At the arraylength trap bci the dead locals are: arr (slot 0 -- its
+        // value is on the operand stack, the local is no longer read), x (slot 1),
+        // y (slot 2), and len (slot 4, not yet stored). temp (slot 3) is live.
+        assertIllegalLocalSlots(dir, m, 0, 1, 2, 4);
 
         try {
             deadLocalsAtTrap(null, 1, 2);
@@ -225,6 +279,12 @@ public class TestDeoptLiveness {
         preLong.checkPattern("define hotspotcc i32 .*TestDeoptLiveness_deadLongLocalsAtTrap");
         preLong.checkPattern("@llvm.experimental.deoptimize");
         assertDeadParamsAbsentFromTrapDeopt(dir, mLong, "i64 %1", "i64 %2");
+        // Dead at the arraylength trap bci: arr (slot 0), the two-word x (slots
+        // 1-2), the two-word y (slots 3-4), and len (slot 7, not yet stored). temp
+        // (slots 5-6) is live. Each dead two-word local must emit two illegal slots
+        // at DISTINCT consecutive indices; the earlier reused-index bug would have
+        // produced [0,1,1,3,3,7] here instead of [0,1,2,3,4,7].
+        assertIllegalLocalSlots(dir, mLong, 0, 1, 2, 3, 4, 7);
 
         try {
             deadLongLocalsAtTrap(null, 1L, 2L);

@@ -254,10 +254,10 @@ llvm::SmallVector<llvm::Value*> JeandleVMState::deopt_args(llvm::IRBuilder<>& bu
       }
     } else {
       // null local, or a local dead at this bci: replace with {T_ILLEGAL, 0}.
-      // A dead double-word local takes two illegal slots (one per word).
+      // A dead double-word local takes two illegal slots, indexed i and i+1.
       int slots = (!_locals[i].is_null() && is_double_word) ? 2 : 1;
       for (int s = 0; s < slots; s++) {
-        uint64_t encode = DeoptValueEncoding(i, DeoptValueEncoding::LocalType, T_ILLEGAL).encode();
+        uint64_t encode = DeoptValueEncoding(i + s, DeoptValueEncoding::LocalType, T_ILLEGAL).encode();
 #ifdef ASSERT
         if (log_is_enabled(Trace, jeandle)) {
           DeoptValueEncoding::decode(encode).print();
@@ -1588,13 +1588,20 @@ void JeandleAbstractInterpreter::attach_switch_weights(llvm::SwitchInst* switch_
   switch_inst->setMetadata(llvm::LLVMContext::MD_prof, md_builder.createBranchWeights(weights));
 }
 
-// Mirrors C2's path_is_suitable_for_uncommon_trap: gate the strict-zero
-// unstable-if prune on a mature profile, a meaningful sample count, and a
-// trap history that hasn't already de-speculated this bci.
+// Based on C2's path_is_suitable_for_uncommon_trap, but deliberately more
+// conservative: gate the strict-zero unstable-if prune on a mature profile, a
+// meaningful sample count, a trap history that hasn't already de-speculated this
+// bci, an available interpreter to deopt into, and -- unlike C2 -- skip OSR.
 bool JeandleAbstractInterpreter::path_is_suitable_for_unstable_if_prune(
     int bci, JeandleProfile::BranchCounts counts) {
-  // OSR sees a partially-warmed profile; the unobserved side may just be a
-  // path the resumed frame hasn't reached yet.
+  // The prune deopts the cold side and reinterprets; with no interpreter to
+  // re-enter there is nowhere safe to land, so don't prune (matches C2).
+  if (!UseInterpreter) {
+    return false;
+  }
+  // More conservative than C2, which prunes OSR too: an OSR compile sees a
+  // partially-warmed profile, so an unobserved side may just be a path the
+  // resumed frame hasn't reached yet. Skipping OSR avoids that false prune.
   if (is_osr()) {
     return false;
   }
