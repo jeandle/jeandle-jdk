@@ -48,7 +48,7 @@ uint JeandleProfile::entry_count() const {
 }
 
 JeandleProfile::BranchCounts JeandleProfile::branch_at(int bci) const {
-  BranchCounts result = {0, 0, false};
+  BranchCounts result = {0, 0, false, false};
   if (!has_profile()) {
     return result;
   }
@@ -62,12 +62,17 @@ JeandleProfile::BranchCounts JeandleProfile::branch_at(int bci) const {
   result.taken     = branch->taken();
   result.not_taken = branch->not_taken();
   result.valid     = true;
+  // BranchData counters saturate at max_juint (inc_taken clamps, never wrapping
+  // to 0). A saturated side means the taken/not_taken ratio is no longer
+  // trustworthy; flag it so callers can be conservative.
+  result.overflow  = (result.taken == max_juint || result.not_taken == max_juint);
   return result;
 }
 
 void JeandleProfile::switch_at(int bci, GrowableArray<uint>& case_counts,
-                               uint& default_count, bool& valid) const {
+                               uint& default_count, bool& valid, bool& overflow) const {
   valid = false;
+  overflow = false;
   default_count = 0;
   if (!has_profile()) {
     return;
@@ -78,9 +83,12 @@ void JeandleProfile::switch_at(int bci, GrowableArray<uint>& case_counts,
   }
   MultiBranchData* multi = data->as_MultiBranchData();
   default_count = multi->default_count();
+  overflow = (default_count == max_juint);
   int num_cases = multi->number_of_cases();
   for (int i = 0; i < num_cases; i++) {
-    case_counts.append(multi->count_at(i));
+    uint c = multi->count_at(i);
+    if (c == max_juint) overflow = true;
+    case_counts.append(c);
   }
   valid = true;
 }

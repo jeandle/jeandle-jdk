@@ -22,13 +22,15 @@
  * @test
  * @summary Locals that are dead at a deopt-point bci are encoded as
  *          T_ILLEGAL placeholders in the deopt bundle, not pinned live as
- *          their SSA values.
+ *          their SSA values. A dead two-word (long/double) local takes two
+ *          illegal slots so later locals stay aligned.
  * @library /test/lib /
  * @build jdk.test.whitebox.WhiteBox compiler.jeandle.fileCheck.FileCheck
  * @run driver jdk.test.lib.helpers.ClassFileInstaller jdk.test.whitebox.WhiteBox
  * @run main/othervm -Xbootclasspath/a:. -XX:+UnlockDiagnosticVMOptions -XX:+WhiteBoxAPI
  *      -XX:+UseJeandleCompiler -XX:+JeandleUseProfile -XX:+JeandleDumpIR
  *      -XX:CompileCommand=compileonly,compiler.jeandle.pgo.TestDeoptLiveness::deadLocalsAtTrap
+ *      -XX:CompileCommand=compileonly,compiler.jeandle.pgo.TestDeoptLiveness::deadLongLocalsAtTrap
  *      -Xlog:compilation*=info
  *      compiler.jeandle.pgo.TestDeoptLiveness
  */
@@ -63,11 +65,21 @@ public class TestDeoptLiveness {
         return temp + len;
     }
 
+    // Same shape with two-word locals: x (slots 1-2) and y (slots 3-4) are dead
+    // from the bci of arr.length (the implicit null-check deopt point). Each must
+    // be encoded as two T_ILLEGAL slots, never pinning the i64 value.
+    static int deadLongLocalsAtTrap(int[] arr, long x, long y) {
+        long temp = x * y + (y >>> 1);
+        int len = arr.length;
+        return (int) temp + len;
+    }
+
     private static void warmup() {
         long acc = 0;
         int[] data = new int[1];
         for (int i = 0; i < 50_000; i++) {
             acc += deadLocalsAtTrap(data, i, i + 1);
+            acc += deadLongLocalsAtTrap(data, i, i + 1);
         }
         sink = (int) acc;
     }
@@ -152,7 +164,8 @@ public class TestDeoptLiveness {
     // The method's only uncommon_trap is the implicit null check on
     // arr.length, which sits at a bci where x (%1) and y (%2) are already
     // dead. Assert neither appears as a deopt argument anywhere in the IR.
-    private static void assertDeadParamsAbsentFromTrapDeopt(String dir, Method m) throws Exception {
+    private static void assertDeadParamsAbsentFromTrapDeopt(String dir, Method m,
+                                                            String... deadParams) throws Exception {
         String prefix = m.getDeclaringClass().getName().replace('.', '_') + "_" + m.getName();
         Path ll;
         try (Stream<Path> s = Files.list(Paths.get(dir))) {
@@ -163,19 +176,16 @@ public class TestDeoptLiveness {
         }
 
         Pattern trapDeoptStart = Pattern.compile("call.*@llvm\\.experimental\\.deoptimize.*\\[\\s*\"deopt\"\\((.*?)\\)\\s*\\]");
-        Pattern param1 = Pattern.compile("\\bi32 %1\\b");
-        Pattern param2 = Pattern.compile("\\bi32 %2\\b");
         int trapsScanned = 0;
         for (String line : Files.readAllLines(ll)) {
             Matcher mm = trapDeoptStart.matcher(line);
             if (!mm.find()) continue;
             trapsScanned++;
             String args = mm.group(1);
-            if (param1.matcher(args).find()) {
-                throw new RuntimeException("dead %1 (x) pinned live in deopt bundle: " + line);
-            }
-            if (param2.matcher(args).find()) {
-                throw new RuntimeException("dead %2 (y) pinned live in deopt bundle: " + line);
+            for (String p : deadParams) {
+                if (Pattern.compile("\\b" + Pattern.quote(p) + "\\b").matcher(args).find()) {
+                    throw new RuntimeException("dead " + p + " pinned live in deopt bundle: " + line);
+                }
             }
         }
         if (trapsScanned == 0) {
@@ -195,7 +205,7 @@ public class TestDeoptLiveness {
         pre.checkPattern("define hotspotcc i32 .*TestDeoptLiveness_deadLocalsAtTrap");
         pre.checkPattern("@llvm.experimental.deoptimize");
 
-        assertDeadParamsAbsentFromTrapDeopt(dir, m);
+        assertDeadParamsAbsentFromTrapDeopt(dir, m, "i32 %1", "i32 %2");
 
         try {
             deadLocalsAtTrap(null, 1, 2);
@@ -204,6 +214,25 @@ public class TestDeoptLiveness {
         }
         if (deadLocalsAtTrap(new int[]{0,1,2}, 4, 5) != (4*5 + (5>>>1) + 3)) {
             throw new RuntimeException("Hot path returned wrong value");
+        }
+
+        // Two-word (long) dead locals: the i64 values must not be pinned, and the
+        // NPE deopt must reconstruct the frame correctly (two illegal slots each).
+        Method mLong = TestDeoptLiveness.class.getDeclaredMethod(
+            "deadLongLocalsAtTrap", int[].class, long.class, long.class);
+        compileAndAwaitDump(mLong, dir);
+        FileCheck preLong = new FileCheck(dir, mLong, /*optimized=*/false);
+        preLong.checkPattern("define hotspotcc i32 .*TestDeoptLiveness_deadLongLocalsAtTrap");
+        preLong.checkPattern("@llvm.experimental.deoptimize");
+        assertDeadParamsAbsentFromTrapDeopt(dir, mLong, "i64 %1", "i64 %2");
+
+        try {
+            deadLongLocalsAtTrap(null, 1L, 2L);
+            throw new RuntimeException("Expected NullPointerException (long)");
+        } catch (NullPointerException expected) {
+        }
+        if (deadLongLocalsAtTrap(new int[]{0,1,2}, 4L, 5L) != ((int)(4L*5L + (5L>>>1)) + 3)) {
+            throw new RuntimeException("Hot path (long) returned wrong value");
         }
 
         System.out.println("TestDeoptLiveness PASSED");

@@ -236,12 +236,11 @@ llvm::SmallVector<llvm::Value*> JeandleVMState::deopt_args(llvm::IRBuilder<>& bu
   for (size_t i = 0; i < _locals.size(); i++) {
     bool is_double_word = !_locals[i].is_null() &&
                           is_double_word_type(_locals[i].computational_type());
-    // Locals dead at this bci are encoded as T_ILLEGAL so they don't pin
-    // values live across the deopt point. Restricted to single-word locals
-    // to keep the long/double two-slot layout untouched.
-    bool dead_single_word = !_locals[i].is_null() && !is_double_word &&
-                            liveness.is_valid() && !liveness.at(i);
-    if (!_locals[i].is_null() && !dead_single_word) {
+    // A local dead at this bci is encoded as T_ILLEGAL so it doesn't pin a value
+    // live across the deopt point. A dead double-word local emits two T_ILLEGAL
+    // slots (one per word) so the two-slot layout of later locals stays aligned.
+    bool dead = !_locals[i].is_null() && liveness.is_valid() && !liveness.at(i);
+    if (!_locals[i].is_null() && !dead) {
       uint64_t encode = DeoptValueEncoding(i, DeoptValueEncoding::LocalType, _locals[i].computational_type()).encode();
 #ifdef ASSERT
       if (log_is_enabled(Trace, jeandle)) {
@@ -254,15 +253,22 @@ llvm::SmallVector<llvm::Value*> JeandleVMState::deopt_args(llvm::IRBuilder<>& bu
         i++;
       }
     } else {
-      // null or dead single-word local: replace with {T_ILLEGAL, 0}
-      uint64_t encode = DeoptValueEncoding(i, DeoptValueEncoding::LocalType, T_ILLEGAL).encode();
+      // null local, or a local dead at this bci: replace with {T_ILLEGAL, 0}.
+      // A dead double-word local takes two illegal slots (one per word).
+      int slots = (!_locals[i].is_null() && is_double_word) ? 2 : 1;
+      for (int s = 0; s < slots; s++) {
+        uint64_t encode = DeoptValueEncoding(i, DeoptValueEncoding::LocalType, T_ILLEGAL).encode();
 #ifdef ASSERT
-      if (log_is_enabled(Trace, jeandle)) {
-        DeoptValueEncoding::decode(encode).print();
-      }
+        if (log_is_enabled(Trace, jeandle)) {
+          DeoptValueEncoding::decode(encode).print();
+        }
 #endif
-      args.push_back(builder.getInt64(encode));
-      args.push_back(builder.getInt32(0));
+        args.push_back(builder.getInt64(encode));
+        args.push_back(builder.getInt32(0));
+      }
+      if (!_locals[i].is_null() && is_double_word) {
+        i++;
+      }
     }
   }
   for (size_t i = 0; i < _stack.size(); i++) {
@@ -1534,8 +1540,9 @@ void JeandleAbstractInterpreter::increment() {
 
 void JeandleAbstractInterpreter::attach_branch_weights(llvm::BranchInst* br, int bci) {
   JeandleProfile::BranchCounts counts = _profile.branch_at(bci);
-  if (!counts.valid || (counts.taken == 0 && counts.not_taken == 0)) {
-    return;
+  if (!counts.valid || counts.overflow ||
+      (counts.taken == 0 && counts.not_taken == 0)) {
+    return;  // overflow: a saturated side makes the taken/not_taken ratio meaningless
   }
   // Clamp zero counts to 1: an unpruned branch must not advertise an impossible
   // edge to LLVM. A genuinely-never-observed strict-zero side is handled by the unstable-if prune
@@ -1552,9 +1559,10 @@ void JeandleAbstractInterpreter::attach_switch_weights(llvm::SwitchInst* switch_
   GrowableArray<uint> case_counts;
   uint default_count = 0;
   bool valid = false;
-  _profile.switch_at(bci, case_counts, default_count, valid);
-  if (!valid) {
-    return;
+  bool overflow = false;
+  _profile.switch_at(bci, case_counts, default_count, valid, overflow);
+  if (!valid || overflow) {
+    return;  // overflow: a saturated case count makes the weights unreliable
   }
   // A SwitchInst's successors are [default, case0, case1, ...]; the cases were added
   // in bytecode order, matching MultiBranchData::count_at(i). Require an exact size
@@ -1591,6 +1599,13 @@ bool JeandleAbstractInterpreter::path_is_suitable_for_unstable_if_prune(
     return false;
   }
   if (!_profile.is_mature() || !counts.valid) {
+    return false;
+  }
+  // A saturated counter (overflow) means we can't trust the distribution; don't
+  // speculate. The strict-zero side is still a genuine never-taken (counters
+  // saturate upward, never wrapping to 0), but staying conservative here matches
+  // C2 and costs nothing in practice (saturation needs ~4e9 executions).
+  if (counts.overflow) {
     return false;
   }
   // C2's counters_are_meaningful threshold.
