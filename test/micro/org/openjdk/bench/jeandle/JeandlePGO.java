@@ -42,22 +42,22 @@ import java.util.concurrent.TimeUnit;
  *   ...benchmarks.jar JeandlePGO -jvmArgsAppend "-XX:+UseJeandleCompiler -XX:-JeandleUseProfile"
  *
  * What each method targets:
- *   biasedBranch     - M1 branch_weights (block layout). Expected delta: small;
+ *   biasedBranch     - branch_weights (block layout). Expected delta: small;
  *                      modern branch predictors already handle a biased branch, so
  *                      the win is mostly icache/codegen density.
- *   neverTakenGuard  - M2 unstable-if pruning. A never-taken cold path that REJOINS
+ *   neverTakenGuard  - unstable-if pruning. A never-taken cold path that REJOINS
  *                      the loop; pruning removes the phi merge / cold-path constraint
  *                      on the hot accumulator. Expected delta: small.
- *   monomorphicCall  - FORWARD-LOOKING (M3 devirtualization, not yet implemented).
+ *   monomorphicCall  - FORWARD-LOOKING (profile-guided devirtualization, not yet implemented).
  *                      A truly virtual call (two impls loaded) whose receiver is
  *                      monomorphic in profile. Today it is a full vtable dispatch
  *                      under both flag settings; this records the baseline so the
- *                      M3 guarded-direct-call + inlining win is measurable later.
+ *                      the guarded-direct-call + inlining win is measurable later.
  *                      THIS is where the dramatic PGO win will show.
  *
- * Honest note: M1/M2 alone are foundational and expected to be roughly perf-neutral
+ * Honest note: branch weights and unstable-if prune alone are foundational and roughly perf-neutral
  * here. This harness is built to (a) rigorously confirm that and (b) be the standing
- * benchmark for the M3/inlining gains.
+ * benchmark for the devirtualization/inlining gains.
  */
 @BenchmarkMode(Mode.AverageTime)
 @OutputTimeUnit(TimeUnit.NANOSECONDS)
@@ -80,7 +80,7 @@ public class JeandlePGO {
             data[i] = r.nextInt(1_000_000); // always >= 0
         }
         // Load BOTH Shape impls so the area() call is NOT CHA-monomorphic (can't be
-        // statically bound); only profile-based devirtualization (M3) can specialize it.
+        // statically bound); only profile-based devirtualization can specialize it.
         Shape keepSquareLoaded = new Square();
         if (keepSquareLoaded.area(1) == Integer.MIN_VALUE) {
             throw new AssertionError(); // never; just forces Square to be loaded
@@ -91,7 +91,7 @@ public class JeandlePGO {
         }
     }
 
-    // --- M1: heavily-biased conditional branch in a hot loop ---
+    // --- branch weights: heavily-biased conditional branch in a hot loop ---
     @Benchmark
     public int biasedBranch() {
         int[] a = data;
@@ -107,7 +107,7 @@ public class JeandlePGO {
         return s;
     }
 
-    // --- M2: never-taken cold path (with a rejoining call) pruned to uncommon_trap ---
+    // --- unstable-if prune: never-taken cold path (with a rejoining call) pruned to uncommon_trap ---
     @Benchmark
     public int neverTakenGuard() {
         int[] a = data;
@@ -122,7 +122,7 @@ public class JeandlePGO {
         return s;
     }
 
-    // --- M3 forward-looking: monomorphic virtual call (devirt target, baseline today) ---
+    // --- forward-looking: monomorphic virtual call (devirt target, baseline today) ---
     @Benchmark
     public int monomorphicCall() {
         Shape[] sh = shapes;

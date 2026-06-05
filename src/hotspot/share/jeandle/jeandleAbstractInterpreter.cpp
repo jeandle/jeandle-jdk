@@ -1393,7 +1393,7 @@ void JeandleAbstractInterpreter::interpret_block(JeandleBasicBlock* block) {
 
   // Add all successors to work list and set up their JeandleVMStates.
   for (JeandleBasicBlock* suc : block->successors()) {
-    // M2: an edge pruned into an uncommon_trap has no LLVM successor edge from this
+    // Unstable-if prune: an edge pruned into an uncommon_trap has no LLVM successor edge from this
     // block, so merging into it would add a PHI incoming for a non-predecessor.
     // Skip it; if it has no other predecessor it becomes dead and is removed later.
     if (suc == _pruned_successor) {
@@ -1538,7 +1538,7 @@ void JeandleAbstractInterpreter::attach_branch_weights(llvm::BranchInst* br, int
     return;
   }
   // Clamp zero counts to 1: an unpruned branch must not advertise an impossible
-  // edge to LLVM. A genuinely-never-observed strict-zero side is handled by M2
+  // edge to LLVM. A genuinely-never-observed strict-zero side is handled by the unstable-if prune
   // pruning; reaching here with a 0 count means immature profile, where 0 is
   // "rare" rather than "impossible".
   uint32_t taken_weight     = counts.taken     == 0 ? 1u : (uint32_t) counts.taken;
@@ -1610,7 +1610,7 @@ void JeandleAbstractInterpreter::do_if_branch(llvm::Value* cond) {
   // Degenerate `if (cond) {}` where taken == fallthrough. BasicBlockBuilder
   // pushes the shared target into _successors twice, so the post-loop merge
   // must see two LLVM edges -- emit a CondBr (not an unconditional br) but
-  // skip M1 weights and M2 prune; !prof on a same-target CondBr trips a
+  // skip branch weights and the unstable-if prune; !prof on a same-target CondBr trips a
   // verifier null-deref on LLVM 22 aarch64.
   if (taken_jbb == fallthrough_jbb) {
     if (taken_jbb->is_exception_handler()) {
@@ -1620,7 +1620,7 @@ void JeandleAbstractInterpreter::do_if_branch(llvm::Value* cond) {
     return;
   }
 
-  // M2: strict-zero one-side prune into uncommon_trap(Reason_unstable_if).
+  // Unstable-if prune: strict-zero one-side prune into uncommon_trap(Reason_unstable_if).
   // Operands are still on the stack here -- if_* helpers defer the pop until
   // after this returns so the trap deopt bundle sees pre-if state, same effect
   // as C2's repush_if_args() without re-pushing.

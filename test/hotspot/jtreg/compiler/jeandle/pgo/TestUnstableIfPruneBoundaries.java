@@ -20,7 +20,7 @@
 
 /*
  * @test
- * @summary M2 unstable-if prune negative cases: heavily-biased (but
+ * @summary unstable-if prune negative cases: heavily-biased (but
  *          two-sided) branch, switch with cold case, immature profile.
  *          None should be pruned.
  * @library /test/lib /
@@ -28,10 +28,10 @@
  * @run driver jdk.test.lib.helpers.ClassFileInstaller jdk.test.whitebox.WhiteBox
  * @run main/othervm -Xbootclasspath/a:. -XX:+UnlockDiagnosticVMOptions -XX:+WhiteBoxAPI
  *      -XX:+UseJeandleCompiler -XX:+JeandleUseProfile -XX:+JeandleDumpIR
- *      -XX:CompileCommand=compileonly,compiler.jeandle.pgo.TestM2Boundaries::biasedNotPruned
- *      -XX:CompileCommand=compileonly,compiler.jeandle.pgo.TestM2Boundaries::switchOneColdCase
- *      -XX:CompileCommand=compileonly,compiler.jeandle.pgo.TestM2Boundaries::immature
- *      compiler.jeandle.pgo.TestM2Boundaries
+ *      -XX:CompileCommand=compileonly,compiler.jeandle.pgo.TestUnstableIfPruneBoundaries::biasedNotPruned
+ *      -XX:CompileCommand=compileonly,compiler.jeandle.pgo.TestUnstableIfPruneBoundaries::switchOneColdCase
+ *      -XX:CompileCommand=compileonly,compiler.jeandle.pgo.TestUnstableIfPruneBoundaries::immature
+ *      compiler.jeandle.pgo.TestUnstableIfPruneBoundaries
  */
 
 package compiler.jeandle.pgo;
@@ -47,13 +47,13 @@ import java.util.List;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
-public class TestM2Boundaries {
+public class TestUnstableIfPruneBoundaries {
     private static final WhiteBox WB = WhiteBox.getWhiteBox();
     private static final int TIER4 = 4;
 
     static volatile int sink;
 
-    // ~99% taken / ~1% not -- never strict-zero, so M2 must keep both edges.
+    // ~99% taken / ~1% not -- never strict-zero, so the prune must keep both edges.
     static int biasedNotPruned(int x) {
         if (x < 1000) {
             return x + 1;
@@ -61,7 +61,7 @@ public class TestM2Boundaries {
         return x - 1;
     }
 
-    // case 3 is strict-zero in the MDO; M2 only prunes if_* (do_if_branch),
+    // case 3 is strict-zero in the MDO; the prune only applies to if_* (do_if_branch),
     // never switch arms.
     static int switchOneColdCase(int k) {
         switch (k) {
@@ -173,14 +173,14 @@ public class TestM2Boundaries {
         // `immature` is intentionally not warmed.
         warmupBiasedAndSwitch();
 
-        Method biased = TestM2Boundaries.class.getDeclaredMethod("biasedNotPruned", int.class);
-        Method sw = TestM2Boundaries.class.getDeclaredMethod("switchOneColdCase", int.class);
-        Method imm = TestM2Boundaries.class.getDeclaredMethod("immature", int.class);
+        Method biased = TestUnstableIfPruneBoundaries.class.getDeclaredMethod("biasedNotPruned", int.class);
+        Method sw = TestUnstableIfPruneBoundaries.class.getDeclaredMethod("switchOneColdCase", int.class);
+        Method imm = TestUnstableIfPruneBoundaries.class.getDeclaredMethod("immature", int.class);
         String dir = System.getProperty("user.dir");
 
         compileAndAwaitDump(biased, dir);
         FileCheck biasedFc = new FileCheck(dir, biased, /*optimized=*/false);
-        biasedFc.checkPattern("define hotspotcc i32 .*TestM2Boundaries_biasedNotPruned");
+        biasedFc.checkPattern("define hotspotcc i32 .*TestUnstableIfPruneBoundaries_biasedNotPruned");
         biasedFc.checkPattern("branch_weights\", i32 [0-9]+, i32 [0-9]+");
         FileCheck biasedNoTrap = new FileCheck(dir, biased, /*optimized=*/false);
         biasedNoTrap.checkNotPattern("unstable_if");
@@ -189,14 +189,14 @@ public class TestM2Boundaries {
 
         compileAndAwaitDump(sw, dir);
         FileCheck swFc = new FileCheck(dir, sw, /*optimized=*/false);
-        swFc.checkPattern("define hotspotcc i32 .*TestM2Boundaries_switchOneColdCase");
+        swFc.checkPattern("define hotspotcc i32 .*TestUnstableIfPruneBoundaries_switchOneColdCase");
         swFc.checkPattern("switch i32 ");
         FileCheck swNoUnstable = new FileCheck(dir, sw, /*optimized=*/false);
         swNoUnstable.checkNotPattern("unstable_if");
 
         compileAndAwaitDump(imm, dir);
         FileCheck immFc = new FileCheck(dir, imm, /*optimized=*/false);
-        immFc.checkPattern("define hotspotcc i32 .*TestM2Boundaries_immature");
+        immFc.checkPattern("define hotspotcc i32 .*TestUnstableIfPruneBoundaries_immature");
         immFc.checkNotPattern("unstable_if");
 
         if (biasedNotPruned(500) != 501 || biasedNotPruned(5000) != 4999) {
@@ -209,6 +209,6 @@ public class TestM2Boundaries {
             throw new RuntimeException("immature wrong");
         }
 
-        System.out.println("TestM2Boundaries PASSED");
+        System.out.println("TestUnstableIfPruneBoundaries PASSED");
     }
 }

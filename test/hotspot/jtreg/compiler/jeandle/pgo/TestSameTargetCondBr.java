@@ -64,7 +64,7 @@ public class TestSameTargetCondBr {
     private static void warmup() {
         long acc = 0;
         // Mix signed-positive and non-positive so the MDO records both sides
-        // as non-zero; if one side were strict-zero, M2 would prune the
+        // as non-zero; if one side were strict-zero, the unstable-if prune would prune the
         // degenerate CondBr away and side-step this regression.
         for (int i = 0; i < 50_000; i++) {
             acc += emptyBranch((i & 0xff) - 64);

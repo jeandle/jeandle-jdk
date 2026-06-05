@@ -16,7 +16,7 @@
 
 /*
  * @test
- * @summary M2 unstable-if prune inside a method with a typed catch handler
+ * @summary unstable-if prune inside a method with a typed catch handler
  *          that reads the same local slot via a phi. Switching the trap
  *          emission to `llvm.experimental.deoptimize` makes LLVM treat the
  *          trap as an opaque barrier, so backward fact propagation from the
@@ -53,7 +53,7 @@ public class TestUnstableIfTypedCatch {
     static volatile int sink;
 
     // Two local slots ('local' and 'fallback') are written under control flow
-    // including the M2-prune-candidate `local < 0` arm, then BOTH are read by
+    // including the prune-candidate `local < 0` arm, then BOTH are read by
     // the typed `catch (ArithmeticException)` handler. The trap site's deopt
     // bundle and the catch handler's local-slot phi reference the same SSA
     // values. With the prior `call @uncommon_trap; unreachable` lowering, an
@@ -65,7 +65,7 @@ public class TestUnstableIfTypedCatch {
         int local = x;
         int fallback = x + 7;
         try {
-            if (local < 0) {            // never taken in warmup -> M2 prune
+            if (local < 0) {            // never taken in warmup -> unstable-if prune
                 local = ~local;
                 fallback = ~fallback;
             }
@@ -77,7 +77,7 @@ public class TestUnstableIfTypedCatch {
 
     private static void warmup() {
         long acc = 0;
-        // x always >= 0, divisor always != 0 -- the M2 prune arm and the
+        // x always >= 0, divisor always != 0 -- the prune arm and the
         // catch handler are both never taken during warmup.
         for (int i = 0; i < 50_000; i++) {
             acc += hotNeverTakenWithCatch(i & 0x7fffffff, (i % 7) + 1);
@@ -189,8 +189,8 @@ public class TestUnstableIfTypedCatch {
         // interpreter's semantics.
         //   x>=0, div!=0 : normal return        -> 100/div + x
         //   x>=0, div==0 : catch fires          -> x + (x+7)
-        //   x< 0, div!=0 : M2 trap, then normal -> 100/div + (~x)
-        //   x< 0, div==0 : M2 trap, then catch  -> (~x) + (~(x+7))
+        //   x< 0, div!=0 : unstable-if trap, then normal -> 100/div + (~x)
+        //   x< 0, div==0 : unstable-if trap, then catch  -> (~x) + (~(x+7))
         if (hotNeverTakenWithCatch(5, 4) != 100 / 4 + 5) {
             throw new RuntimeException("hot/no-throw wrong: " + hotNeverTakenWithCatch(5, 4));
         }
@@ -198,7 +198,7 @@ public class TestUnstableIfTypedCatch {
             throw new RuntimeException("hot/throw wrong: " + hotNeverTakenWithCatch(5, 0));
         }
 
-        // Drive the cold (M2-pruned) arm past the per-method trap limit so
+        // Drive the cold (pruned) arm past the per-method trap limit so
         // de-speculation kicks in; the recompile must keep semantics.
         for (int i = 1; i <= 400; i++) {
             int x = -i;
