@@ -84,3 +84,19 @@ bool ReadELF::findSection(ELFObject& elf, SectionInfo& section_info) {
   }
   return false;
 }
+
+uint64_t ReadELF::calculate_const_sections_size(ELFObject& elf) {
+  uint64_t total_size = 0;
+  for (auto sec = elf.section_begin(); sec != elf.section_end(); ++sec) {
+    llvm::Expected<llvm::StringRef> sec_name = sec->getName();
+    if (!sec_name) {
+      continue;
+    }
+    if (sec_name->starts_with(".rodata") || sec_name->starts_with(".data.rel.ro")) {
+      uint64_t size = sec->getSize();
+      uint64_t align = sec->getAlignment().value();
+      total_size += size + (align > 0 ? align - 1 : 0);
+    }
+  }
+  return total_size;
+}

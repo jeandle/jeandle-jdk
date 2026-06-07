@@ -50,7 +50,6 @@ class JeandleAssembler : public StackObj {
   int emit_exception_handler();
 
   int emit_deopt_handler();
-  int deopt_handler_size();
 
   void emit_insts(address code_start, uint64_t code_size);
 
@@ -79,7 +78,20 @@ class JeandleAssembler : public StackObj {
   // Mirrors C2's InteriorEntryAlignment flag.
   int interior_entry_alignment() const;
 
+  static int static_call_stub_size();
+  static int routine_call_stub_size();
+
+  // Handler sizes matching C2's HandlerImpl::size_exception_handler/size_deopt_handler,
+  // defined in platform-specific implementation files. These are functions (not constants)
+  // because the size may depend on runtime flags (e.g., far_branches on aarch64).
+  static int exception_handler_size();
+  static int deopt_handler_size();
+
  private:
+  // Stub sizes for call sites, defined in platform-specific implementation files.
+  static const int _call_stub_size;
+  static const int _routine_stub_size;
+
   MacroAssembler* _masm;
 
 #include CPU_HEADER(jeandleAssembler)

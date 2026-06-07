@@ -35,6 +35,7 @@
 #include "jeandle/__hotspotHeadersBegin__.hpp"
 #include "asm/macroAssembler.hpp"
 #include "ci/ciEnv.hpp"
+#include "code/nativeInst.hpp"
 #include "code/vmreg.inline.hpp"
 #include "interpreter/interpreter.hpp"
 #include "logging/log.hpp"
@@ -43,6 +44,35 @@
 // Provide swap overload for JeandleReloc* to resolve ambiguity
 inline void swap(JeandleReloc*& a, JeandleReloc*& b) {
   std::swap(a, b);
+}
+
+// CodeBuffer initialization constants (following C2's PhaseOutput::init_buffer pattern).
+static constexpr int CODE_SLOP_SIZE = 2048;
+// Reloc capacity (in bytes). CodeBuffer divides by sizeof(relocInfo)=2 for the
+// element count, so this is a lower bound for small methods.
+static constexpr int INITIAL_RELOC_CAPACITY = 256;
+// Slop for uncounted stubs (EXTERNAL_CALL trampolines, finalize_stubs() shared
+// trampolines, alignment padding, estimation errors).
+static constexpr int STUB_SLOP_SIZE = 256;
+
+static int estimate_reloc_capacity(uint64_t code_size) {
+  uint64_t reloc_capacity = MAX2((uint64_t)INITIAL_RELOC_CAPACITY, code_size / 16);
+  return checked_cast<int>(reloc_capacity);
+}
+
+static int estimate_call_stub_size(CallSiteInfo* call_info) {
+  if (call_info == nullptr) {
+    return 0;
+  }
+
+  switch (call_info->type()) {
+    case JeandleCompiledCall::STATIC_CALL:
+      return JeandleAssembler::static_call_stub_size() + JeandleAssembler::routine_call_stub_size();
+    case JeandleCompiledCall::DYNAMIC_CALL:
+      return JeandleAssembler::routine_call_stub_size();
+    default:
+      return 0;
+  }
 }
 
 // Decide whether to emit a stack overflow check for the compiled entry based on
@@ -113,6 +143,41 @@ void JeandleCompiledCode::install_obj(std::unique_ptr<ObjectBuffer> obj) {
   JEANDLE_ERROR_ASSERT_AND_RET_VOID_ON_FAIL(_elf, "bad ELF file");
 }
 
+JeandleCompiledCode::CodeBufferSizing JeandleCompiledCode::estimate_codebuffer_component_sizes(uint64_t code_size) {
+  CodeBufferSizing sizing;
+
+  sizing._code = checked_cast<int>(code_size) + CODE_SLOP_SIZE + NativeCall::instruction_size;
+  sizing._consts = checked_cast<int>(ReadELF::calculate_const_sections_size(*_elf));
+  sizing._stubs = 0;
+  sizing._relocs = estimate_reloc_capacity(code_size);
+
+  // Count stub sizes from call sites in stackmaps.
+  SectionInfo section_info(".llvm_stackmaps");
+  if (ReadELF::findSection(*_elf, section_info)) {
+    StackMapParser stackmaps(llvm::ArrayRef(((uint8_t *) object_start()) + section_info._offset, section_info._size));
+    for (auto record = stackmaps.records_begin(); record != stackmaps.records_end(); ++record) {
+      if (record->getID() < _non_routine_call_sites.size()) {
+        sizing._stubs += estimate_call_stub_size(_non_routine_call_sites[record->getID()]);
+      } else {
+        // _routine_call_sites only contains routine calls.
+        sizing._stubs += JeandleAssembler::routine_call_stub_size();
+      }
+    }
+  }
+
+  if (_method != nullptr) {
+    sizing._stubs += JeandleAssembler::exception_handler_size();
+    sizing._stubs += JeandleAssembler::deopt_handler_size();
+    if (_has_method_handle_invoke) {
+      sizing._stubs += JeandleAssembler::deopt_handler_size();
+    }
+  }
+
+  sizing._stubs += STUB_SLOP_SIZE;
+  sizing._total = sizing._code + sizing._consts + sizing._stubs;
+  return sizing;
+}
+
 void JeandleCompiledCode::finalize() {
   // Set up code buffer.
   uint64_t align;
@@ -125,18 +190,14 @@ void JeandleCompiledCode::finalize() {
   RETURN_VOID_ON_JEANDLE_ERROR();
   assert(_frame_size > 0, "frame size must be positive");
 
-  // An estimated initial value.
-  uint64_t consts_size = 6144 * wordSize;
-
-  // TODO: How to figure out memory usage.
-  _code_buffer.initialize(code_size + consts_size + 2048/* for prolog */,
-                          sizeof(relocInfo) + relocInfo::length_limit,
-                          160,
-                          _env->oop_recorder());
+  CodeBufferSizing sizing = estimate_codebuffer_component_sizes(code_size);
+  _code_buffer.initialize(sizing._total, sizing._relocs);
   if (_code_buffer.blob() == nullptr) {
     JEANDLE_REPORT_ERROR_AND_RET_VOID("CodeCache is full");
   }
-  _code_buffer.initialize_consts_size(consts_size);
+  _code_buffer.initialize_consts_size(sizing._consts);
+  _code_buffer.initialize_stubs_size(sizing._stubs);
+  _code_buffer.initialize_oop_recorder(_env->oop_recorder());
 
   // Initialize assembler.
   MacroAssembler* masm = new MacroAssembler(&_code_buffer);
@@ -212,6 +273,15 @@ void JeandleCompiledCode::finalize() {
       RETURN_VOID_ON_JEANDLE_ERROR();
     }
   }
+
+  // Verify CodeBuffer pre-allocation was sufficient (no expand needed).
+  assert(_code_buffer.before_expand() == nullptr,
+         "CodeBuffer expanded during code emission, pre-allocation was insufficient "
+         "(initial_req=%d, insts=%d, stubs=%d, consts=%d)",
+         sizing._total,
+         (int)_code_buffer.insts_size(),
+         (int)_code_buffer.stubs()->size(),
+         (int)_code_buffer.consts()->size());
 }
 
 void JeandleCompiledCode::resolve_reloc_info(JeandleAssembler& assembler) {

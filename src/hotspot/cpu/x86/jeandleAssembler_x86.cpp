@@ -31,12 +31,33 @@
 
 #define __ _masm->
 
+// Stub sizes for call sites
+const int JeandleAssembler::_call_stub_size    = 28;
+// No need to emit routine stub on x86.
+const int JeandleAssembler::_routine_stub_size = 0;
+
+int JeandleAssembler::static_call_stub_size() {
+  return _call_stub_size;
+}
+
+int JeandleAssembler::routine_call_stub_size() {
+  return _routine_stub_size;
+}
+
+int JeandleAssembler::exception_handler_size() {
+  return NativeJump::instruction_size;
+}
+
+int JeandleAssembler::deopt_handler_size() {
+  return NOT_LP64(10) LP64_ONLY(17);
+}
+
 void JeandleAssembler::emit_static_call_stub(int inst_offset, CallSiteInfo* call) {
   assert(inst_offset >= 0, "invalid call instruction address");
   assert(call->type() == JeandleCompiledCall::STATIC_CALL, "legal call type");
   address call_address = __ addr_at(inst_offset);
 
-  int stub_size = 28;
+  int stub_size = _call_stub_size;
   address stub = __ start_a_stub(stub_size);
   if (stub == nullptr) {
     JEANDLE_REPORT_ERROR_AND_RET_VOID("static call stub overflow");
@@ -197,10 +218,6 @@ int JeandleAssembler::emit_exception_handler() {
   assert(__ offset() - offset <= (int)NativeJump::instruction_size, "overflow");
   __ end_a_stub();
   return offset;
-}
-
-int JeandleAssembler::deopt_handler_size() {
-  return 17;
 }
 
 int JeandleAssembler::emit_deopt_handler() {

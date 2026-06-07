@@ -280,6 +280,15 @@ class JeandleCompiledCode : public StackObj {
 
   void setup_frame_size();
 
+  struct CodeBufferSizing {
+    int _code;
+    int _consts;
+    int _stubs;
+    int _relocs;
+    int _total;
+  };
+
+  CodeBufferSizing estimate_codebuffer_component_sizes(uint64_t code_size);
   void resolve_reloc_info(JeandleAssembler& assembler);
   bool pd_resolve_reloc(JeandleAssembler& assembler,
                         llvm::SmallVector<JeandleReloc*>& relocs,

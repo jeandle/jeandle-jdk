@@ -31,12 +31,32 @@
 
 #define __ _masm->
 
+// Stub sizes for call sites
+const int JeandleAssembler::_call_stub_size    = 13 * NativeInstruction::instruction_size;
+const int JeandleAssembler::_routine_stub_size = NativeInstruction::instruction_size + NativeCallTrampolineStub::instruction_size;
+
+int JeandleAssembler::static_call_stub_size() {
+  return _call_stub_size;
+}
+
+int JeandleAssembler::routine_call_stub_size() {
+  return _routine_stub_size;
+}
+
+int JeandleAssembler::exception_handler_size() {
+  return MacroAssembler::far_codestub_branch_size();
+}
+
+int JeandleAssembler::deopt_handler_size() {
+  return NativeInstruction::instruction_size + MacroAssembler::far_codestub_branch_size();
+}
+
 void JeandleAssembler::emit_static_call_stub(int inst_offset, CallSiteInfo* call) {
   assert(call->type() == JeandleCompiledCall::STATIC_CALL, "illegal call type");
   address call_address = __ addr_at(inst_offset);
 
   // same as C1 call_stub_size()
-  const int stub_size = 13 * NativeInstruction::instruction_size;
+  const int stub_size = _call_stub_size;
   address stub = __ start_a_stub(stub_size);
   if (stub == nullptr) {
     JEANDLE_REPORT_ERROR_AND_RET_VOID("static call stub overflow");
@@ -234,10 +254,6 @@ int JeandleAssembler::emit_exception_handler() {
   assert(__ offset() - offset <= stub_size, "overflow");
   __ end_a_stub();
   return offset;
-}
-
-int JeandleAssembler::deopt_handler_size() {
-  return 7 * NativeInstruction::instruction_size;
 }
 
 int JeandleAssembler::emit_deopt_handler() {

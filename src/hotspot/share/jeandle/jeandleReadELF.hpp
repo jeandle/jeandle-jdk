@@ -50,6 +50,8 @@ class ReadELF : public AllStatic {
 
   static bool findSection(ELFObject& elf,
                           SectionInfo& section_info);
+
+  static uint64_t calculate_const_sections_size(ELFObject& elf);
 };
 
 #endif // SHARE_JEANDLE_READ_ELF_HPP

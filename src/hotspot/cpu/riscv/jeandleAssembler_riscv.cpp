@@ -26,17 +26,38 @@
 #include "jeandle/jeandleRuntimeRoutine.hpp"
 
 #include "jeandle/__hotspotHeadersBegin__.hpp"
+#include "code/nativeInst.hpp"
 #include "runtime/sharedRuntime.hpp"
 
 #define __ _masm->
+
+// Stub sizes for call sites
+const int JeandleAssembler::_call_stub_size    = 14 * NativeInstruction::instruction_size +
+                                                  (NativeInstruction::instruction_size + NativeCallTrampolineStub::instruction_size);
+const int JeandleAssembler::_routine_stub_size = NativeInstruction::instruction_size + NativeCallTrampolineStub::instruction_size;
+
+int JeandleAssembler::static_call_stub_size() {
+  return _call_stub_size;
+}
+
+int JeandleAssembler::routine_call_stub_size() {
+  return _routine_stub_size;
+}
+
+int JeandleAssembler::exception_handler_size() {
+  return MacroAssembler::far_branch_size();
+}
+
+int JeandleAssembler::deopt_handler_size() {
+  return NativeInstruction::instruction_size + MacroAssembler::far_branch_size();
+}
 
 void JeandleAssembler::emit_static_call_stub(int inst_offset, CallSiteInfo* call) {
   assert(call->type() == JeandleCompiledCall::STATIC_CALL, "legal call type");
   address call_address = __ addr_at(inst_offset);
 
   // same as C1 call_stub_size()
-  int stub_size = 14 * NativeInstruction::instruction_size +
-                  (NativeInstruction::instruction_size + NativeCallTrampolineStub::instruction_size);
+  int stub_size = static_call_stub_size();
   address stub = __ start_a_stub(stub_size);
   JEANDLE_ERROR_ASSERT_AND_RET_VOID_ON_FAIL(stub != nullptr, "static call stub overflow");
 
@@ -223,25 +244,18 @@ int JeandleAssembler::emit_exception_handler() {
   return start;
 }
 
-int JeandleAssembler::deopt_handler_size() {
-  // count auipc + far branch
-  return NativeInstruction::instruction_size + MacroAssembler::far_branch_size();
-}
-
-// Emit deopt handler code.
 int JeandleAssembler::emit_deopt_handler() {
-  address base = __ start_a_stub(deopt_handler_size());
-  if (base == NULL) {
-    JEANDLE_REPORT_ERROR_AND_RET("deopt handler stub overflow", 0);
-  }
-  int offset = __ offset();
+  int stub_size = deopt_handler_size();
+  address stub = __ start_a_stub(stub_size);
+  JEANDLE_ERROR_ASSERT_AND_RET_ON_FAIL(stub != nullptr, "deopt handler stub overflow", 0);
 
+  int start = __ offset();
   __ auipc(ra, 0);
   __ far_jump(RuntimeAddress(JeandleRuntimeRoutine::get_routine_entry(JeandleRuntimeRoutine::_deopt_blob)));
 
-  assert(__ offset() - offset <= (int) deopt_handler_size(), "deopt handler stub overflow");
+  assert(__ offset() - start <= stub_size, "deopt handler stub overflow");
   __ end_a_stub();
-  return offset;
+  return start;
 }
 
 using LinkKind_riscv = llvm::jitlink::riscv::EdgeKind_riscv;
