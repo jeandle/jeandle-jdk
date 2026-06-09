@@ -63,7 +63,7 @@ class JeandleAssembler : public StackObj {
   void emit_verified_entry();
   void emit_poisoned_osr_entry();
   void emit_clinit_barrier_on_entry(Klass* klass);
-  void emit_nmethod_entry_barrier(JeandleEntryBarrierStub* stub);
+  int emit_nmethod_entry_barrier(JeandleEntryBarrierStub* stub);
 
   int emit_exception_handler();
 

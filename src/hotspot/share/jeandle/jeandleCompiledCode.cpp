@@ -187,17 +187,18 @@ void JeandleCompiledCode::finalize() {
     masm->generate_stack_overflow_check(bang_size_in_bytes);
   }
 
+  if (needs_nmethod_entry_barrier()) {
+    _entry_barrier_stub = new (_env->arena()) JeandleEntryBarrierStub();
+    int entry_barrier_offset = assembler.emit_nmethod_entry_barrier(_entry_barrier_stub);
+    _offsets.set_value(CodeOffsets::NMethod_Entry_Barrier, entry_barrier_offset);
+  }
+
   assert(align > 1, "invalid alignment");
   masm->align(static_cast<int>(align));
 
   _prolog_length = masm->offset();
 
   assembler.emit_insts(((address) _obj->getBufferStart()) + offset, code_size);
-
-  if (needs_nmethod_entry_barrier()) {
-    _entry_barrier_stub = new (_env->arena()) JeandleEntryBarrierStub();
-    assembler.emit_nmethod_entry_barrier(_entry_barrier_stub);
-  }
 
   resolve_reloc_info(assembler);
   RETURN_VOID_ON_JEANDLE_ERROR();

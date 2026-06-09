@@ -55,6 +55,7 @@ public:
   enum Entries { Entry,
                  Verified_Entry,
                  Frame_Complete, // Offset in the code where the frame setup is (for forte stackwalks) is complete
+                 NMethod_Entry_Barrier, // Offset of the nmethod entry barrier patch instruction
                  OSR_Entry,
                  Exceptions,     // Offset where exception handler lives
                  Deopt,          // Offset where deopt handler lives
@@ -75,6 +76,7 @@ public:
     _values[Entry         ] = 0;
     _values[Verified_Entry] = 0;
     _values[Frame_Complete] = frame_never_safe;
+    _values[NMethod_Entry_Barrier] = -1;
     _values[OSR_Entry     ] = 0;
     _values[Exceptions    ] = -1;
     _values[Deopt         ] = -1;

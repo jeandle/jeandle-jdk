@@ -350,15 +350,17 @@ bool JeandleAssembler::is_oop_addr_reloc(LinkSymbol& target, LinkKind kind) { re
 
 bool JeandleAssembler::is_section_word_reloc(LinkSymbol& target, LinkKind kind) { return false; }
 
-void JeandleAssembler::emit_nmethod_entry_barrier(JeandleEntryBarrierStub* stub) {
+int JeandleAssembler::emit_nmethod_entry_barrier(JeandleEntryBarrierStub* stub) {
   BarrierSetAssembler* bs = BarrierSet::barrier_set()->barrier_set_assembler();
+  int entry_barrier_offset = _masm->offset();
   bs->nmethod_entry_barrier(_masm, &stub->entry(), &stub->continuation(), &stub->guard());
+  return entry_barrier_offset;
 }
 
 void JeandleEntryBarrierStub::emit(MacroAssembler* _masm) {
   __ bind(entry());
 
-  __ addi(sp, sp, -wordSize);
+  __ addi(sp, sp, -2 * wordSize);
   __ sd(ra, Address(sp, 0));
 
   int32_t offset = 0;
@@ -366,7 +368,7 @@ void JeandleEntryBarrierStub::emit(MacroAssembler* _masm) {
   __ jalr(ra, t0, offset);
 
   __ ld(ra, Address(sp, 0));
-  __ addi(sp, sp, wordSize);
+  __ addi(sp, sp, 2 * wordSize);
 
   __ j(continuation());
 

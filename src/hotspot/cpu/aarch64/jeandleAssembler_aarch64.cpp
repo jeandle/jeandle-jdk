@@ -319,9 +319,11 @@ bool JeandleAssembler::is_section_word_reloc(LinkSymbol& target, LinkKind kind) 
          (kind == LinkKind_aarch64::Page21 || kind == LinkKind_aarch64::PageOffset12);
 }
 
-void JeandleAssembler::emit_nmethod_entry_barrier(JeandleEntryBarrierStub* stub) {
+int JeandleAssembler::emit_nmethod_entry_barrier(JeandleEntryBarrierStub* stub) {
   BarrierSetAssembler* bs = BarrierSet::barrier_set()->barrier_set_assembler();
+  int entry_barrier_offset = _masm->offset();
   bs->nmethod_entry_barrier(_masm, &stub->entry(), &stub->continuation(), &stub->guard());
+  return entry_barrier_offset;
 }
 
 void JeandleEntryBarrierStub::emit(MacroAssembler* _masm) {

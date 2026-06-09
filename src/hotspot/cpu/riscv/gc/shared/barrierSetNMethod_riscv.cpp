@@ -90,7 +90,11 @@ public:
     } else
 #endif
       {
-        _instruction_address = nm->code_begin() + nm->frame_complete_offset() + entry_barrier_offset(nm);
+        if (nm->is_compiled_by_jeandle()) {
+          _instruction_address = nm->code_begin() + nm->nmethod_entry_barrier_offset();
+        } else {
+          _instruction_address = nm->code_begin() + nm->frame_complete_offset() + entry_barrier_offset(nm);
+        }
         if (nm->is_compiled_by_c2() || nm->is_compiled_by_jeandle()) {
           // With c2 compiled code, the guard is out-of-line in a stub
           // We find it using the RelocIterator.
@@ -178,6 +182,19 @@ void BarrierSetNMethod::deoptimize(nmethod* nm, address* return_address_ptr) {
 
   assert(frame.is_compiled_frame() || frame.is_native_frame(), "must be");
   assert(frame.cb() == nm, "must be");
+
+  if (nm->is_compiled_by_jeandle()) {
+    // Jeandle emits the nmethod entry barrier before the LLVM generated frame
+    // setup. If forced deoptimization happens here, the callee frame cannot be
+    // walked yet. The out-of-line Jeandle entry barrier stub saved the caller's
+    // ra in two stack slots before calling the shared barrier stub.
+    new_frame->sp = frame.sp() + 2;
+    new_frame->fp = frame.fp();
+    new_frame->ra = *(address*)frame.sp();
+    new_frame->pc = SharedRuntime::get_handle_wrong_method_stub();
+    return;
+  }
+
   frame = frame.sender(&reg_map);
 
   LogTarget(Trace, nmethod, barrier) out;
