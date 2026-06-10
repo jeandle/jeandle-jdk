@@ -1,15 +1,15 @@
 /**
  * @test
  * @summary Tests whether the Jeandle compiler correctly handles asynchronous exceptions at a return poll.
- * @run main/othervm/native -agentlib:TestJeandleAsyncExceptionAtSafepoint
+ * @run main/othervm/native -agentlib:TestJeandleAsyncExceptionHandleAtSafepoint
  *      -Xbatch -Xcomp -XX:+UnlockDiagnosticVMOptions
  *      -XX:-TieredCompilation -XX:+UseJeandleCompiler -XX:-Inline
  *      -XX:+ExplicitGCInvokesConcurrent -XX:GuaranteedSafepointInterval=1
- *      -XX:CompileCommand=compileonly,compiler.jeandle.safepoint.TestJeandleAsyncExceptionAtSafepoint::returnPoll
- *      -XX:CompileCommand=dontinline,compiler.jeandle.safepoint.TestJeandleAsyncExceptionAtSafepoint::returnPoll
- *      -XX:CompileCommand=exclude,compiler.jeandle.safepoint.TestJeandleAsyncExceptionAtSafepoint::runReturnPollLoop
+ *      -XX:CompileCommand=compileonly,compiler.jeandle.safepoint.TestJeandleAsyncExceptionHandleAtSafepoint::returnPoll
+ *      -XX:CompileCommand=dontinline,compiler.jeandle.safepoint.TestJeandleAsyncExceptionHandleAtSafepoint::returnPoll
+ *      -XX:CompileCommand=exclude,compiler.jeandle.safepoint.TestJeandleAsyncExceptionHandleAtSafepoint::runReturnPollLoop
  *      -XX:+LogCompilation -XX:LogFile=compilation.log
- *      compiler.jeandle.safepoint.TestJeandleAsyncExceptionAtSafepoint
+ *      compiler.jeandle.safepoint.TestJeandleAsyncExceptionHandleAtSafepoint
  */
 
 package compiler.jeandle.safepoint;
@@ -19,7 +19,7 @@ import java.nio.file.Path;
 import java.util.concurrent.TimeUnit;
 import java.util.regex.Pattern;
 
-public class TestJeandleAsyncExceptionAtSafepoint {
+public class TestJeandleAsyncExceptionHandleAtSafepoint {
     private static final int JVMTI_ERROR_NONE = 0;
     private static final String COMPILATION_LOG_FILE = "compilation.log";
     private static final Pattern UNEXPECTED_DEOPT_PATTERN = Pattern.compile("deoptimized");    
@@ -28,12 +28,22 @@ public class TestJeandleAsyncExceptionAtSafepoint {
     private static volatile boolean stopped;
     private static volatile long sink;
 
+    /**
+     * Initializes the JVMTI test agent and configures the exception
+     * that will later be injected into the target thread.
+     */
     private static native void prepareAgent(Throwable exception);
+    
+    /**
+     * Uses JVMTI StopThread to asynchronously throw the configured
+     * exception into the specified thread.
+     */
     private static native int stopThread(Thread thread);
 
     public static void main(String[] args) throws Exception {
         prepareAgent(new ThreadDeath());
 
+	// Continuously executes a method that contains a return poll.
         Thread victim = new Thread(() -> {
             try {
                 runReturnPollLoop();
@@ -55,8 +65,10 @@ public class TestJeandleAsyncExceptionAtSafepoint {
             throw new RuntimeException("victim thread did not enter loop");
         }
 
-        Thread.sleep(500);
+	Thread.sleep(500);
 
+	// Force frequent safepoint activity while the victim
+        // is executing compiled code.
         Thread buster = new Thread(() -> {
             while (!stopped) {
                 System.gc();
@@ -69,6 +81,7 @@ public class TestJeandleAsyncExceptionAtSafepoint {
 
         Thread.sleep(50);
 
+	// Inject ThreadDeath asynchronously into the victim thread.
         int err = stopThread(victim);
         if (err != JVMTI_ERROR_NONE) {
             throw new RuntimeException("StopThread failed with JVMTI error: " + err);
@@ -83,16 +96,18 @@ public class TestJeandleAsyncExceptionAtSafepoint {
             throw new RuntimeException("ThreadDeath was not caught");
         }
 
+	// Verify that handling the async exception did not trigger
+        // an unexpected deoptimization.
         checkCompilationLogContainsExpectedDeopt();
         System.out.println("SUCCESS!");
     }
 
     private static void runReturnPollLoop() {
         long value = 0;
-        for (int i = 0; i < 2000; i++) {
-            value = returnPoll(value);
-        }
 
+	for (int i = 0; i < 2000; i++) {
+            value = returnPoll(value);
+         }
         entered = true; 
 
         while (!stopped) {
