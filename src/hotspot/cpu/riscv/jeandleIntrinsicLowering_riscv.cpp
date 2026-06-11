@@ -33,17 +33,17 @@
 // =============================================================================
 
 bool JeandleIntrinsicLowering::cpu_supports_rounding() {
-  // RISC-V rounding intrinsics are not yet supported by Jeandle.
-  // When support is added, this should return true (LLVM provides custom
-  // lowering via fcvt even without the Zfa extension).
-  ShouldNotReachHere();
+  // RISC-V rounding intrinsics are not yet supported by Jeandle, so decline
+  // and fall back to a normal invoke. When support is added, this should
+  // return true (LLVM provides custom lowering via fcvt even without the
+  // Zfa extension).
   return false;
 }
 
 bool JeandleIntrinsicLowering::cpu_supports_popcount() {
-  // RISC-V popcount intrinsics are not yet supported by Jeandle.
-  // When support is added, this should check UsePopCountInstruction (Zbb).
-  ShouldNotReachHere();
+  // RISC-V popcount intrinsics are not yet supported by Jeandle, so decline
+  // and fall back to a normal invoke. When support is added, this should
+  // check UsePopCountInstruction (Zbb).
   return false;
 }
 
