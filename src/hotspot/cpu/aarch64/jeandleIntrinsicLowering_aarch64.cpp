@@ -45,9 +45,11 @@ bool JeandleIntrinsicLowering::cpu_supports_popcount() {
 }
 
 bool JeandleIntrinsicLowering::cpu_supports_spin_wait() {
-  // The spin-wait hint uses YIELD/ISB/NOP depending on the OnSpinWaitInst flag.
-  // When OnSpinWaitInst is "none" (diagnostic default unset), no hint is emitted.
-  return VM_Version::supports_on_spin_wait();
+  // The current lowering always emits YIELD. Decline when VM_Version selected
+  // NOP/ISB/NONE, and let the normal path preserve the platform policy.
+  // TODO: honor NOP/ISB/YIELD and OnSpinWaitInstCount like the template
+  // interpreter does.
+  return VM_Version::spin_wait_desc().inst() == SpinWait::YIELD;
 }
 
 // =============================================================================
