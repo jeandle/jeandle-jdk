@@ -202,7 +202,11 @@ bool JeandleIntrinsicLowering::lower(vmIntrinsics::ID id, const ciMethod* target
     // reduction quality varies by target. This will cause the calculation
     // results to be inconsistent with those of the interpreter.
     //
-    // issue: https://github.com/jeandle/jeandle-jdk/issues/424
+    // TODO(#424): This is not AArch64-specific; x86 can diverge too when LLVM
+    // lowers these intrinsics to a different libm implementation. We have
+    // reproduced bit mismatches for dlog and dlog10, so the final design should
+    // decide whether these stay LLVM-backed, become runtime-only, or get a
+    // platform/semantics policy instead of this global switch.
     case vmIntrinsics::_dsin:
       return lower_dual_path_libm(llvm::Intrinsic::sin,
                                   "StubRoutines_dsin",
