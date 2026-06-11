@@ -20,49 +20,50 @@
 
 #include "jeandle/__llvmHeadersBegin__.hpp"
 #include "llvm/IR/IRBuilder.h"
-#include "llvm/IR/IntrinsicsX86.h"
+#include "llvm/IR/IntrinsicsRISCV.h"
 
 #include "jeandle/jeandleAbstractInterpreter.hpp"
 #include "jeandle/jeandleIntrinsicLowering.hpp"
 
 #include "jeandle/__hotspotHeadersBegin__.hpp"
-#include "runtime/globals.hpp"
+#include "runtime/vm_version.hpp"
 
 // =============================================================================
-// Arch-specific CPU feature checks (x86)
+// Arch-specific CPU feature checks (RISC-V)
 // =============================================================================
 
 bool JeandleIntrinsicLowering::cpu_supports_rounding() {
-  // SSE4.1 provides ROUNDSS/ROUNDSD instructions for floor/ceil/rint.
-  // UseSSE >= 4 reflects both hardware detection and user overrides,
-  // and is what apply_vm_flag_feature_overrides() reads to control the
-  // LLVM sse4.1 feature.
-  return UseSSE >= 4;
+  // RISC-V rounding intrinsics are not yet supported by Jeandle.
+  // When support is added, this should return true (LLVM provides custom
+  // lowering via fcvt even without the Zfa extension).
+  ShouldNotReachHere();
+  return false;
 }
 
 bool JeandleIntrinsicLowering::cpu_supports_popcount() {
-  // POPCNT instruction for bitCount_i/bitCount_l.
-  // UsePopCountInstruction is set by VM_Version when the hardware supports
-  // it and can be overridden via -XX:-UsePopCountInstruction.
-  return UsePopCountInstruction;
+  // RISC-V popcount intrinsics are not yet supported by Jeandle.
+  // When support is added, this should check UsePopCountInstruction (Zbb).
+  ShouldNotReachHere();
+  return false;
 }
 
 bool JeandleIntrinsicLowering::cpu_supports_spin_wait() {
-  // PAUSE is part of SSE2, which is baseline on x86-64.
-  return true;
+  // RISC-V PAUSE instruction requires the Zihintpause extension.
+  // UseZihintpause is set by VM_Version when the hardware supports it.
+  return UseZihintpause;
 }
 
 // =============================================================================
-// Arch-specific intrinsic lowering (x86)
+// Arch-specific intrinsic lowering (RISC-V)
 // =============================================================================
 
 bool JeandleIntrinsicLowering::lower_spin_wait_hint() {
+  // RISC-V: PAUSE instruction (FENCE w,r) via llvm.riscv.pause (Zihintpause).
+  // cpu_supports_spin_wait() already verified UseZihintpause before
+  // is_supported() returned true, so the target feature is guaranteed.
   llvm::IRBuilder<>& builder = _interp->_ir_builder;
-  // x86-64: PAUSE instruction — spin-wait hint that improves performance
-  // and reduces power consumption in busy-wait loops.  An llvm.* intrinsic is never
-  // rewritten to a statepoint, so no gc-leaf annotation is needed.
   builder.CreateIntrinsic(
-      llvm::Intrinsic::x86_sse2_pause, llvm::ArrayRef<llvm::Type*>{}, {});
+      llvm::Intrinsic::riscv_pause, llvm::ArrayRef<llvm::Type*>{}, {});
   // void return: nothing to push on the JVM operand stack
   return true;
 }

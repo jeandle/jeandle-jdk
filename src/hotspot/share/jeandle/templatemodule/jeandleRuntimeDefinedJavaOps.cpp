@@ -64,21 +64,11 @@
 
 namespace {
 
-// We cannot obtain contexts such as BCI in DEF_JAVA_OP. 
+// We cannot obtain contexts such as BCI in DEF_JAVA_OP.
 // But we can pass the external deopt bundle into this empty one via inlining.
 llvm::OperandBundleDef create_empty_deopt_bundle() {
   return llvm::OperandBundleDef("deopt", llvm::SmallVector<llvm::Value*>{});
 }
-
-// TODO(reinstate-cpuorder-barrier): Reference.referent loads are MISSING the
-// Op_MemBarCPUOrder that C2 emits to stop the load being commoned across a
-// safepoint where GC may clear the field.  The barrier — an empty side-effecting
-// `asm sideeffect "", "~{memory}"` after the load — cannot be emitted until
-// jeandle-llvm's RewriteStatepointsForGC skips inline asm in its NeedsRewrite
-// predicate (add `if (Call->isInlineAsm()) return false;`, matching the sibling
-// PlaceSafepoints pass).  Without that skip, RS4GC wraps the barrier in a
-// gc.statepoint and aborts with "Cannot take the address of an inline asm!".
-// Once LLVM has the skip, emit the barrier here via the helper below.
 
 DEF_JAVA_OP(current_thread, 0, llvm::PointerType::get(context, llvm::jeandle::AddrSpace::CHeapAddrSpace))
   llvm::NamedMDNode* thread_register = template_module.getNamedMetadata(llvm::jeandle::Metadata::CurrentThread);
@@ -206,16 +196,15 @@ DEF_JAVA_OP(post_barrier, 1, llvm::Type::getVoidTy(context),
   ir_builder.CreateRetVoid();
 JAVA_OP_END
 
-// Note: jeandle.new_instance is defined in template.ll (with TLAB fast path).
-// Do not re-declare it here; DEF_JAVA_OP would obtain the existing function
-// via getOrInsertFunction() and shadow the original entry block.
-
 // Object.getClass(): load the java.lang.Class mirror for an object.
 // Two-level load via the OopHandle stored in Klass::_java_mirror:
 //   1. Load klass from object header (jeandle.load_klass).
 //   2. Load the OopHandle pointer from klass + java_mirror_offset  -> oop* in C heap.
 //   3. Dereference the OopHandle to get the actual mirror oop in the Java heap.
 // The mirror is always reachable (a GC root inside the Klass), so no null check is needed.
+//
+// TODO: When the receiver's Klass is known at compile time (via `java-klass` attribute),
+// Step 1 (jeandle.load_klass) can be skipped.
 DEF_JAVA_OP(get_class, 1, llvm::PointerType::get(context, llvm::jeandle::AddrSpace::JavaHeapAddrSpace),
             llvm::PointerType::get(context, llvm::jeandle::AddrSpace::JavaHeapAddrSpace))  // obj (receiver)
   llvm::Value* obj = func->getArg(0);
@@ -243,9 +232,11 @@ DEF_JAVA_OP(get_class, 1, llvm::PointerType::get(context, llvm::jeandle::AddrSpa
   ir_builder.CreateRet(mirror);
 JAVA_OP_END
 
-// Reference.refersTo0: raw load of the referent field, compare with obj, return boolean as i32.
-// This intentionally bypasses GC barriers: refersTo0 compares raw pointer identity
-// without triggering reference processing.
+// Reference.refersTo0 / PhantomReference.refersTo0:
+// Load the referent field and compare with the given object, returning a boolean.
+// No GC barrier is applied (AS_NO_KEEPALIVE semantics): refersTo0 should not keep
+// the referent alive. Equivalent to C2's inline_reference_refersTo0() which uses
+// the AS_NO_KEEPALIVE decorator to suppress the G1 SATB pre-barrier.
 DEF_JAVA_OP(reference_refers_to, 1, llvm::Type::getInt32Ty(context),
             llvm::PointerType::get(context, llvm::jeandle::AddrSpace::JavaHeapAddrSpace),  // reference (this)
             llvm::PointerType::get(context, llvm::jeandle::AddrSpace::JavaHeapAddrSpace))  // obj
@@ -259,17 +250,26 @@ DEF_JAVA_OP(reference_refers_to, 1, llvm::Type::getInt32Ty(context),
   llvm::Value* offset = ir_builder.CreateLoad(ir_builder.getInt32Ty(), offset_gv);
   llvm::Value* referent_addr = ir_builder.CreateInBoundsGEP(ir_builder.getInt8Ty(), ref_obj, offset);
   llvm::Type* ref_type = llvm::PointerType::get(context, llvm::jeandle::AddrSpace::JavaHeapAddrSpace);
-  // Raw load: no atomic ordering, no GC barrier.
+  // Unordered atomic load: safe under concurrent GC writes (a plain non-atomic
+  // load has undefined behavior when the GC concurrently clears the referent).
+  // No GC barrier because refersTo0 uses AS_NO_KEEPALIVE semantics.
   llvm::LoadInst* referent = ir_builder.CreateLoad(ref_type, referent_addr);
-  // TODO(reinstate-cpuorder-barrier): CPUOrder barrier missing after this load;
-  // blocked on the LLVM RS4GC inline-asm gap (see emit_reference_referent_cpu_order_barrier).
+  referent->setAtomic(llvm::AtomicOrdering::Unordered);
+  // CPUOrder fence: equivalent to C2's MemBarCPUOrder. Prevents the compiler from
+  // CSE'ing this referent load across safepoints (GC can change the referent at
+  // any safepoint). Singlethread scope ensures no hardware fence instructions.
+  ir_builder.CreateFence(llvm::AtomicOrdering::SequentiallyConsistent,
+                         llvm::SyncScope::SingleThread);
   llvm::Value* is_equal = ir_builder.CreateICmpEQ(referent, compare_to);
   // JVM boolean on the operand stack is i32
   llvm::Value* result = ir_builder.CreateZExt(is_equal, ir_builder.getInt32Ty());
   ir_builder.CreateRet(result);
 JAVA_OP_END
 
-// Reference.get: acquire-load the referent and apply the collector barrier here.
+// Reference.get: load the referent, apply the G1 SATB pre-barrier (if using G1GC),
+// and insert a CPUOrder fence to prevent the optimizer from CSE'ing referent loads
+// across safepoints (GC can change the referent value asynchronously).
+// Equivalent to C2's inline_reference_get(): Unordered load + MemBarCPUOrder.
 DEF_JAVA_OP(reference_get, 1,
             llvm::PointerType::get(context, llvm::jeandle::AddrSpace::JavaHeapAddrSpace),
             llvm::PointerType::get(context, llvm::jeandle::AddrSpace::JavaHeapAddrSpace))
@@ -282,99 +282,28 @@ DEF_JAVA_OP(reference_get, 1,
   llvm::Value* offset = ir_builder.CreateLoad(ir_builder.getInt32Ty(), offset_gv);
   llvm::Value* referent_addr = ir_builder.CreateInBoundsGEP(ir_builder.getInt8Ty(), ref_obj, offset);
   llvm::Type* ref_type = llvm::PointerType::get(context, llvm::jeandle::AddrSpace::JavaHeapAddrSpace);
+  // Unordered atomic load: matches C2's LoadNode::Unordered for Reference.get().
+  // Acquire is unnecessarily strong on AArch64/RISC-V; Unordered plus the fence
+  // below provides the same compiler-side ordering guarantee as C2's MemBarCPUOrder.
   llvm::LoadInst* referent = ir_builder.CreateLoad(ref_type, referent_addr);
-  referent->setAtomic(llvm::AtomicOrdering::Acquire);
-  // TODO(reinstate-cpuorder-barrier): CPUOrder barrier missing after this load;
-  // blocked on the LLVM RS4GC inline-asm gap (see emit_reference_referent_cpu_order_barrier).
+  referent->setAtomic(llvm::AtomicOrdering::Unordered);
+  // G1 SATB pre-barrier: record the loaded referent value so concurrent marking
+  // does not miss it. In C2, the ON_WEAK_OOP_REF decorator triggers this in the
+  // GC barrier set; here we call the barrier directly with the already-loaded value.
   if (UseG1GC) {
     llvm::Function* barrier_func = template_module.getFunction("jeandle.g1_pre_barrier_loaded");
     assert(barrier_func != nullptr, "jeandle.g1_pre_barrier_loaded not found");
     llvm::CallInst* call = ir_builder.CreateCall(barrier_func, {referent});
     call->setCallingConv(llvm::CallingConv::Hotspot_JIT);
   }
+  // CPUOrder fence: equivalent to C2's MemBarCPUOrder. Prevents the compiler from
+  // commoning/CSE'ing this referent load across safepoints, since GC can clear the
+  // referent at any safepoint. The singlethread scope ensures no hardware fence
+  // instructions are emitted (x86/AArch64/RISC-V lower this to ISD::MEMBARRIER,
+  // which becomes a no-op in assembly).
+  ir_builder.CreateFence(llvm::AtomicOrdering::SequentiallyConsistent,
+                         llvm::SyncScope::SingleThread);
   ir_builder.CreateRet(referent);
-JAVA_OP_END
-
-// Array.newInstance(Class<?> componentType, int length) → Object
-//
-// Fast path: if the array klass has already been cached in the component-type mirror
-//   (java_lang_Class::array_klass_offset), call new_array_callee directly.
-// Slow path: klass not yet cached → call new_array_from_mirror_callee, which invokes
-//   Reflection::reflect_new_array to resolve the klass and allocate.
-//
-// The acquire load on the klass field matches java_lang_Class::array_klass_acquire
-// in HotSpot, ensuring we see a fully published Klass* if another thread has stored one.
-DEF_JAVA_OP(new_array, 1, llvm::PointerType::get(context, llvm::jeandle::AddrSpace::JavaHeapAddrSpace),
-            llvm::PointerType::get(context, llvm::jeandle::AddrSpace::JavaHeapAddrSpace), // mirror (component Class)
-            llvm::Type::getInt32Ty(context))                                              // length
-  llvm::Value* mirror = func->getArg(0);
-  llvm::Value* length = func->getArg(1);
-
-  // Load the array_klass offset global and current thread early (no null dependency).
-  llvm::GlobalVariable* offset_gv = template_module.getGlobalVariable("java_lang_Class.array_klass_offset", /*AllowInternal=*/true);
-  if (!offset_gv) {
-    RuntimeDefinedJavaOps::set_failed("java_lang_Class.array_klass_offset global not found in template module");
-    return;
-  }
-  llvm::Value* offset = ir_builder.CreateLoad(ir_builder.getInt32Ty(), offset_gv);
-
-  llvm::Function* current_thread_func = template_module.getFunction("jeandle.current_thread");
-  if (!current_thread_func) {
-    RuntimeDefinedJavaOps::set_failed("jeandle.current_thread is not found in template module");
-    return;
-  }
-  llvm::CallInst* current_thread = ir_builder.CreateCall(current_thread_func);
-  current_thread->setCallingConv(llvm::CallingConv::Hotspot_JIT);
-
-  llvm::PointerType* java_heap_ptr_ty = llvm::PointerType::get(context, llvm::jeandle::AddrSpace::JavaHeapAddrSpace);
-  llvm::PointerType* c_heap_ptr_ty    = llvm::PointerType::get(context, llvm::jeandle::AddrSpace::CHeapAddrSpace);
-
-  llvm::BasicBlock* klass_load_bb = llvm::BasicBlock::Create(context, "new_array_klass_load", func);
-  llvm::BasicBlock* fast_bb       = llvm::BasicBlock::Create(context, "new_array_fast",       func);
-  llvm::BasicBlock* slow_bb       = llvm::BasicBlock::Create(context, "new_array_slow",       func);
-  llvm::BasicBlock* merge_bb      = llvm::BasicBlock::Create(context, "new_array_merge",      func);
-
-  // Null guard: a null mirror must throw NPE; route directly to slow path which
-  // calls Reflection::reflect_new_array(null, length) → throws NullPointerException.
-  // This avoids forming a GEP from a null base pointer (which is IR-level UB).
-  llvm::Value* mirror_is_null = ir_builder.CreateICmpEQ(
-      mirror, llvm::ConstantPointerNull::get(java_heap_ptr_ty));
-  ir_builder.CreateCondBr(mirror_is_null, slow_bb, klass_load_bb);
-
-  // Klass-load block: mirror is non-null, safe to GEP and acquire-load the cached klass.
-  ir_builder.SetInsertPoint(klass_load_bb);
-  llvm::Value* klass_field_addr = ir_builder.CreateInBoundsGEP(ir_builder.getInt8Ty(), mirror, offset);
-  llvm::LoadInst* klass = ir_builder.CreateLoad(c_heap_ptr_ty, klass_field_addr);
-  klass->setAtomic(llvm::AtomicOrdering::Acquire);
-  klass->setAlignment(llvm::Align(sizeof(void*)));
-  llvm::Value* klass_is_null = ir_builder.CreateICmpEQ(klass, llvm::ConstantPointerNull::get(c_heap_ptr_ty));
-  ir_builder.CreateCondBr(klass_is_null, slow_bb, fast_bb);
-
-  // Fast path: array klass is known — call new_array directly.
-  ir_builder.SetInsertPoint(fast_bb);
-  llvm::CallInst* fast_result = ir_builder.CreateCall(
-      JeandleRuntimeRoutine::new_array_callee(template_module),
-      {klass, length, current_thread},
-      {create_empty_deopt_bundle()});
-  fast_result->setCallingConv(llvm::CallingConv::Hotspot_JIT);
-  ir_builder.CreateBr(merge_bb);
-
-  // Slow path: mirror is null or klass not yet resolved — delegate to
-  // Reflection::reflect_new_array, which handles NPE and klass resolution.
-  ir_builder.SetInsertPoint(slow_bb);
-  llvm::CallInst* slow_result = ir_builder.CreateCall(
-      JeandleRuntimeRoutine::new_array_from_mirror_callee(template_module),
-      {mirror, length, current_thread},
-      {create_empty_deopt_bundle()});
-  slow_result->setCallingConv(llvm::CallingConv::Hotspot_JIT);
-  ir_builder.CreateBr(merge_bb);
-
-  // Merge results via PHI.
-  ir_builder.SetInsertPoint(merge_bb);
-  llvm::PHINode* result = ir_builder.CreatePHI(java_heap_ptr_ty, 2);
-  result->addIncoming(fast_result, fast_bb);
-  result->addIncoming(slow_result, slow_bb);
-  ir_builder.CreateRet(result);
 JAVA_OP_END
 
 } // anonymous namespace
@@ -396,11 +325,9 @@ bool RuntimeDefinedJavaOps::define_all(llvm::Module& template_module) {
   define_card_table_barrier(template_module);
   define_pre_barrier(template_module);
   define_post_barrier(template_module);
-  // jeandle.new_instance is defined inline in template.ll (with TLAB fast path).
   define_get_class(template_module);
   define_reference_refers_to(template_module);
   define_reference_get(template_module);
-  define_new_array(template_module);
 
   return failed();
 }
@@ -473,7 +400,7 @@ void RuntimeDefinedJavaOps::define_global_variables(llvm::Module& template_modul
   define_global("ObjectMonitor.succ_offset_no_monitor_value",       int32_type, static_cast<uint64_t>(OM_OFFSET_NO_MONITOR_VALUE_TAG(succ)));
   define_global("instanceOopDesc.base_offset_in_bytes",             int32_type, static_cast<uint64_t>(instanceOopDesc::base_offset_in_bytes()));
 
-  
+
   define_global("markWord.clear_lock_mask",                         int64_type, static_cast<uint64_t>(~(int32_t)markWord::lock_mask_in_place));
   define_global("markWord.monitor_value",                           int64_type, static_cast<uint64_t>(markWord::monitor_value));
   define_global("markWord.unlocked_value",                          int64_type, static_cast<uint64_t>(markWord::unlocked_value));
@@ -482,7 +409,7 @@ void RuntimeDefinedJavaOps::define_global_variables(llvm::Module& template_modul
   define_global("JavaThread.tlab_end_offset",                       int64_type, static_cast<uint64_t>(JavaThread::tlab_end_offset()));
   define_global("JavaThread.tlab_top_offset",                       int64_type, static_cast<uint64_t>(JavaThread::tlab_top_offset()));
   define_global("markWord.prototype_value",                         int64_type, static_cast<uint64_t>(markWord::prototype().value()));
-  
+
   define_global("JVM_ACC_IS_VALUE_BASED_CLASS",                     int32_type, static_cast<uint64_t>(JVM_ACC_IS_VALUE_BASED_CLASS));
   define_global("oopSize",                                          int32_type, static_cast<uint64_t>(oopSize));
 

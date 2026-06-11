@@ -50,8 +50,8 @@
   product(bool, JeandleDumpRuntimeStubs, false,                             \
           "Dump Jeandle runtime stubs")                                     \
                                                                             \
-  product(ccstr, JeandleIntrinsicCandidate, "auto", DIAGNOSTIC,             \
-          "Force Jeandle intrinsic candidate selection: auto, llvm, hybrid, call") \
+  product(bool, JeandleUseHotspotIntrinsics, false,                         \
+          "Prefer Hotspot intrinsics over LLVM intrinsics")                 \
                                                                             \
   product(ccstr, JeandleLLVMOptions, nullptr,                               \
           "Additional LLVM command line options")                           \

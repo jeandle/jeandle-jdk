@@ -150,136 +150,120 @@
 //      arg1_type       ,
 //         ...          ,
 //      argn_type       )
-#define ALL_JEANDLE_DIRECT_ROUTINES(def)                             \
-  def(StubRoutines_dsin,                                             \
-      StubRoutines::dsin(),                                          \
-      true,                                                          \
-      true,                                                          \
-      llvm::Type::getDoubleTy(context),                              \
-      llvm::Type::getDoubleTy(context))                              \
-                                                                     \
-  def(StubRoutines_dcos,                                             \
-      StubRoutines::dcos(),                                          \
-      true,                                                          \
-      true,                                                          \
-      llvm::Type::getDoubleTy(context),                              \
-      llvm::Type::getDoubleTy(context))                              \
-                                                                     \
-  def(StubRoutines_dtan,                                             \
-      StubRoutines::dtan(),                                          \
-      true,                                                          \
-      true,                                                          \
-      llvm::Type::getDoubleTy(context),                              \
-      llvm::Type::getDoubleTy(context))                              \
-                                                                     \
-  def(StubRoutines_dlog,                                             \
-      StubRoutines::dlog(),                                          \
-      true,                                                          \
-      true,                                                          \
-      llvm::Type::getDoubleTy(context),                              \
-      llvm::Type::getDoubleTy(context))                              \
-                                                                     \
-  def(StubRoutines_dlog10,                                           \
-      StubRoutines::dlog10(),                                        \
-      true,                                                          \
-      true,                                                          \
-      llvm::Type::getDoubleTy(context),                              \
-      llvm::Type::getDoubleTy(context))                              \
-                                                                     \
-  def(StubRoutines_dexp,                                             \
-      StubRoutines::dexp(),                                          \
-      true,                                                          \
-      true,                                                          \
-      llvm::Type::getDoubleTy(context),                              \
-      llvm::Type::getDoubleTy(context))                              \
-                                                                     \
-  def(StubRoutines_dpow,                                             \
-      StubRoutines::dpow(),                                          \
-      true,                                                          \
-      true,                                                          \
-      llvm::Type::getDoubleTy(context),                              \
-      llvm::Type::getDoubleTy(context),                              \
-      llvm::Type::getDoubleTy(context))                              \
-                                                                     \
-  def(uncommon_trap,                                                 \
-      SharedRuntime::uncommon_trap_blob()->entry_point(),            \
-      true,                                                          \
-      false,                                                         \
-      llvm::Type::getVoidTy(context),                                \
-      llvm::Type::getInt32Ty(context))                               \
-                                                                     \
-  def(SharedRuntime_dsin,                                            \
-      SharedRuntime::dsin,                                           \
-      false,                                                         \
-      true,                                                          \
-      llvm::Type::getDoubleTy(context),                              \
-      llvm::Type::getDoubleTy(context))                              \
-                                                                     \
-  def(SharedRuntime_dcos,                                            \
-      SharedRuntime::dcos,                                           \
-      false,                                                         \
-      true,                                                          \
-      llvm::Type::getDoubleTy(context),                              \
-      llvm::Type::getDoubleTy(context))                              \
-                                                                     \
-  def(SharedRuntime_dtan,                                            \
-      SharedRuntime::dtan,                                           \
-      false,                                                         \
-      true,                                                          \
-      llvm::Type::getDoubleTy(context),                              \
-      llvm::Type::getDoubleTy(context))                              \
-                                                                     \
-  def(SharedRuntime_drem,                                            \
-      SharedRuntime::drem,                                           \
-      false,                                                         \
-      true,                                                          \
-      llvm::Type::getDoubleTy(context),                              \
-      llvm::Type::getDoubleTy(context),                              \
-      llvm::Type::getDoubleTy(context))                              \
-                                                                     \
-  def(SharedRuntime_frem,                                            \
-      SharedRuntime::frem,                                           \
-      false,                                                         \
-      true,                                                          \
-      llvm::Type::getFloatTy(context),                               \
-      llvm::Type::getFloatTy(context),                               \
-      llvm::Type::getFloatTy(context))                               \
-                                                                     \
-  def(SharedRuntime_dlog,                                            \
-      SharedRuntime::dlog,                                           \
-      false,                                                         \
-      true,                                                          \
-      llvm::Type::getDoubleTy(context),                              \
-      llvm::Type::getDoubleTy(context))                              \
-                                                                     \
-  def(SharedRuntime_dlog10,                                          \
-      SharedRuntime::dlog10,                                         \
-      false,                                                         \
-      true,                                                          \
-      llvm::Type::getDoubleTy(context),                              \
-      llvm::Type::getDoubleTy(context))                              \
-                                                                     \
-  def(SharedRuntime_dexp,                                            \
-      SharedRuntime::dexp,                                           \
-      false,                                                         \
-      true,                                                          \
-      llvm::Type::getDoubleTy(context),                              \
-      llvm::Type::getDoubleTy(context))                              \
-                                                                     \
-  def(SharedRuntime_dpow,                                            \
-      SharedRuntime::dpow,                                           \
-      false,                                                         \
-      true,                                                          \
-      llvm::Type::getDoubleTy(context),                              \
-      llvm::Type::getDoubleTy(context),                              \
-      llvm::Type::getDoubleTy(context))                              \
-                                                                     \
-  def(install_exceptional_return_for_call_vm,                        \
-      JeandleRuntimeRoutine::install_exceptional_return_for_call_vm, \
-      false,                                                         \
-      true,                                                          \
-      llvm::Type::getVoidTy(context))                                \
-                                                                     \
+#define ALL_JEANDLE_DIRECT_ROUTINES(def)                                            \
+  def(StubRoutines_dsin,                                                            \
+      StubRoutines::dsin(),                                                         \
+      true,                                                                         \
+      true,                                                                         \
+      llvm::Type::getDoubleTy(context),                                             \
+      llvm::Type::getDoubleTy(context))                                             \
+                                                                                    \
+  def(StubRoutines_dcos,                                                            \
+      StubRoutines::dcos(),                                                         \
+      true,                                                                         \
+      true,                                                                         \
+      llvm::Type::getDoubleTy(context),                                             \
+      llvm::Type::getDoubleTy(context))                                             \
+                                                                                    \
+  def(StubRoutines_dtan,                                                            \
+      StubRoutines::dtan(),                                                         \
+      true,                                                                         \
+      true,                                                                         \
+      llvm::Type::getDoubleTy(context),                                             \
+      llvm::Type::getDoubleTy(context))                                             \
+                                                                                    \
+  def(StubRoutines_dlog,                                                            \
+      StubRoutines::dlog(),                                                         \
+      true,                                                                         \
+      true,                                                                         \
+      llvm::Type::getDoubleTy(context),                                             \
+      llvm::Type::getDoubleTy(context))                                             \
+                                                                                    \
+  def(StubRoutines_dlog10,                                                          \
+      StubRoutines::dlog10(),                                                       \
+      true,                                                                         \
+      true,                                                                         \
+      llvm::Type::getDoubleTy(context),                                             \
+      llvm::Type::getDoubleTy(context))                                             \
+                                                                                    \
+  def(StubRoutines_dexp,                                                            \
+      StubRoutines::dexp(),                                                         \
+      true,                                                                         \
+      true,                                                                         \
+      llvm::Type::getDoubleTy(context),                                             \
+      llvm::Type::getDoubleTy(context))                                             \
+                                                                                    \
+  def(uncommon_trap,                                                                \
+      SharedRuntime::uncommon_trap_blob()->entry_point(),                           \
+      true,                                                                         \
+      false,                                                                        \
+      llvm::Type::getVoidTy(context),                                               \
+      llvm::Type::getInt32Ty(context))                                              \
+                                                                                    \
+  def(SharedRuntime_dsin,                                                           \
+      SharedRuntime::dsin,                                                          \
+      false,                                                                        \
+      true,                                                                         \
+      llvm::Type::getDoubleTy(context),                                             \
+      llvm::Type::getDoubleTy(context))                                             \
+                                                                                    \
+  def(SharedRuntime_dcos,                                                           \
+      SharedRuntime::dcos,                                                          \
+      false,                                                                        \
+      true,                                                                         \
+      llvm::Type::getDoubleTy(context),                                             \
+      llvm::Type::getDoubleTy(context))                                             \
+                                                                                    \
+  def(SharedRuntime_dtan,                                                           \
+      SharedRuntime::dtan,                                                          \
+      false,                                                                        \
+      true,                                                                         \
+      llvm::Type::getDoubleTy(context),                                             \
+      llvm::Type::getDoubleTy(context))                                             \
+                                                                                    \
+  def(SharedRuntime_drem,                                                           \
+      SharedRuntime::drem,                                                          \
+      false,                                                                        \
+      true,                                                                         \
+      llvm::Type::getDoubleTy(context),                                             \
+      llvm::Type::getDoubleTy(context),                                             \
+      llvm::Type::getDoubleTy(context))                                             \
+                                                                                    \
+  def(SharedRuntime_frem,                                                           \
+      SharedRuntime::frem,                                                          \
+      false,                                                                        \
+      true,                                                                         \
+      llvm::Type::getFloatTy(context),                                              \
+      llvm::Type::getFloatTy(context),                                              \
+      llvm::Type::getFloatTy(context))                                              \
+                                                                                    \
+  def(SharedRuntime_dlog,                                                           \
+      SharedRuntime::dlog,                                                          \
+      false,                                                                        \
+      true,                                                                         \
+      llvm::Type::getDoubleTy(context),                                             \
+      llvm::Type::getDoubleTy(context))                                             \
+                                                                                    \
+  def(SharedRuntime_dlog10,                                                         \
+      SharedRuntime::dlog10,                                                        \
+      false,                                                                        \
+      true,                                                                         \
+      llvm::Type::getDoubleTy(context),                                             \
+      llvm::Type::getDoubleTy(context))                                             \
+                                                                                    \
+  def(SharedRuntime_dexp,                                                           \
+      SharedRuntime::dexp,                                                          \
+      false,                                                                        \
+      true,                                                                         \
+      llvm::Type::getDoubleTy(context),                                             \
+      llvm::Type::getDoubleTy(context))                                             \
+                                                                                    \
+  def(install_exceptional_return_for_call_vm,                                       \
+      JeandleRuntimeRoutine::install_exceptional_return_for_call_vm,                \
+      false,                                                                        \
+      true,                                                                         \
+      llvm::Type::getVoidTy(context))                                               \
+                                                                                    \
   def(SharedRuntime_complete_monitor_unlocking_C,                                   \
       SharedRuntime::complete_monitor_unlocking_C,                                  \
       false,                                                                        \
@@ -295,33 +279,6 @@
       true,                                                                         \
       llvm::Type::getVoidTy(context),                                               \
       llvm::PointerType::get(context, llvm::jeandle::AddrSpace::CHeapAddrSpace))    \
-                                                                                    \
-  /* StringCoding.countPositives: scalar C++ fallback wrapper.                     \
-   * Always available on all platforms; used when the platform SIMD adapter        \
-   * (JeandleRuntime_count_positives_adapter) has not been generated.              \
-   * Receives a pointer to ba[off] (inside the Java heap byte array) plus the      \
-   * scan length; returns the positive-byte prefix length.                         \
-   * Marked gc-leaf: reads heap memory but performs no allocation or GC action.  */\
-  def(JeandleRuntime_count_positives,                                               \
-      JeandleRuntimeRoutine::count_positives_impl,                                  \
-      false,                                                                        \
-      true,                                                                         \
-      llvm::Type::getInt32Ty(context),                                              \
-      llvm::PointerType::get(context, llvm::jeandle::AddrSpace::JavaHeapAddrSpace), \
-      llvm::Type::getInt32Ty(context))                                              \
-                                                                                    \
-  /* StringCoding.countPositives: platform SIMD adapter stub.                      \
-   * Address is populated at Jeandle startup by generate_count_positives_adapter();\
-   * null if not yet available (e.g., before startup or on an unsupported config). \
-   * GC-leaf registration is done manually in generate() so is_leaf=false here.   \
-   * reachable=false: stub address embedded as inttoptr constant.                */\
-  def(JeandleRuntime_count_positives_adapter,                                       \
-      JeandleRuntimeRoutine::count_positives_stub_adapter(),                        \
-      false,                                                                        \
-      false,                                                                        \
-      llvm::Type::getInt32Ty(context),                                              \
-      llvm::PointerType::get(context, llvm::jeandle::AddrSpace::JavaHeapAddrSpace), \
-      llvm::Type::getInt32Ty(context))                                              \
 
 #define ALL_JEANDLE_ASSEMBLY_ROUTINES(def) \
   def(exceptional_return)                  \
@@ -346,6 +303,14 @@ class JeandleRuntimeRoutine : public AllStatic {
 
   static bool is_routine_entry(llvm::StringRef name) {
     return _routine_entry.contains(name);
+  }
+
+  // Look up a routine entry by name. Returns nullptr if the entry is absent
+  // or if the registered address is null (e.g., StubRoutines not yet generated).
+  static address find_routine_entry(llvm::StringRef name) {
+    auto it = _routine_entry.find(name);
+    if (it == _routine_entry.end()) return nullptr;
+    return it->getValue();
   }
 
   static bool is_gc_leaf(address addr) {
@@ -438,29 +403,6 @@ class JeandleRuntimeRoutine : public AllStatic {
   static void multianewarrayN(Klass* elem_type, arrayOopDesc* dims, JavaThread* current);
 
   static jint instanceof_unloaded_or_null(Method* method, int cp_index, Klass* ex_klass, JavaThread* current);
-
-  // ArrayScan: count leading positive bytes in a byte array slice.
-  // ba_start  — pointer to ba[off] (inside the Java heap byte array)
-  // len       — number of bytes to scan
-  // returns   — number of consecutive bytes with bit 7 clear, i.e. the length
-  //             of the positive-byte prefix; equals len if all bytes are positive.
-  static jint count_positives_impl(jbyte* ba_start, jint len);
-
-  // Platform-specific SIMD adapter stub for countPositives.
-  // Set by generate_count_positives_adapter() during Jeandle startup when a
-  // platform-specific adapter is generated.  lower_count_positives uses it when
-  // present; otherwise it calls the scalar count_positives_impl fallback.
-  static address _count_positives_stub_adapter;
-
- public:
-  static address count_positives_stub_adapter() { return _count_positives_stub_adapter; }
-
- private:
-  // Generates a C-callable stub whose entry point is stored in _count_positives_stub_adapter.
-  // Adapts Jeandle's standard C ABI (ba_start, len) to the platform-specific SIMD calling
-  // convention and emits the counting code via the platform MacroAssembler.
-  // Implemented in cpu/<arch>/jeandleRuntimeRoutine_<arch>.cpp.
-  static void generate_count_positives_adapter();
 
   // Assembly routine implementations:
 

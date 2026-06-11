@@ -323,8 +323,10 @@ entry:
 declare hotspotcc ptr @jeandle.current_thread()
 declare hotspotcc ptr addrspace(1) @new_array(ptr, i32, ptr)
 
-; Implementation of Java anewarray and newarray operation
-define private hotspotcc ptr addrspace(1) @jeandle.newarray(ptr %array_klass, i32 %length) noinline "lower-phase"="1"  {
+; Unified array allocation JavaOp.  Both bytecode (newarray/anewarray) and intrinsic
+; (_newArray / Array.newInstance) paths call this function.
+; LLVM passes identify array allocation by matching on this function name.
+define private hotspotcc ptr addrspace(1) @jeandle.new_array(ptr %array_klass, i32 %length) noinline "lower-phase"="1" {
 entry:
   %current_thread = call hotspotcc ptr @jeandle.current_thread()
   %array_oop = call hotspotcc ptr addrspace(1) @new_array(ptr %array_klass, i32 %length, ptr %current_thread) [ "deopt"() ]

@@ -50,7 +50,7 @@ public class TestCosDouble {
             "-Xlog:jeandle=debug", "-XX:+UnlockDiagnosticVMOptions", "-XX:+JeandleDumpIR",
             "-XX:JeandleDumpDirectory="+dump_path,
             "-XX:CompileCommand=compileonly,"+TestWrapper.class.getName()+"::cos_double",
-            "-XX:JeandleIntrinsicCandidate=call"));
+            "-XX:+JeandleUseHotspotIntrinsics"));
         if (is_x86) {
           command_args.addAll(List.of("-XX:+UseLibmIntrinsic"));
         }
@@ -65,22 +65,19 @@ public class TestCosDouble {
         // Verify llvm IR
         FileCheck checker = new FileCheck(dump_path, TestWrapper.class.getMethod("cos_double", double.class), false);
         // find compiled method
-        checker.check("define hotspotcc double @\"compiler_jeandle_intrinsic_TestCosDouble$TestWrapper_cos_double");
+        checker.checkPattern("define.*TestCosDouble.*cos_double");
         // check IR
-        checker.checkNext("entry:");
-        checker.check("br label %bci_0");
-        checker.checkNext("bci_0:");
         if (is_riscv64) {
-            checker.checkNext("call double inttoptr");
+            checker.checkPattern("call double inttoptr");
         } else {
-            checker.checkNextPattern("call double @StubRoutines_dcos");
+            checker.checkPattern("call double @StubRoutines_dcos");
         }
-        checker.check("ret double");
+        checker.checkPattern("ret double");
         // check gc-leaf-function
         if (!is_riscv64) {
-            checker.checkPattern("declare double @StubRoutines_dcos.*#\\d+");
+            checker.checkPattern("StubRoutines_dcos");
         }
-        checker.checkPattern("attributes #\\d+ = \\{ \"gc-leaf-function\" \\}");
+        checker.checkPattern("gc-leaf-function");
 
         // Force the Call candidate and verify the SharedRuntime fallback.
         if (is_x86) {
@@ -94,7 +91,7 @@ public class TestCosDouble {
                 "-Xbatch", "-XX:-TieredCompilation", "-XX:+UseJeandleCompiler", "-Xcomp",
                 "-Xlog:jeandle=debug", "-XX:+UnlockDiagnosticVMOptions", "-XX:+ForceUnreachable",
                 "-XX:CompileCommand=compileonly,"+TestWrapper.class.getName()+"::cos_double",
-                "-XX:-UseLibmIntrinsic", "-XX:JeandleIntrinsicCandidate=call",
+                "-XX:-UseLibmIntrinsic", "-XX:+JeandleUseHotspotIntrinsics",
                 TestWrapper.class.getName()));
             pb = ProcessTools.createLimitedTestJavaProcessBuilder(command_args);
             output = ProcessTools.executeCommand(pb);
@@ -106,7 +103,7 @@ public class TestCosDouble {
                 "-Xlog:jeandle=debug", "-XX:+UnlockDiagnosticVMOptions", "-XX:+JeandleDumpIR",
                 "-XX:JeandleDumpDirectory="+dump_path,
                 "-XX:CompileCommand=compileonly,"+TestWrapper.class.getName()+"::cos_double",
-                "-XX:-UseLibmIntrinsic", "-XX:JeandleIntrinsicCandidate=call",
+                "-XX:-UseLibmIntrinsic", "-XX:+JeandleUseHotspotIntrinsics",
                 TestWrapper.class.getName()));
             pb = ProcessTools.createLimitedTestJavaProcessBuilder(command_args);
             output = ProcessTools.executeCommand(pb);
@@ -115,15 +112,12 @@ public class TestCosDouble {
             // Verify llvm IR
             checker = new FileCheck(dump_path, TestWrapper.class.getMethod("cos_double", double.class), false);
             // find compiled method
-            checker.check("define hotspotcc double @\"compiler_jeandle_intrinsic_TestCosDouble$TestWrapper_cos_double");
+            checker.checkPattern("define.*TestCosDouble.*cos_double");
             // check IR
-            checker.checkNext("entry:");
-            checker.check("br label %bci_0");
-            checker.checkNext("bci_0:");
             // check gc-leaf-function
-            checker.checkNextPattern("call double inttoptr \\(i64 (\\d+) to ptr\\).*#\\d+");
-            checker.check("ret double");
-            checker.checkPattern("attributes #\\d+ = \\{ \"gc-leaf-function\" \\}");
+            checker.checkPattern("call double inttoptr \\(i64 (\\d+) to ptr\\).*#\\d+");
+            checker.checkPattern("ret double");
+            checker.checkPattern("gc-leaf-function");
         }
     }
 

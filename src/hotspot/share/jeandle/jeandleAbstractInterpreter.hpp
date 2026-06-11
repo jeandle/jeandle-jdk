@@ -292,7 +292,6 @@ class JeandleAbstractInterpreter : public StackObj {
 
  private:
   friend class JeandleIntrinsicLowering;
-  friend class JeandleIntrinsicIRSemantics;
 
   ciMethod* _method;
   llvm::Function* _llvm_func;
@@ -321,7 +320,7 @@ class JeandleAbstractInterpreter : public StackObj {
 
   // Object & Lock for synchronized method
   LockValue _sync_lock;
-  
+
   // Cumulative traps
   uint* _trap_hist;
 
@@ -380,7 +379,7 @@ class JeandleAbstractInterpreter : public StackObj {
   void instanceof(int klass_index);
   void arith_op(BasicType type, Bytecodes::Code code);
 
-  llvm::CallInst*   call_java_op(llvm::StringRef java_op, 
+  llvm::CallInst*   call_java_op(llvm::StringRef java_op,
                                  llvm::ArrayRef<llvm::Value*> args,
                                  llvm::ArrayRef<llvm::OperandBundleDef> deopt_bundle = {});
   llvm::InvokeInst* call_java_op_ex(llvm::StringRef java_op, llvm::ArrayRef<llvm::Value*> args,
@@ -466,13 +465,6 @@ class JeandleAbstractInterpreter : public StackObj {
   void zero_check(llvm::Value* divisor);
 
   void boundary_check(llvm::Value* array_oop, llvm::Value* index);
-
-  // String intrinsic slice precondition guard.
-  //   - null array       -> uncommon_trap(Reason_null_check)
-  //   - invalid off/len  -> uncommon_trap(Reason_intrinsic)
-  // Must be called while the arguments are still on the jvm stack (i.e. before any pop)
-  // so that each trap captures the correct deopt bundle for interpreter re-execution.
-  void string_range_check(llvm::Value* array_oop, llvm::Value* off, llvm::Value* len);
 
   void uncommon_trap(Deoptimization::DeoptReason, Deoptimization::DeoptAction, llvm::BasicBlock* insert_block = nullptr);
 

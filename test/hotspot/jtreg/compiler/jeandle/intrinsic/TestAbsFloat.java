@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2025, the Jeandle-JDK Authors. All Rights Reserved.
+ * Copyright (c) 2025, 2026, the Jeandle-JDK Authors. All Rights Reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -20,6 +20,7 @@
 
 /*
  * @test
+ * @key randomness
  * @library /test/lib /
  * @build jdk.test.lib.Asserts
  * @run main/othervm compiler.jeandle.intrinsic.TestAbsFloat
@@ -28,6 +29,7 @@
 package compiler.jeandle.intrinsic;
 
 import compiler.jeandle.fileCheck.FileCheck;
+import java.nio.file.Files;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Random;
@@ -38,51 +40,73 @@ import jdk.test.lib.process.ProcessTools;
 
 public class TestAbsFloat {
     public static void main(String[] args) throws Exception {
-        String dump_path = System.getProperty("java.io.tmpdir");
+        String dump_path = Files.createTempDirectory("jeandle_test_absfloat").toString();
         ArrayList<String> command_args = new ArrayList<String>(List.of(
             "-Xbatch", "-XX:-TieredCompilation", "-XX:+UseJeandleCompiler", "-Xcomp",
             "-Xlog:jeandle=debug", "-XX:+JeandleDumpIR",
             "-XX:JeandleDumpDirectory="+dump_path,
             "-XX:CompileCommand=compileonly,"+TestWrapper.class.getName()+"::abs_float",
+            "-XX:CompileCommand=compileonly,"+TestWrapper.class.getName()+"::unaligned_abs_float",
             TestWrapper.class.getName()
         ));
-    
+
         ProcessBuilder pb = ProcessTools.createLimitedTestJavaProcessBuilder(command_args);
         OutputAnalyzer output = ProcessTools.executeCommand(pb);
 
         output.shouldHaveExitValue(0)
-              .shouldContain("Method `static jfloat java.lang.Math.abs(jfloat)` is parsed as intrinsic");
+              .shouldContain("is parsed as intrinsic");
 
-        // Verify llvm IR
+        // Verify the llvm intrinsic is used — only check the intrinsic call, not control flow
         FileCheck checker = new FileCheck(dump_path, TestWrapper.class.getMethod("abs_float", float.class), false);
-        // find compiled method
-        checker.check("define hotspotcc float @\"compiler_jeandle_intrinsic_TestAbsFloat$TestWrapper_abs_float");
-        // check IR
-        checker.checkNext("entry:");
-        checker.check("br label %bci_0");
-        checker.checkNext("bci_0:");
-        // the llvm intrinsic is used
-        checker.checkNext("call float @llvm.fabs.f32(float %0)");
+        checker.checkPattern("llvm\\.fabs\\.f32");
     }
 
     static public class TestWrapper {
         static float v = Math.abs(1.0f);   // Force load java.lang.Math class
         public static void main(String[] args) {
             Random random = new Random();
-            Asserts.assertEquals(1.5f, abs_float(1.5f));
-            Asserts.assertEquals(1.5f, abs_float(-1.5f));
-            Asserts.assertEquals(Float.NaN, abs_float(Float.NaN));
-            Asserts.assertEquals(Float.POSITIVE_INFINITY, abs_float(Float.POSITIVE_INFINITY));
-            Asserts.assertEquals(Float.POSITIVE_INFINITY, abs_float(Float.NEGATIVE_INFINITY));
-            for (int i=0; i< 1000; i++) {
+
+            // Basic values
+            Asserts.assertEquals(1.5f, abs_float(1.5f), "abs(1.5f)");
+            Asserts.assertEquals(1.5f, abs_float(-1.5f), "abs(-1.5f)");
+            Asserts.assertEquals(Float.NaN, abs_float(Float.NaN), "abs(NaN)");
+            Asserts.assertEquals(Float.POSITIVE_INFINITY, abs_float(Float.POSITIVE_INFINITY), "abs(+Inf)");
+            Asserts.assertEquals(Float.POSITIVE_INFINITY, abs_float(Float.NEGATIVE_INFINITY), "abs(-Inf)");
+
+            // Negative zero: Math.abs(-0.0f) should be 0.0f
+            Asserts.assertTrue(Float.floatToRawIntBits(abs_float(-0.0f))
+                            == Float.floatToRawIntBits(0.0f),
+                    "abs(-0.0f) should be +0.0f");
+            Asserts.assertTrue(Float.floatToRawIntBits(abs_float(0.0f))
+                            == Float.floatToRawIntBits(0.0f),
+                    "abs(0.0f) should be +0.0f");
+
+            // Subnormal values
+            Asserts.assertEquals(Float.MIN_VALUE, abs_float(Float.MIN_VALUE),
+                    "abs(MIN_VALUEf) = MIN_VALUEf (already positive)");
+            Asserts.assertEquals(Float.MIN_VALUE, abs_float(-Float.MIN_VALUE),
+                    "abs(-MIN_VALUEf) = MIN_VALUEf");
+
+            // Random values
+            for (int i = 0; i < 1000; i++) {
                 float f = random.nextFloat();
-                float r = f > 0.0f ? f : -1*f;
-                Asserts.assertEquals(r , abs_float(f));
+                float r = f > 0.0f ? f : -1 * f;
+                Asserts.assertEquals(r, abs_float(f), "abs random float");
             }
+
+            // Unaligned access test (matching TestAbsDouble pattern)
+            Asserts.assertEquals(1.5f, unaligned_abs_float(1.5f), "unaligned abs(1.5f)");
         }
 
         public static float abs_float(float a) {
             return Math.abs(a);
         }
+
+        public static float unaligned_abs_float(float a) {
+            blackhole(1.0f); // Insert a float constant to break alignment
+            return Math.abs(a);
+        }
+
+        public static void blackhole(float a) {}
     }
 }

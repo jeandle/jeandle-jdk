@@ -53,26 +53,15 @@
   generate_##name();
 
 #define REGISTER_DIRECT_ROUTINE(name, routine_address, reachable, is_leaf, return_type, ...) \
-  if (reachable) {                                                                           \
-    _routine_entry.insert({llvm::StringRef(#name), (address)routine_address});               \
-  }                                                                                          \
-  if (is_leaf) {                                                                             \
+  _routine_entry.insert({llvm::StringRef(#name), (address)routine_address});                 \
+  if (is_leaf && (address)routine_address != nullptr) {                                      \
     _gc_leaf_routines.insert((address)routine_address);                                      \
   }
 
 llvm::StringMap<address> JeandleRuntimeRoutine::_routine_entry;
 llvm::DenseSet<address> JeandleRuntimeRoutine::_gc_leaf_routines;
-address JeandleRuntimeRoutine::_count_positives_stub_adapter = nullptr;
 
 bool JeandleRuntimeRoutine::generate(llvm::TargetMachine* target_machine, llvm::DataLayout* data_layout) {
-  // Generate the platform SIMD adapter for countPositives before registering direct routines
-  // so that count_positives_stub_adapter() is non-null when REGISTER_DIRECT_ROUTINE evaluates
-  // the JeandleRuntime_count_positives_adapter entry.
-  generate_count_positives_adapter();
-  if (_count_positives_stub_adapter != nullptr) {
-    _gc_leaf_routines.insert(_count_positives_stub_adapter);
-  }
-
   // For each indirect routine, compile a runtime stub to wrap it.
   ALL_JEANDLE_INDIRECT_ROUTINES(GEN_ROUTINE_STUB);
 
@@ -189,6 +178,16 @@ JRT_END
 // Called as the slow path when the cached array_klass field in the mirror is null.
 // Delegates to Reflection::reflect_new_array which handles klass resolution, primitive
 // types, dimension limit checks, and NegativeArraySizeException / NullPointerException.
+//
+// Unlike C2, which calls back into the Java method Array.newInstance() via a
+// CallStaticJavaNode (eventually reaching JVM_NewArray -> Reflection::reflect_new_array),
+// Jeandle calls Reflection::reflect_new_array directly. This avoids the overhead of
+// JNI transitions (Java -> native -> VM) and JNI handle marshalling. The two approaches
+// are functionally equivalent: both end up invoking the same underlying allocation logic
+// with identical exception semantics (NPE, NegativeArraySizeException, dimension limits).
+// The only minor difference is that JVMTI VMObjectAlloc events are not posted here,
+// but note that C2's intrinsified fast path (AllocateArrayNode) also skips those events,
+// so this is consistent with standard JIT intrinsification behavior.
 JRT_BLOCK_ENTRY(void, JeandleRuntimeRoutine::new_array_from_mirror(oopDesc* mirror, int length, JavaThread* current))
   JRT_BLOCK
 #ifndef PRODUCT
@@ -356,25 +355,3 @@ JRT_ENTRY(jint, JeandleRuntimeRoutine::instanceof_unloaded_or_null(Method* metho
   }
   return 0;
 JRT_END
-
-//-----------------------------------------------------------------------------
-// ArrayScan: count_positives_impl
-//
-// Scalar GC-leaf implementation of StringCoding.countPositives.
-// Returns the number of leading bytes with bit 7 clear (i.e. >= 0), which
-// equals len if all bytes are positive.  This is a plain C++ function with
-// standard calling convention; no JRT_ENTRY wrapper is needed because it
-// performs no allocation, does not call into the VM, and needs no JavaThread.
-//
-// Scalar fallback: used when _count_positives_stub_adapter is null (i.e., before
-// startup or on configurations where generate_count_positives_adapter() skipped).
-// Platform SIMD paths are installed by generate_count_positives_adapter() at startup:
-//   AArch64 — enter/leave wrapper around MacroAssembler::count_positives
-//   x86_64  — inline SSE/AVX/AVX512 via C2_MacroAssembler::count_positives
-jint JeandleRuntimeRoutine::count_positives_impl(jbyte* ba_start, jint len) {
-  jint i = 0;
-  for (; i < len; i++) {
-    if (ba_start[i] < 0) break;
-  }
-  return i;
-}

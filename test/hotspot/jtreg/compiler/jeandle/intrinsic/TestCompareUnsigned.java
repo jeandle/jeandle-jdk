@@ -64,27 +64,18 @@ public class TestCompareUnsigned {
               .shouldContain("Method `static jint java.lang.Integer.compareUnsigned(jint, jint)` is parsed as intrinsic")
               .shouldContain("Method `static jint java.lang.Long.compareUnsigned(jlong, jlong)` is parsed as intrinsic");
 
+        // Verify IR — only check semantic features (unsigned comparison and select), not control flow
         FileCheck intCheck = new FileCheck(dumpPath, TestWrapper.class.getMethod("compare_int", int.class, int.class), false);
-        intCheck.checkPattern("define hotspotcc i32 @\"compiler_jeandle_intrinsic_TestCompareUnsigned\\$TestWrapper_compare_int");
-        intCheck.checkNext("entry:");
-        intCheck.check("br label %bci_0");
-        intCheck.checkNext("bci_0:");
         intCheck.checkPattern("icmp ult i32");
         intCheck.checkPattern("icmp ugt i32");
         intCheck.checkPattern("select i1");
-		intCheck.checkPattern("select i1");
-        intCheck.checkPattern("ret i32");
+        intCheck.checkPattern("select i1");
 
         FileCheck longCheck = new FileCheck(dumpPath, TestWrapper.class.getMethod("compare_long", long.class, long.class), false);
-        longCheck.checkPattern("define hotspotcc i32 @\"compiler_jeandle_intrinsic_TestCompareUnsigned\\$TestWrapper_compare_long");
-        longCheck.checkNext("entry:");
-        longCheck.check("br label %bci_0");
-        longCheck.checkNext("bci_0:");
         longCheck.checkPattern("icmp ult i64");
         longCheck.checkPattern("icmp ugt i64");
         longCheck.checkPattern("select i1");
-		longCheck.checkPattern("select i1");
-        longCheck.checkPattern("ret i32");
+        longCheck.checkPattern("select i1");
     }
 
     static class TestWrapper {
@@ -93,8 +84,8 @@ public class TestCompareUnsigned {
 
         static int v1 = Integer.compareUnsigned(1, 1); // Force load java.lang.Integer class
         static int v2 = Long.compareUnsigned(1L, 1L); // Force load java.lang.Long class
-		
-		// The test logic refers to compiler/intrinsics/TestCompareUnsigned.java.
+
+        // The test logic refers to compiler/intrinsics/TestCompareUnsigned.java.
         public static void main(String[] args) {
             var random = Utils.getRandomInstance();
             for (int i = 0; i < 1000; i++) {
@@ -122,6 +113,22 @@ public class TestCompareUnsigned {
                 Asserts.assertEquals(compareLongWithImm4(x), expectedResult(x, Integer.MIN_VALUE));
                 Asserts.assertEquals(compareLongWithImm5(x), expectedResult(x, Long.MIN_VALUE));
             }
+
+            // Boundary cases for int: 0 and -1 are unsigned extremes
+            // compareUnsigned(0, -1) → -1 (when interpreted unsigned, -1 is MAX_UNSIGNED which is > 0)
+            Asserts.assertEquals(-1, compare_int(0, -1), "compareUnsigned(0, -1)");
+            Asserts.assertEquals(1, compare_int(-1, 0), "compareUnsigned(-1, 0)");
+            Asserts.assertEquals(0, compare_int(0, 0), "compareUnsigned(0, 0)");
+            Asserts.assertEquals(0, compare_int(-1, -1), "compareUnsigned(-1, -1)");
+            // 1 vs -2: small positive vs near-max unsigned
+            Asserts.assertEquals(-1, compare_int(1, -2), "compareUnsigned(1, -2)");
+
+            // Boundary cases for long
+            Asserts.assertEquals(-1, compare_long(0L, -1L), "compareUnsigned(0L, -1L)");
+            Asserts.assertEquals(1, compare_long(-1L, 0L), "compareUnsigned(-1L, 0L)");
+            Asserts.assertEquals(0, compare_long(0L, 0L), "compareUnsigned(0L, 0L)");
+            Asserts.assertEquals(0, compare_long(-1L, -1L), "compareUnsigned(-1L, -1L)");
+            Asserts.assertEquals(-1, compare_long(1L, -2L), "compareUnsigned(1L, -2L)");
         }
 
         static int expectedResult(int x, int y) {

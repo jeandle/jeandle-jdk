@@ -57,7 +57,7 @@ public class TestLLVMMathIntrinsics {
         "-Xbatch", "-XX:-TieredCompilation", "-XX:+UseJeandleCompiler", "-Xcomp",
         "-Xlog:jeandle=debug", "-XX:+JeandleDumpIR",
         "-XX:+UnlockDiagnosticVMOptions",
-        "-XX:JeandleIntrinsicCandidate=llvm"  // Force the LLVM candidate for dual-path math intrinsics.
+        "-XX:-JeandleUseHotspotIntrinsics"  // Force the LLVM candidate for dual-path math intrinsics.
     };
 
     public static void main(String[] args) throws Exception {
@@ -135,8 +135,6 @@ public class TestLLVMMathIntrinsics {
         checker.checkPattern("define hotspotcc double .*TestLLVMMathIntrinsics_double_exp.*");
         checker.check("call double @llvm.exp.f64");
 
-        // Math.pow is Hybrid-only now; TestPowDouble covers the generated-stub
-        // and SharedRuntime slow paths separately.
     }
 
     private static OutputAnalyzer runTestProcess(String testType) throws Exception {

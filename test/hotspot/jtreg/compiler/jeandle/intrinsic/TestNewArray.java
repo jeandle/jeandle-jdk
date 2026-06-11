@@ -16,11 +16,15 @@
  * 2 along with this work; if not, write to the Free Software Foundation,
  * Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301 USA.
  *
+ */
+
+/*
  * @test
- * @summary Test _newArray intrinsic (Array.newInstance) via Jeandle compiler
+ * @summary Test the intrinsic implementation of Array.newInstance (jeandle.new_array)
+ *          and bytecode array allocation paths
  * @library /test/lib
  * @run main/othervm -XX:+UseJeandleCompiler -XX:-TieredCompilation -Xcomp
- *      -XX:CompileCommand=compileonly,TestNewArray::*
+ *      -XX:CompileCommand=compileonly,TestNewArray$TestWrapper::*
  *      TestNewArray
  */
 
@@ -28,8 +32,38 @@ import java.lang.reflect.Array;
 
 public class TestNewArray {
 
+    // === Intrinsic path (Array.newInstance) — exercises lower_new_array() ===
+
     static Object createIntArray(int len) {
         return Array.newInstance(int.class, len);
+    }
+
+    static Object createByteArray(int len) {
+        return Array.newInstance(byte.class, len);
+    }
+
+    static Object createShortArray(int len) {
+        return Array.newInstance(short.class, len);
+    }
+
+    static Object createCharArray(int len) {
+        return Array.newInstance(char.class, len);
+    }
+
+    static Object createLongArray(int len) {
+        return Array.newInstance(long.class, len);
+    }
+
+    static Object createFloatArray(int len) {
+        return Array.newInstance(float.class, len);
+    }
+
+    static Object createDoubleArray(int len) {
+        return Array.newInstance(double.class, len);
+    }
+
+    static Object createBooleanArray(int len) {
+        return Array.newInstance(boolean.class, len);
     }
 
     static Object createObjectArray(int len) {
@@ -40,27 +74,64 @@ public class TestNewArray {
         return Array.newInstance(String.class, len);
     }
 
+    // === Bytecode path (newarray / anewarray / multianewarray) ===
+
+    static int[] newIntArray(int len) {
+        return new int[len];
+    }
+
+    static byte[] newByteArray(int len) {
+        return new byte[len];
+    }
+
+    static String[] newStringArray(int len) {
+        return new String[len];
+    }
+
+    static Object[] newObjectArray(int len) {
+        return new Object[len];
+    }
+
+    static int[][] newInt2D(int a, int b) {
+        return new int[a][b];
+    }
+
+    static String[][][] newString3D(int a, int b) {
+        return new String[a][b][];
+    }
+
+    // === Helper ===
+
+    static void checkTypeAndLength(Object arr, Class<?> expectedType, int expectedLen) {
+        if (!expectedType.isInstance(arr))
+            throw new RuntimeException("Expected " + expectedType + ", got: " + arr.getClass());
+        int len = java.lang.reflect.Array.getLength(arr);
+        if (len != expectedLen)
+            throw new RuntimeException("Expected length " + expectedLen + ", got: " + len);
+    }
+
     public static void main(String[] args) throws Exception {
-        // Warm up to trigger Jeandle compilation
+
+        // --- Intrinsic path: all primitive types (fast path: klass cached in mirror) ---
         for (int i = 0; i < 3; i++) {
-            Object ia = createIntArray(10);
-            if (!(ia instanceof int[])) throw new RuntimeException("Expected int[], got: " + ia.getClass());
-            if (((int[]) ia).length != 10) throw new RuntimeException("Wrong length: " + ((int[]) ia).length);
+            checkTypeAndLength(createIntArray(10),    int[].class,     10);
+            checkTypeAndLength(createByteArray(5),    byte[].class,    5);
+            checkTypeAndLength(createShortArray(7),   short[].class,   7);
+            checkTypeAndLength(createCharArray(3),    char[].class,    3);
+            checkTypeAndLength(createLongArray(4),    long[].class,    4);
+            checkTypeAndLength(createFloatArray(6),   float[].class,   6);
+            checkTypeAndLength(createDoubleArray(8),  double[].class,  8);
+            checkTypeAndLength(createBooleanArray(2), boolean[].class, 2);
 
-            Object oa = createObjectArray(5);
-            if (!(oa instanceof Object[])) throw new RuntimeException("Expected Object[], got: " + oa.getClass());
-            if (((Object[]) oa).length != 5) throw new RuntimeException("Wrong length: " + ((Object[]) oa).length);
-
-            Object sa = createStringArray(3);
-            if (!(sa instanceof String[])) throw new RuntimeException("Expected String[], got: " + sa.getClass());
-            if (((String[]) sa).length != 3) throw new RuntimeException("Wrong length: " + ((String[]) sa).length);
+            // Reference arrays (fast path)
+            checkTypeAndLength(createObjectArray(5),  Object[].class,  5);
+            checkTypeAndLength(createStringArray(3),  String[].class,  3);
         }
 
-        // Zero-length array
-        Object zero = createIntArray(0);
-        if (((int[]) zero).length != 0) throw new RuntimeException("Zero-length failed");
+        // --- Intrinsic path: zero-length ---
+        checkTypeAndLength(createIntArray(0), int[].class, 0);
 
-        // NegativeArraySizeException
+        // --- Intrinsic path: NegativeArraySizeException (exception edge) ---
         try {
             createIntArray(-1);
             throw new RuntimeException("Expected NegativeArraySizeException");
@@ -68,13 +139,59 @@ public class TestNewArray {
             // expected
         }
 
-        // NullPointerException via null component type (only via reflection path)
+        // --- Intrinsic path: null component type -> slow path -> NPE ---
         try {
             Array.newInstance(null, 5);
             throw new RuntimeException("Expected NullPointerException");
         } catch (NullPointerException e) {
             // expected
         }
+
+        // --- Bytecode path: newarray (primitive) ---
+        for (int i = 0; i < 3; i++) {
+            int[] ia = newIntArray(10);
+            if (ia.length != 10) throw new RuntimeException("int[] length mismatch");
+            byte[] ba = newByteArray(5);
+            if (ba.length != 5) throw new RuntimeException("byte[] length mismatch");
+        }
+
+        // --- Bytecode path: anewarray (reference) ---
+        for (int i = 0; i < 3; i++) {
+            String[] sa = newStringArray(5);
+            if (sa.length != 5) throw new RuntimeException("String[] length mismatch");
+            Object[] oa = newObjectArray(7);
+            if (oa.length != 7) throw new RuntimeException("Object[] length mismatch");
+        }
+
+        // --- Bytecode path: multianewarray (2D) ---
+        int[][] arr2d = newInt2D(3, 4);
+        if (arr2d.length != 3) throw new RuntimeException("2D outer length mismatch");
+        for (int i = 0; i < 3; i++) {
+            if (arr2d[i].length != 4) throw new RuntimeException("2D inner length mismatch at " + i);
+        }
+
+        // --- Bytecode path: multianewarray (3D, last dimension unspecified -> null) ---
+        String[][][] arr3d = newString3D(2, 3);
+        if (arr3d.length != 2) throw new RuntimeException("3D outer length mismatch");
+        for (int i = 0; i < 2; i++) {
+            if (arr3d[i].length != 3) throw new RuntimeException("3D mid length mismatch at " + i);
+            for (int j = 0; j < 3; j++) {
+                if (arr3d[i][j] != null)
+                    throw new RuntimeException("3D inner should be null (unspecified)");
+            }
+        }
+
+        // --- Bytecode path: NegativeArraySizeException ---
+        try {
+            newIntArray(-1);
+            throw new RuntimeException("Expected NegativeArraySizeException (bytecode)");
+        } catch (NegativeArraySizeException e) {
+            // expected
+        }
+
+        // --- Bytecode path: zero-length ---
+        int[] zeroLen = newIntArray(0);
+        if (zeroLen.length != 0) throw new RuntimeException("Zero-length bytecode failed");
 
         System.out.println("TestNewArray PASSED");
     }

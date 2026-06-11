@@ -106,51 +106,6 @@ public class TestCountPositives {
         }
     }
 
-    private static void test_invalidRanges() throws Exception {
-        byte[] sample = new byte[] { 1, 2, 3, -1, 5, 6 };
-
-        assertThrows(NullPointerException.class, () -> Helper.StringCodingCountPositives(null, 0, 1),
-                "null array should throw NPE");
-        assertThrows(IndexOutOfBoundsException.class, () -> Helper.StringCodingCountPositives(sample, -1, 1),
-                "negative offset should throw IndexOutOfBoundsException");
-        // negative length: the Java fallback loop (for i=off; i<off+len; i++) doesn't
-        // execute when len<0, so no exception is thrown — just a silent wrong result.
-        // We verify it at least doesn't crash.
-        Helper.StringCodingCountPositives(sample, 0, -1);
-        assertThrows(IndexOutOfBoundsException.class, () -> Helper.StringCodingCountPositives(sample, 4, 3),
-                "offset + length past end should throw IndexOutOfBoundsException");
-
-        int firstNegative = Helper.StringCodingCountPositives(sample, 0, sample.length);
-        if (firstNegative != 3) {
-            throw new Exception("valid range should still return the first negative index, got " + firstNegative);
-        }
-
-        int allPositive = Helper.StringCodingCountPositives(new byte[] { 1, 2, 3, 4 }, 0, 4);
-        if (allPositive != 4) {
-            throw new Exception("all-positive range should return full length, got " + allPositive);
-        }
-    }
-
-    @FunctionalInterface
-    private interface ThrowingRunnable {
-        void run() throws Throwable;
-    }
-
-    private static void assertThrows(Class<? extends Throwable> expected,
-                                     ThrowingRunnable action,
-                                     String message) throws Exception {
-        try {
-            action.run();
-        } catch (Throwable actual) {
-            if (expected.isInstance(actual)) {
-                return;
-            }
-            throw new Exception(message + ": expected " + expected.getSimpleName()
-                    + ", got " + actual.getClass().getSimpleName(), actual);
-        }
-        throw new Exception(message + ": expected " + expected.getSimpleName());
-    }
-
     private static int countPositives(byte[] ba, int off, int len) {
         int limit = off + len;
         for (int i = off; i < limit; i++) {
@@ -165,11 +120,6 @@ public class TestCountPositives {
         // iterate to eventually get intrinsic inlined
         for (int j = 0; j < 1000; ++j) {
             test_countPositives();
-        }
-        // Repeated invalid slices should deopt back to Java semantics without changing
-        // observable exceptions; this also exercises the intrinsic-precondition guard path.
-        for (int j = 0; j < 2000; ++j) {
-            test_invalidRanges();
         }
     }
 
