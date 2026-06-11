@@ -60,7 +60,7 @@ public class TestRintDouble {
         // Verify llvm IR — only check the intrinsic is used, not control flow
         FileCheck checker = new FileCheck(dumpPath,
                 TestWrapper.class.getMethod("rint_double", double.class), false);
-        checker.checkPattern("llvm\\.rint");
+        checker.checkPattern("llvm\\.roundeven");
     }
 
     static class TestWrapper {

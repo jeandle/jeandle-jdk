@@ -185,7 +185,10 @@ bool JeandleIntrinsicLowering::lower(vmIntrinsics::ID id, const ciMethod* target
     case vmIntrinsics::_ceil:
       return emit_llvm_builtin(llvm::Intrinsic::ceil);
     case vmIntrinsics::_rint:
-      return emit_llvm_builtin(llvm::Intrinsic::rint);
+      // Math.rint is statically ties-to-even; llvm.rint follows the dynamic
+      // FP rounding mode. Use llvm.roundeven (FRINTN / ROUNDSD with a static
+      // nearest-even immediate), matching what C2's rmode_rint emits.
+      return emit_llvm_builtin(llvm::Intrinsic::roundeven);
 
     case vmIntrinsics::_iabs:
     case vmIntrinsics::_labs:
