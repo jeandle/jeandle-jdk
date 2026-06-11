@@ -29,6 +29,7 @@
 
 #include "jeandle/jeandleAbstractInterpreter.hpp"
 #include "jeandle/jeandleCompiledCall.hpp"
+#include "jeandle/jeandleIntrinsicLowering.hpp"
 #include "jeandle/jeandleRuntimeRoutine.hpp"
 #include "jeandle/jeandleType.hpp"
 #include "jeandle/jeandleUtils.hpp"
@@ -41,6 +42,8 @@
 #include "ci/ciTypeFlow.hpp"
 #include "oops/objArrayKlass.hpp"
 #include "classfile/javaClasses.hpp"
+#include "compiler/compilerDirectives.hpp"
+#include "compiler/compileTask.hpp"
 #include "gc/shared/gc_globals.hpp"
 #include "interpreter/interpreter.hpp"
 #include "logging/log.hpp"
@@ -1385,6 +1388,21 @@ void JeandleAbstractInterpreter::interpret_block(JeandleBasicBlock* block) {
 }
 
 void JeandleAbstractInterpreter::uncommon_trap(Deoptimization::DeoptReason reason, Deoptimization::DeoptAction action, llvm::BasicBlock* insert_block) {
+#ifdef ASSERT
+  // Structural guard against trap-throttle drift: any deopt reason an intrinsic emits
+  // must be in its trap-throttle mask, or try_lower_intrinsic's pre-check would not
+  // throttle it.  (Exceptions go through builtin_throw, not here, so null/range/div0
+  // are correctly out of scope.)
+  if (_lowering_intrinsic_id != vmIntrinsics::_none) {
+    const JeandleTrapReasonMask mask =
+        JeandleIntrinsicLowering::trap_throttle_mask(_lowering_intrinsic_id);
+    assert((mask & (JeandleTrapReasonMask(1) << static_cast<uint>(reason))) != 0,
+           "intrinsic %s emits deopt reason %d not in its trap-throttle mask; "
+           "add it to trap_throttle_mask()",
+           vmIntrinsics::name_at(_lowering_intrinsic_id), static_cast<int>(reason));
+  }
+#endif
+
   auto saved_insert_block = _ir_builder.GetInsertBlock();
   auto saved_insert_point = _ir_builder.GetInsertPoint();
 
@@ -1719,10 +1737,56 @@ void JeandleAbstractInterpreter::invoke() {
     _compiled_code.set_has_method_handle_invoke(true);
   }
 
+  // Additional receiver subtype checks for interface calls via invokespecial or invokeinterface.
+  // Must run before try_lower_intrinsic so that intrinsics (e.g. _getClass) cannot bypass
+  // the runtime IllegalAccessError / IncompatibleClassChangeError that the JVMS requires
+  // when the receiver is not a subtype of the declaring interface.
+  {
+    ciKlass* receiver_constraint = nullptr;
+    if (bc == Bytecodes::_invokespecial && !target->is_object_initializer()) {
+      ciInstanceKlass* sender_klass = _method->holder();
+      if (sender_klass->is_interface()) {
+        receiver_constraint = sender_klass;
+      }
+    } else if (bc == Bytecodes::_invokeinterface && target->is_private()) {
+      assert(holder->is_interface(), "How did we get a non-interface method here!");
+      receiver_constraint = holder;
+    }
+
+    if (receiver_constraint != nullptr) {
+      assert(receiver, "receiver must be present");
+
+      int receiver_depth = target->arg_size() - 1; // Index of stack slots where receiver locates.
+      receiver_value = _jvm->raw_peek(receiver_depth).value();
+
+      Klass* receiver_constraint_klass = (Klass*)(receiver_constraint->constant_encoding());
+      llvm::PointerType* klass_type = llvm::PointerType::get(*_context, llvm::jeandle::AddrSpace::CHeapAddrSpace);
+      llvm::Value* receiver_constraint_value = _ir_builder.CreateIntToPtr(_ir_builder.getInt64((intptr_t)receiver_constraint_klass),
+                                                                          klass_type);
+
+      llvm::CallInst* checkcast = call_java_op("jeandle.checkcast", {receiver_constraint_value, receiver_value});
+
+      int cur_bci = _bytecodes.cur_bci();
+      llvm::BasicBlock* checkcast_pass = llvm::BasicBlock::Create(*_context,
+                                                                  "bci_" + std::to_string(cur_bci) + "_check_receiver_pass",
+                                                                  _llvm_func);
+      llvm::BasicBlock* checkcast_fail = llvm::BasicBlock::Create(*_context,
+                                                                  "bci_" + std::to_string(cur_bci) + "_check_receiver_fail",
+                                                                  _llvm_func);
+
+      _ir_builder.CreateCondBr(checkcast, checkcast_pass, checkcast_fail);
+
+      uncommon_trap(Deoptimization::Reason_class_check, Deoptimization::Action_none, checkcast_fail);
+
+      _ir_builder.SetInsertPoint(checkcast_pass);
+      _block->set_tail_llvm_block(checkcast_pass);
+    }
+  }
+
   // try inline callee as intrinsic
   if (target->is_loaded()
     && target->check_intrinsic_candidate()
-    && inline_intrinsic(target)) {
+    && try_lower_intrinsic(target)) {
     if (log_is_enabled(Debug, jeandle)) {
       ResourceMark rm;
       stringStream ss;
@@ -1746,47 +1810,6 @@ void JeandleAbstractInterpreter::invoke() {
     method_signature = target->signature();
   } else {
     assert(method_signature == target->signature(), "method signature unmatched");
-  }
-
-  // Additional receiver subtype checks for interface calls via invokespecial or invokeinterface.
-  ciKlass* receiver_constraint = nullptr;
-  if (bc == Bytecodes::_invokespecial && !target->is_object_initializer()) {
-    ciInstanceKlass* sender_klass = _method->holder();
-    if (sender_klass->is_interface()) {
-      receiver_constraint = sender_klass;
-    }
-  } else if (bc == Bytecodes::_invokeinterface && target->is_private()) {
-    assert(holder->is_interface(), "How did we get a non-interface method here!");
-    receiver_constraint = holder;
-  }
-
-  if (receiver_constraint != nullptr) {
-    assert(receiver, "receiver must be present");
-
-    int receiver_depth = target->arg_size() - 1; // Index of stack slots where receiver locates.
-    receiver_value = _jvm->raw_peek(receiver_depth).value();
-
-    Klass* receiver_constraint_klass = (Klass*)(receiver_constraint->constant_encoding());
-    llvm::PointerType* klass_type = llvm::PointerType::get(*_context, llvm::jeandle::AddrSpace::CHeapAddrSpace);
-    llvm::Value* receiver_constraint_value = _ir_builder.CreateIntToPtr(_ir_builder.getInt64((intptr_t)receiver_constraint_klass),
-                                                                        klass_type);
-
-    llvm::CallInst* checkcast = call_java_op("jeandle.checkcast", {receiver_constraint_value, receiver_value});
-
-    int cur_bci = _bytecodes.cur_bci();
-    llvm::BasicBlock* checkcast_pass = llvm::BasicBlock::Create(*_context,
-                                                                "bci_" + std::to_string(cur_bci) + "_check_receiver_pass",
-                                                                _llvm_func);
-    llvm::BasicBlock* checkcast_fail = llvm::BasicBlock::Create(*_context,
-                                                                "bci_" + std::to_string(cur_bci) + "_check_receiver_fail",
-                                                                _llvm_func);
-
-    _ir_builder.CreateCondBr(checkcast, checkcast_pass, checkcast_fail);
-
-    uncommon_trap(Deoptimization::Reason_class_check, Deoptimization::Action_none, checkcast_fail);
-
-    _ir_builder.SetInsertPoint(checkcast_pass);
-    _block->set_tail_llvm_block(checkcast_pass);
   }
 
   // Construct arguments.
@@ -1883,139 +1906,50 @@ void JeandleAbstractInterpreter::invoke() {
   invoke->addFnAttr(patch_bytes_attr);
 
   // Attach java-klass return type attribute to the call site.
-  ciType* ret_type = method_signature->return_type();
-  if (ret_type->is_klass()) {
-    ciKlass* ret_klass = ret_type->as_klass();
-    if (ret_klass->is_loaded() && !is_unverified_interface(ret_klass)) {
-      Klass* ret_klass_enc = (Klass*)(ret_klass->constant_encoding());
-      invoke->addRetAttr(llvm::Attribute::get(*_context,
-          llvm::jeandle::Attribute::JavaKlass,
-          std::to_string((uintptr_t)ret_klass_enc)));
-      if (is_effectively_final(ret_klass)) {
-        invoke->addRetAttr(llvm::Attribute::get(*_context,
-            llvm::jeandle::Attribute::JavaKlassExact));
-      }
-    }
-  }
+  attach_java_klass_ret_attr(invoke, method_signature->return_type(), *_context);
 
   if (return_type != BasicType::T_VOID) {
     _jvm->push(return_type, invoke);
   }
 }
 
-bool JeandleAbstractInterpreter::inline_intrinsic(const ciMethod* target) {
-  switch(target->intrinsic_id()) {
-    case vmIntrinsics::_dabs: {
-      _jvm->dpush(_ir_builder.CreateIntrinsic(JeandleType::java2llvm(BasicType::T_DOUBLE, *_context), llvm::Intrinsic::fabs, {_jvm->dpop()}));
-      break;
-    }
-    case vmIntrinsicID::_fabs: {
-      _jvm->fpush(_ir_builder.CreateIntrinsic(JeandleType::java2llvm(BasicType::T_FLOAT, *_context), llvm::Intrinsic::fabs, {_jvm->fpop()}));
-      break;
-    }
-    case vmIntrinsicID::_iabs: {
-      _jvm->ipush(_ir_builder.CreateIntrinsic(JeandleType::java2llvm(BasicType::T_INT, *_context), llvm::Intrinsic::abs, {_jvm->ipop(), _ir_builder.getInt1(false)}));
-      break;
-    }
-    case vmIntrinsicID::_labs: {
-      _jvm->lpush(_ir_builder.CreateIntrinsic(JeandleType::java2llvm(BasicType::T_LONG, *_context), llvm::Intrinsic::abs, {_jvm->lpop(), _ir_builder.getInt1(false)}));
-      break;
-    }
-    case vmIntrinsicID::_dsin: {
-      if (JeandleUseHotspotIntrinsics) {
-        llvm::FunctionCallee callee = StubRoutines::dsin() != nullptr ? JeandleRuntimeRoutine::StubRoutines_dsin_callee(_module) :
-                                                                        JeandleRuntimeRoutine::SharedRuntime_dsin_callee(_module);
-        _jvm->dpush(create_call(callee, {_jvm->dpop()}, llvm::CallingConv::C));
-      } else {
-        _jvm->dpush(_ir_builder.CreateIntrinsic(JeandleType::java2llvm(BasicType::T_DOUBLE, *_context), llvm::Intrinsic::sin, {_jvm->dpop()}));
-      }
-      break;
-    }
-    case vmIntrinsicID::_dcos: {
-      if (JeandleUseHotspotIntrinsics) {
-        llvm::FunctionCallee callee = StubRoutines::dcos() != nullptr ? JeandleRuntimeRoutine::StubRoutines_dcos_callee(_module) :
-                                                                        JeandleRuntimeRoutine::SharedRuntime_dcos_callee(_module);
-        _jvm->dpush(create_call(callee, {_jvm->dpop()}, llvm::CallingConv::C));
-      } else {
-        _jvm->dpush(_ir_builder.CreateIntrinsic(JeandleType::java2llvm(BasicType::T_DOUBLE, *_context), llvm::Intrinsic::cos, {_jvm->dpop()}));
+bool JeandleAbstractInterpreter::try_lower_intrinsic(const ciMethod* target) {
+  const vmIntrinsics::ID id = target->intrinsic_id();
 
-      }
-      break;
-    }
-    case vmIntrinsicID::_dtan: {
-      if (JeandleUseHotspotIntrinsics) {
-        llvm::FunctionCallee callee = StubRoutines::dtan() != nullptr ? JeandleRuntimeRoutine::StubRoutines_dtan_callee(_module) :
-                                                                        JeandleRuntimeRoutine::SharedRuntime_dtan_callee(_module);
-        _jvm->dpush(create_call(callee, {_jvm->dpop()}, llvm::CallingConv::C));
-      } else {
-        _jvm->dpush(_ir_builder.CreateIntrinsic(JeandleType::java2llvm(BasicType::T_DOUBLE, *_context), llvm::Intrinsic::tan, {_jvm->dpop()}));
-      }
-      break;
-    }
-    case vmIntrinsicID::_dlog: {
-      if (JeandleUseHotspotIntrinsics) {
-        llvm::FunctionCallee callee = StubRoutines::dlog() != nullptr ? JeandleRuntimeRoutine::StubRoutines_dlog_callee(_module) :
-                                                                        JeandleRuntimeRoutine::SharedRuntime_dlog_callee(_module);
-        _jvm->dpush(create_call(callee, {_jvm->dpop()}, llvm::CallingConv::C));
-      } else {
-        _jvm->dpush(_ir_builder.CreateIntrinsic(JeandleType::java2llvm(BasicType::T_DOUBLE, *_context), llvm::Intrinsic::log, {_jvm->dpop()}));
-      }
-      break;
-    }
-    case vmIntrinsicID::_dlog10: {
-      if (JeandleUseHotspotIntrinsics) {
-        llvm::FunctionCallee callee = StubRoutines::dlog10() != nullptr ? JeandleRuntimeRoutine::StubRoutines_dlog10_callee(_module) :
-                                                                        JeandleRuntimeRoutine::SharedRuntime_dlog10_callee(_module);
-        _jvm->dpush(create_call(callee, {_jvm->dpop()}, llvm::CallingConv::C));
-      } else {
-        _jvm->dpush(_ir_builder.CreateIntrinsic(JeandleType::java2llvm(BasicType::T_DOUBLE, *_context), llvm::Intrinsic::log10, {_jvm->dpop()}));
-      }
-      break;
-    }
-    case vmIntrinsicID::_dexp: {
-      if (JeandleUseHotspotIntrinsics) {
-        llvm::FunctionCallee callee = StubRoutines::dexp() != nullptr ? JeandleRuntimeRoutine::StubRoutines_dexp_callee(_module) :
-                                                                      JeandleRuntimeRoutine::SharedRuntime_dexp_callee(_module);
-        _jvm->dpush(create_call(callee, {_jvm->dpop()}, llvm::CallingConv::C));
-      } else {
-        _jvm->dpush(_ir_builder.CreateIntrinsic(JeandleType::java2llvm(BasicType::T_DOUBLE, *_context), llvm::Intrinsic::exp, {_jvm->dpop()}));
-      }
-      break;
-    }
-    case vmIntrinsicID::_dpow: {
-      // push the base first, then the exponent
-      // the pop order is reversed
-      llvm::Value *component = _jvm->dpop();
-      llvm::Value *base = _jvm->dpop();
-      if (JeandleUseHotspotIntrinsics) {
-        llvm::FunctionCallee callee = StubRoutines::dpow() != nullptr ? JeandleRuntimeRoutine::StubRoutines_dpow_callee(_module) : JeandleRuntimeRoutine::SharedRuntime_dpow_callee(_module);
-        _jvm->dpush(create_call(callee, {base, component}, llvm::CallingConv::C));
-      }
-      else {
-        _jvm->dpush(_ir_builder.CreateIntrinsic(JeandleType::java2llvm(BasicType::T_DOUBLE, *_context), llvm::Intrinsic::pow, {base, component}));
-      }
-      break;
-    }
-    case vmIntrinsics::_compareUnsigned_i:
-    case vmIntrinsics::_compareUnsigned_l: {
-      bool is_long = (target->intrinsic_id() == vmIntrinsics::_compareUnsigned_l);
+  // 1) Is this an intrinsic Jeandle can lower?
+  if (!JeandleIntrinsicLowering::is_supported(id)) return false;
 
-      llvm::Value* arg2 = is_long ? _jvm->lpop() : _jvm->ipop();
-      llvm::Value* arg1 = is_long ? _jvm->lpop() : _jvm->ipop();
-
-      llvm::Value* is_less = _ir_builder.CreateICmpULT(arg1, arg2);
-      llvm::Value* is_greater = _ir_builder.CreateICmpUGT(arg1, arg2);
-
-      llvm::Value* select_greater = _ir_builder.CreateSelect(is_greater, JeandleType::int_const(_ir_builder, 1), JeandleType::int_const(_ir_builder, 0));
-
-      llvm::Value* result = _ir_builder.CreateSelect(is_less, JeandleType::int_const(_ir_builder, -1), select_greater);
-      _jvm->ipush(result);
-      break;
+  // 2) Global / per-method disable flags
+  if (vmIntrinsics::is_disabled_by_flags(id)) return false;
+  if (CompileTask* task = ciEnv::current()->task()) {
+    if (DirectiveSet* directive = task->directive()) {
+      if (directive->is_intrinsic_disabled(id)) {
+        return false;
+      }
     }
-    default:
-      return false;
   }
-  return true;
+
+  // 3) Trap-throttle check
+  const int cur_bci = _bytecodes.cur_bci();
+  JeandleTrapReasonMask mask = JeandleIntrinsicLowering::trap_throttle_mask(id);
+  for (uint reason_idx = 0; mask != 0; ++reason_idx, mask >>= 1) {
+    if ((mask & 1u) != 0 &&
+        too_many_traps(const_cast<ciMethod*>(_method), cur_bci,
+                       static_cast<Deoptimization::DeoptReason>(reason_idx))) {
+      return false;
+    }
+  }
+
+  // 4) Lower
+  JeandleIntrinsicLowering lowering(this);
+  // Publish the intrinsic being lowered so uncommon_trap can verify (debug) that every
+  // deopt reason it emits is declared in the trap-throttle mask.  Save/restore rather
+  // than clear, so the invariant still holds if intrinsic lowering ever nests.
+  DEBUG_ONLY(const vmIntrinsics::ID prev_id = _lowering_intrinsic_id);
+  DEBUG_ONLY(_lowering_intrinsic_id = id);
+  bool lowered = lowering.lower(id, target);
+  DEBUG_ONLY(_lowering_intrinsic_id = prev_id);
+  return lowered;
 }
 
 // Generate IR for calling into llvm FunctionCallee, without exception handling.
@@ -2389,11 +2323,24 @@ void JeandleAbstractInterpreter::do_get_xxx(ciField* field, bool is_static) {
   // rather than inserting the barrier here in the frontend.
   // Late insertion is preferred for GC barriers as it preserves
   // optimization opportunities in earlier passes.
-  if (UseG1GC && !is_static && is_reference_type(field->layout_type()) &&
+  //
+  // CPUOrder fence after loading the Reference.referent field. Prevents the
+  // optimizer from CSE'ing the referent load across safepoints, since GC can
+  // change the referent value at any safepoint. This is the same MemBarCPUOrder
+  // that C2 inserts unconditionally after referent loads in
+  // inline_reference_get() and inline_reference_refersTo0().
+  // The CPUOrder fence is GC-independent — it is needed regardless of which
+  // collector is in use. The singlethread scope ensures no hardware fence
+  // instructions are emitted on any supported platform.
+  if (!is_static && is_reference_type(field->layout_type()) &&
       field->holder()->is_subclass_of(ciEnv::current()->Reference_klass()) &&
       field->offset_in_bytes() == java_lang_ref_Reference::referent_offset()) {
     assert(value != nullptr, "must be loaded already");
-    call_java_op("jeandle.g1_pre_barrier_loaded", {value});
+    if (UseG1GC) {
+      call_java_op("jeandle.g1_pre_barrier_loaded", {value});
+    }
+    _ir_builder.CreateFence(llvm::AtomicOrdering::SequentiallyConsistent,
+                            llvm::SyncScope::SingleThread);
   }
 
   // Attach java-klass metadata to loads of object/array fields.
@@ -3122,7 +3069,7 @@ void JeandleAbstractInterpreter::do_unified_newarray(Klass* array_klass) {
   llvm::Value* array_klass_addr = _ir_builder.getInt64((intptr_t)array_klass);
   llvm::Value* array_klass_ptr =  _ir_builder.CreateIntToPtr(array_klass_addr, klass_type);
 
-  llvm::InvokeInst* result = call_java_op_ex("jeandle.newarray", {array_klass_ptr, length}, {create_current_deopt_bundle()});
+  llvm::InvokeInst* result = call_java_op_ex("jeandle.new_array", {array_klass_ptr, length}, {create_current_deopt_bundle()});
 
   // newarray always produces an exact type.
   result->addRetAttr(llvm::Attribute::get(*_context,
@@ -3190,7 +3137,7 @@ void JeandleAbstractInterpreter::multianewarray() {
 
     llvm::Value* dimensions_array_length = _ir_builder.getInt32(ndimensions);
 
-    llvm::InvokeInst* dimensions_array_oop = call_java_op_ex("jeandle.newarray", {int_array_klass_ptr, dimensions_array_length},
+    llvm::InvokeInst* dimensions_array_oop = call_java_op_ex("jeandle.new_array", {int_array_klass_ptr, dimensions_array_length},
                                                              {create_current_deopt_bundle()});
     RETURN_VOID_ON_JEANDLE_ERROR();
 

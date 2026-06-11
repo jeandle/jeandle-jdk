@@ -359,7 +359,6 @@ runtime/ClassUnload/UnloadTestWithVerifyDuringGC.java                           
 # timeout
 ###
 
-
 compiler/loopopts/TestRemoveEmptyLoop.java                                                     linux-aarch64,linux-x64
 
 ###
@@ -501,7 +500,7 @@ compiler/interpreter/Test6539464.java                                           
 ###
 # Fails because Jeandle does not support nmethod entry barrier
 ###
-serviceability/jvmti/CompiledMethodLoad/Zombie.java                                            linux-x64
+serviceability/jvmti/CompiledMethodLoad/Zombie.java                                            linux-aarch64,linux-x64
 
 ###
 # GC not support(tier3)

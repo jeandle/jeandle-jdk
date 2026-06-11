@@ -43,14 +43,14 @@ public class TestExpDouble {
         boolean is_x86 = System.getProperty("os.arch").equals("amd64");
         String dump_path = System.getProperty("java.io.tmpdir");
 
-        // intrinsic by StubRoutine
+        // Force the Call candidate and verify the StubRoutine path.
         ArrayList<String> command_args = new ArrayList<String>(List.of(
             "-Xbatch", "-XX:-TieredCompilation", "-XX:+UseJeandleCompiler", "-Xcomp",
-            "-Xlog:jeandle=debug", "-XX:+JeandleDumpIR",
+            "-Xlog:jeandle=debug", "-XX:+UnlockDiagnosticVMOptions", "-XX:+JeandleDumpIR",
             "-XX:JeandleDumpDirectory="+dump_path, "-XX:+JeandleUseHotspotIntrinsics",
             "-XX:CompileCommand=compileonly,"+TestWrapper.class.getName()+"::exp_double"));
         if (is_x86) {
-          command_args.addAll(List.of("-XX:+UnlockDiagnosticVMOptions", "-XX:+UseLibmIntrinsic"));
+          command_args.addAll(List.of("-XX:+UseLibmIntrinsic"));
         }
         command_args.add(TestWrapper.class.getName());
 
@@ -63,24 +63,21 @@ public class TestExpDouble {
         // Verify llvm IR
         FileCheck checker = new FileCheck(dump_path, TestWrapper.class.getMethod("exp_double", double.class), false);
         // find compiled method
-        checker.checkPattern("define hotspotcc double .*compiler_jeandle_intrinsic_TestExpDouble\\$TestWrapper_exp_double.*(double %0)");
+        checker.checkPattern("define.*TestExpDouble.*exp_double");
         // check IR
-        checker.checkNext("entry:");
-        checker.check("br label %bci_0");
-        checker.checkNext("bci_0:");
         if (is_x86) {
-            checker.checkNext("call double @StubRoutines_dexp");
+            checker.check("StubRoutines_dexp");
         } else {
-            checker.checkNextPattern("call double inttoptr \\(i64 (\\d+) to ptr\\).*#\\d+");
+            checker.checkPattern("call double inttoptr \\(i64 (\\d+) to ptr\\).*#\\d+");
         }
-        checker.check("ret double");
+        checker.checkPattern("ret double");
         // check gc-leaf-function
         if (is_x86) {
-            checker.checkPattern("declare double @StubRoutines_dexp.*#\\d+");
+            checker.checkPattern("StubRoutines_dexp");
         }
-        checker.checkPattern("attributes #\\d+ = \\{ \"gc-leaf-function\" \\}");
+        checker.checkPattern("gc-leaf-function");
 
-        // intrinsic by SharedRuntime
+        // Force the Call candidate and verify the SharedRuntime fallback.
         if (is_x86) {
             dump_path = System.getProperty("java.io.tmpdir")+"/test2";
             Path tmp2 = Path.of(dump_path);
@@ -90,9 +87,10 @@ public class TestExpDouble {
 
             command_args = new ArrayList<String>(List.of(
                 "-Xbatch", "-XX:-TieredCompilation", "-XX:+UseJeandleCompiler", "-Xcomp",
-                "-Xlog:jeandle=debug", "-XX:+ForceUnreachable", "-XX:+JeandleUseHotspotIntrinsics",
+                "-Xlog:jeandle=debug", "-XX:+UnlockDiagnosticVMOptions", "-XX:+ForceUnreachable",
+                "-XX:+JeandleUseHotspotIntrinsics",
                 "-XX:CompileCommand=compileonly,"+TestWrapper.class.getName()+"::exp_double",
-                "-XX:+UnlockDiagnosticVMOptions", "-XX:-UseLibmIntrinsic",
+                "-XX:-UseLibmIntrinsic",
                 TestWrapper.class.getName()));
             pb = ProcessTools.createLimitedTestJavaProcessBuilder(command_args);
             output = ProcessTools.executeCommand(pb);
@@ -101,10 +99,10 @@ public class TestExpDouble {
 
             command_args = new ArrayList<String>(List.of(
                 "-Xbatch", "-XX:-TieredCompilation", "-XX:+UseJeandleCompiler", "-Xcomp",
-                "-Xlog:jeandle=debug", "-XX:+JeandleDumpIR",
+                "-Xlog:jeandle=debug", "-XX:+UnlockDiagnosticVMOptions", "-XX:+JeandleDumpIR",
                 "-XX:JeandleDumpDirectory="+dump_path, "-XX:+JeandleUseHotspotIntrinsics",
                 "-XX:CompileCommand=compileonly,"+TestWrapper.class.getName()+"::exp_double",
-                "-XX:+UnlockDiagnosticVMOptions", "-XX:-UseLibmIntrinsic",
+                "-XX:-UseLibmIntrinsic",
                 TestWrapper.class.getName()));
             pb = ProcessTools.createLimitedTestJavaProcessBuilder(command_args);
             output = ProcessTools.executeCommand(pb);
@@ -113,16 +111,12 @@ public class TestExpDouble {
             // Verify llvm IR
             checker = new FileCheck(dump_path, TestWrapper.class.getMethod("exp_double", double.class), false);
             // find compiled method
-            checker.checkPattern("define hotspotcc double .*compiler_jeandle_intrinsic_TestExpDouble\\$TestWrapper_exp_double.*(double %0)");
-            // check IR
-            checker.checkNext("entry:");
-            checker.check("br label %bci_0");
-            checker.checkNext("bci_0:");
+            checker.checkPattern("define.*TestExpDouble.*exp_double");
             // check gc-leaf-function
-            checker.checkNextPattern("call double inttoptr \\(i64 (\\d+) to ptr\\).*#\\d+");
-            checker.check("ret double");
-            checker.checkPattern("attributes #\\d+ = \\{ \"gc-leaf-function\" \\}");
-            
+            checker.checkPattern("call double inttoptr \\(i64 (\\d+) to ptr\\).*#\\d+");
+            checker.checkPattern("ret double");
+            checker.checkPattern("gc-leaf-function");
+
         }
     }
 

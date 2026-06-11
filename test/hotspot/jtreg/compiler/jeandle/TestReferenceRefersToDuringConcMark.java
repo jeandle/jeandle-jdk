@@ -88,6 +88,14 @@ public class TestReferenceRefersToDuringConcMark {
         testObject = null;
     }
 
+    private static void runToBeforeMarkingCompleted() {
+        WB.concurrentGCRunTo(WB.BEFORE_MARKING_COMPLETED);
+    }
+
+    private static void runToIdle() {
+        WB.concurrentGCRunToIdle();
+    }
+
     private static void testConcurrentCollection() throws Exception {
         setup();
         gcUntilOld();
@@ -98,7 +106,7 @@ public class TestReferenceRefersToDuringConcMark {
 
             discardStrongReferences();
 
-            WB.concurrentGCRunTo(WB.BEFORE_MARKING_COMPLETED);
+            runToBeforeMarkingCompleted();
 
             // For most collectors - the configurations tested here -,
             // calling get() will keep testObject alive.
@@ -106,7 +114,7 @@ public class TestReferenceRefersToDuringConcMark {
                 fail("testWeak unexpectedly == null");
             }
 
-            WB.concurrentGCRunToIdle();
+            runToIdle();
 
             expectNotCleared(testWeak, "testWeak");
         } finally {

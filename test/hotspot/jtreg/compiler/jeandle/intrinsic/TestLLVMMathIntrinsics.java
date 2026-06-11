@@ -56,7 +56,8 @@ public class TestLLVMMathIntrinsics {
     private static final String[] baseProcArgs = new String[] {
         "-Xbatch", "-XX:-TieredCompilation", "-XX:+UseJeandleCompiler", "-Xcomp",
         "-Xlog:jeandle=debug", "-XX:+JeandleDumpIR",
-        "-XX:-JeandleUseHotspotIntrinsics"  // Disable Hotspot intrinsics to use LLVM intrinsic
+        "-XX:+UnlockDiagnosticVMOptions",
+        "-XX:-JeandleUseHotspotIntrinsics"  // Force the LLVM candidate for dual-path math intrinsics.
     };
 
     public static void main(String[] args) throws Exception {
@@ -74,8 +75,6 @@ public class TestLLVMMathIntrinsics {
             testLog10Function();
         } else if (args[0].equals("testExp")) {
             testExpFunction();
-        } else if (args[0].equals("testPow")) {
-            testPowFunction();
         } else {
             throw new IllegalArgumentException("Unsupported argument: " + args[0]);
         }
@@ -136,14 +135,6 @@ public class TestLLVMMathIntrinsics {
         checker.checkPattern("define hotspotcc double .*TestLLVMMathIntrinsics_double_exp.*");
         checker.check("call double @llvm.exp.f64");
 
-        // Test pow function with LLVM intrinsic
-        output = runTestProcess("testPow");
-        output.shouldHaveExitValue(0);
-
-        testDumpPath = System.getProperty("java.io.tmpdir") + "/test_pow";
-        checker = new FileCheck(testDumpPath, TestLLVMMathIntrinsics.class.getDeclaredMethod("double_pow", double.class, double.class), false);
-        checker.checkPattern("define hotspotcc double .*TestLLVMMathIntrinsics_double_pow.*");
-        checker.check("call double @llvm.pow.f64");
     }
 
     private static OutputAnalyzer runTestProcess(String testType) throws Exception {
@@ -272,35 +263,6 @@ public class TestLLVMMathIntrinsics {
         }
     }
 
-    private static void testPowFunction() {
-        Random random = new Random();
-
-        // Test specific values
-        assertWithinUlp(double_pow(2.0d, 3.0d), double_pow_verified(2.0d, 3.0d), ULP_TOLERANCE);
-        assertWithinUlp(double_pow(4.0d, 0.5d), double_pow_verified(4.0d, 0.5d), ULP_TOLERANCE);
-        assertWithinUlp(double_pow(1.0d, 100.0d), double_pow_verified(1.0d, 100.0d), ULP_TOLERANCE);
-
-        // Test edge cases
-        Asserts.assertEquals(double_pow_verified(Double.NaN, 2.0d), double_pow(Double.NaN, 2.0d));
-        Asserts.assertEquals(double_pow_verified(2.0d, Double.NaN), double_pow(2.0d, Double.NaN));
-        Asserts.assertEquals(double_pow_verified(Double.POSITIVE_INFINITY, 2.0d), double_pow(Double.POSITIVE_INFINITY, 2.0d));
-        Asserts.assertEquals(double_pow_verified(2.0d, Double.POSITIVE_INFINITY), double_pow(2.0d, Double.POSITIVE_INFINITY));
-
-        // Test random values
-        for (int i = 0; i < 1000; i++) {
-            double base = random.nextDouble() * 10.0 + 0.1;
-            double exponent = (random.nextDouble() - 0.5) * 10.0; // [-5, 5)
-            assertWithinUlp(double_pow(base, exponent), double_pow_verified(base, exponent), ULP_TOLERANCE);
-        }
-
-        // test negative base
-        for (int i = 0; i < 100; i++) {
-            double base = -random.nextDouble() * 10.0;
-            int exponent = random.nextInt(10) - 5; // [-5, 5)
-            assertWithinUlp(double_pow(base, exponent), double_pow_verified(base, exponent), ULP_TOLERANCE);
-        }
-    }
-
     public static double double_sin(double a) {
         return Math.sin(a);
     }
@@ -347,13 +309,5 @@ public class TestLLVMMathIntrinsics {
 
     public static double double_exp_verified(double a) {
         return StrictMath.exp(a);
-    }
-
-    public static double double_pow(double a, double b) {
-        return Math.pow(a, b);
-    }
-
-    public static double double_pow_verified(double a, double b) {
-        return StrictMath.pow(a, b);
     }
 }

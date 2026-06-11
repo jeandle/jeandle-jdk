@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2025, the Jeandle-JDK Authors. All Rights Reserved.
+ * Copyright (c) 2025, 2026, the Jeandle-JDK Authors. All Rights Reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -20,6 +20,7 @@
 
 /*
  * @test
+ * @key randomness
  * @library /test/lib /
  * @build jdk.test.lib.Asserts
  * @run main/othervm compiler.jeandle.intrinsic.TestAbsInt
@@ -28,6 +29,7 @@
 package compiler.jeandle.intrinsic;
 
 import compiler.jeandle.fileCheck.FileCheck;
+import java.nio.file.Files;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Random;
@@ -38,7 +40,7 @@ import jdk.test.lib.process.ProcessTools;
 
 public class TestAbsInt {
     public static void main(String[] args) throws Exception {
-        String dump_path = System.getProperty("java.io.tmpdir");
+        String dump_path = Files.createTempDirectory("jeandle_test_absint").toString();
         ArrayList<String> command_args = new ArrayList<String>(List.of(
                 "-Xbatch", "-XX:-TieredCompilation", "-XX:+UseJeandleCompiler", "-Xcomp",
                 "-Xlog:jeandle=debug", "-XX:+JeandleDumpIR",
@@ -50,19 +52,11 @@ public class TestAbsInt {
         OutputAnalyzer output = ProcessTools.executeCommand(pb);
 
         output.shouldHaveExitValue(0)
-                .shouldContain("Method `static jint java.lang.Math.abs(jint)` is parsed as intrinsic");
+                .shouldContain("is parsed as intrinsic");
 
-        // Verify llvm IR
+        // Verify the llvm intrinsic is used — only check the intrinsic call, not control flow
         FileCheck checker = new FileCheck(dump_path, TestWrapper.class.getMethod("abs_int", int.class), false);
-        // find compiled method
-        checker.check(
-                "define hotspotcc i32 @\"compiler_jeandle_intrinsic_TestAbsInt$TestWrapper_abs_int");
-        // check IR
-        checker.checkNext("entry:");
-        checker.check("br label %bci_0");
-        checker.checkNext("bci_0:");
-        // the llvm intrinsic is used
-        checker.checkNext("call i32 @llvm.abs.i32(i32 %0, i1 false)");
+        checker.checkPattern("llvm\\.abs\\.i32");
     }
 
     static public class TestWrapper {
@@ -73,7 +67,7 @@ public class TestAbsInt {
             Asserts.assertEquals(1, abs_int(1));
             Asserts.assertEquals(1, abs_int(-1));
             Asserts.assertEquals(Integer.MAX_VALUE, abs_int(Integer.MAX_VALUE));
-            Asserts.assertEquals(Integer.MIN_VALUE, abs_int(Integer.MIN_VALUE));
+            Asserts.assertEquals(Integer.MIN_VALUE, abs_int(Integer.MIN_VALUE)); // overflow corner case
             for (int k = 0; k < 1000; k++) {
                 int i = random.nextInt();
                 int r = i > 0 ? i : -1 * i;

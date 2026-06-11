@@ -43,7 +43,7 @@ public class FileCheck {
     private List<String> lines;
 
     public FileCheck(String path, Method method, boolean optimized) throws Exception {
-        this(path, method, optimized, 0);
+        this(path, method, optimized, -1);
     }
 
     public FileCheck(String path, Method method, boolean optimized, int fileIndex) throws Exception {
@@ -80,15 +80,16 @@ public class FileCheck {
             throw new FileNotFoundException("No matched file found");
         }
 
-        if (files.size() <= fileIndex) {
-            throw new IllegalArgumentException("fileIndex out of range");
-        }
-
         List<Path> sortedFiles = files.stream()
                                       .sorted(Comparator.comparing(iter -> iter.getFileName().toString()))
                                       .collect(Collectors.toList());
 
-        this.lines = Files.readAllLines(sortedFiles.get(fileIndex))
+        int resolvedIndex = (fileIndex < 0) ? sortedFiles.size() - 1 : fileIndex;
+        if (resolvedIndex >= sortedFiles.size()) {
+            throw new IllegalArgumentException("fileIndex out of range");
+        }
+
+        this.lines = Files.readAllLines(sortedFiles.get(resolvedIndex))
                           .stream()
                           .map(str -> str.replaceAll("\\s+", " ").trim())
                           .filter(str -> !str.isEmpty())

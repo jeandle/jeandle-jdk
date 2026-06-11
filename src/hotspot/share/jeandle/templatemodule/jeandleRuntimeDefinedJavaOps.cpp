@@ -37,6 +37,7 @@
 #include "gc/shared/tlab_globals.hpp"
 #include "oops/arrayOop.hpp"
 #include "oops/array.hpp"
+#include "classfile/javaClasses.hpp"
 #include "oops/klass.hpp"
 #include "oops/objArrayKlass.hpp"
 #include "runtime/javaThread.hpp"
@@ -63,7 +64,7 @@
 
 namespace {
 
-// We cannot obtain contexts such as BCI in DEF_JAVA_OP. 
+// We cannot obtain contexts such as BCI in DEF_JAVA_OP.
 // But we can pass the external deopt bundle into this empty one via inlining.
 llvm::OperandBundleDef create_empty_deopt_bundle() {
   return llvm::OperandBundleDef("deopt", llvm::SmallVector<llvm::Value*>{});
@@ -195,6 +196,116 @@ DEF_JAVA_OP(post_barrier, 1, llvm::Type::getVoidTy(context),
   ir_builder.CreateRetVoid();
 JAVA_OP_END
 
+// Object.getClass(): load the java.lang.Class mirror for an object.
+// Two-level load via the OopHandle stored in Klass::_java_mirror:
+//   1. Load klass from object header (jeandle.load_klass).
+//   2. Load the OopHandle pointer from klass + java_mirror_offset  -> oop* in C heap.
+//   3. Dereference the OopHandle to get the actual mirror oop in the Java heap.
+// The mirror is always reachable (a GC root inside the Klass), so no null check is needed.
+//
+// TODO: When the receiver's Klass is known at compile time (via `java-klass` attribute),
+// Step 1 (jeandle.load_klass) can be skipped.
+DEF_JAVA_OP(get_class, 1, llvm::PointerType::get(context, llvm::jeandle::AddrSpace::JavaHeapAddrSpace),
+            llvm::PointerType::get(context, llvm::jeandle::AddrSpace::JavaHeapAddrSpace))  // obj (receiver)
+  llvm::Value* obj = func->getArg(0);
+  // Step 1: load klass pointer from object header
+  llvm::Function* load_klass_func = template_module.getFunction("jeandle.load_klass");
+  if (!load_klass_func) {
+    RuntimeDefinedJavaOps::set_failed("jeandle.load_klass is not found in template module");
+    return;
+  }
+  llvm::CallInst* klass = ir_builder.CreateCall(load_klass_func, {obj});
+  klass->setCallingConv(llvm::CallingConv::Hotspot_JIT);
+  // Step 2: load OopHandle (oop*) stored at klass + java_mirror_offset
+  llvm::GlobalVariable* mirror_offset_gv = template_module.getGlobalVariable("Klass.java_mirror_offset", /*AllowInternal=*/true);
+  if (!mirror_offset_gv) {
+    RuntimeDefinedJavaOps::set_failed("Klass.java_mirror_offset global not found in template module");
+    return;
+  }
+  llvm::Value* mirror_offset = ir_builder.CreateLoad(ir_builder.getInt32Ty(), mirror_offset_gv);
+  llvm::Value* oop_handle_addr = ir_builder.CreateInBoundsGEP(ir_builder.getInt8Ty(), klass, mirror_offset);
+  llvm::Type* c_heap_ptr_ty = llvm::PointerType::get(context, llvm::jeandle::AddrSpace::CHeapAddrSpace);
+  llvm::Value* oop_handle = ir_builder.CreateLoad(c_heap_ptr_ty, oop_handle_addr);
+  // Step 3: dereference OopHandle to get the actual mirror oop in the Java heap
+  llvm::Type* mirror_ty = llvm::PointerType::get(context, llvm::jeandle::AddrSpace::JavaHeapAddrSpace);
+  llvm::Value* mirror = ir_builder.CreateLoad(mirror_ty, oop_handle);
+  ir_builder.CreateRet(mirror);
+JAVA_OP_END
+
+// Reference.refersTo0 / PhantomReference.refersTo0:
+// Load the referent field and compare with the given object, returning a boolean.
+// No GC barrier is applied (AS_NO_KEEPALIVE semantics): refersTo0 should not keep
+// the referent alive. Equivalent to C2's inline_reference_refersTo0() which uses
+// the AS_NO_KEEPALIVE decorator to suppress the G1 SATB pre-barrier.
+DEF_JAVA_OP(reference_refers_to, 1, llvm::Type::getInt32Ty(context),
+            llvm::PointerType::get(context, llvm::jeandle::AddrSpace::JavaHeapAddrSpace),  // reference (this)
+            llvm::PointerType::get(context, llvm::jeandle::AddrSpace::JavaHeapAddrSpace))  // obj
+  llvm::Value* ref_obj    = func->getArg(0);
+  llvm::Value* compare_to = func->getArg(1);
+  llvm::GlobalVariable* offset_gv = template_module.getGlobalVariable("java_lang_ref_Reference.referent_offset", /*AllowInternal=*/true);
+  if (!offset_gv) {
+    RuntimeDefinedJavaOps::set_failed("java_lang_ref_Reference.referent_offset global not found in template module");
+    return;
+  }
+  llvm::Value* offset = ir_builder.CreateLoad(ir_builder.getInt32Ty(), offset_gv);
+  llvm::Value* referent_addr = ir_builder.CreateInBoundsGEP(ir_builder.getInt8Ty(), ref_obj, offset);
+  llvm::Type* ref_type = llvm::PointerType::get(context, llvm::jeandle::AddrSpace::JavaHeapAddrSpace);
+  // Unordered atomic load: safe under concurrent GC writes (a plain non-atomic
+  // load has undefined behavior when the GC concurrently clears the referent).
+  // No GC barrier because refersTo0 uses AS_NO_KEEPALIVE semantics.
+  llvm::LoadInst* referent = ir_builder.CreateLoad(ref_type, referent_addr);
+  referent->setAtomic(llvm::AtomicOrdering::Unordered);
+  // CPUOrder fence: equivalent to C2's MemBarCPUOrder. Prevents the compiler from
+  // CSE'ing this referent load across safepoints (GC can change the referent at
+  // any safepoint). Singlethread scope ensures no hardware fence instructions.
+  ir_builder.CreateFence(llvm::AtomicOrdering::SequentiallyConsistent,
+                         llvm::SyncScope::SingleThread);
+  llvm::Value* is_equal = ir_builder.CreateICmpEQ(referent, compare_to);
+  // JVM boolean on the operand stack is i32
+  llvm::Value* result = ir_builder.CreateZExt(is_equal, ir_builder.getInt32Ty());
+  ir_builder.CreateRet(result);
+JAVA_OP_END
+
+// Reference.get: load the referent, apply the G1 SATB pre-barrier (if using G1GC),
+// and insert a CPUOrder fence to prevent the optimizer from CSE'ing referent loads
+// across safepoints (GC can change the referent value asynchronously).
+// Equivalent to C2's inline_reference_get(): Unordered load + MemBarCPUOrder.
+DEF_JAVA_OP(reference_get, 1,
+            llvm::PointerType::get(context, llvm::jeandle::AddrSpace::JavaHeapAddrSpace),
+            llvm::PointerType::get(context, llvm::jeandle::AddrSpace::JavaHeapAddrSpace))
+  llvm::Value* ref_obj = func->getArg(0);
+  llvm::GlobalVariable* offset_gv = template_module.getGlobalVariable("java_lang_ref_Reference.referent_offset", /*AllowInternal=*/true);
+  if (!offset_gv) {
+    RuntimeDefinedJavaOps::set_failed("java_lang_ref_Reference.referent_offset global not found in template module");
+    return;
+  }
+  llvm::Value* offset = ir_builder.CreateLoad(ir_builder.getInt32Ty(), offset_gv);
+  llvm::Value* referent_addr = ir_builder.CreateInBoundsGEP(ir_builder.getInt8Ty(), ref_obj, offset);
+  llvm::Type* ref_type = llvm::PointerType::get(context, llvm::jeandle::AddrSpace::JavaHeapAddrSpace);
+  // Unordered atomic load: matches C2's LoadNode::Unordered for Reference.get().
+  // Acquire is unnecessarily strong on AArch64/RISC-V; Unordered plus the fence
+  // below provides the same compiler-side ordering guarantee as C2's MemBarCPUOrder.
+  llvm::LoadInst* referent = ir_builder.CreateLoad(ref_type, referent_addr);
+  referent->setAtomic(llvm::AtomicOrdering::Unordered);
+  // G1 SATB pre-barrier: record the loaded referent value so concurrent marking
+  // does not miss it. In C2, the ON_WEAK_OOP_REF decorator triggers this in the
+  // GC barrier set; here we call the barrier directly with the already-loaded value.
+  if (UseG1GC) {
+    llvm::Function* barrier_func = template_module.getFunction("jeandle.g1_pre_barrier_loaded");
+    assert(barrier_func != nullptr, "jeandle.g1_pre_barrier_loaded not found");
+    llvm::CallInst* call = ir_builder.CreateCall(barrier_func, {referent});
+    call->setCallingConv(llvm::CallingConv::Hotspot_JIT);
+  }
+  // CPUOrder fence: equivalent to C2's MemBarCPUOrder. Prevents the compiler from
+  // commoning/CSE'ing this referent load across safepoints, since GC can clear the
+  // referent at any safepoint. The singlethread scope ensures no hardware fence
+  // instructions are emitted (x86/AArch64/RISC-V lower this to ISD::MEMBARRIER,
+  // which becomes a no-op in assembly).
+  ir_builder.CreateFence(llvm::AtomicOrdering::SequentiallyConsistent,
+                         llvm::SyncScope::SingleThread);
+  ir_builder.CreateRet(referent);
+JAVA_OP_END
+
 } // anonymous namespace
 
 const char* RuntimeDefinedJavaOps::_error_msg = nullptr;
@@ -214,6 +325,9 @@ bool RuntimeDefinedJavaOps::define_all(llvm::Module& template_module) {
   define_card_table_barrier(template_module);
   define_pre_barrier(template_module);
   define_post_barrier(template_module);
+  define_get_class(template_module);
+  define_reference_refers_to(template_module);
+  define_reference_get(template_module);
 
   return failed();
 }
@@ -266,12 +380,15 @@ void RuntimeDefinedJavaOps::define_global_variables(llvm::Module& template_modul
   define_global("arrayOopDesc.length_offset_in_bytes",              int32_type, static_cast<uint64_t>(arrayOopDesc::length_offset_in_bytes()));
   define_global("arrayOopDesc.base_offset_in_bytes.int",            int32_type, static_cast<uint64_t>(arrayOopDesc::base_offset_in_bytes(T_INT)));
   define_global("Klass.access_flags_offset",                        int32_type, static_cast<uint64_t>(Klass::access_flags_offset()));
+  define_global("Klass.java_mirror_offset",                         int32_type, static_cast<uint64_t>(in_bytes(Klass::java_mirror_offset())));
   define_global("Klass.secondary_super_cache_offset",               int32_type, static_cast<uint64_t>(Klass::secondary_super_cache_offset()));
   define_global("Klass.secondary_supers_offset",                    int32_type, static_cast<uint64_t>(Klass::secondary_supers_offset()));
   define_global("Klass.super_check_offset_offset",                  int32_type, static_cast<uint64_t>(Klass::super_check_offset_offset()));
   define_global("ObjArrayKlass.element_klass_offset",               int32_type, static_cast<uint64_t>(ObjArrayKlass::element_klass_offset()));
   define_global("oopDesc.klass_offset_in_bytes",                    int32_type, static_cast<uint64_t>(oopDesc::klass_offset_in_bytes()));
   define_global("oopDesc.mark_offset_in_bytes",                     int32_type, static_cast<uint64_t>(oopDesc::mark_offset_in_bytes()));
+  define_global("java_lang_ref_Reference.referent_offset",          int32_type, static_cast<uint64_t>(java_lang_ref_Reference::referent_offset()));
+  define_global("java_lang_Class.array_klass_offset",               int32_type, static_cast<uint64_t>(java_lang_Class::array_klass_offset()));
   define_global("BasicLock.displaced_header_offset_in_bytes",       int32_type, static_cast<uint64_t>(BasicLock::displaced_header_offset_in_bytes()));
   define_global("JavaThread.held_monitor_count_offset",             int32_type, static_cast<uint64_t>(JavaThread::held_monitor_count_offset()));
   define_global("JavaThread.lock_stack_end",                        int32_type, static_cast<uint64_t>(LockStack::end_offset()));
@@ -283,7 +400,7 @@ void RuntimeDefinedJavaOps::define_global_variables(llvm::Module& template_modul
   define_global("ObjectMonitor.succ_offset_no_monitor_value",       int32_type, static_cast<uint64_t>(OM_OFFSET_NO_MONITOR_VALUE_TAG(succ)));
   define_global("instanceOopDesc.base_offset_in_bytes",             int32_type, static_cast<uint64_t>(instanceOopDesc::base_offset_in_bytes()));
 
-  
+
   define_global("markWord.clear_lock_mask",                         int64_type, static_cast<uint64_t>(~(int32_t)markWord::lock_mask_in_place));
   define_global("markWord.monitor_value",                           int64_type, static_cast<uint64_t>(markWord::monitor_value));
   define_global("markWord.unlocked_value",                          int64_type, static_cast<uint64_t>(markWord::unlocked_value));
@@ -292,7 +409,7 @@ void RuntimeDefinedJavaOps::define_global_variables(llvm::Module& template_modul
   define_global("JavaThread.tlab_end_offset",                       int64_type, static_cast<uint64_t>(JavaThread::tlab_end_offset()));
   define_global("JavaThread.tlab_top_offset",                       int64_type, static_cast<uint64_t>(JavaThread::tlab_top_offset()));
   define_global("markWord.prototype_value",                         int64_type, static_cast<uint64_t>(markWord::prototype().value()));
-  
+
   define_global("JVM_ACC_IS_VALUE_BASED_CLASS",                     int32_type, static_cast<uint64_t>(JVM_ACC_IS_VALUE_BASED_CLASS));
   define_global("oopSize",                                          int32_type, static_cast<uint64_t>(oopSize));
 
