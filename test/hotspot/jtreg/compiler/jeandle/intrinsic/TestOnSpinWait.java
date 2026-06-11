@@ -49,8 +49,14 @@ public class TestOnSpinWait {
                 "-Xlog:jeandle=debug", "-XX:+JeandleDumpIR",
                 "-XX:JeandleDumpDirectory=" + dumpPath,
                 "-XX:CompileCommand=compileonly," + TestWrapper.class.getName() + "::spinWaitLoop",
-                "-XX:CompileCommand=compileonly," + TestWrapper.class.getName() + "::main",
-                TestWrapper.class.getName()));
+                "-XX:CompileCommand=compileonly," + TestWrapper.class.getName() + "::main"));
+        // OnSpinWaitInst defaults to "none" on aarch64, which makes
+        // cpu_supports_spin_wait() decline the intrinsic; opt in explicitly.
+        if (arch.equals("aarch64")) {
+            commandArgs.add("-XX:+UnlockDiagnosticVMOptions");
+            commandArgs.add("-XX:OnSpinWaitInst=yield");
+        }
+        commandArgs.add(TestWrapper.class.getName());
 
         ProcessBuilder pb = ProcessTools.createLimitedTestJavaProcessBuilder(commandArgs);
         OutputAnalyzer output = ProcessTools.executeCommand(pb);
