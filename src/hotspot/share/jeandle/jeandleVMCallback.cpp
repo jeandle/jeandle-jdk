@@ -202,6 +202,14 @@ int64_t jeandle_get_constant_field_double_bits(int oop_id, int offset) {
   return jlong_cast(con.as_double());
 }
 
+int jeandle_get_constant_field_info(int oop_id, int offset) {
+  ciField* field = nullptr;
+  ciConstant con;
+  if (!jeandle_constant_field(oop_id, offset, &field, &con))
+    return -1;
+  return field->layout_type();
+}
+
 int jeandle_get_constant_field_oop(int oop_id, int offset) {
   ciField* field = nullptr;
   ciConstant con;
@@ -237,6 +245,7 @@ void register_jeandle_vm_callbacks() {
   callbacks.GetConstantFieldFloatBits = &jeandle_get_constant_field_float_bits;
   callbacks.GetConstantFieldDoubleBits = &jeandle_get_constant_field_double_bits;
   callbacks.GetConstantFieldOop = &jeandle_get_constant_field_oop;
+  callbacks.GetConstantFieldInfo = &jeandle_get_constant_field_info;
   llvm::jeandle::registerVMCallbacks(callbacks);
 
   if (JeandleRecordVMCallbacks) {
