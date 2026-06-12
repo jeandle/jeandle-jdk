@@ -332,7 +332,6 @@ class JeandleCompiledCode : public StackObj {
   CodeOffsets _offsets;
   JeandleExceptionHandlerTable _exception_handler_table;
   ImplicitExceptionTable _implicit_exception_table;
-  llvm::DenseMap<uint64_t, llvm::SmallVector<uint64_t, 1>> _narrowoop_mask_table;
   int _frame_size;
   int _prolog_length;
   ciEnv* _env;
@@ -375,7 +374,6 @@ class JeandleCompiledCode : public StackObj {
   void build_exception_handler_table();
   bool pd_build_exception_handler_table();
   void build_implicit_exception_table();
-  void build_narrowoop_mask_table();
 
   int frame_size_in_slots();
 };

@@ -369,8 +369,6 @@ void JeandleCompiledCode::resolve_reloc_info(JeandleAssembler& assembler) {
     }
   }
 
-  build_narrowoop_mask_table();
-
   // Step 2: Resolve stackmaps.
   SectionInfo section_info(".llvm_stackmaps");
   if (ReadELF::findSection(*_elf, section_info)) {
@@ -640,10 +638,6 @@ JeandleStackMap* JeandleCompiledCode::parse_stackmap(StackMapParser& stackmaps,
                                                      int& num_deopts,
                                                      const JeandleParseContext& parse_context,
                                                      ciMethod*& next_inlinee) {
-
-    if (UseCompressedOops) {
-    num_deopts = num_deopts - 1;
-  }
   bool reexecute = false;
   int bci = -1;
   ciMethod* current_method = parse_context.method();
@@ -738,24 +732,6 @@ JeandleStackMap* JeandleCompiledCode::parse_stackmap(StackMapParser& stackmaps,
 
   }
 
-  uint64_t mask_id = 0;
-  if (UseCompressedOops && location != record->location_end()) {
-    auto mask_id_loc = *(location++);
-    assert(mask_id_loc.getKind() == StackMapParser::LocationKind::Constant ||
-           mask_id_loc.getKind() == StackMapParser::LocationKind::ConstantIndex,
-           "mask ID must be a constant");
-    mask_id = StackMapUtil::getConstantUlong(stackmaps, mask_id_loc);
-  }
-
-  GrowableArray<uint64_t> narrowoop_mask;
-  if (mask_id > 0) {
-    auto it = _narrowoop_mask_table.find(mask_id);
-    assert(it != _narrowoop_mask_table.end(), "mask ID not found in table");
-    for (uint64_t chunk : it->second) {
-      narrowoop_mask.append(chunk);
-    }
-  }
-
   // build oop map
   OopMap* oop_map = new OopMap(frame_size_in_slots(), 0);
   unsigned pair_idx = 0;
@@ -783,18 +759,14 @@ JeandleStackMap* JeandleCompiledCode::parse_stackmap(StackMapParser& stackmaps,
 
     if (base_kind != StackMapParser::LocationKind::Register &&
         base_kind != StackMapParser::LocationKind::Indirect) {
-      continue;
+          continue;
     }
 
     assert(base_kind != StackMapParser::LocationKind::Direct, "invalid location kind");
 
     VMReg reg_base = resolve_vmreg(base_location, base_kind);
     VMReg reg_derived = resolve_vmreg(derived_location, derived_kind);
-    bool is_narrowoop = false;
-    int chunk_idx = (int)(pair_idx / 64);
-    if (chunk_idx < narrowoop_mask.length()) {
-      is_narrowoop = (narrowoop_mask.at(chunk_idx) >> (pair_idx % 64)) & 1;
-    }
+
     if(reg_base == reg_derived) {
       // No derived pointer.
       if (is_narrowoop) {
@@ -808,7 +780,6 @@ JeandleStackMap* JeandleCompiledCode::parse_stackmap(StackMapParser& stackmaps,
       set_wide_oop_once(reg_base);
       oop_map->set_derived_oop(reg_derived, reg_base);
     }
-    pair_idx++;
   }
   return new JeandleStackMap(bci, current_method, oop_map, locals, stack, monitors, reexecute);
 }
@@ -891,32 +862,6 @@ void JeandleCompiledCode::build_implicit_exception_table() {
     auto handler_offset = fault_info.getHandlerPCOffset() + _prolog_length;
 
     _implicit_exception_table.append(faulting_offset, handler_offset);
-  }
-}
-
-void JeandleCompiledCode::build_narrowoop_mask_table() {
-  SectionInfo section_info(".jeandle_narrowoop_masks");
-  if (!ReadELF::findSection(*_elf, section_info)) {
-    return;
-  }
-
-  const uint64_t *data = reinterpret_cast<const uint64_t *>(
-      object_start() + section_info._offset);
-  size_t count = section_info._size / sizeof(uint64_t);
-  size_t i = 0;
-
-  while (i < count) {
-    uint64_t id = data[i++];
-    assert(i < count, "truncated mask table");
-    uint64_t chunk_count = data[i++];
-    assert(i + chunk_count <= count, "truncated mask table");
-
-    llvm::SmallVector<uint64_t, 1> mask;
-    mask.reserve(chunk_count);
-    for (uint64_t c = 0; c < chunk_count; c++) {
-      mask.push_back(data[i++]);
-    }
-    _narrowoop_mask_table[id] = std::move(mask);
   }
 }
 

@@ -2696,6 +2696,11 @@ llvm::Value* JeandleAbstractInterpreter::load_from_address(llvm::Value* addr, Ba
       res_inst = _ir_builder.CreateSExt(load_inst, expected_ty);
       break;
     }
+    case T_NARROWOOP: {
+      load_inst = _ir_builder.CreateLoad(expected_ty, addr);
+      res_inst = load_inst;
+      break;
+    }
     default: {
       load_inst = _ir_builder.CreateLoad(expected_ty, addr);
       res_inst = load_inst;
@@ -2836,13 +2841,6 @@ void JeandleAbstractInterpreter::do_array_load(BasicType basic_type) {
       }
       // Attach element type metadata if the array's type is known.
       // TODO: maybe we can do this in LLVM side, then we can use context-sensitive type information of array.
-      if (llvm::Instruction* load_inst = llvm::dyn_cast<llvm::Instruction>(load_value)) {
-        llvm::jeandle::JavaType array_type = llvm::jeandle::getJavaType(array_ref);
-        if (array_type.isKnown()) {
-          Klass* array_klass = (Klass*)array_type.Klass;
-          if (array_klass->is_objArray_klass()) {
-            Klass* elem_klass = ObjArrayKlass::cast(array_klass)->element_klass();
-            if (!is_unverified_interface(elem_klass)) {
       llvm::jeandle::JavaType array_type = llvm::jeandle::getJavaType(array_ref);
       if (array_type.isKnown()) {
         Klass* array_klass = (Klass*)array_type.Klass;
@@ -3345,10 +3343,9 @@ void JeandleAbstractInterpreter::builtin_throw(Deoptimization::DeoptReason reaso
       int offset = java_lang_Throwable::get_detailMessage_offset();
       llvm::Value* exception_oop_field_addr = compute_instance_field_address(value, offset);
 
-      llvm::StoreInst* store_inst = _ir_builder.CreateStore(llvm::ConstantPointerNull::get(llvm::cast<llvm::PointerType>(JeandleType::java2llvm(BasicType::T_OBJECT, *_context))),
-          exception_oop_field_addr, true /* is_volatile */);
-
-      store_inst->setAtomic(llvm::AtomicOrdering::Unordered);
+      llvm::Value* null_oop = llvm::ConstantPointerNull::get(llvm::cast<llvm::PointerType>(JeandleType::java2llvm(BasicType::T_OBJECT, *_context)));
+      BasicType oop_field_type = UseCompressedOops ? T_NARROWOOP : T_OBJECT;
+      store_to_address(exception_oop_field_addr, null_oop, oop_field_type, false /* is_volatile */);
       dispatch_exception_to_handler(value);
 
       if (insert_block != nullptr) {
