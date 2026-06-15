@@ -35,7 +35,9 @@
 #include "jeandle/jeandle_globals.hpp"
 #include "logging/log.hpp"
 #include "oops/arrayOop.hpp"
+#include "oops/klass.hpp"
 #include "runtime/deoptimization.hpp"
+#include "runtime/globals.hpp"
 
 // =============================================================================
 // Call-site IR annotation helpers (migrated from JeandleIntrinsicIRSemantics)
@@ -633,13 +635,34 @@ bool JeandleIntrinsicLowering::lower_new_array() {
       klass, llvm::ConstantPointerNull::get(c_heap_ptr_ty));
   builder.CreateCondBr(klass_is_null, slow_bb, fast_bb);
 
-  // Fast path: klass resolved → call unified jeandle.new_array(klass, length).
+  // Fast path: klass resolved → call unified jeandle.new_array.
+  // Unlike the bytecode path, the array klass is loaded from the mirror at runtime, so the
+  // element layout isn't a compile-time constant. Decode it from Klass::layout_helper the way
+  // C2's GraphKit::new_array does for reflective sites:
+  //   base_offset = (lh >> _lh_header_size_shift) & _lh_header_size_mask
+  //   log2_esize  = lh & 0x1f   (_lh_log2_element_size_shift == 0; masked < 32 for the shift,
+  //                              valid l2esz is <= LogBytesPerLong)
   builder.SetInsertPoint(fast_bb);
+  llvm::Value* lh_addr = builder.CreateInBoundsGEP(
+      builder.getInt8Ty(), klass, builder.getInt32(in_bytes(Klass::layout_helper_offset())));
+  llvm::Value* layout_helper = builder.CreateLoad(builder.getInt32Ty(), lh_addr);
+  llvm::Value* base_offset = builder.CreateAnd(
+      builder.CreateLShr(layout_helper, builder.getInt32(Klass::_lh_header_size_shift)),
+      builder.getInt32(Klass::_lh_header_size_mask));
+  llvm::Value* log2_esize = builder.CreateAnd(layout_helper, builder.getInt32(0x1f));
+  llvm::Value* size_in_bytes = _interp->emit_array_size_in_bytes(length, log2_esize, base_offset);
+  // Fast-path length cap, mirroring C2's reflective array path: the unscaled
+  // FastAllocateSizeLimit bounds the byte size to <= FastAllocateSizeLimit << LogBytesPerLong
+  // (~1MB) for any element type, so size_in_bytes cannot overflow i32. Larger reflective arrays
+  // fall to the slow path.
+  llvm::Value* length_limit = builder.getInt32((int)FastAllocateSizeLimit);
+
   static constexpr CallSiteAttributeMetadata fast_attrs =
       {CTRL_NEEDS_EXCEPTION_EDGE, MEM_READ | MEM_WRITE};
   llvm::Function* new_array_op = module.getFunction("jeandle.new_array");
   llvm::CallBase* fast_call =
-      emit_callsite(new_array_op, llvm::CallingConv::Hotspot_JIT, {klass, length}, fast_attrs);
+      emit_callsite(new_array_op, llvm::CallingConv::Hotspot_JIT,
+                    {klass, length, size_in_bytes, base_offset, length_limit}, fast_attrs);
   // emit_callsite with exception edge moves builder to a new normal_dest block.
   builder.CreateBr(merge_bb);
   llvm::BasicBlock* fast_normal_bb = builder.GetInsertBlock();

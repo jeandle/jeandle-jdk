@@ -447,10 +447,17 @@ class JeandleAbstractInterpreter : public StackObj {
   void do_unified_newarray(Klass* array_klass);
   void multianewarray();
 
-  // Builds the call to the jeandle.newarray JavaOp, computing the size/base/max args from
-  // array_klass->layout_helper() so the fast path in template.ll receives them as constants.
-  // Used both by do_unified_newarray and by multianewarray's dimensions-array allocation.
+  // Builds the call to the jeandle.new_array JavaOp for the bytecode path, folding the
+  // size/base/max args from array_klass->layout_helper() into i32 constants so the fast path
+  // in template.ll collapses tight. Used by do_unified_newarray and multianewarray's
+  // dimensions-array allocation. The reflection path (JeandleIntrinsicLowering::lower_new_array)
+  // decodes layout_helper at runtime instead and shares emit_array_size_in_bytes.
   llvm::InvokeInst* emit_jeandle_newarray(Klass* array_klass, llvm::Value* length);
+
+  // Builds the array size_in_bytes expression shared by the bytecode and reflection
+  // allocation paths. Mirrors C2's GraphKit::new_array size computation.
+  llvm::Value* emit_array_size_in_bytes(llvm::Value* length, llvm::Value* log2_element_size,
+                                        llvm::Value* base_offset);
 
   // Implementation of _new
   void do_new();
