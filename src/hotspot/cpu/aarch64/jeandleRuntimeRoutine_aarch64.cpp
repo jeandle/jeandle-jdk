@@ -122,7 +122,7 @@ void JeandleRuntimeRoutine::generate_exceptional_return() {
 
   // For not confusing exception handler, clear the exception pc.
   __ str(zr, Address(rthread, JavaThread::exception_pc_offset()));
-  
+
   // Pop the exception pc to r3. Exception handler will use this.
   __ ldp(rfp, exception_pc, Address(__ post(sp, 2 * wordSize)));
 

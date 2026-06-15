@@ -33,6 +33,38 @@ java/math/BigInteger/largeMemory/SymmetricRangeTests.java                  linux
 ###
 # GC not support
 ###
+jdk/jfr/event/gc/collection/TestGarbageCollectionEventWithZMajor.java                       linux-x64
+jdk/jfr/event/gc/collection/TestGarbageCollectionEventWithZMinor.java                       linux-x64
+jdk/jfr/event/gc/collection/TestGCCauseWithParallelOld.java                                 linux-x64
+jdk/jfr/event/gc/collection/TestZOldGarbageCollectionEvent.java                             linux-x64
+jdk/jfr/event/gc/collection/TestZYoungGarbageCollectionEvent.java                           linux-x64
+jdk/jfr/event/gc/configuration/TestGCHeapConfigurationEventWith32BitOops.java               linux-x64
+jdk/jfr/event/gc/configuration/TestGCHeapConfigurationEventWithHeapBasedOops.java           linux-x64
+jdk/jfr/event/gc/configuration/TestGCHeapConfigurationEventWithZeroBasedOops.java           linux-x64
+jdk/jfr/event/gc/detailed/TestGCPhaseConcurrent.java#id2                                    linux-x64
+jdk/jfr/event/gc/detailed/TestGCPhaseConcurrent.java#ZGenerational                          linux-x64
+jdk/jfr/event/gc/detailed/TestGCPhaseConcurrent.java#ZSinglegen                             linux-x64
+jdk/jfr/event/gc/detailed/TestShenandoahHeapRegionInformationEvent.java                     linux-x64
+jdk/jfr/event/gc/detailed/TestShenandoahHeapRegionStateChangeEvent.java                     linux-x64
+jdk/jfr/event/gc/detailed/TestZAllocationStallEvent.java#ZGenerational                      linux-x64
+jdk/jfr/event/gc/detailed/TestZAllocationStallEvent.java#ZSinglegen                         linux-x64
+jdk/jfr/event/gc/detailed/TestZPageAllocationEvent.java#ZGenerational                       linux-x64
+jdk/jfr/event/gc/detailed/TestZPageAllocationEvent.java#ZSinglegen                          linux-x64
+jdk/jfr/event/gc/detailed/TestZRelocationSetEvent.java#ZGenerational                        linux-x64
+jdk/jfr/event/gc/detailed/TestZRelocationSetEvent.java#ZSinglegen                           linux-x64
+jdk/jfr/event/gc/detailed/TestZRelocationSetGroupEvent.java#ZGenerational                   linux-x64
+jdk/jfr/event/gc/detailed/TestZRelocationSetGroupEvent.java#ZSinglegen                      linux-x64
+jdk/jfr/event/gc/detailed/TestZUnmapEvent.java#ZGenerational                                linux-x64
+jdk/jfr/event/gc/detailed/TestZUnmapEvent.java#ZSinglegen                                   linux-x64
+jdk/jfr/event/gc/heapsummary/TestHeapSummaryEventPSParOld.java                              linux-x64
+jdk/jfr/event/gc/objectcount/TestObjectCountAfterGCEventWithParallelOld.java                linux-x64
+jdk/jfr/event/gc/stacktrace/TestMetaspaceParallelGCAllocationPendingStackTrace.java         linux-x64
+jdk/jfr/event/gc/stacktrace/TestParallelMarkSweepAllocationPendingStackTrace.java           linux-x64
+jdk/jfr/event/gc/stacktrace/TestParallelScavengeAllocationPendingStackTrace.java            linux-x64
+java/lang/management/MemoryMXBean/MemoryTest.java#ZGenerational                             linux-x64
+java/lang/management/MemoryMXBean/MemoryTest.java#ZSinglegen                                linux-x64
+
+###
 jdk/jfr/event/gc/configuration/TestGCConfigurationEvent.java               linux-aarch64,linux-x64
 
 ###
@@ -137,3 +169,39 @@ sun/security/util/math/TestIntegerModuloP.java#IntegerPolynomialP521       linux
 sun/security/util/math/TestIntegerModuloP.java#P256OrderField              linux-aarch64
 sun/security/util/math/TestIntegerModuloP.java#P384OrderField              linux-aarch64
 sun/security/util/math/TestIntegerModuloP.java#P521OrderField              linux-aarch64
+
+###
+# JFR not support
+###
+jdk/jfr/api/consumer/streaming/TestBaseRepositoryAfterStart.java          linux-x64
+jdk/jfr/api/consumer/streaming/TestBaseRepositoryLastModified.java        linux-x64
+jdk/jfr/event/compiler/TestCompilerInlining.java                          linux-x64
+jdk/jfr/event/compiler/TestCompilerPhase.java                             linux-x64
+jdk/jfr/event/compiler/TestDeoptimization.java                            linux-x64
+jdk/jfr/event/runtime/TestVMOperation.java                                linux-x64
+
+###
+# JVMTI / Instrumentation not support
+###
+java/lang/instrument/GetObjectSizeIntrinsicsTest.java#id0                 linux-x64
+java/lang/instrument/GetObjectSizeIntrinsicsTest.java#id1                 linux-x64
+java/lang/instrument/GetObjectSizeIntrinsicsTest.java#id2                 linux-x64
+java/lang/instrument/NativeMethodPrefixAgent.java                         linux-x64
+
+###
+# JDI not support
+###
+com/sun/jdi/EATests.java#id0                                              linux-x64
+com/sun/jdi/JdbOptions.java                                               linux-x64
+
+###
+# Vector API not support
+###
+jdk/incubator/vector/LoadJsvmlTest.java                                   linux-x64
+
+###
+# JMX / Management not support
+###
+java/lang/management/OperatingSystemMXBean/GetSystemLoadAverage.java      linux-x64
+sun/management/jmxremote/startstop/JMXStartStopTest.java                  linux-x64
+sun/management/jmxremote/startstop/JMXStatusPerfCountersTest.java         linux-x64

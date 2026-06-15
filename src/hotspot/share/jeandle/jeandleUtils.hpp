@@ -29,8 +29,11 @@
 #include "ci/ciMethod.hpp"
 
 class Klass;
+class ciType;
 
 namespace llvm {
+class CallBase;
+class LLVMContext;
 class SubtargetFeatures;
 }
 
@@ -50,6 +53,15 @@ bool is_unverified_interface(Klass* klass);
 // A klass is effectively final if no subtype can exist at runtime.
 bool is_effectively_final(ciKlass* klass);
 bool is_effectively_final(Klass* klass);
+
+// Attach JavaKlass (and JavaKlassExact when applicable) return-value attributes
+// to a CallBase, based on the Java return type derived from the callee signature.
+// No-op when ret_type is primitive, when the klass is unloaded, or when the
+// klass is an unverified interface — same exemption rules as the regular
+// invoke() path uses.
+void attach_java_klass_ret_attr(llvm::CallBase* call,
+                                ciType* ret_type,
+                                llvm::LLVMContext& ctx);
 
 void apply_vm_flag_feature_overrides(llvm::SubtargetFeatures& features);
 

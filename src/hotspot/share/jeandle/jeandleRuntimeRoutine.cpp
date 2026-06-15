@@ -22,7 +22,9 @@
 #include "jeandle/jeandleRuntimeRoutine.hpp"
 
 #include "jeandle/__hotspotHeadersBegin__.hpp"
+#include "classfile/javaClasses.hpp"
 #include "memory/oopFactory.hpp"
+#include "runtime/reflection.hpp"
 #include "runtime/sharedRuntime.hpp"
 #include "runtime/stubRoutines.hpp"
 #include "runtime/frame.hpp"
@@ -51,10 +53,8 @@
   generate_##name();
 
 #define REGISTER_DIRECT_ROUTINE(name, routine_address, reachable, is_leaf, return_type, ...) \
-  if (reachable) {                                                                           \
-    _routine_entry.insert({llvm::StringRef(#name), (address)routine_address});               \
-  }                                                                                          \
-  if (is_leaf) {                                                                             \
+  _routine_entry.insert({llvm::StringRef(#name), (address)routine_address});                 \
+  if (is_leaf && (address)routine_address != nullptr) {                                      \
     _gc_leaf_routines.insert((address)routine_address);                                      \
   }
 
@@ -149,12 +149,17 @@ JRT_BLOCK_ENTRY(void, JeandleRuntimeRoutine::new_array(Klass* array_type, int le
     BasicType elem_type = TypeArrayKlass::cast(array_type)->element_type();
     result = oopFactory::new_typeArray(elem_type, len, THREAD);
   } else {
-    // Although the oopFactory likes to work with the elem_type,
-    // the compiler prefers the array_type, since it must already have
-    // that latter value in hand for the fast path.
+    // We already hold the ObjArrayKlass; call its allocate() directly instead
+    // of routing through oopFactory::new_objArray, which would unwrap us to the
+    // element InstanceKlass and then re-resolve the array_klass via
+    // InstanceKlass::array_klass(1) (an acquire-load on array_klasses).
+    // OptoRuntime::new_array_C kept that detour because it is a cold fallback
+    // in C2 (inline TLAB bump-pointer handles the hot path); in Jeandle's
+    // _newArray lowering this runtime call is the hot path and the redundant
+    // re-lookup was measurable (~13% slower than the non-intrinsic invoke
+    // path on String[] allocation, AArch64).
     Handle holder(current, array_type->klass_holder()); // keep the array klass alive
-    Klass* elem_type = ObjArrayKlass::cast(array_type)->element_klass();
-    result = oopFactory::new_objArray(elem_type, len, THREAD);
+    result = ObjArrayKlass::cast(array_type)->allocate(len, THREAD);
   }
 
   // Pass oops back through thread local storage.  Our apparent type to Java
@@ -166,6 +171,35 @@ JRT_BLOCK_ENTRY(void, JeandleRuntimeRoutine::new_array(Klass* array_type, int le
   JRT_BLOCK_END;
 
   // inform GC that we won't do card marks for initializing writes.
+  SharedRuntime::on_slowpath_allocation_exit(current);
+JRT_END
+
+// Array allocation from a component-type mirror (java.lang.Class).
+// Called as the slow path when the cached array_klass field in the mirror is null.
+// Delegates to Reflection::reflect_new_array which handles klass resolution, primitive
+// types, dimension limit checks, and NegativeArraySizeException / NullPointerException.
+//
+// Unlike C2, which calls back into the Java method Array.newInstance() via a
+// CallStaticJavaNode (eventually reaching JVM_NewArray -> Reflection::reflect_new_array),
+// Jeandle calls Reflection::reflect_new_array directly. This avoids the overhead of
+// JNI transitions (Java -> native -> VM) and JNI handle marshalling. The two approaches
+// are functionally equivalent: both end up invoking the same underlying allocation logic
+// with identical exception semantics (NPE, NegativeArraySizeException, dimension limits).
+// The only minor difference is that JVMTI VMObjectAlloc events are not posted here,
+// but note that C2's intrinsified fast path (AllocateArrayNode) also skips those events,
+// so this is consistent with standard JIT intrinsification behavior.
+JRT_BLOCK_ENTRY(void, JeandleRuntimeRoutine::new_array_from_mirror(oopDesc* mirror, int length, JavaThread* current))
+  JRT_BLOCK
+#ifndef PRODUCT
+    SharedRuntime::_new_array_ctr++;
+#endif
+    assert(check_jeandle_compiled_frame(current), "incorrect caller");
+    Handle h_mirror(current, mirror);
+    oop result = Reflection::reflect_new_array(h_mirror(), length, THREAD);
+    if (!HAS_PENDING_EXCEPTION) {
+      current->set_vm_result(result);
+    }
+  JRT_BLOCK_END;
   SharedRuntime::on_slowpath_allocation_exit(current);
 JRT_END
 

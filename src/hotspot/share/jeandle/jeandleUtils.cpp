@@ -19,6 +19,7 @@
  */
 
 #include "jeandle/__llvmHeadersBegin__.hpp"
+#include "llvm/IR/Instructions.h"
 #include "llvm/IR/Jeandle/Attributes.h"
 #include "llvm/IR/Jeandle/GCStrategy.h"
 #include "llvm/IR/Jeandle/Metadata.h"
@@ -30,6 +31,7 @@
 #include "jeandle/__hotspotHeadersBegin__.hpp"
 #include "ci/ciInstanceKlass.hpp"
 #include "ci/ciObjArrayKlass.hpp"
+#include "ci/ciType.hpp"
 #include "compiler/abstractCompiler.hpp"
 #include "compiler/compilerThread.hpp"
 #include "oops/instanceKlass.hpp"
@@ -78,6 +80,26 @@ bool is_effectively_final(Klass* klass) {
   if (klass->is_objArray_klass())
     return is_effectively_final(ObjArrayKlass::cast(klass)->bottom_klass());
   return false;
+}
+
+void attach_java_klass_ret_attr(llvm::CallBase* call,
+                                ciType* ret_type,
+                                llvm::LLVMContext& ctx) {
+  if (!ret_type->is_klass()) {
+    return;
+  }
+  ciKlass* ret_klass = ret_type->as_klass();
+  if (!ret_klass->is_loaded() || is_unverified_interface(ret_klass)) {
+    return;
+  }
+  Klass* enc = (Klass*)ret_klass->constant_encoding();
+  call->addRetAttr(llvm::Attribute::get(ctx,
+      llvm::jeandle::Attribute::JavaKlass,
+      std::to_string((uintptr_t)enc)));
+  if (is_effectively_final(ret_klass)) {
+    call->addRetAttr(llvm::Attribute::get(ctx,
+        llvm::jeandle::Attribute::JavaKlassExact));
+  }
 }
 
 llvm::Function* JeandleFuncSig::create_llvm_func(ciMethod* method, llvm::Module& target_module, bool is_osr_entry) {

@@ -62,7 +62,7 @@ class JeandleCompilation : public StackObj {
 
   // Error related:
   void report_error(const char* msg) {
-    if (msg != nullptr) {
+    if (msg != nullptr && _error_msg == nullptr) {
       _error_msg = msg;
     }
   }
