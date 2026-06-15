@@ -332,12 +332,14 @@ declare hotspotcc ptr addrspace(1) @new_array(ptr, i32, ptr)
 ; Unified array allocation JavaOp.  Both bytecode (newarray/anewarray) and intrinsic
 ; (_newArray / Array.newInstance) paths call this function.
 ; LLVM passes identify array allocation by matching on this function name.
-define private hotspotcc ptr addrspace(1) @jeandle.new_array(ptr %array_klass, i32 %length) noinline "lower-phase"="1" {
+define private hotspotcc ptr addrspace(1) @jeandle.new_array(ptr %array_klass, i32 %length, i32 %size_in_bytes, i32 %base_offset, i32 %length_limit) noinline "lower-phase"="1" {
 entry:
-  ; Length bounds check first. arrayOopDesc::max_array_length() is signed, and a negative
-  ; %length (e.g. user-supplied -1) must go through the runtime to raise
-  ; NegativeArraySizeException, which the slow path handles.
-  %too_long = icmp ugt i32 %length, %max_length
+  ; Fast-path length cap. %length_limit is a size-derived bound (FastAllocateSizeLimit, scaled
+  ; by element size on the caller side) chosen so %size_in_bytes cannot overflow i32 -- it is
+  ; NOT arrayOopDesc::max_array_length(), which is ~max_jint on LP64 and would let a large
+  ; length wrap the size computation. The unsigned compare also routes a negative %length
+  ; (e.g. -1) to the slow path, where the runtime raises NegativeArraySizeException.
+  %too_long = icmp ugt i32 %length, %length_limit
   br i1 %too_long, label %array_slow_path, label %check_tlab
 
 check_tlab:
