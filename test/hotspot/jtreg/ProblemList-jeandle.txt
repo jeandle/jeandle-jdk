@@ -504,11 +504,6 @@ gc/shenandoah/TestStringDedupStress.java#passive                                
 gc/shenandoah/TestStringDedupStress.java#default                                               linux-aarch64,linux-x64
 
 ###
-# OSR - On Stack Replacement
-###
-compiler/whitebox/DeoptimizeMultipleOSRTest.java                                               linux-x64
-
-###
 # CompilerControl not supported
 ###
 compiler/compilercontrol/commands/LogTest.java                                                 linux-aarch64,linux-x64
