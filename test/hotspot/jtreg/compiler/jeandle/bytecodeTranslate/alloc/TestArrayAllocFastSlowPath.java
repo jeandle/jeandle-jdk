@@ -46,6 +46,8 @@ public class TestArrayAllocFastSlowPath {
                 Asserts.assertEquals(stress_allocate_int_array(50_000), 50_000L * 1024);
             } else if (args[0].equals("objarray_stress")) {
                 Asserts.assertEquals(stress_allocate_object_array(50_000), 50_000L * 256);
+            } else if (args[0].equals("typearray_over_limit")) {
+                Asserts.assertEquals(allocate_large_int_array(300_000), 300_000);
             }
             return;
         }
@@ -56,6 +58,7 @@ public class TestArrayAllocFastSlowPath {
         testSlowPathTLABExhaustionTypeArray();
         testSlowPathTLABExhaustionObjectArray();
         testSlowPathUseTLABDisabled();
+        testSlowPathOverSizeLimitTypeArray();
     }
 
     public static int allocate_int_array() {
@@ -65,6 +68,15 @@ public class TestArrayAllocFastSlowPath {
 
     public static int allocate_object_array() {
         Object[] a = new Object[4];
+        return a.length;
+    }
+
+    // ~1.2 MB int[], length over the fast-path size limit (FastAllocateSizeLimit, 262144 ints
+    // for T_INT). The compiled length guard branches to the slow path before the TLAB check, so
+    // an over-limit length can never reach the bump-pointer fast path -- this is the guard that
+    // keeps a large length from wrapping the i32 size computation.
+    public static int allocate_large_int_array(int n) {
+        int[] a = new int[n];
         return a.length;
     }
 
@@ -171,6 +183,26 @@ public class TestArrayAllocFastSlowPath {
             "-XX:CompileCommand=compileonly,compiler.jeandle.bytecodeTranslate.alloc.TestArrayAllocFastSlowPath::allocate_int_array",
             TestArrayAllocFastSlowPath.class.getName(),
             "typearray_small"
+        ));
+        OutputAnalyzer output = ProcessTools.executeCommand(pb);
+        output.shouldHaveExitValue(0);
+        output.shouldContain("Slow path allocation for [I");
+    }
+
+    // int[] length over the fast-path size limit must decline the fast path. The compiled length
+    // guard branches to the slow path before the TLAB check, so this exercises the
+    // FastAllocateSizeLimit guard that prevents the i32 size_in_bytes overflow -- not a TLAB
+    // miss. TLAB defaults are left untouched; the over-limit length alone forces the slow path.
+    static void testSlowPathOverSizeLimitTypeArray() throws Exception {
+        ProcessBuilder pb = ProcessTools.createLimitedTestJavaProcessBuilder(List.of(
+            "-Xcomp",
+            "-Xbatch",
+            "-XX:-TieredCompilation",
+            "-XX:+UseJeandleCompiler",
+            "-Xlog:jeandle+alloc=debug",
+            "-XX:CompileCommand=compileonly,compiler.jeandle.bytecodeTranslate.alloc.TestArrayAllocFastSlowPath::allocate_large_int_array",
+            TestArrayAllocFastSlowPath.class.getName(),
+            "typearray_over_limit"
         ));
         OutputAnalyzer output = ProcessTools.executeCommand(pb);
         output.shouldHaveExitValue(0);
