@@ -1293,12 +1293,12 @@ void JeandleAbstractInterpreter::interpret_block(JeandleBasicBlock* block) {
       case Bytecodes::_tableswitch: table_switch(); break;
       case Bytecodes::_lookupswitch: lookup_switch(); break;
 
-      case Bytecodes::_ireturn: add_safepoint_poll(); return_current(_jvm->ipop()); break;
-      case Bytecodes::_lreturn: add_safepoint_poll(); return_current(_jvm->lpop()); break;
-      case Bytecodes::_freturn: add_safepoint_poll(); return_current(_jvm->fpop()); break;
-      case Bytecodes::_dreturn: add_safepoint_poll(); return_current(_jvm->dpop()); break;
-      case Bytecodes::_areturn: add_safepoint_poll(); return_current(_jvm->apop()); break;
-      case Bytecodes::_return:  add_safepoint_poll(); return_current(nullptr); break;
+      case Bytecodes::_ireturn: add_safepoint_poll(true); return_current(_jvm->ipop()); break;
+      case Bytecodes::_lreturn: add_safepoint_poll(true); return_current(_jvm->lpop()); break;
+      case Bytecodes::_freturn: add_safepoint_poll(true); return_current(_jvm->fpop()); break;
+      case Bytecodes::_dreturn: add_safepoint_poll(true); return_current(_jvm->dpop()); break;
+      case Bytecodes::_areturn: add_safepoint_poll(true); return_current(_jvm->apop()); break;
+      case Bytecodes::_return:  add_safepoint_poll(true); return_current(nullptr); break;
 
       // References:
 
@@ -2469,8 +2469,11 @@ void JeandleAbstractInterpreter::store_to_address(llvm::Value* addr, llvm::Value
   }
 }
 
-void JeandleAbstractInterpreter::add_safepoint_poll() {
-  call_java_op("jeandle.safepoint_poll", {}, {create_current_deopt_bundle()});
+void JeandleAbstractInterpreter::add_safepoint_poll(bool at_return_poll) {
+  if (at_return_poll)
+    call_java_op("jeandle.safepoint_poll", {_ir_builder.getTrue()}, {create_current_deopt_bundle()});
+  else
+    call_java_op("jeandle.safepoint_poll", {_ir_builder.getFalse()}, {create_current_deopt_bundle()});
 }
 
 void JeandleAbstractInterpreter::arraylength() {

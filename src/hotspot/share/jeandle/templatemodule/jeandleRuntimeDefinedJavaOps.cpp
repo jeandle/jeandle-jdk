@@ -83,9 +83,10 @@ DEF_JAVA_OP(current_thread, 0, llvm::PointerType::get(context, llvm::jeandle::Ad
   ir_builder.CreateRet(current_thread_ptr);
 JAVA_OP_END
 
-DEF_JAVA_OP(safepoint_poll, 1, llvm::Type::getVoidTy(context))
+DEF_JAVA_OP(safepoint_poll, 1, llvm::Type::getVoidTy(context), llvm::Type::getInt1Ty(context))
   llvm::BasicBlock* return_block = llvm::BasicBlock::Create(context, "return", func);
   llvm::BasicBlock* do_safepoint_block = llvm::BasicBlock::Create(context, "do_safepoint", func);
+  llvm::Value* at_return_poll = func->getArg(0);
 
   llvm::Type* intptr_type = ir_builder.getIntPtrTy(template_module.getDataLayout());
 
@@ -110,7 +111,7 @@ DEF_JAVA_OP(safepoint_poll, 1, llvm::Type::getVoidTy(context))
   llvm::CallInst* current_thread = ir_builder.CreateCall(current_thread_func);
   current_thread->setCallingConv(llvm::CallingConv::Hotspot_JIT);
   // Call safepoint handler.
-  llvm::CallInst* call_inst = ir_builder.CreateCall(JeandleRuntimeRoutine::safepoint_handler_callee(template_module), {current_thread},
+  llvm::CallInst* call_inst = ir_builder.CreateCall(JeandleRuntimeRoutine::safepoint_handler_callee(template_module), {current_thread, at_return_poll},
                                                     {create_empty_deopt_bundle()});
   call_inst->setCallingConv(llvm::CallingConv::Hotspot_JIT);
   ir_builder.CreateBr(return_block);

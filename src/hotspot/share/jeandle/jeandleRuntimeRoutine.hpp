@@ -46,7 +46,8 @@
   def(safepoint_handler,                                                            \
       JeandleRuntimeRoutine::safepoint_handler,                                     \
       llvm::Type::getVoidTy(context),                                               \
-      llvm::PointerType::get(context, llvm::jeandle::AddrSpace::CHeapAddrSpace))    \
+      llvm::PointerType::get(context, llvm::jeandle::AddrSpace::CHeapAddrSpace),    \
+      llvm::Type::getInt1Ty(context))                                               \
                                                                                     \
   def(install_exceptional_return,                                                   \
       JeandleRuntimeRoutine::install_exceptional_return,                            \
@@ -375,7 +376,7 @@ class JeandleRuntimeRoutine : public AllStatic {
 
   // C/C++ routine implementations:
 
-  static void safepoint_handler(JavaThread* current);
+  static void safepoint_handler(JavaThread* current, bool at_return_poll);
 
   // Install exceptional_return into the current java frame, for throwing exceptions.
   static void install_exceptional_return(oopDesc* exception, JavaThread* current);

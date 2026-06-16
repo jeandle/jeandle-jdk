@@ -92,7 +92,7 @@ static bool check_jeandle_compiled_frame(JavaThread* thread) {
 }
 #endif // ASSERT
 
-JRT_ENTRY(void, JeandleRuntimeRoutine::safepoint_handler(JavaThread* current))
+JRT_ENTRY_NO_ASYNC(void, JeandleRuntimeRoutine::safepoint_handler(JavaThread* current, bool at_return_poll))
   RegisterMap r_map(current,
                     RegisterMap::UpdateMap::skip,
                     RegisterMap::ProcessFrames::include,
@@ -102,12 +102,36 @@ JRT_ENTRY(void, JeandleRuntimeRoutine::safepoint_handler(JavaThread* current))
   guarantee(trap_cb != nullptr && trap_cb->is_compiled_by_jeandle(), "safepoint handler must be called from jeandle compiled method");
 
   ThreadSafepointState* state = current->safepoint_state();
+if (at_return_poll) {
+  log_info(exceptions)("deferred async exception at return safepoint");
+  bool had_async_exception = current->has_async_exception_condition();
+  SafepointMechanism::process_if_requested_with_exit_check(current, true /* check asyncs */);
+  if (had_async_exception) {
+    log_info(exceptions)("deferred async exception at Jeandle compiled safepoint return poll");
+  }
+} else {
   state->set_at_poll_safepoint(true);
 
-  // TODO: Exception check.
   SafepointMechanism::process_if_requested_with_exit_check(current, false /* check asyncs */);
 
   state->set_at_poll_safepoint(false);
+
+  if (current->has_async_exception_condition()) {
+    Deoptimization::deoptimize_frame(current, trap_frame.id());
+    log_info(exceptions)("deferred async exception at compiled safepoint");
+  }
+
+  if (current->has_pending_exception()) {
+    RegisterMap map(current,
+                    RegisterMap::UpdateMap::include,
+                    RegisterMap::ProcessFrames::skip,
+                    RegisterMap::WalkContinuation::skip);
+    frame caller_frame = current->last_frame().sender(&map);
+    if (caller_frame.is_deoptimized_frame()) {
+      fatal("Exception installed and deoptimization is pending");
+    }
+  }
+}
 JRT_END
 
 JRT_LEAF(address, JeandleRuntimeRoutine::get_exception_handler(JavaThread* current))
