@@ -36,6 +36,8 @@
 #include "asm/macroAssembler.hpp"
 #include "ci/ciEnv.hpp"
 #include "code/vmreg.inline.hpp"
+#include "gc/shared/barrierSet.hpp"
+#include "gc/shared/barrierSetAssembler.hpp"
 #include "interpreter/interpreter.hpp"
 #include "logging/log.hpp"
 #include "runtime/os.hpp"
@@ -101,6 +103,13 @@ bool JeandleCompiledCode::needs_clinit_barrier(ciInstanceKlass* holder, ciMethod
     }
   }
   return true;
+}
+
+bool JeandleCompiledCode::needs_nmethod_entry_barrier() {
+  if (_method == nullptr) {
+    return false;
+  }
+  return BarrierSet::barrier_set()->barrier_set_nmethod() != nullptr;
 }
 
 void JeandleCompiledCode::install_obj(std::unique_ptr<ObjectBuffer> obj) {
@@ -178,6 +187,12 @@ void JeandleCompiledCode::finalize() {
     masm->generate_stack_overflow_check(bang_size_in_bytes);
   }
 
+  if (needs_nmethod_entry_barrier()) {
+    _entry_barrier_stub = new (_env->arena()) JeandleEntryBarrierStub();
+    int entry_barrier_offset = assembler.emit_nmethod_entry_barrier(_entry_barrier_stub);
+    _offsets.set_value(CodeOffsets::NMethod_Entry_Barrier, entry_barrier_offset);
+  }
+
   assert(align > 1, "invalid alignment");
   masm->align(static_cast<int>(align));
 
@@ -191,6 +206,10 @@ void JeandleCompiledCode::finalize() {
   // generate shared trampoline stubs
   if (!_code_buffer.finalize_stubs()) {
     JEANDLE_REPORT_ERROR_AND_RET_VOID("shared stub overflow");
+  }
+
+  if (_entry_barrier_stub != nullptr) {
+    _entry_barrier_stub->emit(masm);
   }
 
   if (_method) {

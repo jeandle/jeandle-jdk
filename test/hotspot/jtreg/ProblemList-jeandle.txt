@@ -497,11 +497,6 @@ compiler/loopopts/superword/TestLargeScaleAndStride.java#AlignVector            
 compiler/interpreter/Test6539464.java                                                          linux-aarch64
 
 ###
-# Fails because Jeandle does not support nmethod entry barrier
-###
-serviceability/jvmti/CompiledMethodLoad/Zombie.java                                            linux-aarch64,linux-x64
-
-###
 # GC not support(tier3)
 ###
 gc/shenandoah/TestStringDedupStress.java#iu                                                    linux-aarch64,linux-x64

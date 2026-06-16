@@ -26,6 +26,23 @@
 #include "jeandle/__hotspotHeadersBegin__.hpp"
 #include "asm/macroAssembler.hpp"
 
+class JeandleEntryBarrierStub : public ArenaObj {
+ private:
+  Label _entry;
+  Label _continuation;
+  Label _guard;
+
+ public:
+  JeandleEntryBarrierStub() :
+    _entry(),
+    _continuation(),
+    _guard() {}
+  Label& entry()    { return _entry; }
+  Label& continuation() { return _continuation; }
+  Label& guard()        { return _guard; }
+  void emit(MacroAssembler* masm);
+};
+
 class JeandleAssembler : public StackObj {
  public:
   JeandleAssembler(MacroAssembler* masm) : _masm(masm) {}
@@ -46,6 +63,7 @@ class JeandleAssembler : public StackObj {
   void emit_verified_entry();
   void emit_poisoned_osr_entry();
   void emit_clinit_barrier_on_entry(Klass* klass);
+  int emit_nmethod_entry_barrier(JeandleEntryBarrierStub* stub);
 
   int emit_exception_handler();
 
