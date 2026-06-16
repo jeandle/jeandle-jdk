@@ -60,6 +60,56 @@ static bool need_stack_overflow_check(bool is_method_compilation,
          frame_size_in_bytes > (int)(os::vm_page_size() >> 3) DEBUG_ONLY(|| true);
 }
 
+static std::string oop_handle_name_for(const char* klass_name, int oop_id) {
+  assert(klass_name != nullptr, "klass_name can not be null");
+  return std::string("oop_handle_") + klass_name + "_" + std::to_string(oop_id);
+}
+
+static std::string oop_handle_alias_name(int oop_id) {
+  return std::string("oop_handle_") + std::to_string(oop_id);
+}
+
+int JeandleCompiledCode::find_or_insert_oop(ciObject* oop) {
+  jobject oop_handle = oop->constant_encoding();
+  auto existing = _oop_handle_ids.find(oop_handle);
+  if (existing != _oop_handle_ids.end()) {
+    _oops_by_id[existing->second] = oop;
+    return existing->second;
+  }
+
+  int oop_id = _next_oop_id++;
+  std::string oop_name = oop_handle_name_for(oop->klass()->external_name(), oop_id);
+  _oop_handle_ids[oop_handle] = oop_id;
+  _oop_handles_by_id[oop_id] = oop_handle;
+  _oops_by_id[oop_id] = oop;
+  _oop_handle_names_by_id[oop_id] = oop_name;
+  _oop_handles[oop_name] = oop_handle;
+  _oop_handles[oop_handle_alias_name(oop_id)] = oop_handle;
+  return oop_id;
+}
+
+ciObject* JeandleCompiledCode::oop_at(int oop_id) {
+  auto it = _oops_by_id.find(oop_id);
+  return it == _oops_by_id.end() ? nullptr : it->second;
+}
+
+jobject JeandleCompiledCode::oop_handle_at(int oop_id) {
+  auto it = _oop_handles_by_id.find(oop_id);
+  return it == _oop_handles_by_id.end() ? nullptr : it->second;
+}
+
+std::string JeandleCompiledCode::oop_handle_name(int oop_id) {
+  auto it = _oop_handle_names_by_id.find(oop_id);
+  assert(it != _oop_handle_names_by_id.end(), "unknown oop id");
+  return it->second;
+}
+
+void JeandleCompiledCode::ensure_oop_handle_alias(int oop_id) {
+  jobject oop_handle = oop_handle_at(oop_id);
+  assert(oop_handle != nullptr, "unknown oop id");
+  _oop_handles[oop_handle_alias_name(oop_id)] = oop_handle;
+}
+
 bool JeandleCompiledCode::needs_clinit_barrier_on_entry() {
   if (_method == nullptr) {
     return false;

@@ -681,8 +681,7 @@ JeandleAbstractInterpreter::JeandleAbstractInterpreter(ciMethod* method,
                                                        _jvm(nullptr),
                                                        _work_list(),
                                                        _sync_lock(LockValue()),
-                                                       _trap_hist(trap_hist),
-                                                       _oop_idx(0) {
+                                                       _trap_hist(trap_hist) {
   // Fill basic blocks with LLVM IR.
   interpret();
 }
@@ -1463,33 +1462,8 @@ void JeandleAbstractInterpreter::load_constant() {
     return;
   }
 
-  llvm::Value* value = nullptr;
-  switch (con.basic_type()) {
-    case BasicType::T_BOOLEAN: value = JeandleType::int_const(_ir_builder, con.as_boolean()); break;
-    case BasicType::T_BYTE: value = JeandleType::int_const(_ir_builder, con.as_byte()); break;
-    case BasicType::T_CHAR: value = JeandleType::int_const(_ir_builder, con.as_char()); break;
-    case BasicType::T_SHORT: value = JeandleType::int_const(_ir_builder, con.as_short()); break;
-    case BasicType::T_INT: value = JeandleType::int_const(_ir_builder, con.as_int()); break;
-    case BasicType::T_LONG: value = JeandleType::long_const(_ir_builder, con.as_long()); break;
-    case BasicType::T_FLOAT: value = JeandleType::float_const(_ir_builder, con.as_float()); break;
-    case BasicType::T_DOUBLE: value = JeandleType::double_const(_ir_builder, con.as_double()); break;
-    case BasicType::T_ARRAY: // fall-through
-    case BasicType::T_OBJECT: {
-      ciObject* con_obj = con.as_object();
-
-      if (con_obj->is_null_object()) {
-        value = llvm::ConstantPointerNull::get(llvm::cast<llvm::PointerType>(JeandleType::java2llvm(BasicType::T_OBJECT, *_context)));
-      } else {
-        llvm::Value* oop_handle = find_or_insert_oop(con_obj);
-        value = _ir_builder.CreateLoad(JeandleType::java2llvm(BasicType::T_OBJECT, *_context), oop_handle);
-      }
-
-      break;
-    }
-    default: Unimplemented(); break;
-  }
-
-  _jvm->push(con.basic_type(), value);
+  TypedValue value = constant_to_value(con);
+  _jvm->push(value.actual_type(), value.value());
 }
 
 void JeandleAbstractInterpreter::increment() {
@@ -2254,8 +2228,8 @@ llvm::Value* JeandleAbstractInterpreter::find_or_insert_oop(ciObject* oop) {
   if (llvm::Value* global_oop_handle = _oops.lookup(oop_handle)) {
     return global_oop_handle;
   }
-  std::string oop_name = next_oop_name(oop->klass()->external_name());
-  _compiled_code.oop_handles()[oop_name] = oop_handle;
+  int oop_id = _compiled_code.find_or_insert_oop(oop);
+  std::string oop_name = _compiled_code.oop_handle_name(oop_id);
   llvm::Value* global = _module.getOrInsertGlobal(
                                oop_name,
                                JeandleType::java2llvm(BasicType::T_OBJECT, *_context));
@@ -2265,7 +2239,38 @@ llvm::Value* JeandleAbstractInterpreter::find_or_insert_oop(ciObject* oop) {
   return global_oop_handle;
 }
 
-// TODO: Handle field attributions like final, stable.
+TypedValue JeandleAbstractInterpreter::constant_to_value(ciConstant con) {
+  if (!con.is_valid()) {
+    return TypedValue::null_value();
+  }
+
+  switch (con.basic_type()) {
+    case BasicType::T_BOOLEAN: return TypedValue(T_BOOLEAN, JeandleType::int_const(_ir_builder, con.as_boolean()));
+    case BasicType::T_BYTE:    return TypedValue(T_BYTE, JeandleType::int_const(_ir_builder, con.as_byte()));
+    case BasicType::T_CHAR:    return TypedValue(T_CHAR, JeandleType::int_const(_ir_builder, con.as_char()));
+    case BasicType::T_SHORT:   return TypedValue(T_SHORT, JeandleType::int_const(_ir_builder, con.as_short()));
+    case BasicType::T_INT:     return TypedValue(T_INT, JeandleType::int_const(_ir_builder, con.as_int()));
+    case BasicType::T_LONG:    return TypedValue(T_LONG, JeandleType::long_const(_ir_builder, con.as_long()));
+    case BasicType::T_FLOAT:   return TypedValue(T_FLOAT, JeandleType::float_const(_ir_builder, con.as_float()));
+    case BasicType::T_DOUBLE:  return TypedValue(T_DOUBLE, JeandleType::double_const(_ir_builder, con.as_double()));
+    case BasicType::T_ARRAY:   // fall through
+    case BasicType::T_OBJECT: {
+      ciObject* con_obj = con.as_object();
+      if (con_obj->is_null_object()) {
+        llvm::Value* value = llvm::ConstantPointerNull::get(
+            llvm::cast<llvm::PointerType>(JeandleType::java2llvm(BasicType::T_OBJECT, *_context)));
+        return TypedValue(T_OBJECT, value);
+      }
+      llvm::Value* oop_handle = find_or_insert_oop(con_obj);
+      llvm::Value* value = _ir_builder.CreateLoad(JeandleType::java2llvm(BasicType::T_OBJECT, *_context), oop_handle);
+      return TypedValue(T_OBJECT, value);
+    }
+    default:
+      Unimplemented();
+      return TypedValue::null_value();
+  }
+}
+
 void JeandleAbstractInterpreter::do_field_access(bool is_get, bool is_static) {
   bool will_link;
   ciField* field = _bytecodes.get_field(will_link);

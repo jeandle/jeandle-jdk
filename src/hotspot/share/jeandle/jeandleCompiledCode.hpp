@@ -41,6 +41,7 @@
 #include "ci/ciEnv.hpp"
 #include "ci/ciField.hpp"
 #include "ci/ciMethod.hpp"
+#include "ci/ciObject.hpp"
 #include "code/exceptionHandlerTable.hpp"
 #include "runtime/sharedRuntime.hpp"
 
@@ -193,6 +194,7 @@ class JeandleCompiledCode : public StackObj {
                       _orig_pc_slot(nullptr),
                       _orig_pc_offset_in_bytes(-1),
                       _interpreter_frame_size_in_bytes(0),
+                      _next_oop_id(0),
                       _has_method_handle_invoke(false) {}
 
   // For compiled Jeandle runtime stubs.
@@ -209,6 +211,7 @@ class JeandleCompiledCode : public StackObj {
                       _orig_pc_slot(nullptr),
                       _orig_pc_offset_in_bytes(-1),
                       _interpreter_frame_size_in_bytes(0),
+                      _next_oop_id(0),
                       _has_method_handle_invoke(false) {}
 
   void install_obj(std::unique_ptr<ObjectBuffer> obj);
@@ -217,6 +220,11 @@ class JeandleCompiledCode : public StackObj {
   uint64_t next_statepoint_id() { return _non_routine_call_sites.size(); }
 
   llvm::StringMap<jobject>& oop_handles() { return _oop_handles; }
+  int find_or_insert_oop(ciObject* oop);
+  ciObject* oop_at(int oop_id);
+  jobject oop_handle_at(int oop_id);
+  std::string oop_handle_name(int oop_id);
+  void ensure_oop_handle_alias(int oop_id);
 
   const char* object_start() const { return _obj->getBufferStart(); }
   size_t object_size() const { return _obj->getBufferSize(); }
@@ -266,6 +274,10 @@ class JeandleCompiledCode : public StackObj {
 
   llvm::StringMap<address> _const_sections;
   llvm::StringMap<jobject> _oop_handles;
+  llvm::DenseMap<jobject, int> _oop_handle_ids;
+  llvm::DenseMap<int, jobject> _oop_handles_by_id;
+  llvm::DenseMap<int, ciObject*> _oops_by_id;
+  llvm::DenseMap<int, std::string> _oop_handle_names_by_id;
   CodeOffsets _offsets;
   JeandleExceptionHandlerTable _exception_handler_table;
   ImplicitExceptionTable _implicit_exception_table;
@@ -278,6 +290,7 @@ class JeandleCompiledCode : public StackObj {
   llvm::Value* _orig_pc_slot;
   int _orig_pc_offset_in_bytes;
   int _interpreter_frame_size_in_bytes;
+  int _next_oop_id;
   bool _has_method_handle_invoke;
   JeandleEntryBarrierStub* _entry_barrier_stub = nullptr;
 

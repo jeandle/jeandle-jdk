@@ -23,15 +23,22 @@
 #include "llvm/IR/Jeandle/VMCallbackLog.h"
 
 #include "jeandle/jeandleVMCallback.hpp"
+#include "jeandle/jeandleCompilation.hpp"
 
 #include "jeandle/__hotspotHeadersBegin__.hpp"
 #include "classfile/systemDictionary.hpp"
 #include "classfile/vmClasses.hpp"
+#include "ci/ciField.hpp"
+#include "ci/ciInstance.hpp"
+#include "ci/ciInstanceKlass.hpp"
+#include "ci/ciObject.hpp"
 #include "oops/fieldInfo.inline.hpp"
 #include "oops/fieldStreams.inline.hpp"
+#include "oops/instanceMirrorKlass.hpp"
 #include "oops/instanceKlass.hpp"
 #include "oops/klass.inline.hpp"
 #include "runtime/handles.inline.hpp"
+#include "utilities/globalDefinitions.hpp"
 
 namespace {
 
@@ -87,6 +94,132 @@ bool jeandle_is_effectively_final(uintptr_t klass_ptr) {
   return false;
 }
 
+ciObject* jeandle_oop_by_id(int oop_id) {
+  JeandleCompilation* compilation = JeandleCompilation::current();
+  if (compilation == nullptr) {
+    return nullptr;
+  }
+
+  return compilation->compiled_code()->oop_at(oop_id);
+}
+
+bool jeandle_constant_field(int oop_id, int offset, ciField** field, ciConstant* con) {
+  ciObject* base_oop = jeandle_oop_by_id(oop_id);
+  if (base_oop == nullptr || base_oop->is_null_object()) {
+    return false;
+  }
+
+  if (base_oop->is_array()) {
+    // TODO: Support Stable array element folding in a follow-up pass.
+    return false;
+  }
+
+  if (!base_oop->is_instance()) {
+    return false;
+  }
+
+  ciInstance* instance = base_oop->as_instance();
+  ciField* found = nullptr;
+  ciConstant value;
+  ciType* mirror_type = instance->java_mirror_type();
+  if (mirror_type != nullptr && mirror_type->is_klass() &&
+      mirror_type->as_klass()->is_instance_klass() &&
+      offset >= InstanceMirrorKlass::offset_of_static_fields()) {
+    found = mirror_type->as_klass()->as_instance_klass()->get_field_by_offset(offset, true);
+    if (found == nullptr || !found->is_constant()) {
+      return false;
+    }
+    value = found->constant_value();
+  } else {
+    found = instance->klass()->as_instance_klass()->get_field_by_offset(offset, false);
+    if (found == nullptr || !found->is_constant()) {
+      return false;
+    }
+    value = found->constant_value_of(instance);
+  }
+
+  if (!value.is_valid()) {
+    return false;
+  }
+
+  if (is_reference_type(found->layout_type()) && !found->type()->is_loaded()) {
+    return false;
+  }
+
+  *field = found;
+  *con = value;
+  return true;
+}
+
+bool jeandle_is_constant_field(int oop_id, int offset) {
+  ciField* field = nullptr;
+  ciConstant con;
+  return jeandle_constant_field(oop_id, offset, &field, &con);
+}
+
+int jeandle_get_field_basic_type_by_oop(int oop_id, int offset) {
+  ciField* field = nullptr;
+  ciConstant con;
+  if (!jeandle_constant_field(oop_id, offset, &field, &con)) {
+    return T_ILLEGAL;
+  }
+  return field->layout_type();
+}
+
+int jeandle_get_constant_field_int(int oop_id, int offset) {
+  ciField* field = nullptr;
+  ciConstant con;
+  if (!jeandle_constant_field(oop_id, offset, &field, &con)) {
+    return 0;
+  }
+  return con.as_int();
+}
+
+int64_t jeandle_get_constant_field_long(int oop_id, int offset) {
+  ciField* field = nullptr;
+  ciConstant con;
+  if (!jeandle_constant_field(oop_id, offset, &field, &con)) {
+    return 0;
+  }
+  return con.as_long();
+}
+
+int jeandle_get_constant_field_float_bits(int oop_id, int offset) {
+  ciField* field = nullptr;
+  ciConstant con;
+  if (!jeandle_constant_field(oop_id, offset, &field, &con)) {
+    return 0;
+  }
+  return jint_cast(con.as_float());
+}
+
+int64_t jeandle_get_constant_field_double_bits(int oop_id, int offset) {
+  ciField* field = nullptr;
+  ciConstant con;
+  if (!jeandle_constant_field(oop_id, offset, &field, &con)) {
+    return 0;
+  }
+  return jlong_cast(con.as_double());
+}
+
+int jeandle_get_constant_field_oop(int oop_id, int offset) {
+  ciField* field = nullptr;
+  ciConstant con;
+  if (!jeandle_constant_field(oop_id, offset, &field, &con)) {
+    return -1;
+  }
+
+  ciObject* object = con.as_object();
+  if (object->is_null_object()) {
+    return -1;
+  }
+
+  JeandleCompiledCode* compiled_code = JeandleCompilation::current()->compiled_code();
+  int result_id = compiled_code->find_or_insert_oop(object);
+  compiled_code->ensure_oop_handle_alias(result_id);
+  return result_id;
+}
+
 } // anonymous namespace
 
 void register_jeandle_vm_callbacks() {
@@ -97,6 +230,13 @@ void register_jeandle_vm_callbacks() {
   callbacks.IsInterface = &jeandle_is_interface;
   callbacks.IsObjectKlass = &jeandle_is_object_klass;
   callbacks.IsEffectivelyFinal = &jeandle_is_effectively_final;
+  callbacks.IsConstantField = &jeandle_is_constant_field;
+  callbacks.GetFieldBasicTypeByOop = &jeandle_get_field_basic_type_by_oop;
+  callbacks.GetConstantFieldInt = &jeandle_get_constant_field_int;
+  callbacks.GetConstantFieldLong = &jeandle_get_constant_field_long;
+  callbacks.GetConstantFieldFloatBits = &jeandle_get_constant_field_float_bits;
+  callbacks.GetConstantFieldDoubleBits = &jeandle_get_constant_field_double_bits;
+  callbacks.GetConstantFieldOop = &jeandle_get_constant_field_oop;
   llvm::jeandle::registerVMCallbacks(callbacks);
 
   if (JeandleRecordVMCallbacks) {
