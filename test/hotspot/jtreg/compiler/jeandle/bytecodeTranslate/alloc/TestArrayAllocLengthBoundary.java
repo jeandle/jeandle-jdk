@@ -73,21 +73,20 @@ public class TestArrayAllocLengthBoundary {
         }
         Asserts.assertTrue(negativeCaught, "NegativeArraySizeException not thrown for length=-1");
 
-        // (3) length above max -> the slow path raises OutOfMemoryError (HotSpot's standard
-        // behavior when length > max_array_length). We catch broadly here because the
-        // precise exception type may vary by VM (some versions throw an OOME, others an
-        // Error subclass). The intent is just to confirm the fast path declined.
+        // (3) length above max_array_length -> the runtime rejects it by VM limit and raises
+        // OutOfMemoryError. Keep the assertion OUTSIDE the try and the catch narrow: a
+        // `catch (Throwable)` around an inner Asserts.fail() would swallow its own
+        // RuntimeException and pass even if the allocation wrongly succeeded -- masking exactly
+        // the fast-path size guard this test is meant to protect.
+        int[] tooBig = null;
         boolean tooBigCaught = false;
         try {
-            int[] a = test_huge_length(Integer.MAX_VALUE);
-            Asserts.fail("Expected OutOfMemoryError, got array of length " + a.length);
+            tooBig = test_huge_length(Integer.MAX_VALUE);
         } catch (OutOfMemoryError e) {
             tooBigCaught = true;
-        } catch (Throwable t) {
-            // Accept any Error/RuntimeException from the runtime -- the point is we did
-            // not silently take the fast path for an out-of-range length.
-            tooBigCaught = true;
         }
-        Asserts.assertTrue(tooBigCaught, "VM error not thrown for length=Integer.MAX_VALUE");
+        Asserts.assertTrue(tooBigCaught,
+            "Expected OutOfMemoryError for length=Integer.MAX_VALUE, but allocation returned"
+            + (tooBig != null ? " array of length " + tooBig.length : " no exception"));
     }
 }
