@@ -139,6 +139,9 @@ bool JeandleIntrinsicLowering::is_supported(vmIntrinsics::ID id) {
     // compare unsigned
     case vmIntrinsics::_compareUnsigned_i:
     case vmIntrinsics::_compareUnsigned_l:
+
+    // identity hash code
+    case vmIntrinsics::_identityHashCode:
       return true;
     default:
       return false;
@@ -298,6 +301,10 @@ bool JeandleIntrinsicLowering::lower(vmIntrinsics::ID id, const ciMethod* target
     case vmIntrinsics::_compareUnsigned_i:
     case vmIntrinsics::_compareUnsigned_l:
       return lower_compare_unsigned(id);
+
+    // System.identityHashCode(Object)
+    case vmIntrinsics::_identityHashCode:
+      return lower_identity_hash_code();
 
     default:
       return false;
@@ -667,5 +674,82 @@ bool JeandleIntrinsicLowering::lower_new_array() {
   result->addIncoming(slow_call, slow_normal_bb);
 
   _interp->_jvm->apush(result);
+  return true;
+}
+
+// ---- lower_identity_hash_code ----
+//
+// Lower System.identityHashCode(Object) with three-path structure:
+//   null      → 0                                          (JVM spec)
+//   fast path → jeandle.identity_hashcode_fast(obj) JavaOp (unlocked + hash assigned)
+//   slow path → jeandle.identity_hash_code(obj, thread)    (locked or hash not yet installed)
+//
+// The fast-path IR (mark word load + lock check + hash extraction) lives in the
+// jeandle.identity_hashcode_fast JavaOp (jeandleRuntimeDefinedJavaOps.cpp) so it
+// can be shared by future Object.hashCode lowering. The slow path stays inline
+// because it needs a statepoint-wrapped runtime call with the caller's deopt bundle.
+bool JeandleIntrinsicLowering::lower_identity_hash_code() {
+  llvm::LLVMContext& ctx = *_interp->_context;
+  llvm::IRBuilder<>& builder = _interp->_ir_builder;
+  llvm::Module& module = _interp->_module;
+
+  // Static method: pop the single Object argument.
+  llvm::Value* obj = _interp->_jvm->apop();
+
+  llvm::PointerType* java_heap_ptr_ty =
+      llvm::PointerType::get(ctx, llvm::jeandle::AddrSpace::JavaHeapAddrSpace);
+
+  // null check
+  llvm::BasicBlock* null_check_bb = builder.GetInsertBlock();
+  llvm::BasicBlock* fast_call_bb =
+      llvm::BasicBlock::Create(ctx, "identityHashCode_fast_call", _interp->_llvm_func);
+  llvm::BasicBlock* slow_bb =
+      llvm::BasicBlock::Create(ctx, "identityHashCode_slow", _interp->_llvm_func);
+  llvm::BasicBlock* merge_bb =
+      llvm::BasicBlock::Create(ctx, "identityHashCode_merge", _interp->_llvm_func);
+
+  llvm::Value* obj_is_null = builder.CreateICmpEQ(
+      obj, llvm::ConstantPointerNull::get(java_heap_ptr_ty),
+      "identityHashCode.obj_is_null");
+  builder.CreateCondBr(obj_is_null, merge_bb, fast_call_bb);
+
+  // fast path: call jeandle.identity_hashcode_fast JavaOp
+  //   returns hash on success, 0 on failure (caller falls to slow path)
+  builder.SetInsertPoint(fast_call_bb);
+  llvm::Function* fast_fn = module.getFunction("jeandle.identity_hashcode_fast");
+  assert(fast_fn != nullptr, "jeandle.identity_hashcode_fast JavaOp not defined");
+  // Pure heap read; no deopt, no exception, no GC state needed at the call itself.
+  static constexpr CallSiteAttributeMetadata fast_attrs = {CTRL_NONE, MEM_READ};
+  llvm::CallBase* fast_call = emit_callsite(
+      fast_fn, llvm::CallingConv::Hotspot_JIT, {obj}, fast_attrs);
+  llvm::Value* fast_ok =
+      builder.CreateICmpNE(fast_call, builder.getInt32(0), "identityHashCode.fast_ok");
+  builder.CreateCondBr(fast_ok, merge_bb, slow_bb);
+
+  // slow path: runtime call (handles locked objects + lazy hash install)
+  builder.SetInsertPoint(slow_bb);
+  llvm::Function* current_thread_fn = module.getFunction("jeandle.current_thread");
+  llvm::CallInst* current_thread = builder.CreateCall(current_thread_fn);
+  current_thread->setCallingConv(llvm::CallingConv::Hotspot_JIT);
+
+  static constexpr CallSiteAttributeMetadata slow_attrs =
+      {CTRL_NONE, MEM_READ | MEM_WRITE | MEM_NEEDS_GC_STATE};
+  llvm::CallBase* slow_call = emit_callsite(
+      JeandleRuntimeRoutine::identity_hash_code_callee(module),
+      llvm::CallingConv::Hotspot_JIT,
+      {obj, current_thread}, slow_attrs);
+  builder.CreateBr(merge_bb);
+  llvm::BasicBlock* slow_tail_bb = builder.GetInsertBlock();
+
+  // merge: 0 (null), fast_call (fast), slow_call (slow)
+  builder.SetInsertPoint(merge_bb);
+  _interp->_block->set_tail_llvm_block(merge_bb);
+  llvm::PHINode* result =
+      builder.CreatePHI(builder.getInt32Ty(), 3, "identityHashCode.result");
+  result->addIncoming(builder.getInt32(0), null_check_bb);
+  result->addIncoming(fast_call, fast_call_bb);
+  result->addIncoming(slow_call, slow_tail_bb);
+
+  _interp->_jvm->ipush(result);
   return true;
 }

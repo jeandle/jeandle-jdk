@@ -27,6 +27,7 @@
 #include "runtime/reflection.hpp"
 #include "runtime/sharedRuntime.hpp"
 #include "runtime/stubRoutines.hpp"
+#include "runtime/synchronizer.hpp"
 #include "runtime/frame.hpp"
 #include "runtime/interfaceSupport.inline.hpp"
 #include "runtime/safepoint.hpp"
@@ -354,4 +355,18 @@ JRT_ENTRY(jint, JeandleRuntimeRoutine::instanceof_unloaded_or_null(Method* metho
     return 1;
   }
   return 0;
+JRT_END
+
+// Matches System.identityHashCode semantics.
+JRT_ENTRY(jint, JeandleRuntimeRoutine::identity_hash_code(oopDesc* obj, JavaThread* current))
+  if (obj == nullptr) {
+    return 0;
+  }
+
+  // FastHashCode may safepoint while installing the hash; the Handle keeps
+  // the oop valid across GC.
+  Handle h_obj(current, obj);
+  intptr_t hash = ObjectSynchronizer::FastHashCode(current, h_obj());
+
+  return (jint)hash;
 JRT_END

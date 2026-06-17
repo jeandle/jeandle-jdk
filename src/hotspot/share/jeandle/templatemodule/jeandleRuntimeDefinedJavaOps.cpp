@@ -39,7 +39,9 @@
 #include "oops/array.hpp"
 #include "classfile/javaClasses.hpp"
 #include "oops/klass.hpp"
+#include "oops/markWord.hpp"
 #include "oops/objArrayKlass.hpp"
+#include "oops/oop.hpp"
 #include "runtime/javaThread.hpp"
 #include "runtime/objectMonitor.hpp"
 #include "runtime/safepointMechanism.hpp"
@@ -306,6 +308,61 @@ DEF_JAVA_OP(reference_get, 1,
   ir_builder.CreateRet(referent);
 JAVA_OP_END
 
+// Fast path for System.identityHashCode / Object.hashCode: extract the hash
+// from the object's mark word inline. Returns the hash on success, 0 on failure
+// (object locked/inflated, or hash not yet installed). Caller must guarantee
+// obj != null and must fall back to a runtime call when this returns 0.
+DEF_JAVA_OP(identity_hashcode_fast, 0, llvm::Type::getInt32Ty(context),
+            llvm::PointerType::get(context, llvm::jeandle::AddrSpace::JavaHeapAddrSpace))
+  llvm::Value* obj = func->getArg(0);
+
+  llvm::IntegerType* mark_ty = ir_builder.getIntNTy(sizeof(uintptr_t) * 8);
+  llvm::Value* mark_addr = ir_builder.CreateGEP(
+      ir_builder.getInt8Ty(), obj,
+      ir_builder.getInt64(oopDesc::mark_offset_in_bytes()));
+  llvm::LoadInst* mark = ir_builder.CreateLoad(mark_ty, mark_addr, "mark");
+  mark->setAlignment(llvm::Align(sizeof(uintptr_t)));
+  mark->setAtomic(llvm::AtomicOrdering::Unordered);
+
+  llvm::Constant* lock_mask_c =
+      llvm::ConstantInt::get(mark_ty, markWord::lock_mask_in_place);
+  llvm::Value* lock_bits = ir_builder.CreateAnd(mark, lock_mask_c, "lock_bits");
+
+  llvm::BasicBlock* hash_check_bb = llvm::BasicBlock::Create(context, "hash_check", func);
+  llvm::BasicBlock* success_bb    = llvm::BasicBlock::Create(context, "success", func);
+  llvm::BasicBlock* fail_bb       = llvm::BasicBlock::Create(context, "fail", func);
+
+  // Lock-state guard: LM_LIGHTWEIGHT fails on monitor_value; default fails on
+  // anything that isn't unlocked_value (stack-locked or inflated).
+  if (LockingMode == LM_LIGHTWEIGHT) {
+    llvm::Constant* monitor_c = llvm::ConstantInt::get(mark_ty, markWord::monitor_value);
+    llvm::Value* is_monitor = ir_builder.CreateICmpEQ(lock_bits, monitor_c, "is_monitor");
+    ir_builder.CreateCondBr(is_monitor, fail_bb, hash_check_bb);
+  } else {
+    llvm::Constant* unlocked_c = llvm::ConstantInt::get(mark_ty, markWord::unlocked_value);
+    llvm::Value* is_unlocked = ir_builder.CreateICmpEQ(lock_bits, unlocked_c, "is_unlocked");
+    ir_builder.CreateCondBr(is_unlocked, hash_check_bb, fail_bb);
+  }
+
+  // hash = ((mark >> hash_shift) & hash_mask) truncated to i32.
+  // hash_mask is 31 bits, so the i32 truncation is lossless.
+  ir_builder.SetInsertPoint(hash_check_bb);
+  llvm::Constant* hash_shift_c = llvm::ConstantInt::get(mark_ty, markWord::hash_shift);
+  llvm::Value* shifted = ir_builder.CreateLShr(mark, hash_shift_c, "hash_shifted");
+  llvm::Value* hash_i32 = ir_builder.CreateTrunc(shifted, ir_builder.getInt32Ty(), "hash_truncated");
+  llvm::Constant* hash_mask_c = llvm::ConstantInt::get(ir_builder.getInt32Ty(), markWord::hash_mask);
+  llvm::Value* hash = ir_builder.CreateAnd(hash_i32, hash_mask_c, "hash");
+  // no_hash = 0; any successfully-installed hash is non-zero.
+  llvm::Value* has_hash = ir_builder.CreateICmpNE(hash, ir_builder.getInt32(0), "has_hash");
+  ir_builder.CreateCondBr(has_hash, success_bb, fail_bb);
+
+  ir_builder.SetInsertPoint(success_bb);
+  ir_builder.CreateRet(hash);
+
+  ir_builder.SetInsertPoint(fail_bb);
+  ir_builder.CreateRet(ir_builder.getInt32(0));
+JAVA_OP_END
+
 } // anonymous namespace
 
 const char* RuntimeDefinedJavaOps::_error_msg = nullptr;
@@ -328,6 +385,7 @@ bool RuntimeDefinedJavaOps::define_all(llvm::Module& template_module) {
   define_get_class(template_module);
   define_reference_refers_to(template_module);
   define_reference_get(template_module);
+  define_identity_hashcode_fast(template_module);
 
   return failed();
 }
