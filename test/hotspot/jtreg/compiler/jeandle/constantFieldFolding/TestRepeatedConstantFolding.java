@@ -587,6 +587,11 @@ public class TestRepeatedConstantFolding {
         return ProcessTools.executeProcess(pb);
     }
 
+    private static int countReferenceOccurrences(String ir, String prefix) {
+        return countOccurrences(ir, prefix + " ptr addrspace(1)")
+             + countOccurrences(ir, prefix + " ptr addrspace(3)");
+    }
+
     // -------------------------------------------------------------------------
     // Reusable assertion shapes used by runAllTests.
     // -------------------------------------------------------------------------
@@ -632,7 +637,7 @@ public class TestRepeatedConstantFolding {
     }
 
     /**
-     * PHI-of-same-constant fold: every per-arm `load atomic ptr addrspace(1)`
+     * PHI-of-same-constant fold: every per-arm `load atomic ptr addrspace(1|3)`
      * (a Java reference-field read) is folded to a direct `load <oop_handle>`
      * global. The PHI itself may or may not survive -- two separate loads of
      * the same LLVM global are not collapsed without GVN/EarlyCSE, which RCF
@@ -644,13 +649,13 @@ public class TestRepeatedConstantFolding {
         OutputAnalyzer output = runTestProcess(name, name);
         output.shouldHaveExitValue(0);
         String afterIR = extractAfterIR(output.getOutput(), name);
-        int refLoads = countOccurrences(afterIR, "load atomic ptr addrspace(1)");
+        int refLoads = countReferenceOccurrences(afterIR, "load atomic");
         Asserts.assertEquals(refLoads, 0,
-            name + ": all 'load atomic ptr addrspace(1)' should be folded; got " + refLoads);
+            name + ": all 'load atomic ptr addrspace' should be folded; got " + refLoads);
     }
 
     /**
-     * PHI of distinct or opaque sources: the data join (a `phi ptr addrspace(1)`
+     * PHI of distinct or opaque sources: the data join (a `phi ptr addrspace(1|3)`
      * or, when SimplifyCFG converts the diamond to a select because one arm
      * has no side effects, a `select i1` of pointers) must survive RCF --
      * proves the lattice did NOT fold heterogeneous inputs.
@@ -659,15 +664,15 @@ public class TestRepeatedConstantFolding {
         OutputAnalyzer output = runTestProcess(name, name);
         output.shouldHaveExitValue(0);
         String afterIR = extractAfterIR(output.getOutput(), name);
-        int phiCount    = countOccurrences(afterIR, "phi ptr addrspace(1)");
+        int phiCount    = countReferenceOccurrences(afterIR, "phi");
         int selectCount = countOccurrences(afterIR, "select i1");
         Asserts.assertGTE(phiCount + selectCount, 1,
-            name + ": a conditional data join (phi ptr addrspace(1) or select i1) "
+            name + ": a conditional data join (phi ptr addrspace(1|3) or select i1) "
                  + "must survive RCF; got phi=" + phiCount + " select=" + selectCount);
     }
 
     /**
-     * Cascading scenario: before-IR has a `phi ptr addrspace(1)`, after-IR
+     * Cascading scenario: before-IR has a `phi ptr addrspace(1|3)`, after-IR
      * does not. Proves CFF + SCCP + SimplifyCFG + CFF re-iteration actually
      * unlocked the PHI.
      */
@@ -676,15 +681,15 @@ public class TestRepeatedConstantFolding {
         output.shouldHaveExitValue(0);
         String beforeIR = extractBeforeIR(output.getOutput(), name);
         String afterIR  = extractAfterIR(output.getOutput(),  name);
-        int beforePhi = countOccurrences(beforeIR, "phi ptr addrspace(1)");
-        int afterPhi  = countOccurrences(afterIR,  "phi ptr addrspace(1)");
+        int beforePhi = countReferenceOccurrences(beforeIR, "phi");
+        int afterPhi  = countReferenceOccurrences(afterIR, "phi");
         Asserts.assertGTE(beforePhi, 1,
-            name + ": expected >= 1 'phi ptr addrspace(1)' before RCF; got " + beforePhi);
+            name + ": expected >= 1 'phi ptr addrspace' before RCF; got " + beforePhi);
         Asserts.assertEquals(afterPhi, 0,
-            name + ": 'phi ptr addrspace(1)' should be eliminated by RCF; got " + afterPhi);
-        int refLoads = countOccurrences(afterIR, "load atomic ptr addrspace(1)");
+            name + ": 'phi ptr addrspace' should be eliminated by RCF; got " + afterPhi);
+        int refLoads = countReferenceOccurrences(afterIR, "load atomic");
         Asserts.assertEquals(refLoads, 0,
-            name + ": all per-arm 'load atomic ptr addrspace(1)' should be folded; got " + refLoads);
+            name + ": all per-arm 'load atomic ptr addrspace' should be folded; got " + refLoads);
     }
 
     /**
@@ -752,7 +757,7 @@ public class TestRepeatedConstantFolding {
                 "testStaticFinalStringHash", "testStaticFinalStringHash");
             out.shouldHaveExitValue(0);
             String afterIR = extractAfterIR(out.getOutput(), "testStaticFinalStringHash");
-            int refLoads = countOccurrences(afterIR, "load atomic ptr addrspace(1)");
+            int refLoads = countReferenceOccurrences(afterIR, "load atomic");
             Asserts.assertEquals(refLoads, 0,
                 "B1: STR reference load should be folded; got " + refLoads);
         }
@@ -761,11 +766,11 @@ public class TestRepeatedConstantFolding {
         //     cannot collapse `icmp eq` between two separate loads of the
         //     same global (that would require GVN/EarlyCSE, which RCF does
         //     not run). So we only assert the loads were folded.
-        runPrimitiveFoldNoRetCheck("testStaticFinalReferenceIdentity", "ptr addrspace(1)");
+        runPrimitiveFoldNoRetCheck("testStaticFinalReferenceIdentity", "ptr addrspace");
 
         // B3: null reference. Both operands of the icmp become LLVM literal
         //     null after CFF, so SCCP DOES fold this case.
-        runPrimitiveFold("testStaticFinalNullReference", "ptr addrspace(1)", "ret i32 1");
+        runPrimitiveFold("testStaticFinalNullReference", "ptr addrspace", "ret i32 1");
 
         // B4: array length. ARR static-final reference must fold; arraylength
         //     itself remains (arrays are rejected by the CFF VM callback).
@@ -774,7 +779,7 @@ public class TestRepeatedConstantFolding {
                 "testStaticFinalArrayLength", "testStaticFinalArrayLength");
             out.shouldHaveExitValue(0);
             String afterIR = extractAfterIR(out.getOutput(), "testStaticFinalArrayLength");
-            int refLoads = countOccurrences(afterIR, "load atomic ptr addrspace(1)");
+            int refLoads = countReferenceOccurrences(afterIR, "load atomic");
             Asserts.assertEquals(refLoads, 0,
                 "B4: ARR reference load should be folded; got " + refLoads);
         }
@@ -824,7 +829,7 @@ public class TestRepeatedConstantFolding {
         // F5: null-guarded ref read. After CFF folds NULLSTR to null,
         //     SCCP folds the compare and SimplifyCFG drops the dead
         //     .length() branch -- leaving a constant -1 return.
-        runPrimitiveFold("testGetfieldOnNullStaticRefGuarded", "ptr addrspace(1)", "ret i32 -1");
+        runPrimitiveFold("testGetfieldOnNullStaticRefGuarded", "ptr addrspace", "ret i32 -1");
 
         // === G. Side effects ===============================================
         // G1: clinit barrier preserved. Child-side asserts clinitCount goes
