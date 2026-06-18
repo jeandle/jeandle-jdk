@@ -514,7 +514,6 @@ compiler/compilercontrol/logcompilation/LogTest.java                            
 # WhiteBox API not supported
 ###
 compiler/whitebox/ForceNMethodSweepTest.java                                                   linux-aarch64,linux-x64
-compiler/whitebox/IsMethodCompilableTest.java                                                  linux-aarch64,linux-x64
 
 ###
 # CodeCache stress - unexpected deoptimization not supported
