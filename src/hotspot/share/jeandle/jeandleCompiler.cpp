@@ -104,7 +104,12 @@ void JeandleCompiler::initialize() {
 
   // Per JeandleCompiler initialization:
   if (should_perform_init()) {
-    _data_layout = _target_machine->createDataLayout();
+    llvm::DataLayout target_data_layout = _target_machine->createDataLayout();
+    std::string data_layout_string = target_data_layout.getStringRepresentation();
+    if (UseCompressedOops) {
+      data_layout_string += "-p3:32:32:32"; // for narrow oop
+    }
+    _data_layout = llvm::DataLayout(data_layout_string);
 
     install_jeandle_llvm_fatal_error_handler();
 

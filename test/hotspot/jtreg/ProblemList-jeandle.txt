@@ -418,22 +418,6 @@ compiler/stable/TestStableUByte.java                                            
 compiler/stable/TestStableUShort.java                                                          linux-aarch64,linux-x64
 
 ###
-# CompressedOops/CompressedClassPointers (tier2)
-###
-gc/arguments/TestUseCompressedOopsErgo.java#id0                                                linux-aarch64,linux-x64
-gc/arguments/TestUseCompressedOopsErgo.java#id1                                                linux-aarch64,linux-x64
-gc/arguments/TestUseCompressedOopsErgo.java#id2                                                linux-aarch64,linux-x64
-gc/arguments/TestUseCompressedOopsErgo.java#id3                                                linux-aarch64,linux-x64
-gc/metaspace/TestMetaspacePerfCounters.java#Epsilon-64                                         linux-aarch64,linux-x64
-gc/metaspace/TestMetaspacePerfCounters.java#G1-64                                              linux-aarch64,linux-x64
-gc/metaspace/TestMetaspacePerfCounters.java#Parallel-64                                        linux-aarch64,linux-x64
-gc/metaspace/TestMetaspacePerfCounters.java#Serial-64                                          linux-aarch64,linux-x64
-gc/metaspace/TestMetaspacePerfCounters.java#Shenandoah-64                                      linux-aarch64,linux-x64
-runtime/CompressedOops/UseCompressedOops.java                                                  linux-aarch64,linux-x64
-runtime/cds/appcds/TestCombinedCompressedFlags.java                                            linux-aarch64,linux-x64
-runtime/cds/appcds/TestSerialGCWithCDS.java#id1                                                linux-aarch64,linux-x64
-
-###
 # GC not support (tier2)
 ###
 gc/ergonomics/TestDynamicNumberOfGCThreads.java                                                linux-aarch64,linux-x64
