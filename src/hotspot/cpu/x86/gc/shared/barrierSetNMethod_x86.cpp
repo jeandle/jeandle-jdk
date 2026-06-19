@@ -135,9 +135,23 @@ void BarrierSetNMethod::deoptimize(nmethod* nm, address* return_address_ptr) {
    */
 
   address* stub_rbp = return_address_ptr - 2;
+  address* cookie = return_address_ptr - 1;
+
+#ifdef _LP64
+  if (nm->is_compiled_by_jeandle()) {
+    // Jeandle emits the nmethod entry barrier before the LLVM generated frame
+    // setup. There is no callee nmethod frame to discard here; the stack only
+    // contains the return address pushed by the out-of-line Jeandle barrier
+    // stub's call into StubRoutines::method_entry_barrier().
+    assert(*cookie == (address) -1, "invariant");
+    *cookie = (address)(return_address_ptr + 1);
+    *return_address_ptr = SharedRuntime::get_handle_wrong_method_stub();
+    return;
+  }
+#endif
+
   address* callers_rsp = return_address_ptr + nm->frame_size(); /* points to callers return_address now */
   address* callers_rbp = callers_rsp - 1; // 1 to move to the callers return address, 1 more to move to the rbp
-  address* cookie = return_address_ptr - 1;
 
   LogTarget(Trace, nmethod, barrier) out;
   if (out.is_enabled()) {
@@ -171,7 +185,7 @@ void BarrierSetNMethod::deoptimize(nmethod* nm, address* return_address_ptr) {
 // Note that this offset is invariant of PreserveFramePointer.
 static const int entry_barrier_offset(nmethod* nm) {
 #ifdef _LP64
-  if (nm->is_compiled_by_c2()) {
+  if (nm->is_compiled_by_c2() || nm->is_compiled_by_jeandle()) {
     return -14;
   } else {
     return -15;
@@ -188,9 +202,11 @@ static NativeNMethodCmpBarrier* native_nmethod_barrier(nmethod* nm) {
     barrier_address = nm->code_begin() + nm->jvmci_nmethod_data()->nmethod_entry_patch_offset();
   } else
 #endif
-    {
-      barrier_address = nm->code_begin() + nm->frame_complete_offset() + entry_barrier_offset(nm);
-    }
+  if (nm->is_compiled_by_jeandle()) {
+    barrier_address = nm->code_begin() + nm->nmethod_entry_barrier_offset();
+  } else {
+    barrier_address = nm->code_begin() + nm->frame_complete_offset() + entry_barrier_offset(nm);
+  }
 
   NativeNMethodCmpBarrier* barrier = reinterpret_cast<NativeNMethodCmpBarrier*>(barrier_address);
   barrier->verify();

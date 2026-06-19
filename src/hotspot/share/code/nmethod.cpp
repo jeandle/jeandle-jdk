@@ -696,6 +696,7 @@ nmethod::nmethod(
     _entry_point             = code_begin()          + offsets->value(CodeOffsets::Entry);
     _verified_entry_point    = code_begin()          + offsets->value(CodeOffsets::Verified_Entry);
     _osr_entry_point         = nullptr;
+    _nmethod_entry_barrier_offset = offsets->value(CodeOffsets::NMethod_Entry_Barrier);
     _exception_cache         = nullptr;
     _pc_desc_container.reset_to(nullptr);
 
@@ -882,6 +883,7 @@ nmethod::nmethod(
     _entry_point             = code_begin()          + offsets->value(CodeOffsets::Entry);
     _verified_entry_point    = code_begin()          + offsets->value(CodeOffsets::Verified_Entry);
     _osr_entry_point         = code_begin()          + offsets->value(CodeOffsets::OSR_Entry);
+    _nmethod_entry_barrier_offset = offsets->value(CodeOffsets::NMethod_Entry_Barrier);
     _exception_cache         = nullptr;
     _scopes_data_begin       = (address) this + scopes_data_offset;
 
@@ -1290,7 +1292,7 @@ bool nmethod::is_maybe_on_stack() {
 }
 
 void nmethod::inc_decompile_count() {
-  if (!is_compiled_by_c2() && !is_compiled_by_jvmci()) return;
+  if (!is_compiled_by_c2() && !is_compiled_by_jvmci() && !is_compiled_by_jeandle()) return;
   // Could be gated by ProfileTraps, but do not bother...
   Method* m = method();
   if (m == nullptr)  return;

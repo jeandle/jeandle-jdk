@@ -139,6 +139,11 @@ JeandleCompilation::JeandleCompilation(llvm::TargetMachine* target_machine,
   initialize();
   setup_llvm_module(template_buffer);
 
+  if (ProfileTraps) {
+    // Match C2: make sure decompile_count can be tracked for recompilation cutoffs.
+    method->ensure_method_data();
+  }
+
   if (error_occurred()) {
     _env->record_method_not_compilable(_error_msg);
     return;
