@@ -36,6 +36,8 @@
 #include "asm/macroAssembler.hpp"
 #include "ci/ciEnv.hpp"
 #include "code/vmreg.inline.hpp"
+#include "gc/shared/barrierSet.hpp"
+#include "gc/shared/barrierSetAssembler.hpp"
 #include "interpreter/interpreter.hpp"
 #include "logging/log.hpp"
 #include "runtime/os.hpp"
@@ -56,6 +58,36 @@ static bool need_stack_overflow_check(bool is_method_compilation,
 
   return has_java_calls ||
          frame_size_in_bytes > (int)(os::vm_page_size() >> 3) DEBUG_ONLY(|| true);
+}
+
+static std::string oop_handle_name_for(const char* klass_name, int oop_id) {
+  assert(klass_name != nullptr, "klass_name can not be null");
+  return std::string("oop_handle_") + klass_name + "_" + std::to_string(oop_id);
+}
+
+int JeandleCompiledCode::find_or_insert_oop(ciObject* oop) {
+  jobject oop_handle = oop->constant_encoding();
+  auto existing = _oop_handle_ids.find(oop_handle);
+  if (existing != _oop_handle_ids.end()) {
+    return existing->second;
+  }
+
+  int oop_id = _oop_handle_info.size();
+  std::string oop_name = oop_handle_name_for(oop->klass()->external_name(), oop_id);
+  _oop_handle_ids[oop_handle] = oop_id;
+  _oop_handles[oop_name] = oop_handle;
+  _oop_handle_info.push_back({oop_handle, oop, std::move(oop_name)});
+  return oop_id;
+}
+
+ciObject* JeandleCompiledCode::oop_at(int oop_id) {
+  assert(oop_id >= 0 && (size_t)oop_id < _oop_handle_info.size(), "unknown oop id");
+  return _oop_handle_info[oop_id].oop;
+}
+
+std::string JeandleCompiledCode::oop_handle_name(int oop_id) {
+  assert(oop_id >= 0 && (size_t)oop_id < _oop_handle_info.size(), "unknown oop id");
+  return _oop_handle_info[oop_id].name;
 }
 
 bool JeandleCompiledCode::needs_clinit_barrier_on_entry() {
@@ -101,6 +133,13 @@ bool JeandleCompiledCode::needs_clinit_barrier(ciInstanceKlass* holder, ciMethod
     }
   }
   return true;
+}
+
+bool JeandleCompiledCode::needs_nmethod_entry_barrier() {
+  if (_method == nullptr) {
+    return false;
+  }
+  return BarrierSet::barrier_set()->barrier_set_nmethod() != nullptr;
 }
 
 void JeandleCompiledCode::install_obj(std::unique_ptr<ObjectBuffer> obj) {
@@ -178,6 +217,12 @@ void JeandleCompiledCode::finalize() {
     masm->generate_stack_overflow_check(bang_size_in_bytes);
   }
 
+  if (needs_nmethod_entry_barrier()) {
+    _entry_barrier_stub = new (_env->arena()) JeandleEntryBarrierStub();
+    int entry_barrier_offset = assembler.emit_nmethod_entry_barrier(_entry_barrier_stub);
+    _offsets.set_value(CodeOffsets::NMethod_Entry_Barrier, entry_barrier_offset);
+  }
+
   assert(align > 1, "invalid alignment");
   masm->align(static_cast<int>(align));
 
@@ -191,6 +236,10 @@ void JeandleCompiledCode::finalize() {
   // generate shared trampoline stubs
   if (!_code_buffer.finalize_stubs()) {
     JEANDLE_REPORT_ERROR_AND_RET_VOID("shared stub overflow");
+  }
+
+  if (_entry_barrier_stub != nullptr) {
+    _entry_barrier_stub->emit(masm);
   }
 
   if (_method) {

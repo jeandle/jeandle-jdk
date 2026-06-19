@@ -195,6 +195,7 @@ class nmethod : public CompiledMethod {
   address _entry_point;                      // entry point with class check
   address _verified_entry_point;             // entry point without class check
   address _osr_entry_point;                  // entry point for on stack replacement
+  int _nmethod_entry_barrier_offset;         // offset of the nmethod entry barrier patch instruction
 
   bool _is_unlinked;
 
@@ -354,6 +355,7 @@ class nmethod : public CompiledMethod {
   // Only used for unit tests.
   nmethod()
     : CompiledMethod(),
+      _nmethod_entry_barrier_offset(-1),
       _native_receiver_sp_offset(in_ByteSize(-1)),
       _native_basic_lock_sp_offset(in_ByteSize(-1)),
       _is_unloading_state(0) {}
@@ -431,6 +433,7 @@ class nmethod : public CompiledMethod {
   // entry points
   address entry_point() const                     { return _entry_point;             } // normal entry point
   address verified_entry_point() const            { return _verified_entry_point;    } // if klass is correct
+  int nmethod_entry_barrier_offset() const       { return _nmethod_entry_barrier_offset; }
 
   // flag accessing and manipulation
   bool  is_not_installed() const                  { return _state == not_installed; }

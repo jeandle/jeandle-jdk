@@ -1038,6 +1038,34 @@ public class TestTypeCheckElimination {
     }
 
     // =========================================================================
+    // Group 36: Constant oop type knowledge (ldc / constant object references)
+    //
+    // The frontend represents a compile-time-known object reference as an
+    // oop_handle_* global load WITHOUT !java-klass metadata. The JavaType
+    // interface must recognize these by name and attribute the oop's exact
+    // runtime klass, enabling TypeCheckElimination on values that originate
+    // from a constant oop (String literals, class mirrors, etc.).
+    // =========================================================================
+
+    // 36a. Constant String (ldc) instanceof String -> eliminated (true)
+    static boolean testConstantOopStringExact() {
+        Object obj = "hello";          // ldc -> oop_handle_* load, no metadata
+        return obj instanceof String;  // exact String is subtype of String
+    }
+
+    // 36b. Constant String (ldc) instanceof Animal -> eliminated to false
+    static boolean testConstantOopStringNegative() {
+        Object obj = "hello";
+        return obj instanceof Animal;  // exact String not subtype of Animal
+    }
+
+    // 36c. Constant class mirror (ldc String.class) instanceof Class -> eliminated (true)
+    static boolean testConstantOopClassMirror() {
+        Object obj = String.class;     // ldc class -> oop_handle_* (java.lang.Class)
+        return obj instanceof Class;   // exact Class is subtype of Class
+    }
+
+    // =========================================================================
     // for a specific function, and the section after "IR Dump After".
     // =========================================================================
 
@@ -1508,6 +1536,15 @@ public class TestTypeCheckElimination {
                 Asserts.assertFalse(testOrPartialMatchTrueBranch("hello", true));
                 // both true
                 Asserts.assertTrue(testOrPartialMatchTrueBranch(dog, true));
+                break;
+            case "testConstantOopStringExact":
+                Asserts.assertTrue(testConstantOopStringExact());
+                break;
+            case "testConstantOopStringNegative":
+                Asserts.assertFalse(testConstantOopStringNegative());
+                break;
+            case "testConstantOopClassMirror":
+                Asserts.assertTrue(testConstantOopClassMirror());
                 break;
             default:
                 throw new IllegalArgumentException("Unknown test: " + testName);
@@ -2746,6 +2783,51 @@ public class TestTypeCheckElimination {
                 "35a: should have >= 2 check_instanceof before, got " + beforeCount);
             Asserts.assertEquals(afterCount, beforeCount,
                 "35a: no check_instanceof should be eliminated on true-branch; before=" + beforeCount + " after=" + afterCount);
+        }
+
+        // === 36a. Constant String (ldc) instanceof String -> eliminated ===
+        {
+            OutputAnalyzer output = runTestProcess("testConstantOopStringExact", "testConstantOopStringExact");
+            output.shouldHaveExitValue(0);
+            String fullOutput = output.getOutput();
+            String beforeIR = extractBeforeIR(fullOutput, "testConstantOopStringExact");
+            String afterIR = extractAfterIR(fullOutput, "testConstantOopStringExact");
+            int beforeCount = countOccurrences(beforeIR, "jeandle.check_instanceof");
+            int afterCount = countOccurrences(afterIR, "jeandle.check_instanceof");
+            Asserts.assertGTE(beforeCount, 1,
+                "36a: should have >= 1 check_instanceof before, got " + beforeCount);
+            Asserts.assertEquals(afterCount, 0,
+                "36a: constant-oop String instanceof String should be eliminated, got " + afterCount);
+        }
+
+        // === 36b. Constant String (ldc) instanceof Animal -> eliminated to false ===
+        {
+            OutputAnalyzer output = runTestProcess("testConstantOopStringNegative", "testConstantOopStringNegative");
+            output.shouldHaveExitValue(0);
+            String fullOutput = output.getOutput();
+            String beforeIR = extractBeforeIR(fullOutput, "testConstantOopStringNegative");
+            String afterIR = extractAfterIR(fullOutput, "testConstantOopStringNegative");
+            int beforeCount = countOccurrences(beforeIR, "jeandle.check_instanceof");
+            int afterCount = countOccurrences(afterIR, "jeandle.check_instanceof");
+            Asserts.assertGTE(beforeCount, 1,
+                "36b: should have >= 1 check_instanceof before, got " + beforeCount);
+            Asserts.assertEquals(afterCount, 0,
+                "36b: constant-oop String instanceof Animal should be eliminated to false, got " + afterCount);
+        }
+
+        // === 36c. Constant class mirror (ldc String.class) instanceof Class -> eliminated ===
+        {
+            OutputAnalyzer output = runTestProcess("testConstantOopClassMirror", "testConstantOopClassMirror");
+            output.shouldHaveExitValue(0);
+            String fullOutput = output.getOutput();
+            String beforeIR = extractBeforeIR(fullOutput, "testConstantOopClassMirror");
+            String afterIR = extractAfterIR(fullOutput, "testConstantOopClassMirror");
+            int beforeCount = countOccurrences(beforeIR, "jeandle.check_instanceof");
+            int afterCount = countOccurrences(afterIR, "jeandle.check_instanceof");
+            Asserts.assertGTE(beforeCount, 1,
+                "36c: should have >= 1 check_instanceof before, got " + beforeCount);
+            Asserts.assertEquals(afterCount, 0,
+                "36c: constant-oop Class mirror instanceof Class should be eliminated, got " + afterCount);
         }
 
         System.out.println("All TypeCheckElimination tests passed.");

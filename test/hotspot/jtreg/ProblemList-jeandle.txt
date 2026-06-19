@@ -356,9 +356,8 @@ gc/z/TestZNMT.java                                                              
 runtime/ClassUnload/UnloadTestWithVerifyDuringGC.java                                          linux-aarch64,linux-x64
 
 ###
-# timeout
+# Timeout
 ###
-
 compiler/loopopts/TestRemoveEmptyLoop.java                                                     linux-aarch64,linux-x64
 
 ###
@@ -487,45 +486,34 @@ serviceability/sa/TestJmapCore.java                                             
 serviceability/sa/TestJmapCoreMetaspace.java                                                   linux-aarch64,linux-x64
 
 ###
-# timeout due to unimplemented vm option `InlineUnsafeOps`
+# Timeout due to unimplemented vm option `InlineUnsafeOps`
 ###
 compiler/loopopts/superword/TestLargeScaleAndStride.java#vanilla                               linux-aarch64,linux-x64
 compiler/loopopts/superword/TestLargeScaleAndStride.java#AlignVector                           linux-aarch64,linux-x64
 
 ###
-# fails due to `Math.log` (issue #424)
+# Fails due to `Math.log` (issue #424)
 ###
 compiler/interpreter/Test6539464.java                                                          linux-aarch64
 
 ###
-# Fails because Jeandle does not support nmethod entry barrier
-###
-serviceability/jvmti/CompiledMethodLoad/Zombie.java                                            linux-aarch64,linux-x64
-
-###
 # GC not support(tier3)
 ###
-gc/shenandoah/TestStringDedupStress.java#iu                                                    linux-x64
-gc/shenandoah/TestStringDedupStress.java#passive                                               linux-x64                     
-gc/shenandoah/TestStringDedupStress.java#default                                               linux-x64
-
-###
-# OSR - On Stack Replacement
-###
-compiler/whitebox/DeoptimizeMultipleOSRTest.java                                               linux-x64
+gc/shenandoah/TestStringDedupStress.java#iu                                                    linux-aarch64,linux-x64
+gc/shenandoah/TestStringDedupStress.java#passive                                               linux-aarch64,linux-x64                     
+gc/shenandoah/TestStringDedupStress.java#default                                               linux-aarch64,linux-x64
 
 ###
 # CompilerControl not supported
 ###
-compiler/compilercontrol/commands/LogTest.java                                                 linux-x64
-compiler/compilercontrol/mixed/RandomValidCommandsTest.java                                    linux-x64
-compiler/compilercontrol/logcompilation/LogTest.java                                           linux-x64
+compiler/compilercontrol/commands/LogTest.java                                                 linux-aarch64,linux-x64
+compiler/compilercontrol/mixed/RandomValidCommandsTest.java                                    linux-aarch64,linux-x64
+compiler/compilercontrol/logcompilation/LogTest.java                                           linux-aarch64,linux-x64
 
 ###
 # WhiteBox API not supported
 ###
-compiler/whitebox/ForceNMethodSweepTest.java                                                   linux-x64
-compiler/whitebox/IsMethodCompilableTest.java                                                  linux-x64
+compiler/whitebox/ForceNMethodSweepTest.java                                                   linux-aarch64,linux-x64
 
 ###
 # CodeCache stress - unexpected deoptimization not supported
@@ -536,9 +524,55 @@ compiler/codecache/stress/UnexpectedDeoptimizationAllTest.java                  
 ###
 # Compiler debug/stress options not supported
 ###
-compiler/debug/TestGenerateStressSeed.java                                                     linux-x64
+compiler/debug/TestGenerateStressSeed.java                                                     linux-aarch64,linux-x64
+compiler/debug/TestStressCM.java                                                               linux-aarch64
+
+###
+# Compiler replay
+###
+compiler/ciReplay/TestDumpReplayCommandLine.java                                               linux-aarch64
+compiler/ciReplay/TestIncrementalInlining.java                                                 linux-aarch64
+compiler/ciReplay/TestInlining.java                                                            linux-aarch64
+compiler/ciReplay/TestInliningProtectionDomain.java                                            linux-aarch64
+compiler/ciReplay/TestLambdas.java                                                             linux-aarch64
+compiler/ciReplay/TestNoClassFile.java                                                         linux-aarch64
+compiler/ciReplay/TestUnresolvedClasses.java                                                   linux-aarch64
+
+###
+# Jeandle compiler has no ideal graph phase
+###
+compiler/oracle/PrintIdealPhaseTest.java                                                       linux-aarch64
+
+###
+# Vectorapi not supported.
+###
+compiler/vectorapi/AllBitsSetVectorMatchRuleTest.java                                          linux-aarch64
+compiler/vectorapi/TestVectorMaskTrueCount.java                                                linux-aarch64
+compiler/vectorapi/TestVectorMulAddSub.java                                                    linux-aarch64
+compiler/vectorapi/TestVectorTest.java                                                         linux-aarch64
+compiler/vectorapi/VectorAbsDiffTest.java                                                      linux-aarch64
+compiler/vectorapi/VectorCompareWithZeroTest.java                                              linux-aarch64
+compiler/vectorapi/VectorLogicalOpIdentityTest.java                                            linux-aarch64
+compiler/vectorapi/VectorMaskCastTest.java                                                     linux-aarch64
+compiler/vectorapi/VectorReverseBytesTest.java                                                 linux-aarch64
+compiler/vectorapi/reshape/TestVectorCastNeon.java                                             linux-aarch64
+compiler/vectorapi/reshape/TestVectorReinterpret.java                                          linux-aarch64
+compiler/vectorapi/TestReverseByteTransforms.java                                              linux-aarch64
+compiler/vectorapi/VectorCastShape64Test.java                                                  linux-aarch64
+compiler/vectorapi/VectorCastShape128Test.java                                                 linux-aarch64
+compiler/vectorapi/VectorReplicateLongSpecialImmTest.java                                      linux-aarch64
+
+###
+# Crash when RepeatCompilation=1.
+###
+runtime/CommandLine/OptionsValidation/TestOptionsWithRanges.java                               linux-aarch64
+
+###
+# Signal problem.
+###
+runtime/signal/TestSigiot.java                                                                 linux-aarch64
 
 ###
 # CTW - Compile The World module compilation failure
 ###
-applications/ctw/modules/java_desktop.java                                                     linux-x64
+applications/ctw/modules/java_desktop.java                                                     linux-aarch64,linux-x64

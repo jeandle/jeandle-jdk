@@ -31,6 +31,7 @@ on:
     types: [opened, synchronize, reopened, labeled, unlabeled]
     branches:
       - 'main'
+      - 'performance'
   repository_dispatch:
     types: ["dispatch-from-llvm"]
 concurrency:

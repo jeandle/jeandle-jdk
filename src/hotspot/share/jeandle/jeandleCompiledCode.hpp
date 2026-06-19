@@ -23,6 +23,7 @@
 
 #include "jeandle/__llvmHeadersBegin__.hpp"
 #include "llvm/ADT/DenseMap.h"
+#include "llvm/ADT/SmallVector.h"
 #include "llvm/ExecutionEngine/JITLink/JITLink.h"
 #include "llvm/IR/Statepoint.h"
 #include "llvm/Object/ELFObjectFile.h"
@@ -41,6 +42,7 @@
 #include "ci/ciEnv.hpp"
 #include "ci/ciField.hpp"
 #include "ci/ciMethod.hpp"
+#include "ci/ciObject.hpp"
 #include "code/exceptionHandlerTable.hpp"
 #include "runtime/sharedRuntime.hpp"
 
@@ -174,6 +176,13 @@ using LinkSymbol     = llvm::jitlink::Symbol;
 using StackMapParser = llvm::StackMapParser<ELFT::Endianness>;
 using DynamicLibrary = llvm::sys::DynamicLibrary;
 
+struct OopHandleInfo {
+  jobject handle;
+  ciObject* oop;
+  std::string name;
+};
+
+class JeandleEntryBarrierStub;
 class JeandleAssembler;
 class JeandleCompiledCode : public StackObj {
  public:
@@ -183,6 +192,15 @@ class JeandleCompiledCode : public StackObj {
                       _obj(nullptr),
                       _elf(nullptr),
                       _code_buffer("JeandleCompiledCode"),
+                      _routine_call_sites(),
+                      _non_routine_call_sites(),
+                      _const_sections(),
+                      _oop_handles(),
+                      _oop_handle_ids(),
+                      _oop_handle_info(),
+                      _offsets(),
+                      _exception_handler_table(),
+                      _implicit_exception_table(),
                       _frame_size(-1),
                       _prolog_length(-1),
                       _env(env),
@@ -199,6 +217,15 @@ class JeandleCompiledCode : public StackObj {
                       _obj(nullptr),
                       _elf(nullptr),
                       _code_buffer("JeandleCompiledStub"),
+                      _routine_call_sites(),
+                      _non_routine_call_sites(),
+                      _const_sections(),
+                      _oop_handles(),
+                      _oop_handle_ids(),
+                      _oop_handle_info(),
+                      _offsets(),
+                      _exception_handler_table(),
+                      _implicit_exception_table(),
                       _frame_size(-1),
                       _prolog_length(-1),
                       _env(env),
@@ -215,6 +242,13 @@ class JeandleCompiledCode : public StackObj {
   void push_non_routine_call_site(CallSiteInfo* call_site) { _non_routine_call_sites.push_back(call_site); }
   uint64_t next_statepoint_id() { return _non_routine_call_sites.size(); }
 
+  int find_or_insert_oop(ciObject* oop);
+  ciObject* oop_at(int oop_id);
+  std::string oop_handle_name(int oop_id);
+  // StringMap entries are individually heap-allocated and never relocated on
+  // insertion, so their keys stay valid for the life of this JeandleCompiledCode
+  // (unlike the std::strings in _oop_handle_info's SmallVector). Exposed so that
+  // the GetOopHandleName callback can return a stable name pointer.
   llvm::StringMap<jobject>& oop_handles() { return _oop_handles; }
 
   const char* object_start() const { return _obj->getBufferStart(); }
@@ -245,6 +279,7 @@ class JeandleCompiledCode : public StackObj {
   bool needs_clinit_barrier(ciMethod* ik,        ciMethod* accessing_method);
   bool needs_clinit_barrier(ciInstanceKlass* ik, ciMethod* accessing_method);
   bool needs_clinit_barrier_on_entry();
+  bool needs_nmethod_entry_barrier();
   void update_interpreter_frame_size_in_bytes(int frame_size) { _interpreter_frame_size_in_bytes = MAX2(frame_size, _interpreter_frame_size_in_bytes); }
   int interpreter_frame_size_in_bytes() { return _interpreter_frame_size_in_bytes; }
 
@@ -263,7 +298,12 @@ class JeandleCompiledCode : public StackObj {
                                                             // constructed during LLVM IR generation.
 
   llvm::StringMap<address> _const_sections;
-  llvm::StringMap<jobject> _oop_handles;
+
+  // Oop handles maintainer:
+  llvm::StringMap<jobject> _oop_handles;                // name -> jobject
+  llvm::DenseMap<jobject, int> _oop_handle_ids;         // jobject -> id
+  llvm::SmallVector<OopHandleInfo> _oop_handle_info;    // index is oop_id
+
   CodeOffsets _offsets;
   JeandleExceptionHandlerTable _exception_handler_table;
   ImplicitExceptionTable _implicit_exception_table;
@@ -277,6 +317,7 @@ class JeandleCompiledCode : public StackObj {
   int _orig_pc_offset_in_bytes;
   int _interpreter_frame_size_in_bytes;
   bool _has_method_handle_invoke;
+  JeandleEntryBarrierStub* _entry_barrier_stub = nullptr;
 
   void setup_frame_size();
 
