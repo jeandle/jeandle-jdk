@@ -103,12 +103,8 @@ JRT_ENTRY_NO_ASYNC(void, JeandleRuntimeRoutine::safepoint_handler(JavaThread* cu
 
   ThreadSafepointState* state = current->safepoint_state();
   if (at_return_poll) {
+    StackWatermarkSet::after_unwind(current);
     SafepointMechanism::process_if_requested_with_exit_check(current, true /* check asyncs */);
-    if (current->has_pending_exception()) {
-      oop exception = current->pending_exception();
-      current->clear_pending_exception();
-      install_exceptional_return(exception, current);
-    }
   } else {
     state->set_at_poll_safepoint(true);
     SafepointMechanism::process_if_requested_with_exit_check(current, false /* check asyncs */);

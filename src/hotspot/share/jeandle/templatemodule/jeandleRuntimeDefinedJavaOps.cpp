@@ -86,6 +86,8 @@ JAVA_OP_END
 DEF_JAVA_OP(safepoint_poll, 1, llvm::Type::getVoidTy(context), llvm::Type::getInt1Ty(context))
   llvm::BasicBlock* return_block = llvm::BasicBlock::Create(context, "return", func);
   llvm::BasicBlock* do_safepoint_block = llvm::BasicBlock::Create(context, "do_safepoint", func);
+  llvm::BasicBlock* forward_exception_block = llvm::BasicBlock::Create(context, "forward_exception", func);
+  llvm::BasicBlock* no_exception_block = llvm::BasicBlock::Create(context, "no_exception", func);
   llvm::Value* at_return_poll = func->getArg(0);
 
   llvm::Type* intptr_type = ir_builder.getIntPtrTy(template_module.getDataLayout());
@@ -114,6 +116,23 @@ DEF_JAVA_OP(safepoint_poll, 1, llvm::Type::getVoidTy(context), llvm::Type::getIn
   llvm::CallInst* call_inst = ir_builder.CreateCall(JeandleRuntimeRoutine::safepoint_handler_callee(template_module), {current_thread, at_return_poll},
                                                     {create_empty_deopt_bundle()});
   call_inst->setCallingConv(llvm::CallingConv::Hotspot_JIT);
+  // Check pending exception.
+  llvm::Value* pending_exception_addr = ir_builder.CreateIntToPtr(ir_builder.getInt64((uint64_t)Thread::pending_exception_offset()),
+      llvm::PointerType::get(context, llvm::jeandle::AddrSpace::TLSAddrSpace));
+  llvm::Type* oop_type = llvm::PointerType::get(context, llvm::jeandle::AddrSpace::JavaHeapAddrSpace);
+  llvm::Value* pending_exception = ir_builder.CreateLoad(oop_type, pending_exception_addr);
+  llvm::Value* null_oop = llvm::ConstantPointerNull::get(llvm::cast<llvm::PointerType>(oop_type));
+  llvm::Value* has_pending_exception = ir_builder.CreateICmpNE(pending_exception, null_oop);
+  ir_builder.CreateCondBr(has_pending_exception, forward_exception_block, no_exception_block);
+
+  // ***** Forward Exception Block *****
+  ir_builder.SetInsertPoint(forward_exception_block);
+  llvm::CallInst* install_exceptional_return_call = ir_builder.CreateCall(JeandleRuntimeRoutine::install_exceptional_return_callee(template_module), {pending_exception, current_thread});
+  install_exceptional_return_call->setCallingConv(llvm::CallingConv::Hotspot_JIT);
+  ir_builder.CreateRetVoid();
+
+  // ***** No Exception Block *****
+  ir_builder.SetInsertPoint(no_exception_block);
   ir_builder.CreateBr(return_block);
 
   // ******** Return Block ********
