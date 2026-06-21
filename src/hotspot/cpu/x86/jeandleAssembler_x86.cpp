@@ -265,6 +265,12 @@ void JeandleAssembler::emit_oop_addr_reloc(int offset, jobject oop_handle) {
   Unimplemented();
 }
 
+void JeandleAssembler::emit_poll_return_reloc(int offset) {
+  assert(offset >= 0, "invalid poll return relocation offset");
+  address pc = __ code()->insts_begin() + offset;
+  __ code_section()->relocate(pc, relocInfo::poll_return_type, Assembler::imm_operand);
+}
+
 int JeandleAssembler::fixup_call_inst_offset(int offset) {
   assert(offset >= 0, "invalid offset");
   return offset - NativeJump::data_offset + NativeJump::instruction_size;

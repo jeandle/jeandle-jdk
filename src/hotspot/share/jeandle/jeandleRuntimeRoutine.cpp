@@ -92,7 +92,7 @@ static bool check_jeandle_compiled_frame(JavaThread* thread) {
 }
 #endif // ASSERT
 
-JRT_ENTRY_NO_ASYNC(void, JeandleRuntimeRoutine::safepoint_handler(JavaThread* current, bool at_return_poll))
+JRT_ENTRY(void, JeandleRuntimeRoutine::safepoint_handler(JavaThread* current, bool at_return_poll))
   RegisterMap r_map(current,
                     RegisterMap::UpdateMap::skip,
                     RegisterMap::ProcessFrames::include,
@@ -103,9 +103,11 @@ JRT_ENTRY_NO_ASYNC(void, JeandleRuntimeRoutine::safepoint_handler(JavaThread* cu
 
   ThreadSafepointState* state = current->safepoint_state();
   if (at_return_poll) {
+    log_info(exceptions)("return safepoint");
     StackWatermarkSet::after_unwind(current);
     SafepointMechanism::process_if_requested_with_exit_check(current, true /* check asyncs */);
   } else {
+    log_info(exceptions)("no return safepoint");
     state->set_at_poll_safepoint(true);
     SafepointMechanism::process_if_requested_with_exit_check(current, false /* check asyncs */);
     state->set_at_poll_safepoint(false);

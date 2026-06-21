@@ -114,11 +114,13 @@ class CallSiteInfo : public JeandleCompilationResourceObj {
                address target,
                int bci,
                bool is_method_handle_invoke = false,
-               uint64_t statepoint_id = llvm::StatepointDirectives::DefaultStatepointID) :
+               uint64_t statepoint_id = llvm::StatepointDirectives::DefaultStatepointID,
+               bool is_poll_return = false) :
                _type(type),
                _target(target),
                _bci(bci),
                _is_method_handle_invoke(is_method_handle_invoke),
+               _is_poll_return(is_poll_return),
                _statepoint_id(statepoint_id) {
 #ifdef ASSERT
     // We don't need to assign a unique statepoint id for each routine call site, only call type and target is used.
@@ -137,12 +139,15 @@ class CallSiteInfo : public JeandleCompilationResourceObj {
   uint64_t statepoint_id() const { return _statepoint_id; }
   address target() const { return _target; }
   bool is_method_handle_invoke() const { return _is_method_handle_invoke; }
+  bool is_poll_return() const { return _is_poll_return; }
+  void set_is_poll_return(bool is_poll_return) { _is_poll_return = is_poll_return; }
 
  private:
   JeandleCompiledCall::Type _type;
   address _target;
   int _bci;
   bool _is_method_handle_invoke;
+  bool _is_poll_return;
 
   // Used to distinguish each call site in stackmaps.
   uint64_t _statepoint_id;

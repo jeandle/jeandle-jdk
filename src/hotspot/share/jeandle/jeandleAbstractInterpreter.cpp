@@ -49,6 +49,7 @@
 #include "logging/log.hpp"
 #include "runtime/sharedRuntime.hpp"
 #include "runtime/stubRoutines.hpp"
+#include "runtime/thread.hpp"
 #include "utilities/ostream.hpp"
 
 JeandleVMState::JeandleVMState(int max_stack, int max_locals, llvm::LLVMContext *context) :
@@ -2480,10 +2481,7 @@ void JeandleAbstractInterpreter::store_to_address(llvm::Value* addr, llvm::Value
 }
 
 void JeandleAbstractInterpreter::add_safepoint_poll(bool at_return_poll) {
-  if (at_return_poll)
-    call_java_op("jeandle.safepoint_poll", {_ir_builder.getTrue()}, {create_current_deopt_bundle()});
-  else
-    call_java_op("jeandle.safepoint_poll", {_ir_builder.getFalse()}, {create_current_deopt_bundle()});
+  call_java_op("jeandle.safepoint_poll", {at_return_poll ? _ir_builder.getTrue() : _ir_builder.getFalse()}, {create_current_deopt_bundle()});
 }
 
 void JeandleAbstractInterpreter::arraylength() {

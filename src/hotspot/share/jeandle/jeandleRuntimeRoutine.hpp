@@ -25,6 +25,7 @@
 #include "llvm/IR/Constants.h"
 #include "llvm/IR/Jeandle/Metadata.h"
 #include "llvm/IR/Module.h"
+#include "llvm/IR/Statepoint.h"
 #include "llvm/Target/TargetMachine.h"
 
 #include "jeandle/__hotspotHeadersBegin__.hpp"
@@ -316,6 +317,12 @@ class JeandleRuntimeRoutine : public AllStatic {
 
   static bool is_gc_leaf(address addr) {
     return _gc_leaf_routines.contains(addr);
+  }
+
+  static constexpr uint64_t ReturnPollStatepointID = llvm::StatepointDirectives::DefaultStatepointID + 1;
+
+  static constexpr uint64_t return_poll_statepoint_id() {
+    return ReturnPollStatepointID;
   }
 
 #ifdef ASSERT
