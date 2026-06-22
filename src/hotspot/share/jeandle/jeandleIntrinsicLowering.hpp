@@ -172,6 +172,7 @@ class JeandleIntrinsicLowering : public StackObj {
   // Per-intrinsic handlers
   // ========================================================================
   bool lower_bit_count(vmIntrinsics::ID id);
+  bool lower_count_zeros(vmIntrinsics::ID id, llvm::Intrinsic::ID llvm_id);
   bool lower_llvm_bitcast();
   bool lower_llvm_fence(vmIntrinsics::ID id);
   bool lower_preconditions_check_index(vmIntrinsics::ID id);

@@ -141,6 +141,15 @@ bool JeandleIntrinsicLowering::is_supported(vmIntrinsics::ID id) {
     // compare unsigned
     case vmIntrinsics::_compareUnsigned_i:
     case vmIntrinsics::_compareUnsigned_l:
+
+    // count leading/trailing zeros
+    // No CPU gating: LLVM lowers ctlz/cttz to native sequences on both x86-64
+    // (bsr/bsf fallback when LZCNT/TZCNT are absent) and aarch64 (CLZ, RBIT+CLZ),
+    // never to a libcall. Matches C2, which always intrinsifies these.
+    case vmIntrinsics::_numberOfLeadingZeros_i:
+    case vmIntrinsics::_numberOfLeadingZeros_l:
+    case vmIntrinsics::_numberOfTrailingZeros_i:
+    case vmIntrinsics::_numberOfTrailingZeros_l:
       return true;
     default:
       return false;
@@ -200,6 +209,13 @@ bool JeandleIntrinsicLowering::lower(vmIntrinsics::ID id, const ciMethod* target
     case vmIntrinsics::_bitCount_i:
     case vmIntrinsics::_bitCount_l:
       return lower_bit_count(id);
+
+    case vmIntrinsics::_numberOfLeadingZeros_i:
+    case vmIntrinsics::_numberOfLeadingZeros_l:
+      return lower_count_zeros(id, llvm::Intrinsic::ctlz);
+    case vmIntrinsics::_numberOfTrailingZeros_i:
+    case vmIntrinsics::_numberOfTrailingZeros_l:
+      return lower_count_zeros(id, llvm::Intrinsic::cttz);
 
     // Dual-path libm (JeandleUseHotspotIntrinsics selects the path)
     // TODO/FIXME: LLVM's `llvm.sin`, `llvm.cos`, etc. do **not** guarantee
@@ -576,6 +592,33 @@ bool JeandleIntrinsicLowering::lower_bit_count(vmIntrinsics::ID id) {
   if (is_long) {
     // Long.bitCount(long) returns int in Java, but llvm.ctpop.i64 returns i64.
     // Truncate the result to i32.
+    _interp->_jvm->ipush(builder.CreateTrunc(call, JeandleType::java2llvm(BasicType::T_INT, ctx)));
+  } else {
+    _interp->_jvm->ipush(call);
+  }
+  return true;
+}
+
+// ---- lower_count_zeros ----
+// numberOfLeadingZeros  -> llvm.ctlz
+// numberOfTrailingZeros -> llvm.cttz
+// The _l variants return int in Java but llvm.ctlz/cttz.i64 returns i64, so trunc.
+bool JeandleIntrinsicLowering::lower_count_zeros(vmIntrinsics::ID id,
+                                                 llvm::Intrinsic::ID llvm_id) {
+  llvm::LLVMContext& ctx = *_interp->_context;
+  llvm::IRBuilder<>& builder = _interp->_ir_builder;
+  bool is_long = (id == vmIntrinsics::_numberOfLeadingZeros_l ||
+                  id == vmIntrinsics::_numberOfTrailingZeros_l);
+
+  llvm::Value* arg = is_long ? _interp->_jvm->lpop() : _interp->_jvm->ipop();
+  llvm::Type* arg_ty = arg->getType(); // i32 or i64
+
+  // ctlz/cttz take a trailing i1 is_zero_poison flag; pass false so that
+  // numberOf{Leading,Trailing}Zeros(0) is the bit width (32/64), not poison.
+  llvm::CallInst* call =
+      builder.CreateIntrinsic(arg_ty, llvm_id, {arg, builder.getInt1(false)});
+
+  if (is_long) {
     _interp->_jvm->ipush(builder.CreateTrunc(call, JeandleType::java2llvm(BasicType::T_INT, ctx)));
   } else {
     _interp->_jvm->ipush(call);
