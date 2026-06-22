@@ -85,46 +85,9 @@ DEF_JAVA_OP(current_thread, 0, llvm::PointerType::get(context, llvm::jeandle::Ad
                                                               llvm::PointerType::get(context, llvm::jeandle::AddrSpace::CHeapAddrSpace));
   ir_builder.CreateRet(current_thread_ptr);
 JAVA_OP_END
-//
-// DEF_JAVA_OP(safepoint_poll, 1, llvm::Type::getVoidTy(context), llvm::Type::getInt1Ty(context))
-//   llvm::BasicBlock* return_block = llvm::BasicBlock::Create(context, "return", func);
-//   llvm::BasicBlock* do_safepoint_block = llvm::BasicBlock::Create(context, "do_safepoint", func);
-//   llvm::Value* at_return_poll = func->getArg(0);
-//
-//   llvm::Type* intptr_type = ir_builder.getIntPtrTy(template_module.getDataLayout());
-//
-//   // ******** Entry Block *********
-//   // Get the poll word pointer.
-//   llvm::Value* poll_word_ptr = ir_builder.CreateIntToPtr(ir_builder.getInt64((uint64_t)JavaThread::polling_word_offset()),
-//                                                          llvm::PointerType::get(context, llvm::jeandle::AddrSpace::TLSAddrSpace));
-//   // Do poll.
-//   llvm::Value* poll_word = ir_builder.CreateLoad(intptr_type, poll_word_ptr, true /* is_volatile */);
-//   llvm::Value* masked = ir_builder.CreateAnd(poll_word, llvm::ConstantInt::get(intptr_type, SafepointMechanism::poll_bit()));
-//   llvm::Value* need_safepoint = ir_builder.CreateICmpNE(masked, llvm::ConstantInt::get(intptr_type, 0));
-//   ir_builder.CreateCondBr(need_safepoint, do_safepoint_block, return_block);
-//
-//   // ***** Do Safepoint Block *****
-//   ir_builder.SetInsertPoint(do_safepoint_block);
-//   // Get the current thread pointer as the safepoint handler's argument.
-//   llvm::Function* current_thread_func = template_module.getFunction("jeandle.current_thread");
-//   if (!current_thread_func) {
-//     RuntimeDefinedJavaOps::set_failed("jeandle.current_thread is not found in template module");
-//     return;
-//   }
-//   llvm::CallInst* current_thread = ir_builder.CreateCall(current_thread_func);
-//   current_thread->setCallingConv(llvm::CallingConv::Hotspot_JIT);
-//   // Call safepoint handler.
-//   llvm::CallInst* call_inst = ir_builder.CreateCall(JeandleRuntimeRoutine::safepoint_handler_callee(template_module), {current_thread, at_return_poll},
-//                                                     {create_empty_deopt_bundle()});
-//   call_inst->setCallingConv(llvm::CallingConv::Hotspot_JIT);
-//   ir_builder.CreateBr(return_block);
-//
-//   // ******** Return Block ********
-//   ir_builder.SetInsertPoint(return_block);
-//   ir_builder.CreateRetVoid();
-// JAVA_OP_END
 
-  DEF_JAVA_OP(safepoint_poll, 1, llvm::Type::getVoidTy(context), llvm::Type::getInt1Ty(context))
+
+DEF_JAVA_OP(safepoint_poll, 1, llvm::Type::getVoidTy(context), llvm::Type::getInt1Ty(context))
   llvm::BasicBlock* return_block = llvm::BasicBlock::Create(context, "return", func);
   llvm::BasicBlock* do_safepoint_block = llvm::BasicBlock::Create(context, "do_safepoint", func);
   llvm::BasicBlock* do_return_safepoint_block = llvm::BasicBlock::Create(context, "do_return_safepoint", func);
