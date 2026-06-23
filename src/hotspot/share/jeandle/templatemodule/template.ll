@@ -285,6 +285,12 @@ alloc_fast_path:
   store atomic i64 %prototype_value, ptr addrspace(1) %mark_word_addr unordered, align 8
   ; TODO: When UseCompressedClassPointers is enabled, klass should be stored as a 32-bit narrowKlass
   ; instead of a full pointer. Currently this assumes uncompressed class pointers.
+  ; (Layout offsets -- oopDesc.klass_offset_in_bytes, arrayOopDesc.length_offset_in_bytes,
+  ; arrayOopDesc.base_offset_in_bytes -- are already CCP-aware because they flow through
+  ; oopDesc::klass_offset_in_bytes() / arrayOopDesc::base_offset_in_bytes() on the C++
+  ; side, so only the store width and the encoding (>> CompressedKlassPointers::shift())
+  ; need updating when CCP support is added. instance and array fast paths must be
+  ; upgraded together.)
   store atomic ptr %klass, ptr addrspace(1) %klass_addr unordered, align 8
 
   %zero_tlab = load i1, ptr @VMOptions.ZeroTLAB
@@ -326,10 +332,126 @@ declare hotspotcc ptr addrspace(1) @new_array(ptr, i32, ptr)
 ; Unified array allocation JavaOp.  Both bytecode (newarray/anewarray) and intrinsic
 ; (_newArray / Array.newInstance) paths call this function.
 ; LLVM passes identify array allocation by matching on this function name.
-define private hotspotcc ptr addrspace(1) @jeandle.new_array(ptr %array_klass, i32 %length) noinline "lower-phase"="1" {
+define private hotspotcc ptr addrspace(1) @jeandle.new_array(ptr %array_klass, i32 %length, i32 %size_in_bytes, i32 %base_offset, i32 %length_limit) noinline "lower-phase"="1" {
 entry:
+  ; Fast-path length cap. %length_limit is a size-derived bound (FastAllocateSizeLimit, scaled
+  ; by element size on the caller side) chosen so %size_in_bytes cannot overflow i32 -- it is
+  ; NOT arrayOopDesc::max_array_length(), which is ~max_jint on LP64 and would let a large
+  ; length wrap the size computation. The unsigned compare also routes a negative %length
+  ; (e.g. -1) to the slow path, where the runtime raises NegativeArraySizeException.
+  %too_long = icmp ugt i32 %length, %length_limit
+  br i1 %too_long, label %array_slow_path, label %check_tlab
+
+check_tlab:
+  %use_tlab = load i1, ptr @VMOptions.UseTLAB
+  br i1 %use_tlab, label %test_tlab, label %array_slow_path
+
+test_tlab:
+  %tlab_top_offset = load i64, ptr @JavaThread.tlab_top_offset
+  %tlab_end_offset = load i64, ptr @JavaThread.tlab_end_offset
+
+  %tlab_top_ptr = inttoptr i64 %tlab_top_offset to ptr addrspace(2)
+  %tlab_end_ptr = inttoptr i64 %tlab_end_offset to ptr addrspace(2)
+
+  %tlab_old_top = load ptr addrspace(1), ptr addrspace(2) %tlab_top_ptr, align 8
+  %tlab_end = load ptr addrspace(1), ptr addrspace(2) %tlab_end_ptr, align 8
+
+  %tlab_new_top = getelementptr i8, ptr addrspace(1) %tlab_old_top, i32 %size_in_bytes
+  %if_tlab_full = icmp uge ptr addrspace(1) %tlab_new_top, %tlab_end
+  br i1 %if_tlab_full, label %array_slow_path, label %array_fast_path
+
+array_slow_path:
   %current_thread = call hotspotcc ptr @jeandle.current_thread()
-  %array_oop = call hotspotcc ptr addrspace(1) @new_array(ptr %array_klass, i32 %length, ptr %current_thread) [ "deopt"() ]
+  %slow_array_oop = call hotspotcc ptr addrspace(1) @new_array(ptr %array_klass, i32 %length, ptr %current_thread) [ "deopt"() ]
+  br label %array_return
+
+array_fast_path:
+  store ptr addrspace(1) %tlab_new_top, ptr addrspace(2) %tlab_top_ptr, align 8
+
+  ; Header: mark word, klass pointer, length. No inter-field barriers; the
+  ; trailing release fence publishes the whole object as a unit.
+  %mark_word_offset = load i32, ptr @oopDesc.mark_offset_in_bytes
+  %mark_word_addr = getelementptr i8, ptr addrspace(1) %tlab_old_top, i32 %mark_word_offset
+
+  %klass_offset = load i32, ptr @oopDesc.klass_offset_in_bytes
+  %klass_addr = getelementptr i8, ptr addrspace(1) %tlab_old_top, i32 %klass_offset
+
+  %length_offset = load i32, ptr @arrayOopDesc.length_offset_in_bytes
+  %length_addr = getelementptr i8, ptr addrspace(1) %tlab_old_top, i32 %length_offset
+
+  %prototype_value = load i64, ptr @markWord.prototype_value
+
+  store atomic i64 %prototype_value, ptr addrspace(1) %mark_word_addr unordered, align 8
+  ; TODO: When UseCompressedClassPointers is enabled, klass should be stored as a 32-bit narrowKlass
+  ; instead of a full pointer. Currently this assumes uncompressed class pointers.
+  ; (Layout offsets -- oopDesc.klass_offset_in_bytes, arrayOopDesc.length_offset_in_bytes,
+  ; arrayOopDesc.base_offset_in_bytes -- are already CCP-aware because they flow through
+  ; oopDesc::klass_offset_in_bytes() / arrayOopDesc::base_offset_in_bytes() on the C++
+  ; side, so only the store width and the encoding (>> CompressedKlassPointers::shift())
+  ; need updating when CCP support is added. instance and array fast paths must be
+  ; upgraded together.)
+  store atomic ptr %array_klass, ptr addrspace(1) %klass_addr unordered, align 8
+  store atomic i32 %length, ptr addrspace(1) %length_addr unordered, align 4
+
+  %zero_tlab = load i1, ptr @VMOptions.ZeroTLAB
+  %skip_clear = and i1 %use_tlab, %zero_tlab
+  br i1 %skip_clear, label %array_init_membar, label %array_clear_memory
+
+array_clear_memory:
+  ; Explicit 8-byte-stride zero loop. We do NOT use @llvm.memset because LLVM's
+  ; default lowering produces poor code for both target backends we care about:
+  ;   - AArch64 (without MOPS): every memset, constant size or not, falls back
+  ;     to a per-byte strb loop -- the target hook in AArch64SelectionDAGInfo
+  ;     just `return SDValue()` and lets the generic SelectionDAG byte expansion
+  ;     take over. That's ~10x slower than the str xzr / stp xzr,xzr sequence
+  ;     HotSpot C1 emits.
+  ;   - x86: constant-size memset gets the rep stosq fast path, but variable
+  ;     size is bailed out by X86SelectionDAGInfo (`if (!ConstantSize) return
+  ;     SDValue();`) and ends up in the same generic per-byte loop. So variable-
+  ;     length arrays (the common `new T[N]` case in real workloads) regress on
+  ;     x86 too, not just AArch64.
+  ;
+  ; The stores must be `volatile` -- otherwise LLVM's LoopIdiomRecognize pass
+  ; folds an idiomatic "for(i=0;i<n;i++) p[i]=0" loop right back into
+  ; @llvm.memset, which round-trips through the same broken lowering. Volatile
+  ; stores are exempt from idiom recognition, so they survive into codegen as
+  ; plain str xzr (AArch64) / `mov qword ptr [...], 0` (x86) 8-byte stores.
+  ; LoopFullUnroll still applies for constant trip counts, so `new T[N]` with
+  ; N a compile-time constant becomes a fully unrolled sequence.
+  ;
+  ; TODO: For payloads larger than ~256 bytes (HotSpot AArch64
+  ; BlockZeroingLowLimit default), HotSpot's MacroAssembler::zero_words calls
+  ; the zero_blocks stub, which uses `dc zva` (64-byte cache-line zero). The
+  ; single-str loop here is ~4x slower than `dc zva` for large arrays; emitting
+  ; platform-specific inline asm or an LLVM target intrinsic for that tier is a
+  ; follow-up. The current loop already closes the biggest gap (per-byte ->
+  ; per-word).
+  ;
+  ; size_in_bytes is aligned to MinObjAlignmentInBytes (8) on the caller side,
+  ; and base_offset is always a multiple of 8, so payload_size is exactly
+  ; divisible by 8.
+  %base_addr = getelementptr i8, ptr addrspace(1) %tlab_old_top, i32 %base_offset
+  %payload_size = sub i32 %size_in_bytes, %base_offset
+  %payload_words = lshr exact i32 %payload_size, 3
+  %has_payload = icmp ne i32 %payload_words, 0
+  br i1 %has_payload, label %array_zero_loop, label %array_init_membar
+
+array_zero_loop:
+  %zi = phi i32 [ 0, %array_clear_memory ], [ %zi_next, %array_zero_loop ]
+  %zaddr = getelementptr i64, ptr addrspace(1) %base_addr, i32 %zi
+  store volatile i64 0, ptr addrspace(1) %zaddr, align 8
+  %zi_next = add nuw nsw i32 %zi, 1
+  %zero_done = icmp eq i32 %zi_next, %payload_words
+  br i1 %zero_done, label %array_init_membar, label %array_zero_loop
+
+array_init_membar:
+  ; TODO: Same plan as new_instance -- replace atomic stores + fence release with plain
+  ; stores plus a lightweight publish barrier once the supporting LLVM pass lands.
+  fence release
+  br label %array_return
+
+array_return:
+  %array_oop = phi ptr addrspace(1) [ %tlab_old_top, %array_init_membar ], [ %slow_array_oop, %array_slow_path ]
   ret ptr addrspace(1) %array_oop
 }
 
