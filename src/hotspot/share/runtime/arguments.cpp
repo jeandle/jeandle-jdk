@@ -71,6 +71,10 @@
 #include "jfr/jfr.hpp"
 #endif
 
+#ifdef JEANDLE
+#include "os_posix.inline.hpp"
+#endif // JEANDLE
+
 #include <limits>
 
 static const char _default_java_launcher[] = "generic";

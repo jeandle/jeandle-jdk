@@ -271,5 +271,5 @@ jobs:
         id: build
         uses: ./.github/actions/do-build
         with:
-          make-target: 'hotspot ${{ inputs.make-arguments }}'
+          make-target: 'images ${{ inputs.make-arguments }}'
           platform: linux-${{ inputs.target-cpu }}

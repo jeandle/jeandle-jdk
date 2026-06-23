@@ -1292,7 +1292,7 @@ bool nmethod::is_maybe_on_stack() {
 }
 
 void nmethod::inc_decompile_count() {
-  if (!is_compiled_by_c2() && !is_compiled_by_jvmci()) return;
+  if (!is_compiled_by_c2() && !is_compiled_by_jvmci() && !is_compiled_by_jeandle()) return;
   // Could be gated by ProfileTraps, but do not bother...
   Method* m = method();
   if (m == nullptr)  return;
