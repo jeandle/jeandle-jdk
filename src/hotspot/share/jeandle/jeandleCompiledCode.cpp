@@ -381,10 +381,13 @@ static VMReg resolve_vmreg(const StackMapParser::LocationAccessor& location, Sta
   if (kind == StackMapParser::LocationKind::Register) {
     Register reg = JeandleRegister::decode_dwarf_register(location.getDwarfRegNum());
     return reg->as_VMReg();
-  } else if (kind == StackMapParser::LocationKind::Indirect) {
+  } else if (kind == StackMapParser::LocationKind::Indirect ||
+             kind == StackMapParser::LocationKind::Direct) {
 #ifdef ASSERT
-    Register reg = JeandleRegister::decode_dwarf_register(location.getDwarfRegNum());
-    assert(JeandleRegister::is_stack_pointer(reg), "register of indirect kind must be stack pointer");
+    if (kind == StackMapParser::LocationKind::Indirect) {
+      Register reg = JeandleRegister::decode_dwarf_register(location.getDwarfRegNum());
+      assert(JeandleRegister::is_stack_pointer(reg), "register of indirect kind must be stack pointer");
+    }
 #endif
     int offset = location.getOffset();
 
@@ -460,6 +463,15 @@ void JeandleCompiledCode::fill_one_scope_value(const StackMapParser& stackmaps,
       }
     } else {
       array->append(new_location_value(location, Location::oop));
+    }
+    break;
+  }
+  case T_ADDRESS: {
+    if (is_constant) {
+      jlong const_addr = JeandleBitCast::bit_cast<jlong>(StackMapUtil::getConstantUlong(stackmaps, location));
+      array->append(new ConstantLongValue(const_addr));
+    } else {
+      array->append(new_location_value(location, Location::lng));
     }
     break;
   }
@@ -593,7 +605,7 @@ JeandleStackMap* JeandleCompiledCode::parse_stackmap(StackMapParser& stackmaps, 
         auto orig_pc_location = *(location++);
         assert(StackMapUtil::is_stack(orig_pc_location), "orig pc slot must be stack allocated");
         set_real_orig_pc_offset_in_bytes(StackMapUtil::stack_offset(orig_pc_location));
-        num_deopts -= 2;
+        num_deopts = 0;
         break;
       }
       default:
@@ -604,33 +616,48 @@ JeandleStackMap* JeandleCompiledCode::parse_stackmap(StackMapParser& stackmaps, 
 
   // build oop map
   OopMap* oop_map = new OopMap(frame_size_in_slots(), 0);
-  for (; location != record->location_end(); location++) {
+  GrowableArray<int> seen_regs;
+  auto mark_reg = [&](VMReg reg) -> bool {
+    int v = reg->value();
+    if (seen_regs.contains(v)) return false;
+    seen_regs.append(v);
+    return true;
+  };
+  for (auto it = location; it != record->location_end();) {
     // Extract location of base pointer.
-    auto base_location = *location;
+    auto base_location = *(it++);
     StackMapParser::LocationKind base_kind = base_location.getKind();
 
-    if (base_kind != StackMapParser::LocationKind::Register &&
-        base_kind != StackMapParser::LocationKind::Indirect) {
-          continue;
+    bool base_is_ptr = base_kind == StackMapParser::LocationKind::Register ||
+                       base_kind == StackMapParser::LocationKind::Indirect ||
+                       base_kind == StackMapParser::LocationKind::Direct;
+
+    if (it == record->location_end()) {
+      if (base_is_ptr) {
+        VMReg reg = resolve_vmreg(base_location, base_kind);
+        if (mark_reg(reg)) { oop_map->set_oop(reg); }
+      }
+      break;
     }
 
     // Extract location of derived pointer.
-    location++;
-    auto derived_location = *location;
+    auto derived_location = *(it++);
     StackMapParser::LocationKind derived_kind = derived_location.getKind();
 
-    assert(base_kind != StackMapParser::LocationKind::Direct, "invalid location kind");
+    if (!base_is_ptr) {
+      continue;
+    }
 
     VMReg reg_base = resolve_vmreg(base_location, base_kind);
-    VMReg reg_derived = resolve_vmreg(derived_location, derived_kind);
+    if (mark_reg(reg_base)) { oop_map->set_oop(reg_base); }
 
-    if(reg_base == reg_derived) {
-      // No derived pointer.
-      oop_map->set_oop(reg_base);
-    } else {
-      // Derived pointer.
-      oop_map->set_derived_oop(reg_derived, reg_base);
-    }
+    bool derived_is_ptr = derived_kind == StackMapParser::LocationKind::Register ||
+                          derived_kind == StackMapParser::LocationKind::Indirect ||
+                          derived_kind == StackMapParser::LocationKind::Direct;
+    if (!derived_is_ptr) { continue; }
+
+    VMReg reg_derived = resolve_vmreg(derived_location, derived_kind);
+    if (mark_reg(reg_derived)) { oop_map->set_derived_oop(reg_derived, reg_base); }
   }
   return new JeandleStackMap(oop_map, locals, stack, monitors, reexecute);
 }
