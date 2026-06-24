@@ -649,15 +649,22 @@ JeandleStackMap* JeandleCompiledCode::parse_stackmap(StackMapParser& stackmaps, 
     }
 
     VMReg reg_base = resolve_vmreg(base_location, base_kind);
-    if (mark_reg(reg_base)) { oop_map->set_oop(reg_base); }
 
     bool derived_is_ptr = derived_kind == StackMapParser::LocationKind::Register ||
                           derived_kind == StackMapParser::LocationKind::Indirect ||
                           derived_kind == StackMapParser::LocationKind::Direct;
-    if (!derived_is_ptr) { continue; }
+
+    if (!derived_is_ptr) {
+      if (mark_reg(reg_base)) { oop_map->set_oop(reg_base); }
+      continue;
+    }
 
     VMReg reg_derived = resolve_vmreg(derived_location, derived_kind);
-    if (mark_reg(reg_derived)) { oop_map->set_derived_oop(reg_derived, reg_base); }
+    if (reg_base == reg_derived) {
+      if (mark_reg(reg_base)) { oop_map->set_oop(reg_base); }
+    } else {
+      if (mark_reg(reg_derived)) { oop_map->set_derived_oop(reg_derived, reg_base); }
+    }
   }
   return new JeandleStackMap(oop_map, locals, stack, monitors, reexecute);
 }
