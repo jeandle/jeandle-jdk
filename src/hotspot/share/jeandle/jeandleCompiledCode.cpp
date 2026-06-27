@@ -370,9 +370,12 @@ void JeandleCompiledCode::resolve_reloc_info(JeandleAssembler& assembler) {
   }
 
   // Step 2: Resolve stackmaps.
+  build_narrowoop_maps();
+
   SectionInfo section_info(".llvm_stackmaps");
   if (ReadELF::findSection(*_elf, section_info)) {
     StackMapParser stackmaps(llvm::ArrayRef(((uint8_t*)object_start()) + section_info._offset, section_info._size));
+    uint32_t matched_narrowoop_count = 0;
     for (auto record = stackmaps.records_begin(); record != stackmaps.records_end(); ++record) {
       assert(_prolog_length != -1, "prolog length must be initialized");
 
@@ -385,6 +388,15 @@ void JeandleCompiledCode::resolve_reloc_info(JeandleAssembler& assembler) {
       } else {
         call_info = _routine_call_sites[inst_end_offset];
       }
+
+      JeandleNarrowOopInfo* narrowoop_info = nullptr;
+      auto narrowoop_it = _narrowoop_infos.find(static_cast<uint32_t>(inst_end_offset));
+      if (narrowoop_it != _narrowoop_infos.end()) {
+        narrowoop_info = &narrowoop_it->second;
+        assert(narrowoop_info->_id == record->getID(), "Jeandle narrow oop map statepoint id mismatch");
+        matched_narrowoop_count++;
+      }
+
       if (call_info) {
         auto location = record->location_begin();
         int num_deopts = parse_stackmap_prologue(record, location);
@@ -408,6 +420,8 @@ void JeandleCompiledCode::resolve_reloc_info(JeandleAssembler& assembler) {
         relocs.push_back(reloc);
       }
     }
+    assert(matched_narrowoop_count == _narrowoop_infos.size(),
+           "unmatched Jeandle narrow oop map records");
   }
 
   // Step 3: Sort jeandle relocs.
@@ -755,7 +769,27 @@ JeandleStackMap* JeandleCompiledCode::parse_stackmap(StackMapParser& stackmaps,
     auto derived_location = *(location++);
 
     StackMapParser::LocationKind base_kind = base_location.getKind();
+
+    // Extract location of derived pointer.
+    location++;
+    auto derived_location = *location;
     StackMapParser::LocationKind derived_kind = derived_location.getKind();
+
+    bool is_narrowoop = false;
+    if (UseCompressedOops) {
+      assert(narrowoop_info != nullptr, "missing Jeandle narrow oop map");
+      is_narrowoop = narrowoop_info->is_narrowoop(pair_idx);
+    }
+    pair_idx++;
+
+    if (derived_kind != StackMapParser::LocationKind::Register &&
+        derived_kind != StackMapParser::LocationKind::Indirect) {
+      continue;
+    }
+
+    VMReg reg_derived = resolve_vmreg(derived_location, derived_kind);
+
+    if (!is_narrowoop) {
 
     if (base_kind != StackMapParser::LocationKind::Register &&
         base_kind != StackMapParser::LocationKind::Indirect) {
@@ -764,14 +798,10 @@ JeandleStackMap* JeandleCompiledCode::parse_stackmap(StackMapParser& stackmaps,
 
     assert(base_kind != StackMapParser::LocationKind::Direct, "invalid location kind");
 
-    VMReg reg_base = resolve_vmreg(base_location, base_kind);
-    VMReg reg_derived = resolve_vmreg(derived_location, derived_kind);
+      VMReg reg_base = resolve_vmreg(base_location, base_kind);
 
-    if(reg_base == reg_derived) {
-      // No derived pointer.
-      if (is_narrowoop) {
-        assert(UseCompressedOops, "narrowoop only valid with CompressedOops");
-        oop_map->set_narrowoop(reg_base);
+      if (reg_base == reg_derived) {
+        set_wide_oop_once(reg_derived);
       } else {
         set_wide_oop_once(reg_base);
       }
@@ -862,6 +892,46 @@ void JeandleCompiledCode::build_implicit_exception_table() {
     auto handler_offset = fault_info.getHandlerPCOffset() + _prolog_length;
 
     _implicit_exception_table.append(faulting_offset, handler_offset);
+  }
+}
+
+void JeandleCompiledCode::build_narrowoop_maps() {
+  _narrowoop_infos.clear();
+
+  SectionInfo section_info(".jeandle_narrowoop_maps");
+  if (!ReadELF::findSection(*_elf, section_info)) {
+    return;
+  }
+
+  const char* section_begin = object_start() + section_info._offset;
+  uint64_t section_size = section_info._size;
+
+  llvm::DataExtractor data_extractor(llvm::StringRef(section_begin, section_size),
+                                     ELFT::Endianness == llvm::endianness::little,
+                                     BytesPerWord);
+  llvm::DataExtractor::Cursor data_cursor(0);
+
+  uint32_t num_records = data_extractor.getU32(data_cursor);
+  assert(data_cursor, "invalid Jeandle narrow oop map record count");
+
+  for (uint32_t record_index = 0; record_index < num_records; record_index++) {
+    JeandleNarrowOopInfo info;
+    info._instruction_offset = data_extractor.getU32(data_cursor);
+    info._gc_pair_count = data_extractor.getU32(data_cursor);
+    info._id = data_extractor.getU64(data_cursor);
+    uint32_t num_mask_words = data_extractor.getU32(data_cursor);
+    data_extractor.getU32(data_cursor); // padding
+    assert(data_cursor, "invalid Jeandle narrow oop map record header");
+    assert(num_mask_words == (info._gc_pair_count + 63) / 64,
+           "invalid Jeandle narrow oop mask word count");
+
+    info._narrowoop_mask.reserve(num_mask_words);
+    for (uint32_t word_index = 0; word_index < num_mask_words; word_index++) {
+      info._narrowoop_mask.push_back(data_extractor.getU64(data_cursor));
+      assert(data_cursor, "invalid Jeandle narrow oop mask word");
+    }
+
+    _narrowoop_infos.try_emplace(info._instruction_offset, std::move(info));
   }
 }
 

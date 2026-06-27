@@ -2696,11 +2696,6 @@ llvm::Value* JeandleAbstractInterpreter::load_from_address(llvm::Value* addr, Ba
       res_inst = _ir_builder.CreateSExt(load_inst, expected_ty);
       break;
     }
-    case T_NARROWOOP: {
-      load_inst = _ir_builder.CreateLoad(expected_ty, addr);
-      res_inst = load_inst;
-      break;
-    }
     default: {
       load_inst = _ir_builder.CreateLoad(expected_ty, addr);
       res_inst = load_inst;
@@ -2848,7 +2843,7 @@ void JeandleAbstractInterpreter::do_array_load(BasicType basic_type) {
           Klass* elem_klass = ObjArrayKlass::cast(array_klass)->element_klass();
           if (!is_unverified_interface(elem_klass)) {
             if (llvm::CallBase* call_inst = llvm::dyn_cast<llvm::CallBase>(load_value)) {
-              call_inst->addRetAttr(llvm::Attribute::get(*_context, 
+              call_inst->addRetAttr(llvm::Attribute::get(*_context,
                                     llvm::jeandle::Attribute::JavaKlass, std::to_string((uintptr_t)elem_klass)));
               if (is_effectively_final(elem_klass)) {
                 call_inst->addRetAttr(llvm::Attribute::get(*_context,
