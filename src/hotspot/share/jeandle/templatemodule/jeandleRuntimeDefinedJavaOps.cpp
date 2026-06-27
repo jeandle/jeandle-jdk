@@ -121,16 +121,11 @@ DEF_JAVA_OP(safepoint_poll, 1, llvm::Type::getVoidTy(context), llvm::Type::getIn
   llvm::CallInst* return_current_thread = ir_builder.CreateCall(current_thread_func);
   return_current_thread->setCallingConv(llvm::CallingConv::Hotspot_JIT);
 
-  llvm::CallInst* return_call_inst = ir_builder.CreateCall(
-      JeandleRuntimeRoutine::safepoint_handler_callee(template_module),
-      {return_current_thread, at_return_poll},
-      {create_empty_deopt_bundle()});
+  llvm::CallInst* return_call_inst = ir_builder.CreateCall(JeandleRuntimeRoutine::safepoint_handler_callee(template_module),{return_current_thread, at_return_poll},
+                                               {create_empty_deopt_bundle()});
   return_call_inst->setCallingConv(llvm::CallingConv::Hotspot_JIT);
 
-  llvm::Attribute id_attr = llvm::Attribute::get(
-      context,
-      llvm::jeandle::Attribute::StatepointID,
-      std::to_string(JeandleRuntimeRoutine::return_poll_statepoint_id()));
+  llvm::Attribute id_attr = llvm::Attribute::get(context,llvm::jeandle::Attribute::StatepointID, std::to_string(JeandleRuntimeRoutine::return_poll_statepoint_id()));
   return_call_inst->addFnAttr(id_attr);
 
   ir_builder.CreateBr(return_block);
@@ -140,10 +135,8 @@ DEF_JAVA_OP(safepoint_poll, 1, llvm::Type::getVoidTy(context), llvm::Type::getIn
   llvm::CallInst* normal_current_thread = ir_builder.CreateCall(current_thread_func);
   normal_current_thread->setCallingConv(llvm::CallingConv::Hotspot_JIT);
 
-  llvm::CallInst* normal_call_inst = ir_builder.CreateCall(
-      JeandleRuntimeRoutine::safepoint_handler_callee(template_module),
-      {normal_current_thread, at_return_poll},
-      {create_empty_deopt_bundle()});
+  llvm::CallInst* normal_call_inst = ir_builder.CreateCall(JeandleRuntimeRoutine::safepoint_handler_callee(template_module),{normal_current_thread, at_return_poll},
+                                               {create_empty_deopt_bundle()});
   normal_call_inst->setCallingConv(llvm::CallingConv::Hotspot_JIT);
 
   ir_builder.CreateBr(return_block);

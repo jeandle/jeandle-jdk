@@ -344,6 +344,12 @@ void JeandleAssembler::emit_oop_reloc(int offset, jobject oop_handle, int64_t ad
 
 void JeandleAssembler::emit_oop_addr_reloc(int offset, jobject oop_handle) { }
 
+void JeandleAssembler::emit_poll_return_reloc(int offset) {
+  assert(offset >= 0, "invalid poll return relocation offset");
+  address pc = __ code()->insts_begin() + offset;
+  __ code_section()->relocate(pc, relocInfo::poll_return_type);
+}
+
 bool JeandleAssembler::is_oop_reloc(LinkSymbol& target, LinkKind kind) { return false; }
 
 bool JeandleAssembler::is_oop_addr_reloc(LinkSymbol& target, LinkKind kind) { return false; }

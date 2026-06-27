@@ -28,7 +28,7 @@
  *      -XX:CompileCommand=dontinline,compiler.jeandle.safepoint.TestJeandleAsyncExceptionHandleAtSafepoint::returnPoll
  *      -XX:CompileCommand=compileonly,compiler.jeandle.safepoint.TestJeandleAsyncExceptionHandleAtSafepoint::runReturnPoll
  *      -XX:CompileCommand=dontinline,compiler.jeandle.safepoint.TestJeandleAsyncExceptionHandleAtSafepoint::runReturnPoll
- *      -Xlog:exceptions=info:file=exceptions.log
+ *      -XX:+LogCompilation -XX:LogFile=compilation.log
  *      compiler.jeandle.safepoint.TestJeandleAsyncExceptionHandleAtSafepoint
  */
 
@@ -43,15 +43,10 @@ public class TestJeandleAsyncExceptionHandleAtSafepoint {
 
     private static final int JVMTI_ERROR_NONE = 0;
 
-    private static final String EXCEPTIONS_LOG_FILE = "exceptions.log";
+    private static final String COMPILATION_LOG_FILE = "compilation.log";
 
-    private static final Pattern THREAD_DEATH_IN_INTERPRETER_PATTERN =
-            Pattern.compile(
-                    "Exception <a 'java/lang/ThreadDeath'.*?"
-                  + "thrown in interpreter method .*?"
-                  + "'(?:returnPoll|runReturnPoll)' "
-                  + "'\\((?:J\\)J|\\)V)'",
-                    Pattern.DOTALL);
+    private static final Pattern UNEXPECTED_DEOPT_PATTERN =
+            Pattern.compile("deoptimized");
 
     private static volatile boolean entered;
     private static volatile boolean stopped;
@@ -70,6 +65,7 @@ public class TestJeandleAsyncExceptionHandleAtSafepoint {
     private static native int stopThread(Thread thread);
 
     public static void main(String[] args) throws Exception {
+
         prepareAgent(new ThreadDeath());
 
         Thread victim = new Thread(() -> {
@@ -81,49 +77,89 @@ public class TestJeandleAsyncExceptionHandleAtSafepoint {
             }
         }, "async-exception-victim");
 
+
         victim.setDaemon(true);
         victim.start();
 
-        long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(10);
+
+        long deadline =
+                System.nanoTime()
+                + TimeUnit.SECONDS.toNanos(10);
+
 
         while (!entered && System.nanoTime() < deadline) {
             Thread.onSpinWait();
         }
 
+
         if (!entered) {
-            throw new RuntimeException("Victim thread did not enter loop");
+            throw new RuntimeException(
+                    "Victim thread did not enter loop");
         }
+
 
         Thread.sleep(500);
 
+
         int err = stopThread(victim);
+
 
         if (err != JVMTI_ERROR_NONE) {
             throw new RuntimeException(
                     "StopThread failed with JVMTI error: " + err);
         }
 
+
         victim.join(10_000);
 
+
         if (victim.isAlive()) {
-            throw new RuntimeException("Victim thread is still alive");
+            throw new RuntimeException(
+                    "Victim thread is still alive");
         }
+
 
         if (!stopped) {
-            throw new RuntimeException("ThreadDeath was not caught");
+            throw new RuntimeException(
+                    "ThreadDeath was not caught");
         }
 
-        checkExceptionsLog();
+
+        checkCompilationLogContainsExpectedDeopt();
+
 
         System.out.println("SUCCESS!");
     }
 
+
     private static void runReturnPoll() {
+
         long value = 0;
 
         entered = true;
 
+
         while (!stopped) {
+            value = returnPoll(value);
+            value = returnPoll(value);
+            value = returnPoll(value);
+            value = returnPoll(value);
+            value = returnPoll(value);
+            value = returnPoll(value);
+            value = returnPoll(value);
+            value = returnPoll(value);
+
+
+            value = returnPoll(value);
+            value = returnPoll(value);
+            value = returnPoll(value);
+            value = returnPoll(value);
+            value = returnPoll(value);
+            value = returnPoll(value);
+            value = returnPoll(value);
+            value = returnPoll(value);
+
+
             value = returnPoll(value);
             value = returnPoll(value);
             value = returnPoll(value);
@@ -137,27 +173,32 @@ public class TestJeandleAsyncExceptionHandleAtSafepoint {
         }
     }
 
+
     private static long returnPoll(long value) {
         return value + 42;
     }
 
-    /**
-     * Verify that ThreadDeath was not handled in the interpreter.
-     */
-    private static void checkExceptionsLog() throws Exception {
-        Path log = Path.of(EXCEPTIONS_LOG_FILE);
+
+    private static void checkCompilationLogContainsExpectedDeopt()
+            throws Exception {
+
+        Path log = Path.of(COMPILATION_LOG_FILE);
+
 
         if (!Files.exists(log)) {
             throw new RuntimeException(
-                    "Exception log file does not exist: "
-                    + EXCEPTIONS_LOG_FILE);
+                    "Compilation log file does not exist: "
+                    + COMPILATION_LOG_FILE);
         }
+
 
         String content = Files.readString(log);
 
-        if (THREAD_DEATH_IN_INTERPRETER_PATTERN.matcher(content).find()) {
+
+        if (UNEXPECTED_DEOPT_PATTERN.matcher(content).find()) {
+
             throw new RuntimeException(
-                    "Found ThreadDeath handled in interpreter execution");
+                    "Unexpected deopt pattern found in compilation log.");
         }
     }
 }

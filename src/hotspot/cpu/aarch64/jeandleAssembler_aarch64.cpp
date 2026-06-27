@@ -285,6 +285,12 @@ void JeandleAssembler::emit_oop_addr_reloc(int offset, jobject oop_handle) {
   __ code()->consts()->relocate(at_addr, rspec);
 }
 
+void JeandleAssembler::emit_poll_return_reloc(int offset) {
+  assert(offset >= 0, "invalid poll return relocation offset");
+  address pc = __ code()->insts_begin() + offset;
+  __ code_section()->relocate(pc, relocInfo::poll_return_type);
+}
+
 int JeandleAssembler::fixup_call_inst_offset(int offset) {
   assert(offset >= 0, "invalid offset");
   // point to the end of call instruction
