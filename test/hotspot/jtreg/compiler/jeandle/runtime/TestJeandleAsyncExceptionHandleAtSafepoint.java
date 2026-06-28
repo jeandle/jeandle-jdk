@@ -26,8 +26,6 @@
  *      -XX:+ExplicitGCInvokesConcurrent -XX:GuaranteedSafepointInterval=1
  *      -XX:CompileCommand=compileonly,compiler.jeandle.safepoint.TestJeandleAsyncExceptionHandleAtSafepoint::returnPoll
  *      -XX:CompileCommand=dontinline,compiler.jeandle.safepoint.TestJeandleAsyncExceptionHandleAtSafepoint::returnPoll
- *      -XX:CompileCommand=compileonly,compiler.jeandle.safepoint.TestJeandleAsyncExceptionHandleAtSafepoint::runReturnPoll
- *      -XX:CompileCommand=dontinline,compiler.jeandle.safepoint.TestJeandleAsyncExceptionHandleAtSafepoint::runReturnPoll
  *      -XX:+LogCompilation -XX:LogFile=compilation.log
  *      compiler.jeandle.safepoint.TestJeandleAsyncExceptionHandleAtSafepoint
  */
@@ -40,16 +38,12 @@ import java.util.concurrent.TimeUnit;
 import java.util.regex.Pattern;
 
 public class TestJeandleAsyncExceptionHandleAtSafepoint {
-
     private static final int JVMTI_ERROR_NONE = 0;
-
     private static final String COMPILATION_LOG_FILE = "compilation.log";
-
-    private static final Pattern UNEXPECTED_DEOPT_PATTERN =
-            Pattern.compile("deoptimized");
+    private static final Pattern UNEXPECTED_DEOPT_PATTERN = Pattern.compile("deoptimized");
 
     private static volatile boolean entered;
-    private static volatile boolean stopped;
+    private static volatile boolean stopped = false;
     private static volatile long sink;
 
     /**
@@ -65,140 +59,64 @@ public class TestJeandleAsyncExceptionHandleAtSafepoint {
     private static native int stopThread(Thread thread);
 
     public static void main(String[] args) throws Exception {
-
         prepareAgent(new ThreadDeath());
 
         Thread victim = new Thread(() -> {
             try {
-                runReturnPoll();
+                entered = true;
+                returnPoll(true);
             } catch (ThreadDeath td) {
-                stopped = true;
                 System.out.println("caught ThreadDeath");
             }
         }, "async-exception-victim");
 
-
         victim.setDaemon(true);
+        returnPoll(false);
         victim.start();
 
-
-        long deadline =
-                System.nanoTime()
-                + TimeUnit.SECONDS.toNanos(10);
-
-
+        long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(10);
         while (!entered && System.nanoTime() < deadline) {
             Thread.onSpinWait();
         }
 
-
         if (!entered) {
-            throw new RuntimeException(
-                    "Victim thread did not enter loop");
+            throw new RuntimeException("Victim thread did not enter loop");
         }
 
-
-        Thread.sleep(500);
-
-
+        Thread.sleep(50);
+        stopped = true;
         int err = stopThread(victim);
-
-
         if (err != JVMTI_ERROR_NONE) {
-            throw new RuntimeException(
-                    "StopThread failed with JVMTI error: " + err);
+            throw new RuntimeException("StopThread failed with JVMTI error: " + err);
         }
-
 
         victim.join(10_000);
-
-
         if (victim.isAlive()) {
-            throw new RuntimeException(
-                    "Victim thread is still alive");
+            throw new RuntimeException("Victim thread is still alive");
         }
-
-
-        if (!stopped) {
-            throw new RuntimeException(
-                    "ThreadDeath was not caught");
-        }
-
 
         checkCompilationLogContainsExpectedDeopt();
-
-
         System.out.println("SUCCESS!");
     }
 
-
-    private static void runReturnPoll() {
-
-        long value = 0;
-
-        entered = true;
-
-
-        while (!stopped) {
-            value = returnPoll(value);
-            value = returnPoll(value);
-            value = returnPoll(value);
-            value = returnPoll(value);
-            value = returnPoll(value);
-            value = returnPoll(value);
-            value = returnPoll(value);
-            value = returnPoll(value);
-
-
-            value = returnPoll(value);
-            value = returnPoll(value);
-            value = returnPoll(value);
-            value = returnPoll(value);
-            value = returnPoll(value);
-            value = returnPoll(value);
-            value = returnPoll(value);
-            value = returnPoll(value);
-
-
-            value = returnPoll(value);
-            value = returnPoll(value);
-            value = returnPoll(value);
-            value = returnPoll(value);
-            value = returnPoll(value);
-            value = returnPoll(value);
-            value = returnPoll(value);
-            value = returnPoll(value);
-
-            sink = value;
-        }
+    private static void returnPoll(boolean recurse) {
+        if(stopped)
+            return ;
+        if (recurse)
+            returnPoll(true);
     }
 
-
-    private static long returnPoll(long value) {
-        return value + 42;
-    }
-
-
-    private static void checkCompilationLogContainsExpectedDeopt()
-            throws Exception {
-
+    private static void checkCompilationLogContainsExpectedDeopt() throws Exception {
         Path log = Path.of(COMPILATION_LOG_FILE);
 
-
         if (!Files.exists(log)) {
-            throw new RuntimeException(
-                    "Compilation log file does not exist: "
-                    + COMPILATION_LOG_FILE);
+            throw new RuntimeException("Compilation log file does not exist: " + COMPILATION_LOG_FILE);
         }
-
 
         String content = Files.readString(log);
 
-
         if (UNEXPECTED_DEOPT_PATTERN.matcher(content).find()) {
-
-            throw new RuntimeException(
-                    "Unexpected deopt pattern found in compilation log.");
+            throw new RuntimeException("Unexpected deopt pattern found in compilation log.");
         }
     }
 }

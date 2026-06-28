@@ -293,9 +293,7 @@ void JeandleCompiledCode::resolve_reloc_info(JeandleAssembler& assembler) {
           int inst_end_offset = JeandleAssembler::fixup_call_inst_offset(static_cast<int>(block->getAddress().getValue() + edge.getOffset()));
 
           // TODO: Set the right bci.
-          CallSiteInfo* call_info = new CallSiteInfo(JeandleCompiledCall::ROUTINE_CALL,
-                                                     target_addr,
-                                                     -1/* bci */);
+          CallSiteInfo* call_info = new CallSiteInfo(JeandleCompiledCall::ROUTINE_CALL, target_addr, -1/* bci */);
           if (JeandleRuntimeRoutine::is_gc_leaf(target_addr)) {
             relocs.push_back(new JeandleCallReloc(inst_end_offset, _env, _method, nullptr /* no oopmap */, call_info));
           } else {

@@ -1035,7 +1035,6 @@ void JavaThread::handle_async_exception(oop java_throwable) {
       frame compiled_frame = f.sender(&reg_map);
       if (!StressCompiledExceptionHandlers && compiled_frame.can_be_deoptimized()) {
         Deoptimization::deoptimize(this, compiled_frame);
-      } else {
       }
     }
   }

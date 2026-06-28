@@ -103,11 +103,9 @@ JRT_ENTRY(void, JeandleRuntimeRoutine::safepoint_handler(JavaThread* current, bo
 
   ThreadSafepointState* state = current->safepoint_state();
   if (at_return_poll) {
-    log_info(exceptions)("return safepoint");
     StackWatermarkSet::after_unwind(current);
     SafepointMechanism::process_if_requested_with_exit_check(current, true /* check asyncs */);
   } else {
-    log_info(exceptions)("no return safepoint");
     state->set_at_poll_safepoint(true);
     SafepointMechanism::process_if_requested_with_exit_check(current, false /* check asyncs */);
     state->set_at_poll_safepoint(false);
