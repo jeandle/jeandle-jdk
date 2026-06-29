@@ -22,6 +22,7 @@
 #include "jeandle/__llvmHeadersBegin__.hpp"
 #include "llvm/Analysis/ConstantFolding.h"
 #include "llvm/IR/Constants.h"
+#include "llvm/IR/MDBuilder.h"
 
 #include "jeandle/jeandleAbstractInterpreter.hpp"
 #include "jeandle/jeandleRuntimeRoutine.hpp"
@@ -782,11 +783,8 @@ bool JeandleIntrinsicLowering::lower_add_exact(vmIntrinsics::ID id) {
   llvm::Type* ty = JeandleType::java2llvm(
       is_long ? BasicType::T_LONG : BasicType::T_INT, ctx);
 
-  // Stack layout for int (1-slot each): depth 0 = arg2 (top), depth 1 = arg1.
-  // Stack layout for long (double-word): depth 0 = null_hi2, depth 1 = arg2,
-  //                                      depth 2 = null_hi1, depth 3 = arg1.
-  llvm::Value* arg2 = _interp->_jvm->raw_peek(is_long ? 1 : 0).value();
-  llvm::Value* arg1 = _interp->_jvm->raw_peek(is_long ? 3 : 1).value();
+  llvm::Value* arg2 = _interp->_jvm->peek_value(0).value();
+  llvm::Value* arg1 = _interp->_jvm->peek_value(1).value();
 
   llvm::Value* res = builder.CreateIntrinsic(
       llvm::Intrinsic::sadd_with_overflow, {ty}, {arg1, arg2});
@@ -798,7 +796,8 @@ bool JeandleIntrinsicLowering::lower_add_exact(vmIntrinsics::ID id) {
   llvm::BasicBlock* ok_bb = llvm::BasicBlock::Create(ctx, pfx + "_ok",       _interp->_llvm_func);
   llvm::BasicBlock* ov_bb = llvm::BasicBlock::Create(ctx, pfx + "_overflow", _interp->_llvm_func);
 
-  builder.CreateCondBr(overflow, ov_bb, ok_bb);
+  llvm::MDNode* bwmd = llvm::MDBuilder(ctx).createBranchWeights(1, 9999);
+  builder.CreateCondBr(overflow, ov_bb, ok_bb, bwmd);
   _interp->uncommon_trap(Deoptimization::Reason_intrinsic,
                          Deoptimization::Action_none, ov_bb);
 
