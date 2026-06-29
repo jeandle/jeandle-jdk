@@ -354,7 +354,7 @@ DEF_JAVA_OP(reference_get, 1,
   ir_builder.CreateRet(referent);
 JAVA_OP_END
 
-DEF_JAVA_OP(encode_heap_oop, 1, llvm::PointerType::get(context, llvm::jeandle::AddrSpace::NarrowOopAddrSpace),
+DEF_JAVA_OP(encode_heap_oop, 9, llvm::PointerType::get(context, llvm::jeandle::AddrSpace::NarrowOopAddrSpace),
             llvm::PointerType::get(context, llvm::jeandle::AddrSpace::JavaHeapAddrSpace))
   llvm::Value* obj_addr = func->getArg(0);
   llvm::Value* obj_ptr = ir_builder.CreatePtrToInt(obj_addr, llvm::Type::getInt64Ty(context));
@@ -384,7 +384,7 @@ DEF_JAVA_OP(encode_heap_oop, 1, llvm::PointerType::get(context, llvm::jeandle::A
   ir_builder.CreateRet(narrow_addr);
 JAVA_OP_END
 
-DEF_JAVA_OP(decode_heap_oop, 1, llvm::PointerType::get(context, llvm::jeandle::AddrSpace::JavaHeapAddrSpace),
+DEF_JAVA_OP(decode_heap_oop, 9, llvm::PointerType::get(context, llvm::jeandle::AddrSpace::JavaHeapAddrSpace),
             llvm::PointerType::get(context, llvm::jeandle::AddrSpace::NarrowOopAddrSpace))
   llvm::Value* narrow_addr = func->getArg(0);
   llvm::Value* narrow_ptr = ir_builder.CreatePtrToInt(narrow_addr, llvm::Type::getInt32Ty(context));
