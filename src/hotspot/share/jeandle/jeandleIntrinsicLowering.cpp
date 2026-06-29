@@ -799,7 +799,8 @@ bool JeandleIntrinsicLowering::lower_add_exact(vmIntrinsics::ID id) {
   llvm::MDNode* bwmd = llvm::MDBuilder(ctx).createBranchWeights(1, 9999);
   builder.CreateCondBr(overflow, ov_bb, ok_bb, bwmd);
   _interp->uncommon_trap(Deoptimization::Reason_intrinsic,
-                         Deoptimization::Action_none, ov_bb);
+                         Deoptimization::Action_none, ov_bb,
+                         true /* should_reexecute */);
 
   builder.SetInsertPoint(ok_bb);
   _interp->_block->set_tail_llvm_block(ok_bb);
