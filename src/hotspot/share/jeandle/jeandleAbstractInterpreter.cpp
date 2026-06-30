@@ -1540,9 +1540,11 @@ void JeandleAbstractInterpreter::increment() {
 
 void JeandleAbstractInterpreter::attach_branch_weights(llvm::BranchInst* br, int bci) {
   JeandleProfile::BranchCounts counts = _profile.branch_at(bci);
-  if (!counts.valid || counts.overflow ||
+  if (!_profile.is_mature() || !counts.valid || counts.overflow ||
       (counts.taken == 0 && counts.not_taken == 0)) {
-    return;  // overflow: a saturated side makes the taken/not_taken ratio meaningless
+    // Immature profile: too few samples for the ratio to be trustworthy.
+    // Overflow: a saturated side makes the taken/not_taken ratio meaningless.
+    return;
   }
   // Clamp zero counts to 1: an unpruned branch must not advertise an impossible
   // edge to LLVM. A genuinely-never-observed strict-zero side is handled by the unstable-if prune
@@ -1561,8 +1563,10 @@ void JeandleAbstractInterpreter::attach_switch_weights(llvm::SwitchInst* switch_
   bool valid = false;
   bool overflow = false;
   _profile.switch_at(bci, case_counts, default_count, valid, overflow);
-  if (!valid || overflow) {
-    return;  // overflow: a saturated case count makes the weights unreliable
+  if (!_profile.is_mature() || !valid || overflow) {
+    // Immature profile: too few samples to trust. Overflow: a saturated case
+    // count makes the weights unreliable.
+    return;
   }
   // A SwitchInst's successors are [default, case0, case1, ...]; the cases were added
   // in bytecode order, matching MultiBranchData::count_at(i). Require an exact size
@@ -1615,10 +1619,17 @@ bool JeandleAbstractInterpreter::path_is_suitable_for_unstable_if_prune(
   if (counts.overflow) {
     return false;
   }
-  // C2's counters_are_meaningful threshold.
+  // C2's counters_are_meaningful threshold. We compare raw counts; C2 first
+  // applies scale_count (method_life/counter_life). is_mature() already imposes a
+  // method-wide sample floor, so the unscaled compare differs from C2 only for a
+  // method whose MDO was reset/rotated -- acceptably conservative here.
   if (counts.taken + counts.not_taken < 40) {
     return false;
   }
+  // Prune only a *strict-zero* side. C2 generalizes to prob < PROB_MIN (~1.5e-6),
+  // so a 1-in-10-million branch C2 would prune we keep -- deliberately more
+  // conservative (fewer speculative deopts). The strict-zero check itself is in
+  // do_if_branch.
   return !too_many_traps(_method, bci, Deoptimization::Reason_unstable_if);
 }
 

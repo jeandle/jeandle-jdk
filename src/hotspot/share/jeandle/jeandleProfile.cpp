@@ -62,10 +62,14 @@ JeandleProfile::BranchCounts JeandleProfile::branch_at(int bci) const {
   result.taken     = branch->taken();
   result.not_taken = branch->not_taken();
   result.valid     = true;
-  // BranchData counters saturate at max_juint (inc_taken clamps, never wrapping
-  // to 0). A saturated side means the taken/not_taken ratio is no longer
-  // trustworthy; flag it so callers can be conservative.
-  result.overflow  = (result.taken == max_juint || result.not_taken == max_juint);
+  // A counter that saturated or grew past INT_MAX reads back negative as a signed
+  // int; such a count is untrustworthy (cf. C2's negative-counter check). Each
+  // side is emitted as an independent u32 weight and !prof consumers accumulate
+  // in 64-bit, so -- unlike C2, which sums the two to feed its <40 maturity test
+  // -- there is no need to reject a pair whose sum exceeds INT_MAX: each fits a
+  // u32 and is a perfectly representable weight. switch_at uses the same
+  // per-count test.
+  result.overflow = ((jint)result.taken < 0 || (jint)result.not_taken < 0);
   return result;
 }
 
@@ -83,11 +87,15 @@ void JeandleProfile::switch_at(int bci, GrowableArray<uint>& case_counts,
   }
   MultiBranchData* multi = data->as_MultiBranchData();
   default_count = multi->default_count();
-  overflow = (default_count == max_juint);
+  // Same overflow test as branch_at: a count that saturated or grew past
+  // INT_MAX reads back negative as a signed int. A fixed max_juint compare only
+  // catches the saturation endpoint and misses the [INT_MAX+1, max_juint) range,
+  // whose near-2^32 weight would dwarf the other cases.
+  overflow = ((jint)default_count < 0);
   int num_cases = multi->number_of_cases();
   for (int i = 0; i < num_cases; i++) {
     uint c = multi->count_at(i);
-    if (c == max_juint) overflow = true;
+    if ((jint)c < 0) overflow = true;
     case_counts.append(c);
   }
   valid = true;
