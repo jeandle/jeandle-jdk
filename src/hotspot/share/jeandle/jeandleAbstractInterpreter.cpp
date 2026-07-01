@@ -44,6 +44,7 @@
 #include "ci/ciObjArrayKlass.hpp"
 #include "ci/ciSymbols.hpp"
 #include "ci/ciTypeFlow.hpp"
+#include "oops/arrayOop.hpp"
 #include "oops/objArrayKlass.hpp"
 #include "classfile/javaClasses.hpp"
 #include "compiler/compilerDirectives.hpp"
@@ -51,6 +52,7 @@
 #include "gc/shared/gc_globals.hpp"
 #include "interpreter/interpreter.hpp"
 #include "logging/log.hpp"
+#include "runtime/globals.hpp"
 #include "runtime/sharedRuntime.hpp"
 #include "runtime/stubRoutines.hpp"
 #include "utilities/ostream.hpp"
@@ -3268,13 +3270,53 @@ void JeandleAbstractInterpreter::anewarray(int klass_index) {
   }
 }
 
+// size_in_bytes = align((length << log2_element_size) + base_offset, MinObjAlignmentInBytes).
+// log2_element_size and base_offset are i32 constants on the bytecode path (array klass known
+// at IR build time) and runtime values decoded from Klass::layout_helper on the reflection
+// path; the arithmetic is identical and LLVM folds the constant case. Mirrors C2's
+// GraphKit::new_array size computation.
+llvm::Value* JeandleAbstractInterpreter::emit_array_size_in_bytes(llvm::Value* length,
+                                                                  llvm::Value* log2_element_size,
+                                                                  llvm::Value* base_offset) {
+  jint align_mask = static_cast<jint>(MinObjAlignmentInBytesMask);
+  llvm::Value* body_bytes = _ir_builder.CreateShl(length, log2_element_size);
+  llvm::Value* with_header = _ir_builder.CreateAdd(body_bytes, base_offset);
+  llvm::Value* with_align_pad = _ir_builder.CreateAdd(with_header, _ir_builder.getInt32(align_mask));
+  return _ir_builder.CreateAnd(with_align_pad, _ir_builder.getInt32(~align_mask));
+}
+
+llvm::InvokeInst* JeandleAbstractInterpreter::emit_jeandle_newarray(Klass* array_klass, llvm::Value* length) {
+  // Decode the array klass layout at IR build time. array_klass is known here, so size/base/max
+  // fold to i32 constants and the fast path in template.ll collapses to a tight bump-pointer plus
+  // inline zero loop.
+  jint lh = array_klass->layout_helper();
+  assert(Klass::layout_helper_is_array(lh), "must be an array klass");
+
+  int log2_element_size = Klass::layout_helper_log2_element_size(lh);
+  BasicType element_type = static_cast<BasicType>(Klass::layout_helper_element_type(lh));
+  int base_offset = arrayOopDesc::base_offset_in_bytes(element_type);
+
+  // Fast-path length cap, mirroring C2 GraphKit::new_array. It must bound the array so that
+  // size_in_bytes cannot overflow i32: arrayOopDesc::max_array_length() is ~max_jint on LP64
+  // (an element count, not a byte size) and would let e.g. int[1<<30] wrap size_in_bytes and
+  // corrupt the heap. FastAllocateSizeLimit caps the fast path at ~1MB; larger arrays take the
+  // slow path. Scaled by element size so the byte limit is uniform across element types.
+  int length_limit = (int)FastAllocateSizeLimit << (LogBytesPerLong - log2_element_size);
+
+  llvm::Value* size_in_bytes = emit_array_size_in_bytes(length,
+      _ir_builder.getInt32(log2_element_size), _ir_builder.getInt32(base_offset));
+
+  llvm::PointerType* klass_type = llvm::PointerType::get(*_context, llvm::jeandle::AddrSpace::CHeapAddrSpace);
+  llvm::Value* array_klass_ptr = _ir_builder.CreateIntToPtr(_ir_builder.getInt64((intptr_t)array_klass), klass_type);
+
+  return call_java_op_ex("jeandle.new_array",
+      {array_klass_ptr, length, size_in_bytes, _ir_builder.getInt32(base_offset), _ir_builder.getInt32(length_limit)},
+      {create_current_deopt_bundle()});
+}
+
 void JeandleAbstractInterpreter::do_unified_newarray(Klass* array_klass) {
   llvm::Value* length = _jvm->ipop();
-  llvm::PointerType* klass_type = llvm::PointerType::get(*_context, llvm::jeandle::AddrSpace::CHeapAddrSpace);
-  llvm::Value* array_klass_addr = _ir_builder.getInt64((intptr_t)array_klass);
-  llvm::Value* array_klass_ptr =  _ir_builder.CreateIntToPtr(array_klass_addr, klass_type);
-
-  llvm::InvokeInst* result = call_java_op_ex("jeandle.new_array", {array_klass_ptr, length}, {create_current_deopt_bundle()});
+  llvm::InvokeInst* result = emit_jeandle_newarray(array_klass, length);
 
   // newarray always produces an exact type.
   result->addRetAttr(llvm::Attribute::get(*_context,
@@ -3336,14 +3378,9 @@ void JeandleAbstractInterpreter::multianewarray() {
   } else {
     // Create a java array for dimension sizes
     Klass* int_array_klass = (Klass*)(ciTypeArrayKlass::make(T_INT)->constant_encoding());
-    llvm::Value* int_array_klass_addr = _ir_builder.getInt64((intptr_t)int_array_klass);
-    llvm::PointerType* klass_type = llvm::PointerType::get(*_context, llvm::jeandle::AddrSpace::CHeapAddrSpace);
-    llvm::Value* int_array_klass_ptr = _ir_builder.CreateIntToPtr(int_array_klass_addr, klass_type);
-
     llvm::Value* dimensions_array_length = _ir_builder.getInt32(ndimensions);
 
-    llvm::InvokeInst* dimensions_array_oop = call_java_op_ex("jeandle.new_array", {int_array_klass_ptr, dimensions_array_length},
-                                                             {create_current_deopt_bundle()});
+    llvm::InvokeInst* dimensions_array_oop = emit_jeandle_newarray(int_array_klass, dimensions_array_length);
     RETURN_VOID_ON_JEANDLE_ERROR();
 
     llvm::Value* array_base_offset = _ir_builder.CreateLoad(llvm::Type::getInt32Ty(*_context),
