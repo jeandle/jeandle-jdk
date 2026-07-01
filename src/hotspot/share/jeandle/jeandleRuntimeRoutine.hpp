@@ -193,7 +193,7 @@
       llvm::Type::getDoubleTy(context),                                             \
       llvm::Type::getDoubleTy(context))                                             \
                                                                                     \
-  def(uncommon_trap,                                                                \
+  def(__llvm_deoptimize,                                                            \
       SharedRuntime::uncommon_trap_blob()->entry_point(),                           \
       true,                                                                         \
       false,                                                                        \

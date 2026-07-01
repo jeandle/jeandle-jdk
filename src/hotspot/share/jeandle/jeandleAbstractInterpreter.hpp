@@ -30,6 +30,7 @@
 #include "llvm/IR/LLVMContext.h"
 
 #include "jeandle/jeandleCompilation.hpp"
+#include "jeandle/jeandleProfile.hpp"
 #include "jeandle/jeandleType.hpp"
 
 #include "jeandle/__hotspotHeadersBegin__.hpp"
@@ -148,7 +149,7 @@ class JeandleVMState : public JeandleCompilationResourceObj {
   size_t locks_size() const { return _locks.size(); }
   LockValue lock_at(int index) { return _locks[index]; }
 
-  llvm::SmallVector<llvm::Value*> deopt_args(llvm::IRBuilder<> &builder, int bci);
+  llvm::SmallVector<llvm::Value*> deopt_args(llvm::IRBuilder<> &builder, int bci, MethodLivenessResult liveness);
 
   int interpreter_frame_size_in_bytes();
  private:
@@ -294,6 +295,9 @@ class JeandleAbstractInterpreter : public StackObj {
   friend class JeandleIntrinsicLowering;
 
   ciMethod* _method;
+  // Read-only view of the method's MDO. Declared after _method so the
+  // constructor's init list can build it from _method.
+  JeandleProfile _profile;
   llvm::Function* _llvm_func;
   int _entry_bci;
   llvm::LLVMContext* _context;
@@ -314,6 +318,12 @@ class JeandleAbstractInterpreter : public StackObj {
   // The JeandleBasicBlock and its JeandleVMState currently being interpreted.
   JeandleBasicBlock* _block;
   JeandleVMState* _jvm;
+
+  // When do_if_branch prunes a never-taken edge into an uncommon_trap, the
+  // cold Java successor receives no LLVM edge from this block and must be
+  // skipped by the post-loop successor merge. Reset at the start of every
+  // block.
+  JeandleBasicBlock* _pruned_successor;
 
   // Contains all blocks to interpret. Sorted by reverse-post-order.
   llvm::SmallVector<JeandleBasicBlock*> _work_list;
@@ -365,6 +375,14 @@ class JeandleAbstractInterpreter : public StackObj {
   void if_icmp(llvm::CmpInst::Predicate p);
   void if_acmp(llvm::CmpInst::Predicate p);
   void if_null(llvm::CmpInst::Predicate p);
+  // Shared emission for if_* helpers. Either prunes a strict-zero edge into
+  // an uncommon_trap, or emits a two-way branch with MDO weights. Must be
+  // called before the if_* helper pops its operands, so a pruned trap's deopt
+  // bundle still captures the pre-if operand stack.
+  void do_if_branch(llvm::Value* cond);
+  bool path_is_suitable_for_unstable_if_prune(int bci, JeandleProfile::BranchCounts counts);
+  void attach_branch_weights(llvm::BranchInst* br, int bci);
+  void attach_switch_weights(llvm::SwitchInst* switch_inst, int bci);
   void fcmp(BasicType type, bool true_if_unordered);
   void lcmp();
   void merge_into_exception_handler(JeandleBasicBlock* handler_block);
