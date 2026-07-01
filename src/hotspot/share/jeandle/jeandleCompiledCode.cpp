@@ -325,11 +325,10 @@ void JeandleCompiledCode::resolve_reloc_info(JeandleAssembler& assembler) {
             reloc_section = CodeBuffer::SECT_INSTS;
           } else {
             assert(target.getSection().getName().compare(".text") == 0, "invalid target section");
-            assert(block->getSection().getName().starts_with(".rodata"), "invalid reloc section");
             target_addr = _code_buffer.insts()->start();
-            address reloc_base = lookup_const_section(block->getSection().getName(), assembler);
+            address reloc_site = resolve_const_reloc_site(*block, edge, assembler);
             RETURN_VOID_ON_JEANDLE_ERROR();
-            reloc_offset = reloc_base + edge.getOffset() - _code_buffer.consts()->start();
+            reloc_offset = reloc_site - _code_buffer.consts()->start();
             reloc_section = CodeBuffer::SECT_CONSTS;
           }
           relocs.push_back(new JeandleSectionWordReloc(reloc_offset, edge, target_addr, reloc_section));
@@ -346,7 +345,10 @@ void JeandleCompiledCode::resolve_reloc_info(JeandleAssembler& assembler) {
           assert((target_name).starts_with("oop_handle"), "invalid oop relocation name");
           auto oop_it = _oop_handles.find(target_name);
           JEANDLE_ERROR_ASSERT_AND_RET_VOID_ON_FAIL(oop_it != _oop_handles.end(), "missing oop handle in relocation");
-          relocs.push_back(new JeandleOopAddrReloc(static_cast<int>(block->getAddress().getValue() + edge.getOffset()), oop_it->getValue()));
+          address reloc_site = resolve_const_reloc_site(*block, edge, assembler);
+          RETURN_VOID_ON_JEANDLE_ERROR();
+          relocs.push_back(new JeandleOopAddrReloc(static_cast<int>(reloc_site - _code_buffer.consts()->start()),
+                                                   oop_it->getValue()));
         } else {
           // Unhandled relocations
           ShouldNotReachHere();
@@ -408,6 +410,21 @@ address JeandleCompiledCode::lookup_const_section(llvm::StringRef name, JeandleA
   }
 
   return it->getValue();
+}
+
+address JeandleCompiledCode::resolve_const_reloc_site(LinkBlock& block, LinkEdge& edge, JeandleAssembler& assembler) {
+  llvm::StringRef section_name = block.getSection().getName();
+  assert(section_name.starts_with(".rodata") || section_name.starts_with(".data.rel.ro"),
+         "invalid const relocation section");
+
+  address section_base = lookup_const_section(section_name, assembler);
+  if (section_base == nullptr) {
+    return nullptr;
+  }
+
+  llvm::jitlink::SectionRange range(block.getSection());
+  uint64_t offset_in_section = block.getAddress() - range.getFirstBlock()->getAddress();
+  return section_base + offset_in_section + edge.getOffset();
 }
 
 address JeandleCompiledCode::resolve_const_edge(LinkBlock& block, LinkEdge& edge, JeandleAssembler& assembler) {

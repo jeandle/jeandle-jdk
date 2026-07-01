@@ -328,6 +328,7 @@ class JeandleCompiledCode : public StackObj {
 
   // Lookup address of const section in CodeBuffer.
   address lookup_const_section(llvm::StringRef name, JeandleAssembler& assembler);
+  address resolve_const_reloc_site(LinkBlock& block, LinkEdge& edge, JeandleAssembler& assembler);
   address resolve_const_edge(LinkBlock& block, LinkEdge& edge, JeandleAssembler& assembler);
 
   JeandleStackMap* parse_stackmap(StackMapParser& stackmaps, StackMapParser::record_iterator& record, CallSiteInfo* call_info);
