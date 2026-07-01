@@ -949,10 +949,6 @@ void JeandleAbstractInterpreter::interpret() {
     assert(current->is_set(JeandleBasicBlock::is_loop_header), "sanity");
   }
 
-  if (uint entry_count = _profile.entry_count()) {
-    _llvm_func->setEntryCount((uint64_t) entry_count);
-  }
-
   // Prepare work list. Push the first block.
   add_to_work_list(current);
 
