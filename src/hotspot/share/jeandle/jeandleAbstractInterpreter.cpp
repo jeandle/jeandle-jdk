@@ -1437,31 +1437,13 @@ void JeandleAbstractInterpreter::uncommon_trap(Deoptimization::DeoptReason reaso
 
   llvm::Value* request = _ir_builder.getInt32(Deoptimization::make_trap_request(reason, action));
 
-  // Pre-declare __llvm_deoptimize with the exact signature
-  // RewriteStatepointsForGC will request when it lowers the intrinsic
-  // (`void(i32)` for the trap request operand), pinned to Hotspot_JIT so
-  // the lowered statepoint's call agrees with the uncommon_trap blob's
-  // entry. RS4GC otherwise synthesises a default-CC declaration via
-  // getOrInsertFunction, leaving the lowered call as CallingConv::C with
-  // a latent CC mismatch against the runtime entry.
-  if (_module.getFunction("__llvm_deoptimize") == nullptr) {
-    llvm::FunctionType* deopt_target_ty = llvm::FunctionType::get(
-        llvm::Type::getVoidTy(*_context),
-        {llvm::Type::getInt32Ty(*_context)},
-        /*isVarArg=*/false);
-    llvm::Function* deopt_target = llvm::Function::Create(
-        deopt_target_ty, llvm::Function::ExternalLinkage,
-        "__llvm_deoptimize", &_module);
-    deopt_target->setCallingConv(llvm::CallingConv::Hotspot_JIT);
-  }
-
   // Emit the trap via `llvm.experimental.deoptimize.<ret_type>`. LLVM's
   // optimization passes (CFG-simplify, JumpThreading, CVP/SCCP, InstCombine)
   // are documented to treat this intrinsic as an opaque barrier and not
   // reverse-propagate "branch outcome -> operand value" facts through it.
   // RewriteStatepointsForGC later converts the call into a statepoint
-  // targeting __llvm_deoptimize (declared just above) with the deopt
-  // operand bundle preserved, so GC oop maps still come out right.
+  // targeting __llvm_deoptimize (declared in the template module) with the
+  // deopt operand bundle preserved, so GC oop maps still come out right.
   llvm::Type* ret_type = _llvm_func->getReturnType();
   llvm::Function* deopt_decl = llvm::Intrinsic::getOrInsertDeclaration(
       &_module, llvm::Intrinsic::experimental_deoptimize, {ret_type});
@@ -1536,12 +1518,11 @@ void JeandleAbstractInterpreter::increment() {
 
 void JeandleAbstractInterpreter::attach_branch_weights(llvm::BranchInst* br, int bci) {
   JeandleProfile::BranchCounts counts = _profile.branch_at(bci);
-  if (!_profile.is_mature() || !counts.valid || counts.overflow ||
-      (counts.taken == 0 && counts.not_taken == 0)) {
-    // Immature profile: too few samples for the ratio to be trustworthy.
-    // Overflow: a saturated side makes the taken/not_taken ratio meaningless.
+
+  if (!_profile.is_mature() || !counts.valid) {
     return;
   }
+
   // Clamp zero counts to 1: an unpruned branch must not advertise an impossible
   // edge to LLVM. A genuinely-never-observed strict-zero side is handled by the unstable-if prune
   // pruning; reaching here with a 0 count means immature profile, where 0 is
@@ -1554,31 +1535,27 @@ void JeandleAbstractInterpreter::attach_branch_weights(llvm::BranchInst* br, int
 }
 
 void JeandleAbstractInterpreter::attach_switch_weights(llvm::SwitchInst* switch_inst, int bci) {
-  GrowableArray<uint> case_counts;
-  uint default_count = 0;
-  bool valid = false;
-  bool overflow = false;
-  _profile.switch_at(bci, case_counts, default_count, valid, overflow);
-  if (!_profile.is_mature() || !valid || overflow) {
-    // Immature profile: too few samples to trust. Overflow: a saturated case
-    // count makes the weights unreliable.
-    return;
+  if (!_profile.is_mature()) {
+    return;  // immature profile: let LLVM assume a uniform distribution
+  }
+  JeandleProfile::SwitchCounts counts = _profile.switch_at(bci);
+  if (!counts.valid) {
+    return;  // overflow: a saturated case count makes the weights unreliable
   }
   // A SwitchInst's successors are [default, case0, case1, ...]; the cases were added
   // in bytecode order, matching MultiBranchData::count_at(i). Require an exact size
   // match so a weight can never land on the wrong successor.
-  if (case_counts.length() != (int) switch_inst->getNumCases()) {
+  if (counts.case_counts.size() != switch_inst->getNumCases()) {
     return;
   }
   // Clamp zero counts to 1 (see attach_branch_weights): an unpruned switch arm must
   // not be advertised as an impossible edge. Skip attaching entirely only when there
   // is no information at all (every count zero).
   llvm::SmallVector<uint32_t, 8> weights;
-  weights.push_back(default_count == 0 ? 1u : (uint32_t) default_count);
-  bool any_nonzero = default_count != 0;
-  for (int i = 0; i < case_counts.length(); i++) {
-    uint count = case_counts.at(i);
-    weights.push_back(count == 0 ? 1u : (uint32_t) count);
+  weights.push_back(counts.default_count == 0 ? 1u : counts.default_count);
+  bool any_nonzero = counts.default_count != 0;
+  for (uint32_t count : counts.case_counts) {
+    weights.push_back(count == 0 ? 1u : count);
     any_nonzero = any_nonzero || (count != 0);
   }
   if (!any_nonzero) {
@@ -1608,24 +1585,7 @@ bool JeandleAbstractInterpreter::path_is_suitable_for_unstable_if_prune(
   if (!_profile.is_mature() || !counts.valid) {
     return false;
   }
-  // A saturated counter (overflow) means we can't trust the distribution; don't
-  // speculate. The strict-zero side is still a genuine never-taken (counters
-  // saturate upward, never wrapping to 0), but staying conservative here matches
-  // C2 and costs nothing in practice (saturation needs ~4e9 executions).
-  if (counts.overflow) {
-    return false;
-  }
-  // C2's counters_are_meaningful threshold. We compare raw counts; C2 first
-  // applies scale_count (method_life/counter_life). is_mature() already imposes a
-  // method-wide sample floor, so the unscaled compare differs from C2 only for a
-  // method whose MDO was reset/rotated -- acceptably conservative here.
-  if (counts.taken + counts.not_taken < 40) {
-    return false;
-  }
-  // Prune only a *strict-zero* side. C2 generalizes to prob < PROB_MIN (~1.5e-6),
-  // so a 1-in-10-million branch C2 would prune we keep -- deliberately more
-  // conservative (fewer speculative deopts). The strict-zero check itself is in
-  // do_if_branch.
+
   return !too_many_traps(_method, bci, Deoptimization::Reason_unstable_if);
 }
 
@@ -1674,6 +1634,8 @@ void JeandleAbstractInterpreter::do_if_branch(llvm::Value* cond) {
                       md_builder.createBranchWeights(
                           cond_true_is_hot ? hot_weight : cold_weight,
                           cond_true_is_hot ? cold_weight : hot_weight));
+      // TODO: Here maybe we can use the liveness of the pruned branch's bci,
+      // then the liveness info will be more accurate.
       uncommon_trap(Deoptimization::Reason_unstable_if,
                     Deoptimization::Action_reinterpret, trap_block);
       // Skip the pruned JBB in the post-loop successor merge; its preallocated

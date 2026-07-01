@@ -323,6 +323,15 @@ entry:
 declare hotspotcc ptr @jeandle.current_thread()
 declare hotspotcc ptr addrspace(1) @new_array(ptr, i32, ptr)
 
+; IR-level runtime target that RewriteStatepointsForGC lowers each
+; llvm.experimental.deoptimize call onto (RewriteStatepointsForGC.cpp). Declared
+; here rather than synthesized per-method so every compilation module starts with
+; it. The `hotspotcc` convention (= CallingConv::Hotspot_JIT) MUST match the
+; uncommon_trap_blob entry resolved at JIT link time (jeandleRuntimeRoutine.hpp);
+; do not simplify to the default CC -- RS4GC would otherwise synthesize a
+; default-CC declaration and the lowered call would mismatch the runtime entry.
+declare hotspotcc void @__llvm_deoptimize(i32)
+
 ; Unified array allocation JavaOp.  Both bytecode (newarray/anewarray) and intrinsic
 ; (_newArray / Array.newInstance) paths call this function.
 ; LLVM passes identify array allocation by matching on this function name.

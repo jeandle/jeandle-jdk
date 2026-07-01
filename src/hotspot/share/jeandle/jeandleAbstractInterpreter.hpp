@@ -295,9 +295,7 @@ class JeandleAbstractInterpreter : public StackObj {
   friend class JeandleIntrinsicLowering;
 
   ciMethod* _method;
-  // Read-only view of the method's MDO. Declared after _method so the
-  // constructor's init list can build it from _method.
-  JeandleProfile _profile;
+  JeandleProfile _profile; // Read-only view of the method's MDO. 
   llvm::Function* _llvm_func;
   int _entry_bci;
   llvm::LLVMContext* _context;
