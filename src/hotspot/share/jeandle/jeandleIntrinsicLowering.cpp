@@ -655,6 +655,25 @@ bool JeandleIntrinsicLowering::lower_new_array() {
   // FastAllocateSizeLimit bounds the byte size to <= FastAllocateSizeLimit << LogBytesPerLong
   // (~1MB) for any element type, so size_in_bytes cannot overflow i32. Larger reflective arrays
   // fall to the slow path.
+  // TODO: this cap is a flat limit on element count, applied the same way regardless of element
+  // type. Because it isn't scaled by element size, it effectively assumes every element is 8
+  // bytes wide, so arrays of smaller elements (byte[], or reference arrays under compressed oops)
+  // fall back to the slow path far earlier than their real byte size requires. The constant-klass
+  // bytecode path (emit_jeandle_newarray) already scales it by element size:
+  //     FastAllocateSizeLimit << (LogBytesPerLong - log2_esize)
+  // We can do the same here using the log2_esize decoded just above -- one shift, covers every
+  // element type, no extra branching.
+  //
+  // Going further like C2 (speculatively assuming a reference array so the whole layout folds to
+  // constants) isn't worth it here: C2's real gain comes from optimizing the code after the
+  // allocation -- folding a trailing arraycopy's address math and deleting the now-redundant
+  // zeroing. Neither is reachable for us: the zeroing lives inside the opaque jeandle.new_array
+  // helper, and this reflection site just returns the array with no copy to merge with.
+  //
+  // If that after-allocation win is ever worth pursuing, the path forward is not C2's guard but
+  // making the zeroing removable at the call site: expose it as stores the optimizer can see (or
+  // flag the region as already-zeroed) so a following overwrite can delete it, and let the
+  // allocation fuse with the arraycopy.
   llvm::Value* length_limit = builder.getInt32((int)FastAllocateSizeLimit);
 
   static constexpr CallSiteAttributeMetadata fast_attrs =
