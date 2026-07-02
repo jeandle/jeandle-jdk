@@ -1,6 +1,6 @@
 /*
- * Copyright (c) 2026, The Jeandle-JDK Authors. All Rights Reserved.
- * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES ON THIS FILE HEADER.
+ * Copyright (c) 2026, the Jeandle-JDK Authors. All Rights Reserved.
+ * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License version 2 only, as
@@ -9,11 +9,11 @@
  * This code is distributed in the hope that it will be useful, but WITHOUT
  * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
  * FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General Public License
- * version 2 for more details (a copy of the LICENSE file that accompanied
- * this code).
+ * version 2 for more details (a copy is included in the LICENSE file that
+ * accompanied this code).
  *
- * You should have received a copy of the GNU General Public License
- * version 2 along with this work; if not, write to the Free Software Foundation,
+ * You should have received a copy of the GNU General Public License version
+ * 2 along with this work; if not, write to the Free Software Foundation,
  * Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301 USA.
  *
  */
@@ -74,19 +74,19 @@ public class TestIdentityHashCode {
             "Expected exactly 2 intrinsic-log entries (one each for hashOf/hashOfNull), got "
             + intrinsicCount);
 
-        // Verify the fast path is generated as a call to jeandle.identity_hashcode_fast
+        // Verify the fast path is generated as a call to jeandle.hashcode_fast
         // (the JavaOp defined in jeandleRuntimeDefinedJavaOps.cpp), with the slow path
-        // falling back to jeandle.identity_hash_code runtime. Patterns walk the file
+        // falling back to jeandle.hashcode_slow runtime. Patterns walk the file
         // in order; the JavaOp body itself is checked via its inlined form in the
         // optimized IR.
         FileCheck fc = new FileCheck(dumpPath,
                 TestWrapper.class.getDeclaredMethod("hashOf", Object.class), false);
         // Null check + fast-path dispatch.
         fc.checkPattern("identityHashCode_fast_call");
-        fc.checkPattern("call hotspotcc i32 @jeandle\\.identity_hashcode_fast");
+        fc.checkPattern("call hotspotcc i32 @jeandle\\.hashcode_fast");
         // Slow-path runtime call.
         fc.checkPattern("identityHashCode_slow");
-        fc.checkPattern("identity_hash_code");
+        fc.checkPattern("@hashcode_slow");
         // Merge PHI for null (0) / fast result / slow result.
         fc.checkPattern("identityHashCode_merge");
     }

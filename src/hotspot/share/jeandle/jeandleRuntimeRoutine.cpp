@@ -357,8 +357,8 @@ JRT_ENTRY(jint, JeandleRuntimeRoutine::instanceof_unloaded_or_null(Method* metho
   return 0;
 JRT_END
 
-// Matches System.identityHashCode semantics.
-JRT_ENTRY(jint, JeandleRuntimeRoutine::identity_hash_code(oopDesc* obj, JavaThread* current))
+// Slow path for hashCode/identityHashCode intrinsics.
+JRT_ENTRY(jint, JeandleRuntimeRoutine::hashcode_slow(oopDesc* obj, JavaThread* current))
   if (obj == nullptr) {
     return 0;
   }

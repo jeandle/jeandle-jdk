@@ -140,8 +140,8 @@
       llvm::PointerType::get(context, llvm::jeandle::AddrSpace::CHeapAddrSpace),    \
       llvm::PointerType::get(context, llvm::jeandle::AddrSpace::CHeapAddrSpace))    \
                                                                                     \
-  def(identity_hash_code,                                                           \
-      JeandleRuntimeRoutine::identity_hash_code,                                    \
+  def(hashcode_slow,                                                               \
+      JeandleRuntimeRoutine::hashcode_slow,                                         \
       llvm::Type::getInt32Ty(context),                                              \
       llvm::PointerType::get(context, llvm::jeandle::AddrSpace::JavaHeapAddrSpace), \
       llvm::PointerType::get(context, llvm::jeandle::AddrSpace::CHeapAddrSpace))    \
@@ -410,10 +410,9 @@ class JeandleRuntimeRoutine : public AllStatic {
 
   static jint instanceof_unloaded_or_null(Method* method, int cp_index, Klass* ex_klass, JavaThread* current);
 
-  // Identity hash code computation: delegates to ObjectSynchronizer::FastHashCode,
-  // which lazily installs a hash into the object header if not yet present.
-  // Matches System.identityHashCode semantics — null returns 0 (handled in lowering).
-  static jint identity_hash_code(oopDesc* obj, JavaThread* current);
+  // Slow path for hashCode/identityHashCode intrinsics: reads or installs the
+  // identity hash via ObjectSynchronizer::FastHashCode. null returns 0.
+  static jint hashcode_slow(oopDesc* obj, JavaThread* current);
 
   // Assembly routine implementations:
 

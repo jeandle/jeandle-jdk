@@ -179,6 +179,7 @@ class JeandleIntrinsicLowering : public StackObj {
   bool lower_compare_unsigned(vmIntrinsics::ID id);
   bool lower_new_array();
   bool lower_identity_hash_code();
+  bool lower_hash_code();
 
   };
 
