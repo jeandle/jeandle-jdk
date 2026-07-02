@@ -494,7 +494,7 @@ static inline void insert_patch_size_metadata(
 // from the object's mark word inline. Returns the hash on success, 0 on failure
 // (object locked/inflated, or hash not yet installed). Caller must guarantee
 // obj != null and must fall back to a runtime call when this returns 0.
-DEF_JAVA_OP(identity_hashcode_fast, 0, llvm::Type::getInt32Ty(context),
+DEF_JAVA_OP(hashcode_fast, 0, llvm::Type::getInt32Ty(context),
             llvm::PointerType::get(context, llvm::jeandle::AddrSpace::JavaHeapAddrSpace))
   llvm::Value* obj = func->getArg(0);
 
@@ -572,7 +572,7 @@ bool RuntimeDefinedJavaOps::define_all(llvm::Module& template_module) {
   define_decode_heap_oop(template_module);
   define_encode_klass(template_module);
   define_decode_klass(template_module);
-  define_identity_hashcode_fast(template_module);
+  define_hashcode_fast(template_module);
 
   return failed();
 }
