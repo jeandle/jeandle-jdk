@@ -2613,15 +2613,11 @@ void JeandleAbstractInterpreter::do_get_xxx(ciField* field, bool is_static) {
     ciKlass* field_klass = field->type()->as_klass();
     if (field_klass->is_loaded() && !is_unverified_interface(field_klass)) {
       Klass* klass_enc = (Klass*)(field_klass->constant_encoding());
-      if (llvm::CallBase* call_inst = llvm::dyn_cast<llvm::CallBase>(value)) {
-        call_inst->addRetAttr(llvm::Attribute::get(*_context,
-            llvm::jeandle::Attribute::JavaKlass,
-            std::to_string((uintptr_t)klass_enc)));
-        if (is_effectively_final(field_klass)) {
-          call_inst->addRetAttr(llvm::Attribute::get(*_context,
-              llvm::jeandle::Attribute::JavaKlassExact, ""));
-        }
-      } else if (llvm::LoadInst* load_inst = llvm::dyn_cast<llvm::LoadInst>(value)) {
+      llvm::Value* metadata_value = value;
+      if (auto* cast_inst = llvm::dyn_cast<llvm::AddrSpaceCastInst>(metadata_value)) {
+        metadata_value = cast_inst->getOperand(0);
+      }
+      if (llvm::LoadInst* load_inst = llvm::dyn_cast<llvm::LoadInst>(metadata_value)) {
         llvm::MDNode* klass_md = llvm::MDNode::get(*_context, {
             llvm::ConstantAsMetadata::get(_ir_builder.getInt64((intptr_t)klass_enc))
         });
@@ -2710,7 +2706,8 @@ llvm::Value* JeandleAbstractInterpreter::load_from_address(llvm::Value* addr, Ba
   }
 
   if (type == T_NARROWOOP) {
-    res_inst = call_java_op("jeandle.decode_heap_oop", {res_inst});
+    llvm::Type* oop_type = JeandleType::java2llvm(T_OBJECT, *_context);
+    res_inst = _ir_builder.CreateAddrSpaceCast(res_inst, oop_type);
   }
 
   return res_inst;
@@ -2736,7 +2733,7 @@ void JeandleAbstractInterpreter::store_to_address(llvm::Value* addr, llvm::Value
       break;
     }
     case T_NARROWOOP: {
-      value = call_java_op("jeandle.encode_heap_oop", {value});
+      value = _ir_builder.CreateAddrSpaceCast(value, expected_ty);
       break;
     }
     default:
@@ -2787,7 +2784,8 @@ llvm::Value* JeandleAbstractInterpreter::do_array_load_inner(BasicType basic_typ
   llvm::LoadInst* load_inst = _ir_builder.CreateLoad(load_type, element_address);
   load_inst->setAtomic(llvm::AtomicOrdering::Unordered);
   if (basic_type == T_OBJECT && UseCompressedOops) {
-    return call_java_op("jeandle.decode_heap_oop", {load_inst});
+    llvm::Type* oop_type = JeandleType::java2llvm(T_OBJECT, *_context);
+    return _ir_builder.CreateAddrSpaceCast(load_inst, oop_type);
   }
   return load_inst;
 }
@@ -2836,20 +2834,17 @@ void JeandleAbstractInterpreter::do_array_load(BasicType basic_type) {
       }
       // Attach element type metadata if the array's type is known.
       // TODO: maybe we can do this in LLVM side, then we can use context-sensitive type information of array.
-      llvm::jeandle::JavaType array_type = llvm::jeandle::getJavaType(array_ref);
-      if (array_type.isKnown()) {
-        Klass* array_klass = (Klass*)array_type.Klass;
-        if (array_klass->is_objArray_klass()) {
-          Klass* elem_klass = ObjArrayKlass::cast(array_klass)->element_klass();
-          if (!is_unverified_interface(elem_klass)) {
-            if (llvm::CallBase* call_inst = llvm::dyn_cast<llvm::CallBase>(load_value)) {
-              call_inst->addRetAttr(llvm::Attribute::get(*_context,
-                                    llvm::jeandle::Attribute::JavaKlass, std::to_string((uintptr_t)elem_klass)));
-              if (is_effectively_final(elem_klass)) {
-                call_inst->addRetAttr(llvm::Attribute::get(*_context,
-                                      llvm::jeandle::Attribute::JavaKlassExact, ""));
-              }
-            } else if (llvm::LoadInst* load_inst = llvm::dyn_cast<llvm::LoadInst>(load_value)) {
+      llvm::Value* metadata_value = load_value;
+      if (auto* cast_inst = llvm::dyn_cast<llvm::AddrSpaceCastInst>(metadata_value)) {
+        metadata_value = cast_inst->getOperand(0);
+      }
+      if (llvm::Instruction* load_inst = llvm::dyn_cast<llvm::Instruction>(metadata_value)) {
+        llvm::jeandle::JavaType array_type = llvm::jeandle::getJavaType(array_ref);
+        if (array_type.isKnown()) {
+          Klass* array_klass = (Klass*)array_type.Klass;
+          if (array_klass->is_objArray_klass()) {
+            Klass* elem_klass = ObjArrayKlass::cast(array_klass)->element_klass();
+            if (!is_unverified_interface(elem_klass)) {
               llvm::MDNode* klass_md = llvm::MDNode::get(*_context, {
                   llvm::ConstantAsMetadata::get(
                       _ir_builder.getInt64((intptr_t)elem_klass))
@@ -2891,18 +2886,11 @@ void JeandleAbstractInterpreter::do_array_store_inner(BasicType basic_type, llvm
 
   llvm::Value* wide_oop = value;
   if (basic_type == T_OBJECT && UseCompressedOops) {
-    value = call_java_op("jeandle.encode_heap_oop", {value});
+    value = _ir_builder.CreateAddrSpaceCast(value, store_type);
   }
 
   llvm::StoreInst* store_inst = _ir_builder.CreateStore(value, element_address);
   store_inst->setAtomic(llvm::AtomicOrdering::Unordered);
-
-  // TODO: A workaround for card table barrier of array element, not to block the development progress.
-  // Currently, we can't get array type in LLVM pass. Once a clearer design is available, the barrier
-  // insertion operation will be moved to the LLVM pass.
-  if (basic_type == T_OBJECT) {
-    call_java_op("jeandle.post_barrier", {element_address, wide_oop});
-  }
 }
 
 void JeandleAbstractInterpreter::do_array_store(BasicType basic_type) {

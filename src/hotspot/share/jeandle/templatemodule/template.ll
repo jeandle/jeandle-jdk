@@ -124,18 +124,21 @@
 @G1BarrierSetRuntime.write_ref_field_post_entry = external global i64
 
 ; Keep use to lately-used java operations, until it is lowered.
-@llvm.used = appending addrspace(1) global [5 x ptr] [
+@llvm.used = appending addrspace(1) global [7 x ptr] [
   ptr @jeandle.card_table_barrier,
   ptr @jeandle.g1_pre_barrier,
   ptr @jeandle.g1_post_barrier,
   ptr @jeandle.pre_barrier,
-  ptr @jeandle.post_barrier
+  ptr @jeandle.post_barrier,
+  ptr @jeandle.encode_heap_oop,
+  ptr @jeandle.decode_heap_oop
 ], section "llvm.metadata"
 
 declare hotspotcc ptr addrspace(0) @jeandle.decode_klass(i32)
 declare hotspotcc i32 @jeandle.encode_klass(ptr addrspace(0))
 
 declare hotspotcc ptr addrspace(1) @jeandle.decode_heap_oop(ptr addrspace(3))
+declare hotspotcc ptr addrspace(3) @jeandle.encode_heap_oop(ptr addrspace(1))
 
 ; Load klass pointer from oop
 define hotspotcc ptr addrspace(0) @jeandle.load_klass(ptr addrspace(1) nocapture %oop) noinline "lower-phase"="0" #0 {

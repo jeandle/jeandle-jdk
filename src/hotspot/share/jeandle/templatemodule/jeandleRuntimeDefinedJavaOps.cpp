@@ -283,11 +283,7 @@ DEF_JAVA_OP(reference_refers_to, 1, llvm::Type::getInt32Ty(context),
     llvm::Type* narrow_type = llvm::PointerType::get(context, llvm::jeandle::AddrSpace::NarrowOopAddrSpace);
     llvm::LoadInst* narrow_oop = ir_builder.CreateLoad(narrow_type, referent_addr);
     narrow_oop->setAtomic(llvm::AtomicOrdering::Unordered);
-    llvm::Function* decode_func = template_module.getFunction("jeandle.decode_heap_oop");
-    assert(decode_func != nullptr, "jeandle.decode_heap_oop not found");
-    llvm::CallInst* call = ir_builder.CreateCall(decode_func, {narrow_oop});
-    call->setCallingConv(llvm::CallingConv::Hotspot_JIT);
-    referent = call;
+    referent = ir_builder.CreateAddrSpaceCast(narrow_oop, ref_type);
   } else {
     llvm::LoadInst* wide_oop = ir_builder.CreateLoad(ref_type, referent_addr);
     wide_oop->setAtomic(llvm::AtomicOrdering::Unordered);
@@ -325,11 +321,7 @@ DEF_JAVA_OP(reference_get, 1,
     llvm::Type* narrow_type = llvm::PointerType::get(context, llvm::jeandle::AddrSpace::NarrowOopAddrSpace);
     llvm::LoadInst* narrow_oop = ir_builder.CreateLoad(narrow_type, referent_addr);
     narrow_oop->setAtomic(llvm::AtomicOrdering::Unordered);
-    llvm::Function* decode_func = template_module.getFunction("jeandle.decode_heap_oop");
-    assert(decode_func != nullptr, "jeandle.decode_heap_oop not found");
-    llvm::CallInst* call = ir_builder.CreateCall(decode_func, {narrow_oop});
-    call->setCallingConv(llvm::CallingConv::Hotspot_JIT);
-    referent = call;
+    referent = ir_builder.CreateAddrSpaceCast(narrow_oop, ref_type);
   } else {
     llvm::LoadInst* wide_oop = ir_builder.CreateLoad(ref_type, referent_addr);
     wide_oop->setAtomic(llvm::AtomicOrdering::Unordered);
