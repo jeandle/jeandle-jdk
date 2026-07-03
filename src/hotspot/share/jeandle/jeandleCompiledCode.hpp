@@ -23,6 +23,7 @@
 
 #include "jeandle/__llvmHeadersBegin__.hpp"
 #include "llvm/ADT/DenseMap.h"
+#include "llvm/ADT/DenseSet.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ExecutionEngine/JITLink/JITLink.h"
 #include "llvm/IR/Statepoint.h"
@@ -60,13 +61,14 @@ public:
     ScalarValueType = 4,
     OrigPcSlotType = 5,
     MethodType = 6,
-    LastType = MethodType + 1
+    NarrowOopMarkerType = 7,
+    LastType = NarrowOopMarkerType + 1
   };
   DeoptValueEncoding(int index, DeoptValueType value_type, BasicType basic_type):
     _index(index), _value_type(value_type), _basic_type(basic_type) {
     assert(_value_type == LocalType || _value_type == StackType ||
            _value_type == MonitorType || _value_type == OrigPcSlotType ||
-           _value_type == MethodType,
+           _value_type == MethodType || _value_type == NarrowOopMarkerType,
            "Unsupported value type");
   }
 
@@ -97,6 +99,7 @@ public:
       case ScalarValueType: return "ScalarValueType";
       case OrigPcSlotType: return "OrigPcSlotType";
       case MethodType: return "MethodType";
+      case NarrowOopMarkerType: return "NarrowOopMarkerType";
       default: return "Unknown";
     }
   }
@@ -183,20 +186,6 @@ using LinkKind       = llvm::jitlink::Edge::Kind;
 using LinkSymbol     = llvm::jitlink::Symbol;
 using StackMapParser = llvm::StackMapParser<ELFT::Endianness>;
 
-struct JeandleNarrowOopInfo {
-  uint32_t _instruction_offset;
-  uint64_t _id;
-  uint32_t _gc_pair_count;
-  llvm::SmallVector<uint64_t, 1> _narrowoop_mask;
-
-  bool is_narrowoop(uint32_t pair_index) const {
-    assert(pair_index < _gc_pair_count, "narrow oop pair index out of range");
-    uint32_t chunk_index = pair_index / 64;
-    uint32_t bit_index = pair_index % 64;
-    assert(chunk_index < _narrowoop_mask.size(), "missing narrow oop mask word");
-    return ((_narrowoop_mask[chunk_index] >> bit_index) & 1) != 0;
-  }
-};
 
 using DynamicLibrary = llvm::sys::DynamicLibrary;
 
@@ -348,7 +337,6 @@ class JeandleCompiledCode : public StackObj {
   CodeOffsets _offsets;
   JeandleExceptionHandlerTable _exception_handler_table;
   ImplicitExceptionTable _implicit_exception_table;
-  llvm::DenseMap<uint32_t, JeandleNarrowOopInfo> _narrowoop_infos;
   int _frame_size;
   int _prolog_length;
   ciEnv* _env;
@@ -391,7 +379,6 @@ class JeandleCompiledCode : public StackObj {
   void build_exception_handler_table();
   bool pd_build_exception_handler_table();
   void build_implicit_exception_table();
-  void build_narrowoop_maps();
 
   int frame_size_in_slots();
 };
