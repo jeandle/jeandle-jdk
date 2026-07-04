@@ -1416,7 +1416,7 @@ void JeandleAbstractInterpreter::interpret_block(JeandleBasicBlock* block) {
       case Bytecodes::_ifnull: if_null(llvm::CmpInst::ICMP_EQ); break;
       case Bytecodes::_ifnonnull: if_null(llvm::CmpInst::ICMP_NE); break;
 
-      case Bytecodes::_goto_w: Unimplemented(); break;
+      case Bytecodes::_goto_w: goto_bci(_bytecodes.get_far_dest()); break;
       case Bytecodes::_jsr_w: Unimplemented(); break;
 
       // Reserved:
