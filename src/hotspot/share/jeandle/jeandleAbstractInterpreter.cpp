@@ -2617,7 +2617,7 @@ void JeandleAbstractInterpreter::do_get_xxx(ciField* field, bool is_static) {
       if (auto* cast_inst = llvm::dyn_cast<llvm::AddrSpaceCastInst>(metadata_value)) {
         metadata_value = cast_inst->getOperand(0);
       }
-      if (llvm::LoadInst* load_inst = llvm::dyn_cast<llvm::LoadInst>(metadata_value)) {
+      if (llvm::Instruction* load_inst = llvm::dyn_cast<llvm::Instruction>(metadata_value)) {
         llvm::MDNode* klass_md = llvm::MDNode::get(*_context, {
             llvm::ConstantAsMetadata::get(_ir_builder.getInt64((intptr_t)klass_enc))
         });

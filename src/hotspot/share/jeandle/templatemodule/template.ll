@@ -304,12 +304,6 @@ alloc_fast_path:
   %prototype_value = load i64, ptr @markWord.prototype_value
 
   store atomic i64 %prototype_value, ptr addrspace(1) %mark_word_addr unordered, align 8
-  ; (Layout offsets -- oopDesc.klass_offset_in_bytes, arrayOopDesc.length_offset_in_bytes,
-  ; arrayOopDesc.base_offset_in_bytes -- are already CCP-aware because they flow through
-  ; oopDesc::klass_offset_in_bytes() / arrayOopDesc::base_offset_in_bytes() on the C++
-  ; side, so only the store width and the encoding (>> CompressedKlassPointers::shift())
-  ; need updating when CCP support is added. instance and array fast paths must be
-  ; upgraded together.)
 
   %use_compressed_klass = load i1, ptr @UseCompressedClassPointers
   br i1 %use_compressed_klass, label %store_narrow_klass, label %store_wide_klass
@@ -321,7 +315,7 @@ store_narrow_klass:
 
 store_wide_klass:
   store atomic ptr %klass, ptr addrspace(1) %klass_addr unordered, align 8
-    br label %post_klass_store
+  br label %post_klass_store
 
 post_klass_store:
   %zero_tlab = load i1, ptr @VMOptions.ZeroTLAB
@@ -422,15 +416,19 @@ array_fast_path:
   %prototype_value = load i64, ptr @markWord.prototype_value
 
   store atomic i64 %prototype_value, ptr addrspace(1) %mark_word_addr unordered, align 8
-  ; TODO: When UseCompressedClassPointers is enabled, klass should be stored as a 32-bit narrowKlass
-  ; instead of a full pointer. Currently this assumes uncompressed class pointers.
-  ; (Layout offsets -- oopDesc.klass_offset_in_bytes, arrayOopDesc.length_offset_in_bytes,
-  ; arrayOopDesc.base_offset_in_bytes -- are already CCP-aware because they flow through
-  ; oopDesc::klass_offset_in_bytes() / arrayOopDesc::base_offset_in_bytes() on the C++
-  ; side, so only the store width and the encoding (>> CompressedKlassPointers::shift())
-  ; need updating when CCP support is added. instance and array fast paths must be
-  ; upgraded together.)
+  %array_use_compressed_klass = load i1, ptr @UseCompressedClassPointers
+  br i1 %array_use_compressed_klass, label %array_store_narrow_klass, label %array_store_wide_klass
+
+array_store_narrow_klass:
+  %array_narrow_klass = call hotspotcc i32 @jeandle.encode_klass(ptr %array_klass)
+  store atomic i32 %array_narrow_klass, ptr addrspace(1) %klass_addr unordered, align 4
+  br label %array_post_klass_store
+
+array_store_wide_klass:
   store atomic ptr %array_klass, ptr addrspace(1) %klass_addr unordered, align 8
+  br label %array_post_klass_store
+
+array_post_klass_store:
   store atomic i32 %length, ptr addrspace(1) %length_addr unordered, align 4
 
   %zero_tlab = load i1, ptr @VMOptions.ZeroTLAB
