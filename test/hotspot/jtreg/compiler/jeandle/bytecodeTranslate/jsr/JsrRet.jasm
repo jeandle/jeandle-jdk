@@ -1,0 +1,151 @@
+/*
+ * Copyright (c) 2026, the Jeandle-JDK Authors. All Rights Reserved.
+ * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
+ *
+ * This code is free software; you can redistribute it and/or modify it
+ * under the terms of the GNU General Public License version 2 only, as
+ * published by the Free Software Foundation.
+ *
+ * This code is distributed in the hope that it will be useful, but WITHOUT
+ * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
+ * FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General Public License
+ * version 2 for more details (a copy is included in the LICENSE file that
+ * accompanied this code).
+ *
+ * You should have received a copy of the GNU General Public License version
+ * 2 along with this work; if not, write to the Free Software Foundation,
+ * Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301 USA.
+ */
+
+package compiler/jeandle/bytecodeTranslate/jsr;
+
+super public class JsrRet version 49:0 {
+    public static Method simple:"(I)I" stack 2 locals 3 {
+        iload_0;
+        istore_1;
+        jsr Finally;
+        iload_1;
+        ireturn;
+    Finally:
+        astore_2;
+        iinc 1, 10;
+        ret 2;
+    }
+
+    public static Method twoCallSites:"(IZ)I" stack 2 locals 4 {
+        iload_0;
+        istore_2;
+        iload_1;
+        ifeq Else;
+        iinc 2, 1;
+        jsr Finally;
+        iload_2;
+        ireturn;
+    Else:
+        iinc 2, 2;
+        jsr Finally;
+        iload_2;
+        ireturn;
+    Finally:
+        astore_3;
+        iinc 2, 10;
+        ret 3;
+    }
+
+    public static Method nested:"(I)I" stack 2 locals 4 {
+        iload_0;
+        istore_1;
+        jsr Outer;
+        iload_1;
+        ireturn;
+    Outer:
+        astore_2;
+        iinc 1, 10;
+        jsr Inner;
+        ret 2;
+    Inner:
+        astore_3;
+        iinc 1, 100;
+        ret 3;
+    }
+
+    public static Method loopInSubroutine:"(I)I" stack 2 locals 4 {
+        iconst_0;
+        istore_1;
+        jsr Finally;
+        iload_1;
+        ireturn;
+    Finally:
+        astore_3;
+        iconst_0;
+        istore_2;
+    Loop:
+        iload_2;
+        iload_0;
+        if_icmpge Done;
+        iinc 1, 1;
+        iinc 2, 1;
+        goto Loop;
+    Done:
+        ret 3;
+    }
+
+    public static Method loopCallsSubroutine:"(I)I" stack 2 locals 4 {
+        iconst_0;
+        istore_1;
+        iconst_0;
+        istore_2;
+    Loop:
+        iload_2;
+        iload_0;
+        if_icmpge Done;
+        jsr Finally;
+        iinc 2, 1;
+        goto Loop;
+    Done:
+        iload_1;
+        ireturn;
+    Finally:
+        astore_3;
+        iinc 1, 2;
+        ret 3;
+    }
+
+    public static Method wideJsr:"(I)I" stack 2 locals 3 {
+        iload_0;
+        istore_1;
+        jsr_w Finally;
+        iload_1;
+        ireturn;
+    Finally:
+        astore_2;
+        iinc 1, 20;
+        ret 2;
+    }
+
+    public static Method exceptionFinally:"(Z)I" stack 3 locals 4 {
+        iconst_1;
+        istore_1;
+        try t;
+            iload_0;
+            ifeq NoThrow;
+            new class java/lang/RuntimeException;
+            dup;
+            invokespecial Method java/lang/RuntimeException."<init>":"()V";
+            athrow;
+        NoThrow:
+            jsr Finally;
+            iload_1;
+            ireturn;
+        endtry t;
+        catch t java/lang/RuntimeException;
+            astore_2;
+            jsr Finally;
+            bipush -1;
+            ireturn;
+    Finally:
+        astore_3;
+        iinc 1, 10;
+        ret 3;
+    }
+}
