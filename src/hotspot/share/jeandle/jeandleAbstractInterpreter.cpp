@@ -274,6 +274,7 @@ llvm::SmallVector<llvm::Value*> JeandleVMState::deopt_args(llvm::IRBuilder<>& bu
   // Duplicate the BCI as a BCI marker for the LLVM backend.
   // Keep TestScopeValues.java in sync with this duplicated-BCI convention.
   args.push_back(builder.getInt32(bci));
+  args.push_back(builder.getInt32(bci));
   for (size_t i = 0; i < _locals.size(); i++) {
     bool is_double_word = !_locals[i].is_null() &&
                           is_double_word_type(_locals[i].computational_type());
