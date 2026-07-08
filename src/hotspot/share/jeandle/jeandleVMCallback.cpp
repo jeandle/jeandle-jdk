@@ -22,6 +22,9 @@
 #include "llvm/IR/Jeandle/VMCallback.h"
 #include "llvm/IR/Jeandle/VMCallbackLog.h"
 
+#include "jeandle/jeandleAbstractInterpreter.hpp"
+#include "jeandle/jeandleCompilation.hpp"
+#include "jeandle/jeandleUtils.hpp"
 #include "jeandle/jeandleVMCallback.hpp"
 #include "jeandle/jeandleCompilation.hpp"
 
@@ -38,6 +41,7 @@
 #include "oops/instanceKlass.hpp"
 #include "oops/klass.inline.hpp"
 #include "runtime/handles.inline.hpp"
+#include "runtime/javaThread.hpp"
 #include "utilities/globalDefinitions.hpp"
 
 namespace {
@@ -226,6 +230,84 @@ uintptr_t jeandle_get_oop_klass(int oop_id) {
   return (uintptr_t)(Klass*)(klass->constant_encoding());
 }
 
+ciMethod* jeandle_callback_method(uintptr_t method) {
+  assert(method != 0, "callback method pointer must not be null");
+  return (ciMethod*)method;
+}
+
+bool jeandle_is_ok_to_inline(int scope_id, int bci, uintptr_t callee_method) {
+  JeandleCompilation* comp = JeandleCompilation::current();
+  assert(comp != nullptr, "Must be called in compile thread");
+  JeandleInlineTree* caller_tree = comp->inline_tree_for_scope(scope_id);
+  assert(caller_tree != nullptr, "caller inline tree must exist");
+  ciMethod* callee = jeandle_callback_method(callee_method);
+  if (caller_tree->callee_at(bci, callee) != nullptr) {
+    return true;
+  }
+  return caller_tree->ok_to_inline(comp, callee, bci);
+}
+
+bool jeandle_record_inline_success(int scope_id, int bci, uintptr_t callee_method) {
+  JeandleCompilation* comp = JeandleCompilation::current();
+  assert(comp != nullptr, "Must be called in compile thread");
+  ciMethod* callee = jeandle_callback_method(callee_method);
+
+  // LLVM calls this callback only after the inline transformation succeeds.
+  // Keep Jeandle's inline tree in sync at that point so later policy checks
+  // account for the bytecodes that were actually inlined.
+  JeandleInlineTree* callee_tree = comp->build_inline_tree_for_callee(scope_id, bci, callee);
+  // TODO: Allocate the callee inline tree before asking LLVM to inline. Today
+  // this callback is reached after LLVM has already changed IR, so failing to
+  // build the tree here would leave frontend inline metadata out of sync with
+  // backend IR.
+  guarantee(callee_tree != nullptr, "callee inline tree must be recorded after a successful inline");
+  return true;
+}
+
+bool jeandle_get_inline_callee_ir(uintptr_t callee_method) {
+  JeandleCompilation* comp = JeandleCompilation::current();
+  assert(comp != nullptr, "Must be called in compile thread");
+  llvm::Module* M = comp->llvm_module();
+  ciMethod* callee = jeandle_callback_method(callee_method);
+  std::string callee_name = JeandleFuncSig::method_name_with_signature(callee);
+  llvm::Function* callee_func = M->getFunction(callee_name);
+  if (callee_func != nullptr && !callee_func->isDeclaration()) {
+    return true;
+  }
+
+  JeandleParseContext parse_context = JeandleParseContext::inlinee(callee);
+  JeandleAbstractInterpreter interpret(parse_context, -1, *M, *comp->compiled_code(), comp->trap_hist());
+  llvm::Function* resolved_func = M->getFunction(callee_name);
+  assert(resolved_func != nullptr, "callee function not found");
+  if (comp->error_occurred()) {
+    if (!resolved_func->isDeclaration()) {
+      resolved_func->deleteBody();
+    }
+    return false;
+  }
+
+  resolved_func->setLinkage(llvm::GlobalValue::AvailableExternallyLinkage);
+  return true;
+}
+
+int64_t jeandle_get_new_statepoint_id(int64_t old_statepoint_id) {
+  JeandleCompilation* comp = JeandleCompilation::current();
+  assert(comp != nullptr, "Must be called in compile thread");
+  assert(old_statepoint_id >= 0, "old statepoint id must be non-negative");
+
+  return comp->compiled_code()->duplicate_non_routine_call_site(
+      static_cast<uint64_t>(old_statepoint_id));
+}
+
+bool jeandle_record_inlining_complete() {
+  if (JeandleRecordVMCallbacks) {
+    JeandleCompilation* comp = JeandleCompilation::current();
+    assert(comp != nullptr, "Must be called in compile thread");
+    comp->dump_inline_callee_replay_module();
+  }
+  return true;
+}
+
 } // anonymous namespace
 
 void register_jeandle_vm_callbacks() {
@@ -240,6 +322,11 @@ void register_jeandle_vm_callbacks() {
   callbacks.GetConstantFieldInfo = &jeandle_get_constant_field_info;
   callbacks.GetOopHandleName = &jeandle_get_oop_handle_name;
   callbacks.GetOopKlass = &jeandle_get_oop_klass;
+  callbacks.GetInlineCalleeIR = &jeandle_get_inline_callee_ir;
+  callbacks.GetNewStatepointID = &jeandle_get_new_statepoint_id;
+  callbacks.IsOkToInline = &jeandle_is_ok_to_inline;
+  callbacks.RecordInlineSuccess = &jeandle_record_inline_success;
+  callbacks.RecordInliningComplete = &jeandle_record_inlining_complete;
   llvm::jeandle::registerVMCallbacks(callbacks);
 
   if (JeandleRecordVMCallbacks) {

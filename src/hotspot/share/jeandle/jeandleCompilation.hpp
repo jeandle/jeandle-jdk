@@ -22,19 +22,94 @@
 #define SHARE_JEANDLE_COMPILATION_HPP
 
 #include "jeandle/__llvmHeadersBegin__.hpp"
+#include "llvm/ADT/DenseMap.h"
 #include "llvm/IR/Module.h"
 #include "llvm/IR/Function.h"
 #include "llvm/IR/LLVMContext.h"
 #include "llvm/Target/TargetMachine.h"
 
 #include <memory>
+#include <string>
 
 #include "jeandle/jeandleCompiledCode.hpp"
 
 #include "jeandle/__hotspotHeadersBegin__.hpp"
 #include "ci/ciEnv.hpp"
 #include "ci/ciMethod.hpp"
+#include "memory/allocation.hpp"
 #include "memory/arena.hpp"
+#include "utilities/growableArray.hpp"
+
+class ciCallProfile;
+class ciObject;
+class DirectiveSet;
+class JeandleCompilation;
+class outputStream;
+
+class JeandleInlineTree : public AnyObj {
+  JeandleInlineTree* _caller_tree;
+  ciMethod* _method;
+  int _caller_bci;
+  int _inline_depth;
+  int _max_inline_level;
+  uint _count_inline_bcs;
+  GrowableArray<JeandleInlineTree*> _subtrees;
+
+  bool pass_initial_checks(JeandleCompilation* comp,
+                           ciMethod* caller,
+                           int caller_bci,
+                           ciMethod* callee);
+  const char* check_can_parse(ciMethod* callee) const;
+  bool should_inline(JeandleCompilation* comp,
+                     ciMethod* callee,
+                     ciMethod* caller,
+                     int caller_bci,
+                     bool& forced_inline,
+                     ciCallProfile& profile);
+  bool should_not_inline(JeandleCompilation* comp,
+                         ciMethod* callee,
+                         ciMethod* caller,
+                         int caller_bci,
+                         ciCallProfile& profile);
+  bool is_not_reached(ciMethod* callee,
+                      ciMethod* caller,
+                      int caller_bci,
+                      ciCallProfile& profile);
+  void print_impl(outputStream* out,
+                  const std::string& prefix,
+                  bool is_last) const;
+  bool try_to_inline(JeandleCompilation* comp,
+                     ciMethod* callee,
+                     ciMethod* caller,
+                     int caller_bci,
+                     ciCallProfile& profile);
+
+ public:
+  JeandleInlineTree(JeandleInlineTree* caller_tree,
+                    ciMethod* method,
+                    int caller_bci,
+                    int max_inline_level,
+                    Arena* arena);
+
+  JeandleInlineTree* caller_tree() const { return _caller_tree; }
+  ciMethod* method() const { return _method; }
+  int caller_bci() const { return _caller_bci; }
+  int inline_depth() const { return _inline_depth; }
+  int max_inline_level() const { return _max_inline_level; }
+  uint count_inline_bcs() const { return _count_inline_bcs; }
+  const GrowableArray<JeandleInlineTree*>& subtrees() const { return _subtrees; }
+
+  bool ok_to_inline(JeandleCompilation* comp,
+                    ciMethod* callee,
+                    int caller_bci);
+  JeandleInlineTree* callee_at(int caller_bci, ciMethod* callee) const;
+  JeandleInlineTree* build_inline_tree_for_callee(ciMethod* callee,
+                                                  int caller_bci,
+                                                  Arena* arena);
+  int count() const;
+  void print(outputStream* out) const;
+  void dump_replay_data(outputStream* out, int depth_adjust = 0) const;
+};
 
 class JeandleCompilation : public StackObj {
  public:
@@ -45,6 +120,7 @@ class JeandleCompilation : public StackObj {
                      ciMethod* method,
                      int entry_bci,
                      bool install_code,
+                     DirectiveSet* directive,
                      llvm::MemoryBuffer* template_buffer);
 
   // Compile a runtime stub that call a JeandleRuntimeRoutine.
@@ -56,7 +132,7 @@ class JeandleCompilation : public StackObj {
                      address routine_address,
                      llvm::FunctionType* func_type);
 
-  ~JeandleCompilation() = default;
+  ~JeandleCompilation();
 
   static JeandleCompilation* current() { return (JeandleCompilation*) ciEnv::current()->compiler_data(); }
 
@@ -80,13 +156,34 @@ class JeandleCompilation : public StackObj {
     }
   }
 
+  llvm::Module* llvm_module() { return _llvm_module.get(); }
+  llvm::Value* find_or_insert_oop(ciObject* oop);
+
+  ciMethod* method() { return _method; }
+
+  void initialize_inline_tree();
+
+  JeandleInlineTree* inline_tree_root() const { return _inline_tree_root; }
+  JeandleInlineTree* inline_tree_for_scope(int scope_id) const;
+  JeandleInlineTree* build_inline_tree_for_callee(int caller_scope_id,
+                                                  int caller_bci,
+                                                  ciMethod* callee);
+
   JeandleCompiledCode* compiled_code() { return &_code; }
+
+  uint* trap_hist() { return _trap_hist; }
 
   Arena* arena() { return _arena; }
 
   const std::string name() { return _name; }
 
   bool is_osr_compilation() { return _entry_bci != InvocationEntryBci; }
+  bool over_inlining_cutoff() const;
+  void* replay_inline_data() const { return _replay_inline_data; }
+
+  void dump_inline_data(outputStream* out);
+  void dump_inline_data_reduced(outputStream* out);
+  void dump_inline_callee_replay_module();
 
  private:
   Arena* _arena; // Hold compilation life-time objects (JeandleCompilationResourceObj).
@@ -100,6 +197,17 @@ class JeandleCompilation : public StackObj {
   std::unique_ptr<llvm::Module> _llvm_module;
   std::string _comp_start_time;
   uint _trap_hist[MethodData::_trap_hist_limit];
+  void* _replay_inline_data;
+
+  // LLVM uses -1 for the root Java method scope. Non-negative scope ids are
+  // assigned in successful inline order and index this array.
+  GrowableArray<JeandleInlineTree*> _inline_trees;
+  JeandleInlineTree* _inline_tree_root;
+
+  // Record oop constants as module-level globals. This is shared by all
+  // method parsers participating in one compilation, including inlinees.
+  llvm::DenseMap<jobject, llvm::Value*> _oops;
+  int _oop_idx;
 
   JeandleCompiledCode _code; // Compiled code.
 
@@ -108,6 +216,8 @@ class JeandleCompilation : public StackObj {
   bool _has_monitors;
 
   int _const_section_alignment;
+
+  std::string next_oop_name(const char* klass_name);
 
   const char* check_can_parse(ciMethod* method);
 
@@ -120,7 +230,6 @@ class JeandleCompilation : public StackObj {
   void dump_obj();
   void dump_ir(bool optimized);
 };
-
 
 #ifdef ASSERT
 #define JEANDLE_CRASH_ON_ERROR(_error_msg)                            \

@@ -123,7 +123,7 @@ bool JeandleCompiledCode::pd_resolve_reloc(JeandleAssembler& assembler,
         // TODO: Set the right bci.
         CallSiteInfo* call_info = new CallSiteInfo(JeandleCompiledCall::ROUTINE_CALL, target_addr, -1/* bci */);
         if (JeandleRuntimeRoutine::is_gc_leaf(target_addr)) {
-          relocs.push_back(new JeandleCallReloc(inst_end_offset, _env, _method, nullptr /* no oopmap */, call_info));
+          relocs.push_back(new JeandleCallReloc(inst_end_offset, _env, _method, call_info));
         } else {
           // JeandleCallReloc for a non-gc-leaf routine call site will be created during stackmaps resolving because an oopmap is required.
           _routine_call_sites[inst_end_offset] = call_info;
@@ -138,7 +138,7 @@ bool JeandleCompiledCode::pd_resolve_reloc(JeandleAssembler& assembler,
         // TODO: Set the right bci.
         CallSiteInfo* call_info = new CallSiteInfo(JeandleCompiledCall::EXTERNAL_CALL, target_addr, -1/* bci */);
         // LLVM doesn't rewrite intrinsic calls to statepoints, so we don't need oopmaps for external calls.
-        relocs.push_back(new JeandleCallReloc(inst_end_offset, _env, _method, nullptr /* no oopmap */, call_info));
+        relocs.push_back(new JeandleCallReloc(inst_end_offset, _env, _method, call_info));
       } else if (JeandleAssembler::is_section_word_reloc(edge, rel_high_edges)) {
         int64_t rel_offset = 0;
         auto actual_edge = edge;
@@ -165,18 +165,20 @@ bool JeandleCompiledCode::pd_resolve_reloc(JeandleAssembler& assembler,
                    target.getSection().getName().compare(".text") == 0) {
           assert(edge.getKind() == llvm::jitlink::riscv::EdgeKind_riscv::R_RISCV_ADD32, "Unexpected link kind");
           target_addr = _code_buffer.insts()->start() + target.getOffset();
-          address reloc_base = lookup_const_section(block->getSection().getName(), assembler);
+          address reloc_site = resolve_const_reloc_site(*block, edge, assembler);
           RETURN_ON_JEANDLE_ERROR(true);
-          reloc_offset = reloc_base + edge.getOffset() - _code_buffer.consts()->start();
+          reloc_offset = reloc_site - _code_buffer.consts()->start();
           reloc_section = CodeBuffer::SECT_CONSTS;
           relocs.push_back(new JeandleSectionWordReloc(reloc_offset, edge, target_addr, reloc_section, 0));
         } else {
           assert(block->getSection().getName().starts_with(".rodata"), "invalid reloc section");
           assert(target.getSection().getName().starts_with(".rodata"), "invalid target section");
           assert(edge.getKind() == llvm::jitlink::riscv::EdgeKind_riscv::R_RISCV_SUB32, "Unexpected link kind");
-          target_addr = _code_buffer.consts()->start() + target.getOffset();
-          address reloc_base = lookup_const_section(block->getSection().getName(), assembler);
-          reloc_offset = reloc_base + edge.getOffset() - _code_buffer.consts()->start();
+          target_addr = resolve_const_edge(*block, edge, assembler);
+          RETURN_ON_JEANDLE_ERROR(true);
+          address reloc_site = resolve_const_reloc_site(*block, edge, assembler);
+          RETURN_ON_JEANDLE_ERROR(true);
+          reloc_offset = reloc_site - _code_buffer.consts()->start();
           reloc_section = CodeBuffer::SECT_CONSTS;
           relocs.push_back(new JeandleSectionWordReloc(reloc_offset, edge, target_addr, reloc_section, 0));
         }
@@ -206,7 +208,9 @@ bool JeandleCompiledCode::pd_resolve_reloc(JeandleAssembler& assembler,
           rel_offset = edge.getOffset() - high_edge->getOffset();
         }
         auto actual_name = actual_edge.getTarget().getName();
-        relocs.push_back(new JeandleOopAddrReloc(static_cast<int>(block->getAddress().getValue() + edge.getOffset()),
+        address reloc_site = resolve_const_reloc_site(*block, edge, assembler);
+        RETURN_ON_JEANDLE_ERROR(true);
+        relocs.push_back(new JeandleOopAddrReloc(static_cast<int>(reloc_site - _code_buffer.consts()->start()),
                                                  _oop_handles[(*actual_name)],
                                                  rel_offset));
       } else {

@@ -43,7 +43,7 @@ class JeandleFuncSig : public AllStatic {
   static llvm::Function* create_llvm_func(ciMethod* method, llvm::Module& target_module, bool is_osr_entry);
   static std::string method_name(ciMethod* method);
   static std::string method_name_with_signature(ciMethod* method);
-  static void setup_description(llvm::Function* func, bool is_stub = false);
+  static void setup_description(llvm::Function* func, ciMethod* method, bool is_stub = false);
 };
 
 // Check if a klass is an interface type that the bytecode verifier does not enforce.

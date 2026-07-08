@@ -103,6 +103,15 @@ void attach_java_klass_ret_attr(llvm::CallBase* call,
 }
 
 llvm::Function* JeandleFuncSig::create_llvm_func(ciMethod* method, llvm::Module& target_module, bool is_osr_entry) {
+  std::string func_name = method_name_with_signature(method);
+
+  llvm::Function* existing = target_module.getFunction(func_name);
+  if (existing != nullptr) {
+    assert(existing->getFnAttribute(llvm::jeandle::Attribute::JavaMethod).isStringAttribute(),
+           "existing Java method function must carry a ciMethod pointer");
+    return existing;
+  }
+
   llvm::SmallVector<llvm::Type*> args;
   llvm::LLVMContext& context = target_module.getContext();
 
@@ -127,7 +136,7 @@ llvm::Function* JeandleFuncSig::create_llvm_func(ciMethod* method, llvm::Module&
                               false);
   llvm::Function* func = llvm::Function::Create(func_type,
                                                 llvm::Function::ExternalLinkage,
-                                                method_name_with_signature(method),
+                                                func_name,
                                                 target_module);
 
   if (!is_osr_entry) {
@@ -187,7 +196,7 @@ llvm::Function* JeandleFuncSig::create_llvm_func(ciMethod* method, llvm::Module&
     }
   }
 
-  setup_description(func);
+  setup_description(func, method);
 
   return func;
 }

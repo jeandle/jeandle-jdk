@@ -136,7 +136,7 @@ void JeandleCompiler::initialize() {
 
 void JeandleCompiler::compile_method(ciEnv* env, ciMethod* target, int entry_bci, bool install_code, DirectiveSet* directive) {
   ResourceMark rm;
-  JeandleCompilation compilation(target_machine(), data_layout(), env, target, entry_bci, install_code, _template_buffer.get());
+  JeandleCompilation compilation(target_machine(), data_layout(), env, target, entry_bci, install_code, directive, _template_buffer.get());
 }
 
 void JeandleCompiler::print_timers() {

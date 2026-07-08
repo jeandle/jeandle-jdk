@@ -26,13 +26,13 @@
 ; ==============================================================================
 
 ; Get the stack pointer
-define hotspotcc i64 @jeandle.get_stack_pointer() "lower-phase"="0" {
+define hotspotcc i64 @jeandle.get_stack_pointer() "lower-phase"="0" #0 {
     %stack_pointer = call i64 @llvm.read_register.i64(metadata !{!"rsp"})
     ret i64 %stack_pointer
 }
 
 ; Try to release the monitor lock when the lock is inflated
-define hotspotcc i1 @jeandle.try_release_monitor_lock(i64 %mark_word) "lower-phase"="0" {
+define hotspotcc i1 @jeandle.try_release_monitor_lock(i64 %mark_word) "lower-phase"="0" #0 {
 entry:
   %monitor_ptr = inttoptr i64 %mark_word to ptr
   %recursions_offset_no_monitor_value = load i32, ptr @ObjectMonitor.recursions_offset_no_monitor_value
@@ -91,3 +91,5 @@ return_true:
 return_false:
   ret i1 false
 }
+
+attributes #0 = { nounwind "gc-leaf-function" }

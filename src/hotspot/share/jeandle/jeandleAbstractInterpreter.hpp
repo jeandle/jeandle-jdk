@@ -23,13 +23,13 @@
 
 #include "jeandle/__llvmHeadersBegin__.hpp"
 #include "llvm/IR/BasicBlock.h"
-#include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/IR/BasicBlock.h"
 #include "llvm/IR/IRBuilder.h"
 #include "llvm/IR/LLVMContext.h"
 
 #include "jeandle/jeandleCompilation.hpp"
+#include "jeandle/jeandleParseContext.hpp"
 #include "jeandle/jeandleProfile.hpp"
 #include "jeandle/jeandleType.hpp"
 
@@ -149,7 +149,10 @@ class JeandleVMState : public JeandleCompilationResourceObj {
   size_t locks_size() const { return _locks.size(); }
   LockValue lock_at(int index) { return _locks[index]; }
 
-  llvm::SmallVector<llvm::Value*> deopt_args(llvm::IRBuilder<> &builder, int bci, MethodLivenessResult liveness);
+  llvm::SmallVector<llvm::Value*> deopt_args(llvm::IRBuilder<> &builder,
+                                             MethodLivenessResult liveness,
+                                             const JeandleParseContext& parse_context,
+                                             int bci);
 
   int interpreter_frame_size_in_bytes();
  private:
@@ -285,7 +288,7 @@ class BasicBlockBuilder : public JeandleCompilationResourceObj {
 // Convert java bytecodes to llvm ir.
 class JeandleAbstractInterpreter : public StackObj {
  public:
-  JeandleAbstractInterpreter(ciMethod* method,
+  JeandleAbstractInterpreter(const JeandleParseContext& parse_context,
                              int entry_bci,
                              llvm::Module& target_module,
                              JeandleCompiledCode& code,
@@ -294,10 +297,9 @@ class JeandleAbstractInterpreter : public StackObj {
  private:
   friend class JeandleIntrinsicLowering;
 
+  JeandleParseContext _parse_context;
   ciMethod* _method;
-  // Read-only view of the method's MDO. Declared after _method so the
-  // constructor's init list can build it from _method.
-  JeandleProfile _profile;
+  JeandleProfile _profile; // Read-only view of the method's MDO. 
   llvm::Function* _llvm_func;
   int _entry_bci;
   llvm::LLVMContext* _context;
@@ -311,9 +313,6 @@ class JeandleAbstractInterpreter : public StackObj {
   // Debug only: lets uncommon_trap verify that every deopt reason an intrinsic emits
   // is declared in that intrinsic's trap-throttle mask (see kTrapThrottleTable).
   DEBUG_ONLY(vmIntrinsics::ID _lowering_intrinsic_id = vmIntrinsics::_none;)
-
-  // Record oop values.
-  llvm::DenseMap<jobject, llvm::Value*> _oops;
 
   // The JeandleBasicBlock and its JeandleVMState currently being interpreted.
   JeandleBasicBlock* _block;
@@ -334,25 +333,24 @@ class JeandleAbstractInterpreter : public StackObj {
   // Cumulative traps
   uint* _trap_hist;
 
-  // Reuse stack allocation for monitor: each monitor nesting level maps to a
-  // fixed BasicLock slot on the stack. When the same nesting level is entered
-  // again, the existing slot is reused rather than allocating a new one, so
-  // that phi nodes and deopt info can consistently reference the same stack
-  // location for a given monitor depth.
-  llvm::SmallVector<llvm::Value*> _allocated_basic_lock;
+  // Reuse BasicLock stack slots within the current LLVM function: each monitor
+  // nesting level maps to a fixed slot. Inline currently cannot reuse BasicLock
+  // slots across caller/callee functions because the slot is a function-local
+  // alloca. A later LLVM pass should hoist or merge these slots after inlining.
+  llvm::SmallVector<llvm::Value*> _basic_lock_slots;
 
-  bool need_alloc_for(int monitor_nest_level) {
-    return (int)_allocated_basic_lock.size() <= monitor_nest_level;
+  bool needs_new_basic_lock_slot(int monitor_nest_level) {
+    return (int)_basic_lock_slots.size() <= monitor_nest_level;
   };
 
-  void push_allocated_basic_lock(llvm::Value* basic_lock) {
+  void add_basic_lock_slot(llvm::Value* basic_lock) {
     assert(basic_lock != nullptr, "basic_lock should not be nullptr");
-    return _allocated_basic_lock.push_back(basic_lock);
+    return _basic_lock_slots.push_back(basic_lock);
   };
 
-  llvm::Value* allocated_basic_lock_at(int index) {
-    assert(index >= 0 && index < (int)_allocated_basic_lock.size(), "index out of bound");
-    return _allocated_basic_lock[index];
+  llvm::Value* basic_lock_slot_at(int index) {
+    assert(index >= 0 && index < (int)_basic_lock_slots.size(), "index out of bound");
+    return _basic_lock_slots[index];
   };
 
   bool is_osr() { return _entry_bci != InvocationEntryBci; }
@@ -422,10 +420,10 @@ class JeandleAbstractInterpreter : public StackObj {
   llvm::OperandBundleDef create_current_deopt_bundle();
 
   void add_safepoint_poll();
+  void add_return_safepoint_poll();
 
   llvm::SmallVector<JeandleBasicBlock*>& bci2block() { return _block_builder->bci2block(); }
 
-  llvm::Value* find_or_insert_oop(ciObject* oop);
   TypedValue constant_to_value(ciConstant con);
 
   // Implementation of _get* and _put* bytecodes.
@@ -462,8 +460,9 @@ class JeandleAbstractInterpreter : public StackObj {
   } DispatchedDest;
 
   DispatchedDest dispatch_exception_for_invoke(); // Dispatch exceptions raised by invoke.
-  void dispatch_exception_to_handler(llvm::Value* exception_oop); // Generate a series of IR to dispatch an exception to its handler.
-  void throw_exception(llvm::Value* exception_oop);
+  // Generate a series of IR to dispatch an exception to its handler.
+  void dispatch_exception_to_handler(llvm::Value* exception_oop, llvm::LandingPadInst* landingpad = nullptr);
+  void throw_exception(llvm::Value* exception_oop, llvm::LandingPadInst* landingpad = nullptr);
   void uncommon_trap_if_should_post_on_exceptions(Deoptimization::DeoptReason reason);
   bool has_exception_handler();
   void builtin_throw(Deoptimization::DeoptReason reason, llvm::BasicBlock *insert_block);

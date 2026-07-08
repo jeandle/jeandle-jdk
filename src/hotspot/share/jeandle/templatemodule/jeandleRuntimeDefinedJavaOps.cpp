@@ -46,6 +46,23 @@
 #include "runtime/objectMonitor.hpp"
 #include "runtime/safepointMechanism.hpp"
 
+// All JavaOps are nounwind and gc-leaf-function by default. These attributes
+// are a paired Jeandle leaf contract: add them together, or remove them
+// together.
+//
+// The pairing matters for two reasons:
+//   1. Keep JavaOps nounwind whenever possible. Inlining an invoke rewrites
+//      calls inside the inlinee into invokes; if a JavaOp can unwind, every such
+//      invoke carries extra EH control flow that later lowering must remove
+//      explicitly.
+//   2. Any gc-leaf-function must also be nounwind. RS4GC skips gc-leaf calls, so
+//      an invoke to a gc-leaf function would keep its landingpad type unchanged
+//      while other landingpads are rewritten to token, producing mixed
+//      landingpad types in one module.
+//
+// JavaOps have no supported use case for splitting these attributes, so if a
+// JavaOp may trigger GC safepoints or throw asynchronous exceptions, it must
+// remove both attributes.
 //                  name, lower_phase, return_type, arg_types
 #define DEF_JAVA_OP(name, lower_phase, return_type, ...)                                        \
   void define_##name(llvm::Module& template_module) {                                           \
@@ -58,6 +75,8 @@
     func->setLinkage(llvm::Function::PrivateLinkage);                                           \
     func->addFnAttr("lower-phase", #lower_phase);                                               \
     func->addFnAttr(llvm::Attribute::NoInline);                                                 \
+    func->addFnAttr(llvm::Attribute::NoUnwind);                                                 \
+    func->addFnAttr("gc-leaf-function");                                                        \
     func->setCallingConv(llvm::CallingConv::Hotspot_JIT);                                       \
     llvm::BasicBlock* entry_block = llvm::BasicBlock::Create(context, "entry", func);           \
     llvm::IRBuilder<> ir_builder(entry_block);
@@ -86,6 +105,10 @@ DEF_JAVA_OP(current_thread, 0, llvm::PointerType::get(context, llvm::jeandle::Ad
 JAVA_OP_END
 
 DEF_JAVA_OP(safepoint_poll, 1, llvm::Type::getVoidTy(context))
+  // safepoint_poll may trigger GC and throw asynchronous exceptions,
+  // so it must not be nounwind or gc-leaf-function.
+  func->removeFnAttr(llvm::Attribute::NoUnwind);
+  func->removeFnAttr("gc-leaf-function");
   llvm::BasicBlock* return_block = llvm::BasicBlock::Create(context, "return", func);
   llvm::BasicBlock* do_safepoint_block = llvm::BasicBlock::Create(context, "do_safepoint", func);
 
@@ -122,7 +145,11 @@ DEF_JAVA_OP(safepoint_poll, 1, llvm::Type::getVoidTy(context))
   ir_builder.CreateRetVoid();
 JAVA_OP_END
 
-DEF_JAVA_OP(card_table_barrier, 1, llvm::Type::getVoidTy(context), llvm::PointerType::get(context, llvm::jeandle::AddrSpace::JavaHeapAddrSpace))
+// Phase 9 barrier JavaOps are lowered after RS4GC. They materialize raw
+// addresses derived from oops, such as card-table addresses, which RS4GC does
+// not track. Keeping them opaque until phase 9 prevents O3 from reusing those
+// raw derived addresses across safepoints.
+DEF_JAVA_OP(card_table_barrier, 9, llvm::Type::getVoidTy(context), llvm::PointerType::get(context, llvm::jeandle::AddrSpace::JavaHeapAddrSpace))
   llvm::Value* obj_addr = func->getArg(0);
   llvm::Type* intptr_type = ir_builder.getIntPtrTy(template_module.getDataLayout());
   llvm::Value* obj_ptr = ir_builder.CreatePtrToInt(obj_addr, intptr_type);
@@ -164,7 +191,7 @@ DEF_JAVA_OP(card_table_barrier, 1, llvm::Type::getVoidTy(context), llvm::Pointer
   ir_builder.CreateRetVoid();
 JAVA_OP_END
 
-DEF_JAVA_OP(pre_barrier, 1, llvm::Type::getVoidTy(context), llvm::PointerType::get(context, llvm::jeandle::AddrSpace::JavaHeapAddrSpace))
+DEF_JAVA_OP(pre_barrier, 9, llvm::Type::getVoidTy(context), llvm::PointerType::get(context, llvm::jeandle::AddrSpace::JavaHeapAddrSpace))
   // Only serial/G1 GC is supported on jeandle for now
   if (UseG1GC) {
     // TODO: implement ReduceInitialCardMarks
@@ -178,7 +205,7 @@ DEF_JAVA_OP(pre_barrier, 1, llvm::Type::getVoidTy(context), llvm::PointerType::g
   ir_builder.CreateRetVoid();
 JAVA_OP_END
 
-DEF_JAVA_OP(post_barrier, 1, llvm::Type::getVoidTy(context),
+DEF_JAVA_OP(post_barrier, 9, llvm::Type::getVoidTy(context),
             llvm::PointerType::get(context, llvm::jeandle::AddrSpace::JavaHeapAddrSpace),
             llvm::PointerType::get(context, llvm::jeandle::AddrSpace::JavaHeapAddrSpace))
   // Only serial/G1 GC is supported on jeandle for now

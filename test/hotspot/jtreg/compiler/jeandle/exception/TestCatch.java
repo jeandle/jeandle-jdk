@@ -23,7 +23,7 @@
  * @library /test/lib /
  * @run main/othervm -XX:CompileCommand=compileonly,compiler.jeandle.exception.TestCatch::testCatch
  *      -XX:CompileCommand=compileonly,compiler.jeandle.exception.TestCatch::catchException
- *      -Xcomp -XX:-TieredCompilation -XX:+JeandleDumpIR -XX:+UseJeandleCompiler compiler.jeandle.exception.TestCatch
+ *      -Xcomp -XX:-TieredCompilation -XX:+JeandleDumpIR -XX:+UseJeandleCompiler -XX:-Inline compiler.jeandle.exception.TestCatch
  */
 
 package compiler.jeandle.exception;
