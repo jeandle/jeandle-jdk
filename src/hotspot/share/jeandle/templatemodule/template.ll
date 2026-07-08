@@ -498,7 +498,7 @@ array_return:
 ; addresses derived from oops, such as card-table addresses, which RS4GC does
 ; not track. Keeping them opaque until phase 9 prevents O3 from reusing those
 ; raw derived addresses across safepoints.
-declare hotspotcc void @jeandle.card_table_barrier(ptr addrspace(1) %addr) noinline "lower-phase"="9";
+declare hotspotcc void @jeandle.card_table_barrier(ptr addrspace(1) %addr)
 
 define private hotspotcc void @jeandle.g1_satb_enqueue(ptr addrspace(1) %pre_val) "lower-phase"="1" #0 {
 entry:
@@ -653,10 +653,10 @@ store_in_buffer:
 }
 
 ; Declaration of Java pre barrier.
-declare hotspotcc void @jeandle.pre_barrier(ptr addrspace(1) %addr) noinline "lower-phase"="9";
+declare hotspotcc void @jeandle.pre_barrier(ptr addrspace(1) %addr)
 
 ; Declaration of Java post barrier.
-declare hotspotcc void @jeandle.post_barrier(ptr addrspace(1) %addr, ptr addrspace(1) nocapture %oop) noinline "lower-phase"="9";
+declare hotspotcc void @jeandle.post_barrier(ptr addrspace(1) %addr, ptr addrspace(1) nocapture %oop)
 
 ; Implementation of Java checkcast operation
 define hotspotcc i1 @jeandle.checkcast(ptr addrspace(0) nocapture %super_klass, ptr addrspace(1) nocapture %oop) noinline "lower-phase"="0" #0 {

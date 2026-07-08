@@ -461,14 +461,10 @@ bool RuntimeDefinedJavaOps::define_all(llvm::Module& template_module) {
   define_get_class(template_module);
   define_reference_refers_to(template_module);
   define_reference_get(template_module);
-  if (UseCompressedOops) {
-    define_encode_heap_oop(template_module);
-    define_decode_heap_oop(template_module);
-  }
-  if (UseCompressedClassPointers) {
-    define_encode_klass(template_module);
-    define_decode_klass(template_module);
-  }
+  define_encode_heap_oop(template_module);
+  define_decode_heap_oop(template_module);
+  define_encode_klass(template_module);
+  define_decode_klass(template_module);
 
   return failed();
 }
