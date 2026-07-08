@@ -65,34 +65,28 @@ public class TestHashCode {
 
         output.shouldHaveExitValue(0);
 
-        // Expecting count = 1: hashOf is intrinsified on first compilation when
-        // only Object is loaded. Later, when Overridden is loaded and hashOf(ov)
-        // triggers the vtable guard, the deopt may cause recompilation — but CHA
-        // then sees the override, so the intrinsic candidate is no longer set
-        // and no additional intrinsic-log line is emitted.
+        // hashOf is intrinsified on first compilation. The vtable guard's slow
+        // path is now a Java call (matching C2), not uncommon_trap — so no CHA
+        // deopt/recompile cycle. Exactly 1 intrinsic-log entry expected.
         Matcher m = Pattern.compile(Pattern.quote(INTRINSIC_LOG_LINE)).matcher(output.getOutput());
         int intrinsicCount = 0;
         while (m.find()) intrinsicCount++;
         Asserts.assertEQ(intrinsicCount, 1,
             "Expected exactly 1 intrinsic-log entry for hashOf, got " + intrinsicCount);
 
-        // Verify the intrinsified IR (first compilation, before CHA deopt) contains
-        // the vtable guard + fast/slow/merge structure. fileIndex=0 picks the first
-        // compilation; the second (post-deopt) has no intrinsic and is skipped.
+        // Verify the IR contains: vtable guard + fast path + Java-call slow path + merge.
         FileCheck fc = new FileCheck(dumpPath,
                 TestWrapper.class.getDeclaredMethod("hashOf", Object.class),
                 false,  // raw IR (.ll), not optimized
-                0);     // first compilation — has the intrinsic
+                0);     // first compilation
         // Vtable guard: load receiver's vtable slot, compare to Object.hashCode's Method*.
-        // Patterns are ordered to match IR line order (FileCheck walks forward only).
         fc.checkPattern("hashCode.methods_match");
-        fc.checkPattern("hashCode_guard_fail");
         // Fast path block + jeandle.hashcode_fast JavaOp call.
         fc.checkPattern("hashCode_fast");
         fc.checkPattern("call hotspotcc i32 @jeandle\\.hashcode_fast");
-        // Slow path block + hashcode_slow runtime routine call.
-        fc.checkPattern("hashCode_slow");
-        fc.checkPattern("@hashcode_slow");
+        // Slow path block — a Java call to Object.hashCode, NOT uncommon_trap.
+        fc.checkPattern("hashCode_slow_call");
+        fc.checkPattern("@\"java_lang_Object_hashCode\\(\\)I\"");
         // Merge block + result PHI.
         fc.checkPattern("hashCode_merge");
         fc.checkPattern("hashCode.result");
@@ -146,8 +140,9 @@ public class TestHashCode {
                 }
             }
 
-            // === Scenario 4: overridden + vtable guard fails (must run last: CHA deopt) ===
-            // Overridden trips the guard → uncommon_trap → interpreter returns 42.
+            // === Scenario 4: overridden + vtable guard fails ===
+            // Overridden trips the guard → slow path Java call dispatches to
+            // Overridden.hashCode() → returns 42.
             Overridden ov = new Overridden();
             int overrideResult = hashOf(ov);
             if (overrideResult != 42) {

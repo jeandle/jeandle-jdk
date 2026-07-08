@@ -391,6 +391,14 @@ class JeandleAbstractInterpreter : public StackObj {
   void table_switch();
   void invoke();
   bool try_lower_intrinsic(const ciMethod* target);
+
+  // Emit a Java call with pre-built argument values. Does NOT touch the JVM
+  // stack — the caller manages stack discipline.
+  llvm::InvokeInst* emit_java_call(ciMethod* target,
+                                   const ciSignature* method_signature,
+                                   llvm::ArrayRef<llvm::Value*> args,
+                                   bool is_method_handle_invoke,
+                                   Bytecodes::Code bc);
   void stack_op(Bytecodes::Code code);
   void shift_op(BasicType type, Bytecodes::Code code);
   void checkcast();

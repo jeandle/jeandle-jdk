@@ -361,17 +361,3 @@ JRT_ENTRY(jint, JeandleRuntimeRoutine::instanceof_unloaded_or_null(Method* metho
   }
   return 0;
 JRT_END
-
-// Slow path for hashCode/identityHashCode intrinsics.
-JRT_ENTRY(jint, JeandleRuntimeRoutine::hashcode_slow(oopDesc* obj, JavaThread* current))
-  if (obj == nullptr) {
-    return 0;
-  }
-
-  // FastHashCode may safepoint while installing the hash; the Handle keeps
-  // the oop valid across GC.
-  Handle h_obj(current, obj);
-  intptr_t hash = ObjectSynchronizer::FastHashCode(current, h_obj());
-
-  return (jint)hash;
-JRT_END

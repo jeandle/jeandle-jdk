@@ -139,12 +139,6 @@
       llvm::Type::getInt32Ty(context),                                              \
       llvm::PointerType::get(context, llvm::jeandle::AddrSpace::CHeapAddrSpace),    \
       llvm::PointerType::get(context, llvm::jeandle::AddrSpace::CHeapAddrSpace))    \
-                                                                                    \
-  def(hashcode_slow,                                                               \
-      JeandleRuntimeRoutine::hashcode_slow,                                         \
-      llvm::Type::getInt32Ty(context),                                              \
-      llvm::PointerType::get(context, llvm::jeandle::AddrSpace::JavaHeapAddrSpace), \
-      llvm::PointerType::get(context, llvm::jeandle::AddrSpace::CHeapAddrSpace))    \
 
 // Define a direct Jeandle runtime routine.
 // def( name            ,
@@ -409,10 +403,6 @@ class JeandleRuntimeRoutine : public AllStatic {
   static void multianewarrayN(Klass* elem_type, arrayOopDesc* dims, JavaThread* current);
 
   static jint instanceof_unloaded_or_null(Method* method, int cp_index, Klass* ex_klass, JavaThread* current);
-
-  // Slow path for hashCode/identityHashCode intrinsics: reads or installs the
-  // identity hash via ObjectSynchronizer::FastHashCode. null returns 0.
-  static jint hashcode_slow(oopDesc* obj, JavaThread* current);
 
   // Assembly routine implementations:
 

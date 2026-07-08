@@ -75,20 +75,19 @@ public class TestIdentityHashCode {
             + intrinsicCount);
 
         // Verify the fast path is generated as a call to jeandle.hashcode_fast
-        // (the JavaOp defined in jeandleRuntimeDefinedJavaOps.cpp), with the slow path
-        // falling back to jeandle.hashcode_slow runtime. Patterns walk the file
-        // in order; the JavaOp body itself is checked via its inlined form in the
-        // optimized IR.
+        // (the JavaOp defined in jeandleRuntimeDefinedJavaOps.cpp), with the slow
+        // path falling back to a static Java call to System.identityHashCode
+        // (matching C2's design). Patterns walk the file in order.
         FileCheck fc = new FileCheck(dumpPath,
                 TestWrapper.class.getDeclaredMethod("hashOf", Object.class), false);
-        // Null check + fast-path dispatch.
-        fc.checkPattern("identityHashCode_fast_call");
+        // Null check branches to merge (returns 0) or fast-path block.
+        fc.checkPattern("identityHashCode_not_null");
         fc.checkPattern("call hotspotcc i32 @jeandle\\.hashcode_fast");
-        // Slow-path runtime call.
-        fc.checkPattern("identityHashCode_slow");
-        fc.checkPattern("@hashcode_slow");
+        // Slow-path Java call (static dispatch to System.identityHashCode).
+        fc.checkPattern("hashCode_slow_call");
+        fc.checkPattern("@\"java_lang_System_identityHashCode\\(Ljava/lang/Object;\\)I\"");
         // Merge PHI for null (0) / fast result / slow result.
-        fc.checkPattern("identityHashCode_merge");
+        fc.checkPattern("hashCode_merge");
     }
 
     static class TestWrapper {
@@ -111,12 +110,12 @@ public class TestIdentityHashCode {
             System.out.println("TestIdentityHashCode PASSED");
         }
 
-        // Compiled by Jeandle — exercises lower_identity_hash_code() on non-null path.
+        // Compiled by Jeandle — exercises lower_hash_code(identityHashCode) on non-null path.
         static int hashOf(Object o) {
             return System.identityHashCode(o);
         }
 
-        // Compiled by Jeandle — exercises the null path (returns 0 inline).
+        // Compiled by Jeandle — exercises the null path of lower_hash_code (returns 0 inline).
         static int hashOfNull() {
             return System.identityHashCode(null);
         }
