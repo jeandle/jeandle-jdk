@@ -185,8 +185,6 @@ using LinkEdge       = llvm::jitlink::Edge;
 using LinkKind       = llvm::jitlink::Edge::Kind;
 using LinkSymbol     = llvm::jitlink::Symbol;
 using StackMapParser = llvm::StackMapParser<ELFT::Endianness>;
-
-
 using DynamicLibrary = llvm::sys::DynamicLibrary;
 
 struct OopHandleInfo {

@@ -552,7 +552,7 @@ compressed:
   br i1 %narrow_is_null, label %done, label %decode_narrow
 
 decode_narrow:
-  %pre_val_c = call hotspotcc ptr addrspace(1) @jeandle.decode_heap_oop(ptr addrspace(3) %narrow_val)
+  %pre_val_c = addrspacecast ptr addrspace(3) %narrow_val to ptr addrspace(1)
   br label %enqueue
   
 uncompressed:
