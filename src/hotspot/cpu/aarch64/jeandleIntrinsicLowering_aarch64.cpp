@@ -10,7 +10,7 @@
  * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
  * FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General Public License
  * version 2 for more details (a copy is included in the LICENSE file that
- * accompanied this code.
+ * accompanied this code).
  *
  * You should have received a copy of the GNU General Public License version
  * 2 along with this work; if not, write to the Free Software Foundation,
@@ -52,6 +52,13 @@ bool JeandleIntrinsicLowering::cpu_supports_spin_wait() {
   return VM_Version::spin_wait_desc().inst() == SpinWait::YIELD;
 }
 
+bool JeandleIntrinsicLowering::cpu_supports_cache_writeback() {
+  // On AArch64, supports_data_cache_line_flush() returns true only when:
+  // 1. OS supports map_sync (for persistent memory)
+  // 2. CPU supports DCPOP (ARMv8.2-A extension)
+  return VM_Version::supports_data_cache_line_flush();
+}
+
 // =============================================================================
 // Arch-specific intrinsic lowering (AArch64)
 // =============================================================================
@@ -67,5 +74,44 @@ bool JeandleIntrinsicLowering::lower_spin_wait_hint() {
   builder.CreateIntrinsic(
       llvm::Intrinsic::aarch64_hint, {}, {builder.getInt32(1)});
   // void return: nothing to push on the JVM operand stack
+  return true;
+}
+
+bool JeandleIntrinsicLowering::lower_writeback0() {
+  llvm::IRBuilder<>& builder = _interp->_ir_builder;
+  llvm::LLVMContext& ctx = builder.getContext();
+
+  // Pop address (long) and receiver (Unsafe) from the JVM stack.
+  llvm::Value* address = _interp->_jvm->lpop();
+  _interp->_jvm->apop(); // Unsafe receiver — unused
+
+  // Cast long address to pointer, matching C2's CastX2PNode.
+  llvm::PointerType* ptr_ty = llvm::PointerType::get(ctx, 0);
+  llvm::Value* addr_ptr = builder.CreateIntToPtr(address, ptr_ty);
+
+  // AArch64: DC CVAP — clean data cache by VA to point of persistence.
+  // else: no DCPOP — Unsafe.writebackMemory() should never reach here.
+  if (VM_Version::supports_dcpop()) {
+    llvm::InlineAsm* dc_cvap = llvm::InlineAsm::get(
+        llvm::FunctionType::get(llvm::Type::getVoidTy(ctx), {ptr_ty}, false),
+        "dc cvap, $0",  // assembly string
+        "r",             // constraint: input in general-purpose register
+        /*hasSideEffects=*/true);
+    builder.CreateCall(dc_cvap, {addr_ptr});
+  }
+
+  return true;
+}
+
+bool JeandleIntrinsicLowering::lower_writeback_sync(vmIntrinsics::ID id) {
+  llvm::IRBuilder<>& builder = _interp->_ir_builder;
+  _interp->_jvm->apop(); // Unsafe receiver — unused
+
+  // Pre-sync is a no-op.
+  // Post-sync emits DMB ISH (data memory barrier, inner-shareable),
+  if (id == vmIntrinsics::_writebackPostSync0) {
+    builder.CreateIntrinsic(
+        llvm::Intrinsic::aarch64_dmb, {}, {builder.getInt32(0xb)});
+  }
   return true;
 }

@@ -93,6 +93,11 @@ bool JeandleIntrinsicLowering::is_supported(vmIntrinsics::ID id) {
     case vmIntrinsics::_onSpinWait:
       return cpu_supports_spin_wait();
 
+    case vmIntrinsics::_writeback0:
+    case vmIntrinsics::_writebackPreSync0:
+    case vmIntrinsics::_writebackPostSync0:
+      return cpu_supports_cache_writeback();
+
     default: break;
   }
 
@@ -306,6 +311,15 @@ bool JeandleIntrinsicLowering::lower(vmIntrinsics::ID id, const ciMethod* target
     // onSpinWait
     case vmIntrinsics::_onSpinWait:
       return lower_spin_wait_hint();
+
+    // writeback0
+    case vmIntrinsics::_writeback0:
+      return lower_writeback0();
+
+    // writebackPreSync0 / writebackPostSync0
+    case vmIntrinsics::_writebackPreSync0:
+    case vmIntrinsics::_writebackPostSync0:
+      return lower_writeback_sync(id);
 
     // Preconditions
     case vmIntrinsics::_Preconditions_checkIndex:
