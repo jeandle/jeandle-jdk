@@ -58,6 +58,11 @@ bool JeandleIntrinsicLowering::supports_vectorized_mismatch_medium_path() {
   return false;
 }
 
+bool JeandleIntrinsicLowering::cpu_supports_cache_writeback() {
+  // TODO: emit CMO.CLEAN via inline ASM when the Zicbom extension is available.
+  return false;
+}
+
 // =============================================================================
 // Arch-specific intrinsic lowering (RISC-V)
 // =============================================================================
@@ -71,4 +76,16 @@ bool JeandleIntrinsicLowering::lower_spin_wait_hint() {
       llvm::Intrinsic::riscv_pause, llvm::ArrayRef<llvm::Type*>{}, {});
   // void return: nothing to push on the JVM operand stack
   return true;
+}
+
+bool JeandleIntrinsicLowering::lower_writeback0() {
+  ShouldNotReachHere();
+  return false;
+}
+
+bool JeandleIntrinsicLowering::lower_writeback_sync(vmIntrinsics::ID id) {
+  // TODO: emit FENCE via a RISC-V fence intrinsic when cache writeback
+  // is supported on RISC-V (Zicbom extension).
+  ShouldNotReachHere();
+  return false;
 }
