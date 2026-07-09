@@ -180,6 +180,12 @@ class JeandleIntrinsicLowering : public StackObj {
   bool lower_compare_unsigned(vmIntrinsics::ID id);
   bool lower_new_array();
 
+  // Unsafe primitive get/put (no GC barrier): inline load/store with a
+  // heap (JavaHeap) vs native (CHeap) path chosen by the base pointer.
+  bool lower_unsafe_get_put(vmIntrinsics::ID id);
+  bool emit_unsafe_access(bool is_store, BasicType mem_type,
+                          llvm::AtomicOrdering order, bool unaligned);
+
   };
 
 #endif // SHARE_JEANDLE_INTRINSIC_LOWERING_HPP
