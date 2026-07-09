@@ -385,7 +385,6 @@ void JeandleCompiledCode::resolve_reloc_info(JeandleAssembler& assembler) {
       } else {
         call_info = _routine_call_sites[inst_end_offset];
       }
-
       if (call_info) {
         auto location = record->location_begin();
         int num_deopts = parse_stackmap_prologue(record, location);

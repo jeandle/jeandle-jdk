@@ -2874,7 +2874,6 @@ void JeandleAbstractInterpreter::do_array_load(BasicType basic_type) {
 
 llvm::Value* JeandleAbstractInterpreter::do_array_store_inner(BasicType basic_type, llvm::Type* store_type, llvm::Value* value) {
   llvm::Value* element_address = compute_array_element_address(basic_type, store_type);
-
   llvm::StoreInst* store_inst = _ir_builder.CreateStore(value, element_address);
   store_inst->setAtomic(llvm::AtomicOrdering::Unordered);
   return element_address;
@@ -3322,7 +3321,9 @@ void JeandleAbstractInterpreter::builtin_throw(Deoptimization::DeoptReason reaso
 
       BasicType oop_field_type = UseCompressedOops ? T_NARROWOOP : T_OBJECT;
       llvm::Value* null_oop = llvm::ConstantPointerNull::get(llvm::cast<llvm::PointerType>(JeandleType::java2llvm(oop_field_type, *_context)));
-      store_to_address(exception_oop_field_addr, null_oop, oop_field_type, false /* is_volatile */);
+      llvm::StoreInst* store_inst = _ir_builder.CreateStore(null_oop, exception_oop_field_addr, true /* is_volatile */);
+
+      store_inst->setAtomic(llvm::AtomicOrdering::Unordered);
       dispatch_exception_to_handler(value);
 
       if (insert_block != nullptr) {
