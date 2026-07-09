@@ -150,6 +150,13 @@ bool JeandleIntrinsicLowering::is_supported(vmIntrinsics::ID id) {
     case vmIntrinsics::_numberOfLeadingZeros_l:
     case vmIntrinsics::_numberOfTrailingZeros_i:
     case vmIntrinsics::_numberOfTrailingZeros_l:
+
+    // reverseBytes: full-width variants are direct bswap; narrow variants need
+    // explicit zero/sign-extension semantics.
+    case vmIntrinsics::_reverseBytes_i:
+    case vmIntrinsics::_reverseBytes_l:
+    case vmIntrinsics::_reverseBytes_s:
+    case vmIntrinsics::_reverseBytes_c:
       return true;
     default:
       return false;
@@ -216,6 +223,16 @@ bool JeandleIntrinsicLowering::lower(vmIntrinsics::ID id, const ciMethod* target
     case vmIntrinsics::_numberOfTrailingZeros_i:
     case vmIntrinsics::_numberOfTrailingZeros_l:
       return lower_count_zeros(id, llvm::Intrinsic::cttz);
+
+    // Keep full-width variants as direct IR instead of relying on fallback
+    // invoke inlining to recover llvm.bswap.
+    case vmIntrinsics::_reverseBytes_i:
+    case vmIntrinsics::_reverseBytes_l:
+      return emit_llvm_builtin(llvm::Intrinsic::bswap);
+    // char/short need a narrow swap plus zero/sign extension (see handler).
+    case vmIntrinsics::_reverseBytes_c:
+    case vmIntrinsics::_reverseBytes_s:
+      return lower_reverse_bytes_narrow(id);
 
     // Dual-path libm (JeandleUseHotspotIntrinsics selects the path)
     // TODO/FIXME: LLVM's `llvm.sin`, `llvm.cos`, etc. do **not** guarantee
@@ -623,6 +640,33 @@ bool JeandleIntrinsicLowering::lower_count_zeros(vmIntrinsics::ID id,
   } else {
     _interp->_jvm->ipush(call);
   }
+  return true;
+}
+
+// ---- lower_reverse_bytes_narrow ----
+// Character.reverseBytes(char) / Short.reverseBytes(short). The value sits on
+// the operand stack as a computational int, but only the low 16 bits are
+// meaningful. Prefer target-specific C2-like IR when it can preserve those
+// semantics; otherwise use the portable i16 swap plus zero/sign extension.
+bool JeandleIntrinsicLowering::lower_reverse_bytes_narrow(vmIntrinsics::ID id) {
+  if (lower_reverse_bytes_narrow_arch(id)) {
+    return true;
+  }
+  return lower_reverse_bytes_narrow_portable(id);
+}
+
+// ---- lower_reverse_bytes_narrow_portable ----
+bool JeandleIntrinsicLowering::lower_reverse_bytes_narrow_portable(vmIntrinsics::ID id) {
+  llvm::IRBuilder<>& builder = _interp->_ir_builder;
+  bool is_char = (id == vmIntrinsics::_reverseBytes_c);
+
+  llvm::Value* arg = _interp->_jvm->ipop();
+  llvm::Value* narrow = builder.CreateTrunc(arg, builder.getInt16Ty());
+  llvm::Value* swapped =
+      builder.CreateIntrinsic(builder.getInt16Ty(), llvm::Intrinsic::bswap, {narrow});
+  llvm::Value* result = is_char ? builder.CreateZExt(swapped, builder.getInt32Ty())
+                                : builder.CreateSExt(swapped, builder.getInt32Ty());
+  _interp->_jvm->ipush(result);
   return true;
 }
 

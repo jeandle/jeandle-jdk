@@ -57,6 +57,11 @@ bool JeandleIntrinsicLowering::cpu_supports_spin_wait() {
 // Arch-specific intrinsic lowering (RISC-V)
 // =============================================================================
 
+bool JeandleIntrinsicLowering::lower_reverse_bytes_narrow_arch(vmIntrinsics::ID id) {
+  (void)id;
+  return false;
+}
+
 bool JeandleIntrinsicLowering::lower_spin_wait_hint() {
   // RISC-V: PAUSE instruction (FENCE w,r) via llvm.riscv.pause (Zihintpause).
   // cpu_supports_spin_wait() already verified UseZihintpause before
