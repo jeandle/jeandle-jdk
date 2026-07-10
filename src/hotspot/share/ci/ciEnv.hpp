@@ -423,6 +423,7 @@ public:
   ciInstance* unloaded_ciinstance();
 
   ciInstanceKlass* get_box_klass_for_primitive_type(BasicType type);
+  ciInstanceKlass* get_instance_klass_for_klass(Klass* klass);
 
   ciKlass*  find_system_klass(ciSymbol* klass_name);
 
