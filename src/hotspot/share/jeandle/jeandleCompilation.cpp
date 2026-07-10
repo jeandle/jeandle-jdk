@@ -176,6 +176,7 @@ JeandleCompilation::JeandleCompilation(llvm::TargetMachine* target_machine,
                                        _code(env, method),
                                        _error_msg(nullptr),
                                        _has_monitors(false),
+                                       _has_unsafe_access(false),
                                        _const_section_alignment(-1) {
 
   const char* reason = check_can_parse(method);
@@ -241,6 +242,7 @@ JeandleCompilation::JeandleCompilation(llvm::TargetMachine* target_machine,
                                        _code(_env, name),
                                        _error_msg(nullptr),
                                        _has_monitors(false),
+                                       _has_unsafe_access(false),
                                        _const_section_alignment(-1) {
   initialize();
 
@@ -1027,7 +1029,7 @@ void JeandleCompilation::install_code() {
                         _code.exception_handler_table(),
                         _code.implicit_exception_table(),
                         CompilerThread::current()->compiler(),
-                        false, // temporary value
+                        _has_unsafe_access,
                         false, // temporary value
                         _has_monitors,
                         0); // temporary value

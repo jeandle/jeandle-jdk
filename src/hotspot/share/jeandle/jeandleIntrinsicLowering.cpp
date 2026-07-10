@@ -134,6 +134,81 @@ bool JeandleIntrinsicLowering::is_supported(vmIntrinsics::ID id) {
     case vmIntrinsics::_storeFence:
     case vmIntrinsics::_fullFence:
 
+    // Unsafe primitive get/put — no GC barrier, inline load/store.
+    // Plain (Relaxed): all 8 primitive types.
+    case vmIntrinsics::_getBoolean:
+    case vmIntrinsics::_getByte:
+    case vmIntrinsics::_getChar:
+    case vmIntrinsics::_getShort:
+    case vmIntrinsics::_getInt:
+    case vmIntrinsics::_getLong:
+    case vmIntrinsics::_getFloat:
+    case vmIntrinsics::_getDouble:
+    case vmIntrinsics::_putBoolean:
+    case vmIntrinsics::_putByte:
+    case vmIntrinsics::_putChar:
+    case vmIntrinsics::_putShort:
+    case vmIntrinsics::_putInt:
+    case vmIntrinsics::_putLong:
+    case vmIntrinsics::_putFloat:
+    case vmIntrinsics::_putDouble:
+    // Volatile: Long/Double and Reference variants are deferred.
+    case vmIntrinsics::_getBooleanVolatile:
+    case vmIntrinsics::_getByteVolatile:
+    case vmIntrinsics::_getCharVolatile:
+    case vmIntrinsics::_getShortVolatile:
+    case vmIntrinsics::_getIntVolatile:
+    case vmIntrinsics::_getFloatVolatile:
+    case vmIntrinsics::_putBooleanVolatile:
+    case vmIntrinsics::_putByteVolatile:
+    case vmIntrinsics::_putCharVolatile:
+    case vmIntrinsics::_putShortVolatile:
+    case vmIntrinsics::_putIntVolatile:
+    case vmIntrinsics::_putFloatVolatile:
+    // Opaque: all 8 primitive types.
+    case vmIntrinsics::_getBooleanOpaque:
+    case vmIntrinsics::_getByteOpaque:
+    case vmIntrinsics::_getCharOpaque:
+    case vmIntrinsics::_getShortOpaque:
+    case vmIntrinsics::_getIntOpaque:
+    case vmIntrinsics::_getLongOpaque:
+    case vmIntrinsics::_getFloatOpaque:
+    case vmIntrinsics::_getDoubleOpaque:
+    case vmIntrinsics::_putBooleanOpaque:
+    case vmIntrinsics::_putByteOpaque:
+    case vmIntrinsics::_putCharOpaque:
+    case vmIntrinsics::_putShortOpaque:
+    case vmIntrinsics::_putIntOpaque:
+    case vmIntrinsics::_putLongOpaque:
+    case vmIntrinsics::_putFloatOpaque:
+    case vmIntrinsics::_putDoubleOpaque:
+    // Acquire get / Release put: all 8 primitive types.
+    case vmIntrinsics::_getBooleanAcquire:
+    case vmIntrinsics::_getByteAcquire:
+    case vmIntrinsics::_getCharAcquire:
+    case vmIntrinsics::_getShortAcquire:
+    case vmIntrinsics::_getIntAcquire:
+    case vmIntrinsics::_getLongAcquire:
+    case vmIntrinsics::_getFloatAcquire:
+    case vmIntrinsics::_getDoubleAcquire:
+    case vmIntrinsics::_putBooleanRelease:
+    case vmIntrinsics::_putByteRelease:
+    case vmIntrinsics::_putCharRelease:
+    case vmIntrinsics::_putShortRelease:
+    case vmIntrinsics::_putIntRelease:
+    case vmIntrinsics::_putLongRelease:
+    case vmIntrinsics::_putFloatRelease:
+    case vmIntrinsics::_putDoubleRelease:
+    // Unaligned (Relaxed, align 1): short/char/int/long.
+    case vmIntrinsics::_getShortUnaligned:
+    case vmIntrinsics::_getCharUnaligned:
+    case vmIntrinsics::_getIntUnaligned:
+    case vmIntrinsics::_getLongUnaligned:
+    case vmIntrinsics::_putShortUnaligned:
+    case vmIntrinsics::_putCharUnaligned:
+    case vmIntrinsics::_putIntUnaligned:
+    case vmIntrinsics::_putLongUnaligned:
+
     // Preconditions
     case vmIntrinsics::_Preconditions_checkIndex:
     case vmIntrinsics::_Preconditions_checkLongIndex:
@@ -302,6 +377,77 @@ bool JeandleIntrinsicLowering::lower(vmIntrinsics::ID id, const ciMethod* target
     case vmIntrinsics::_storeFence:
     case vmIntrinsics::_fullFence:
       return lower_llvm_fence(id);
+
+    // Unsafe primitive get/put — all routed to the shared lowering helper.
+    case vmIntrinsics::_getBoolean:
+    case vmIntrinsics::_getByte:
+    case vmIntrinsics::_getChar:
+    case vmIntrinsics::_getShort:
+    case vmIntrinsics::_getInt:
+    case vmIntrinsics::_getLong:
+    case vmIntrinsics::_getFloat:
+    case vmIntrinsics::_getDouble:
+    case vmIntrinsics::_putBoolean:
+    case vmIntrinsics::_putByte:
+    case vmIntrinsics::_putChar:
+    case vmIntrinsics::_putShort:
+    case vmIntrinsics::_putInt:
+    case vmIntrinsics::_putLong:
+    case vmIntrinsics::_putFloat:
+    case vmIntrinsics::_putDouble:
+    case vmIntrinsics::_getBooleanVolatile:
+    case vmIntrinsics::_getByteVolatile:
+    case vmIntrinsics::_getCharVolatile:
+    case vmIntrinsics::_getShortVolatile:
+    case vmIntrinsics::_getIntVolatile:
+    case vmIntrinsics::_getFloatVolatile:
+    case vmIntrinsics::_putBooleanVolatile:
+    case vmIntrinsics::_putByteVolatile:
+    case vmIntrinsics::_putCharVolatile:
+    case vmIntrinsics::_putShortVolatile:
+    case vmIntrinsics::_putIntVolatile:
+    case vmIntrinsics::_putFloatVolatile:
+    case vmIntrinsics::_getBooleanOpaque:
+    case vmIntrinsics::_getByteOpaque:
+    case vmIntrinsics::_getCharOpaque:
+    case vmIntrinsics::_getShortOpaque:
+    case vmIntrinsics::_getIntOpaque:
+    case vmIntrinsics::_getLongOpaque:
+    case vmIntrinsics::_getFloatOpaque:
+    case vmIntrinsics::_getDoubleOpaque:
+    case vmIntrinsics::_putBooleanOpaque:
+    case vmIntrinsics::_putByteOpaque:
+    case vmIntrinsics::_putCharOpaque:
+    case vmIntrinsics::_putShortOpaque:
+    case vmIntrinsics::_putIntOpaque:
+    case vmIntrinsics::_putLongOpaque:
+    case vmIntrinsics::_putFloatOpaque:
+    case vmIntrinsics::_putDoubleOpaque:
+    case vmIntrinsics::_getBooleanAcquire:
+    case vmIntrinsics::_getByteAcquire:
+    case vmIntrinsics::_getCharAcquire:
+    case vmIntrinsics::_getShortAcquire:
+    case vmIntrinsics::_getIntAcquire:
+    case vmIntrinsics::_getLongAcquire:
+    case vmIntrinsics::_getFloatAcquire:
+    case vmIntrinsics::_getDoubleAcquire:
+    case vmIntrinsics::_putBooleanRelease:
+    case vmIntrinsics::_putByteRelease:
+    case vmIntrinsics::_putCharRelease:
+    case vmIntrinsics::_putShortRelease:
+    case vmIntrinsics::_putIntRelease:
+    case vmIntrinsics::_putLongRelease:
+    case vmIntrinsics::_putFloatRelease:
+    case vmIntrinsics::_putDoubleRelease:
+    case vmIntrinsics::_getShortUnaligned:
+    case vmIntrinsics::_getCharUnaligned:
+    case vmIntrinsics::_getIntUnaligned:
+    case vmIntrinsics::_getLongUnaligned:
+    case vmIntrinsics::_putShortUnaligned:
+    case vmIntrinsics::_putCharUnaligned:
+    case vmIntrinsics::_putIntUnaligned:
+    case vmIntrinsics::_putLongUnaligned:
+      return lower_unsafe_get_put(id);
 
     // onSpinWait
     case vmIntrinsics::_onSpinWait:
@@ -752,5 +898,259 @@ bool JeandleIntrinsicLowering::lower_new_array() {
   result->addIncoming(slow_call, slow_normal_bb);
 
   _interp->_jvm->apush(result);
+  return true;
+}
+
+// =============================================================================
+// Unsafe primitive get/put (no GC barrier)
+//
+// Mirrors C2's inline_unsafe_access for primitive types: a plain load/store with
+// an LLVM atomic ordering derived from C2's mo_decorator_for_access_kind. Primitives
+// never touch oops, so (like C2, where access.is_oop() is false) there is no read or
+// write barrier and no GC-state call site -- the base oop is tracked by RS4GC exactly
+// as a getfield base is.
+//
+// Address space: base != null is an on-heap field (JavaHeap, RS4GC-tracked); base
+// == null is an absolute native address (CHeap, e.g. allocateMemory/NIO). These are
+// distinct LLVM pointer types. A literal-null base (aconst_null) lowers to native
+// only, matching C2's IN_NATIVE; a non-constant base branches at runtime since
+// Jeandle lacks C2's type lattice to resolve heap-vs-native statically.
+// =============================================================================
+
+namespace {
+// Natural byte size / alignment of a primitive BasicType.
+unsigned unsafe_basic_type_size(BasicType bt) {
+  switch (bt) {
+    case T_BOOLEAN: case T_BYTE:  return 1;
+    case T_CHAR:   case T_SHORT:  return 2;
+    case T_INT:    case T_FLOAT:  return 4;
+    case T_LONG:   case T_DOUBLE: return 8;
+    default: ShouldNotReachHere(); return 0;
+  }
+}
+
+// The in-memory LLVM type (narrower than the computational type for sub-int kinds).
+llvm::Type* unsafe_basic_type_mem_llvm(BasicType bt, llvm::LLVMContext& ctx) {
+  switch (bt) {
+    case T_BOOLEAN: case T_BYTE:  return llvm::Type::getInt8Ty(ctx);
+    case T_CHAR:   case T_SHORT:  return llvm::Type::getInt16Ty(ctx);
+    case T_INT:                    return llvm::Type::getInt32Ty(ctx);
+    case T_LONG:                   return llvm::Type::getInt64Ty(ctx);
+    case T_FLOAT:                  return llvm::Type::getFloatTy(ctx);
+    case T_DOUBLE:                 return llvm::Type::getDoubleTy(ctx);
+    default: ShouldNotReachHere(); return nullptr;
+  }
+}
+} // namespace
+
+// Map each Unsafe primitive get/put intrinsic to (store?, mem_type, ordering, unaligned).
+// Ordering mirrors C2: Relaxed -> Unordered, Volatile -> SeqCst, Opaque -> Monotonic,
+// Acquire -> Acquire (loads), Release -> Release (stores).
+bool JeandleIntrinsicLowering::lower_unsafe_get_put(vmIntrinsics::ID id) {
+  using AO = llvm::AtomicOrdering;
+  switch (id) {
+    // Plain (Relaxed) -- all 8 primitive types.
+    case vmIntrinsics::_getBoolean: return emit_unsafe_access(false, T_BOOLEAN, AO::Unordered, false);
+    case vmIntrinsics::_getByte:    return emit_unsafe_access(false, T_BYTE,    AO::Unordered, false);
+    case vmIntrinsics::_getChar:    return emit_unsafe_access(false, T_CHAR,    AO::Unordered, false);
+    case vmIntrinsics::_getShort:   return emit_unsafe_access(false, T_SHORT,   AO::Unordered, false);
+    case vmIntrinsics::_getInt:     return emit_unsafe_access(false, T_INT,     AO::Unordered, false);
+    case vmIntrinsics::_getLong:    return emit_unsafe_access(false, T_LONG,    AO::Unordered, false);
+    case vmIntrinsics::_getFloat:   return emit_unsafe_access(false, T_FLOAT,   AO::Unordered, false);
+    case vmIntrinsics::_getDouble:  return emit_unsafe_access(false, T_DOUBLE,  AO::Unordered, false);
+    case vmIntrinsics::_putBoolean: return emit_unsafe_access(true,  T_BOOLEAN, AO::Unordered, false);
+    case vmIntrinsics::_putByte:    return emit_unsafe_access(true,  T_BYTE,    AO::Unordered, false);
+    case vmIntrinsics::_putChar:    return emit_unsafe_access(true,  T_CHAR,    AO::Unordered, false);
+    case vmIntrinsics::_putShort:   return emit_unsafe_access(true,  T_SHORT,   AO::Unordered, false);
+    case vmIntrinsics::_putInt:     return emit_unsafe_access(true,  T_INT,     AO::Unordered, false);
+    case vmIntrinsics::_putLong:    return emit_unsafe_access(true,  T_LONG,    AO::Unordered, false);
+    case vmIntrinsics::_putFloat:   return emit_unsafe_access(true,  T_FLOAT,   AO::Unordered, false);
+    case vmIntrinsics::_putDouble:  return emit_unsafe_access(true,  T_DOUBLE,  AO::Unordered, false);
+    // Volatile -- excludes Long/Double (deferred).
+    case vmIntrinsics::_getBooleanVolatile: return emit_unsafe_access(false, T_BOOLEAN, AO::SequentiallyConsistent, false);
+    case vmIntrinsics::_getByteVolatile:    return emit_unsafe_access(false, T_BYTE,    AO::SequentiallyConsistent, false);
+    case vmIntrinsics::_getCharVolatile:    return emit_unsafe_access(false, T_CHAR,    AO::SequentiallyConsistent, false);
+    case vmIntrinsics::_getShortVolatile:   return emit_unsafe_access(false, T_SHORT,   AO::SequentiallyConsistent, false);
+    case vmIntrinsics::_getIntVolatile:     return emit_unsafe_access(false, T_INT,     AO::SequentiallyConsistent, false);
+    case vmIntrinsics::_getFloatVolatile:   return emit_unsafe_access(false, T_FLOAT,   AO::SequentiallyConsistent, false);
+    case vmIntrinsics::_putBooleanVolatile: return emit_unsafe_access(true,  T_BOOLEAN, AO::SequentiallyConsistent, false);
+    case vmIntrinsics::_putByteVolatile:    return emit_unsafe_access(true,  T_BYTE,    AO::SequentiallyConsistent, false);
+    case vmIntrinsics::_putCharVolatile:    return emit_unsafe_access(true,  T_CHAR,    AO::SequentiallyConsistent, false);
+    case vmIntrinsics::_putShortVolatile:   return emit_unsafe_access(true,  T_SHORT,   AO::SequentiallyConsistent, false);
+    case vmIntrinsics::_putIntVolatile:     return emit_unsafe_access(true,  T_INT,     AO::SequentiallyConsistent, false);
+    case vmIntrinsics::_putFloatVolatile:   return emit_unsafe_access(true,  T_FLOAT,   AO::SequentiallyConsistent, false);
+    // Opaque -- all 8 primitive types.
+    case vmIntrinsics::_getBooleanOpaque: return emit_unsafe_access(false, T_BOOLEAN, AO::Monotonic, false);
+    case vmIntrinsics::_getByteOpaque:    return emit_unsafe_access(false, T_BYTE,    AO::Monotonic, false);
+    case vmIntrinsics::_getCharOpaque:    return emit_unsafe_access(false, T_CHAR,    AO::Monotonic, false);
+    case vmIntrinsics::_getShortOpaque:   return emit_unsafe_access(false, T_SHORT,   AO::Monotonic, false);
+    case vmIntrinsics::_getIntOpaque:     return emit_unsafe_access(false, T_INT,     AO::Monotonic, false);
+    case vmIntrinsics::_getLongOpaque:    return emit_unsafe_access(false, T_LONG,    AO::Monotonic, false);
+    case vmIntrinsics::_getFloatOpaque:   return emit_unsafe_access(false, T_FLOAT,   AO::Monotonic, false);
+    case vmIntrinsics::_getDoubleOpaque:  return emit_unsafe_access(false, T_DOUBLE,  AO::Monotonic, false);
+    case vmIntrinsics::_putBooleanOpaque: return emit_unsafe_access(true,  T_BOOLEAN, AO::Monotonic, false);
+    case vmIntrinsics::_putByteOpaque:    return emit_unsafe_access(true,  T_BYTE,    AO::Monotonic, false);
+    case vmIntrinsics::_putCharOpaque:    return emit_unsafe_access(true,  T_CHAR,    AO::Monotonic, false);
+    case vmIntrinsics::_putShortOpaque:   return emit_unsafe_access(true,  T_SHORT,   AO::Monotonic, false);
+    case vmIntrinsics::_putIntOpaque:     return emit_unsafe_access(true,  T_INT,     AO::Monotonic, false);
+    case vmIntrinsics::_putLongOpaque:    return emit_unsafe_access(true,  T_LONG,    AO::Monotonic, false);
+    case vmIntrinsics::_putFloatOpaque:   return emit_unsafe_access(true,  T_FLOAT,   AO::Monotonic, false);
+    case vmIntrinsics::_putDoubleOpaque:  return emit_unsafe_access(true,  T_DOUBLE,  AO::Monotonic, false);
+    // Acquire get / Release put -- all 8 primitive types.
+    case vmIntrinsics::_getBooleanAcquire: return emit_unsafe_access(false, T_BOOLEAN, AO::Acquire, false);
+    case vmIntrinsics::_getByteAcquire:    return emit_unsafe_access(false, T_BYTE,    AO::Acquire, false);
+    case vmIntrinsics::_getCharAcquire:    return emit_unsafe_access(false, T_CHAR,    AO::Acquire, false);
+    case vmIntrinsics::_getShortAcquire:   return emit_unsafe_access(false, T_SHORT,   AO::Acquire, false);
+    case vmIntrinsics::_getIntAcquire:     return emit_unsafe_access(false, T_INT,     AO::Acquire, false);
+    case vmIntrinsics::_getLongAcquire:    return emit_unsafe_access(false, T_LONG,    AO::Acquire, false);
+    case vmIntrinsics::_getFloatAcquire:   return emit_unsafe_access(false, T_FLOAT,   AO::Acquire, false);
+    case vmIntrinsics::_getDoubleAcquire:  return emit_unsafe_access(false, T_DOUBLE,  AO::Acquire, false);
+    case vmIntrinsics::_putBooleanRelease: return emit_unsafe_access(true,  T_BOOLEAN, AO::Release, false);
+    case vmIntrinsics::_putByteRelease:    return emit_unsafe_access(true,  T_BYTE,    AO::Release, false);
+    case vmIntrinsics::_putCharRelease:    return emit_unsafe_access(true,  T_CHAR,    AO::Release, false);
+    case vmIntrinsics::_putShortRelease:   return emit_unsafe_access(true,  T_SHORT,   AO::Release, false);
+    case vmIntrinsics::_putIntRelease:     return emit_unsafe_access(true,  T_INT,     AO::Release, false);
+    case vmIntrinsics::_putLongRelease:    return emit_unsafe_access(true,  T_LONG,    AO::Release, false);
+    case vmIntrinsics::_putFloatRelease:   return emit_unsafe_access(true,  T_FLOAT,   AO::Release, false);
+    case vmIntrinsics::_putDoubleRelease:  return emit_unsafe_access(true,  T_DOUBLE,  AO::Release, false);
+    // Unaligned (Relaxed, align 1) -- short/char/int/long. Non-atomic: an atomic
+    // load/store with align < natural lowers to an __atomic libcall (unresolvable
+    // external symbol); a plain misaligned load matches C2's generated code.
+    case vmIntrinsics::_getShortUnaligned: return emit_unsafe_access(false, T_SHORT, AO::NotAtomic, true);
+    case vmIntrinsics::_getCharUnaligned:  return emit_unsafe_access(false, T_CHAR,  AO::NotAtomic, true);
+    case vmIntrinsics::_getIntUnaligned:   return emit_unsafe_access(false, T_INT,   AO::NotAtomic, true);
+    case vmIntrinsics::_getLongUnaligned:  return emit_unsafe_access(false, T_LONG,  AO::NotAtomic, true);
+    case vmIntrinsics::_putShortUnaligned: return emit_unsafe_access(true,  T_SHORT, AO::NotAtomic, true);
+    case vmIntrinsics::_putCharUnaligned:  return emit_unsafe_access(true,  T_CHAR,  AO::NotAtomic, true);
+    case vmIntrinsics::_putIntUnaligned:   return emit_unsafe_access(true,  T_INT,   AO::NotAtomic, true);
+    case vmIntrinsics::_putLongUnaligned:  return emit_unsafe_access(true,  T_LONG,  AO::NotAtomic, true);
+    default:
+      ShouldNotReachHere();
+      return false;
+  }
+}
+
+// Emit the load/store for an Unsafe primitive access, choosing the address space
+// from the base pointer. value/offset/base are popped LIFO from the JVM stack.
+bool JeandleIntrinsicLowering::emit_unsafe_access(bool is_store, BasicType mem_type,
+                                                   llvm::AtomicOrdering order, bool unaligned) {
+  // Mark the compiled method as doing unsafe memory access so the JVM signal
+  // handler converts a faulting access (e.g. SIGBUS on a truncated mmap) into an
+  // InternalError instead of crashing. Matches C2's set_has_unsafe_access(true).
+  JeandleCompilation::current()->set_has_unsafe_access(true);
+
+  llvm::LLVMContext& ctx = *_interp->_context;
+  llvm::IRBuilder<>& builder = _interp->_ir_builder;
+
+  // JVM stack (top -> bottom):
+  //   store: [value, offset, base, Unsafe receiver]
+  //   load:  [offset, base, Unsafe receiver]
+  llvm::Value* value = nullptr;
+  if (is_store) {
+    value = _interp->_jvm->pop(mem_type);
+  }
+  llvm::Value* offset = _interp->_jvm->lpop();  // i64 byte offset
+  llvm::Value* base   = _interp->_jvm->apop();  // ptr addrspace(1), or null
+  _interp->_jvm->apop();                        // Unsafe receiver (singleton, never null)
+
+  const unsigned align = unaligned ? 1 : unsafe_basic_type_size(mem_type);
+  llvm::Type* comp_ty = JeandleType::java2llvm(mem_type, ctx);  // computational type
+  llvm::Type* mem_ty  = unsafe_basic_type_mem_llvm(mem_type, ctx);
+  llvm::Type* i8_ty   = llvm::Type::getInt8Ty(ctx);
+  llvm::PointerType* heap_ptr_ty =
+      llvm::PointerType::get(ctx, llvm::jeandle::AddrSpace::JavaHeapAddrSpace);
+  llvm::PointerType* native_ptr_ty =
+      llvm::PointerType::get(ctx, llvm::jeandle::AddrSpace::CHeapAddrSpace);
+
+  // Load mem_ty from addr and widen to the computational type (mirrors load_from_address).
+  auto emit_load = [&](llvm::Value* addr) -> llvm::Value* {
+    llvm::LoadInst* ld = builder.CreateLoad(mem_ty, addr);
+    // NotAtomic (unaligned access) is left as a plain misaligned load; an atomic
+    // load with align < natural would lower to an __atomic libcall that Jeandle's
+    // external-symbol resolver cannot handle.
+    if (order != llvm::AtomicOrdering::NotAtomic) {
+      ld->setAtomic(order);
+    }
+    ld->setAlignment(llvm::Align(align));
+    switch (mem_type) {
+      case T_BOOLEAN: case T_CHAR:  return builder.CreateZExt(ld, comp_ty);
+      case T_BYTE:    case T_SHORT: return builder.CreateSExt(ld, comp_ty);
+      default:                       return ld;
+    }
+  };
+  // Narrow value (computational type) to mem_ty and store (mirrors store_to_address).
+  auto emit_store = [&](llvm::Value* addr) {
+    llvm::Value* v = value;
+    switch (mem_type) {
+      case T_BOOLEAN:
+        v = builder.CreateAnd(builder.CreateTrunc(v, mem_ty), builder.getInt8(1));
+        break;
+      case T_BYTE: case T_CHAR: case T_SHORT:
+        v = builder.CreateTrunc(v, mem_ty);
+        break;
+      default:
+        break;
+    }
+    llvm::StoreInst* st = builder.CreateStore(v, addr);
+    if (order != llvm::AtomicOrdering::NotAtomic) {
+      st->setAtomic(order);
+    }
+    st->setAlignment(llvm::Align(align));
+  };
+
+  const bool base_is_null = llvm::isa<llvm::ConstantPointerNull>(base);
+
+  if (is_store) {
+    if (base_is_null) {
+      emit_store(builder.CreateIntToPtr(offset, native_ptr_ty));
+      return true;
+    }
+    llvm::BasicBlock* heap_bb   = llvm::BasicBlock::Create(ctx, "unsafe_store_heap",   _interp->_llvm_func);
+    llvm::BasicBlock* native_bb = llvm::BasicBlock::Create(ctx, "unsafe_store_native", _interp->_llvm_func);
+    llvm::BasicBlock* cont_bb   = llvm::BasicBlock::Create(ctx, "unsafe_store_cont",   _interp->_llvm_func);
+    builder.CreateCondBr(builder.CreateICmpEQ(base, llvm::ConstantPointerNull::get(heap_ptr_ty)),
+                         native_bb, heap_bb);
+
+    builder.SetInsertPoint(heap_bb);
+    emit_store(builder.CreateInBoundsGEP(i8_ty, base, offset));
+    builder.CreateBr(cont_bb);
+
+    builder.SetInsertPoint(native_bb);
+    emit_store(builder.CreateIntToPtr(offset, native_ptr_ty));
+    builder.CreateBr(cont_bb);
+
+    builder.SetInsertPoint(cont_bb);
+    _interp->_block->set_tail_llvm_block(cont_bb);
+    return true;
+  }
+
+  // Load: PHI-merge the two paths.
+  if (base_is_null) {
+    _interp->_jvm->push(mem_type, emit_load(builder.CreateIntToPtr(offset, native_ptr_ty)));
+    return true;
+  }
+
+  llvm::BasicBlock* heap_bb   = llvm::BasicBlock::Create(ctx, "unsafe_load_heap",   _interp->_llvm_func);
+  llvm::BasicBlock* native_bb = llvm::BasicBlock::Create(ctx, "unsafe_load_native", _interp->_llvm_func);
+  llvm::BasicBlock* cont_bb   = llvm::BasicBlock::Create(ctx, "unsafe_load_cont",   _interp->_llvm_func);
+  builder.CreateCondBr(builder.CreateICmpEQ(base, llvm::ConstantPointerNull::get(heap_ptr_ty)),
+                       native_bb, heap_bb);
+
+  builder.SetInsertPoint(heap_bb);
+  llvm::Value* heap_val = emit_load(builder.CreateInBoundsGEP(i8_ty, base, offset));
+  builder.CreateBr(cont_bb);
+  llvm::BasicBlock* heap_pred = builder.GetInsertBlock();
+
+  builder.SetInsertPoint(native_bb);
+  llvm::Value* native_val = emit_load(builder.CreateIntToPtr(offset, native_ptr_ty));
+  builder.CreateBr(cont_bb);
+  llvm::BasicBlock* native_pred = builder.GetInsertBlock();
+
+  builder.SetInsertPoint(cont_bb);
+  _interp->_block->set_tail_llvm_block(cont_bb);
+  llvm::PHINode* phi = builder.CreatePHI(comp_ty, 2, "unsafe_get");
+  phi->addIncoming(heap_val, heap_pred);
+  phi->addIncoming(native_val, native_pred);
+  _interp->_jvm->push(mem_type, phi);
   return true;
 }
