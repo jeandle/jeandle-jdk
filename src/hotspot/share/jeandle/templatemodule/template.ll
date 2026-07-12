@@ -35,6 +35,9 @@
 ; System word size
 @WordSize = external global i64
 
+@UseCompressedClassPointers = external global i1
+@UseCompressedOops = external global i1
+
 ; Byte offsets of Array<Klass*> structure fields.
 @KlassArray.base_offset_in_bytes = external global i32
 @KlassArray.length_offset_in_bytes = external global i32
@@ -121,20 +124,38 @@
 @G1BarrierSetRuntime.write_ref_field_post_entry = external global i64
 
 ; Keep use to lately-used java operations, until it is lowered.
-@llvm.used = appending addrspace(1) global [5 x ptr] [
+@llvm.used = appending addrspace(1) global [7 x ptr] [
   ptr @jeandle.card_table_barrier,
   ptr @jeandle.g1_pre_barrier,
   ptr @jeandle.g1_post_barrier,
   ptr @jeandle.pre_barrier,
-  ptr @jeandle.post_barrier
+  ptr @jeandle.post_barrier,
+  ptr @jeandle.encode_heap_oop,
+  ptr @jeandle.decode_heap_oop
 ], section "llvm.metadata"
+
+declare hotspotcc ptr addrspace(0) @jeandle.decode_klass(i32)
+declare hotspotcc i32 @jeandle.encode_klass(ptr addrspace(0))
+
+declare hotspotcc ptr addrspace(1) @jeandle.decode_heap_oop(ptr addrspace(3))
+declare hotspotcc ptr addrspace(3) @jeandle.encode_heap_oop(ptr addrspace(1))
 
 ; Load klass pointer from oop
 define hotspotcc ptr addrspace(0) @jeandle.load_klass(ptr addrspace(1) nocapture %oop) noinline "lower-phase"="0" #0 {
   %klass_offset = load i32, ptr @oopDesc.klass_offset_in_bytes
   %klass_addr = getelementptr inbounds i8, ptr addrspace(1) %oop, i32 %klass_offset
-  %klass = load atomic ptr addrspace(0), ptr addrspace(1) %klass_addr unordered, align 8
-  ret ptr addrspace(0) %klass
+
+  %use_compressed = load i1, ptr @UseCompressedClassPointers
+  br i1 %use_compressed, label %compressed, label %uncompressed
+
+compressed:
+  %narrow = load atomic i32, ptr addrspace(1) %klass_addr unordered, align 4
+  %decoded = call hotspotcc ptr addrspace(0) @jeandle.decode_klass(i32 %narrow)
+  ret ptr addrspace(0) %decoded
+
+uncompressed:
+  %wide = load atomic ptr addrspace(0), ptr addrspace(1) %klass_addr unordered, align 8
+  ret ptr addrspace(0) %wide
 }
 
 ; This is the slow path for subtype checking when the fast path fails.
@@ -283,16 +304,20 @@ alloc_fast_path:
   %prototype_value = load i64, ptr @markWord.prototype_value
 
   store atomic i64 %prototype_value, ptr addrspace(1) %mark_word_addr unordered, align 8
-  ; TODO: When UseCompressedClassPointers is enabled, klass should be stored as a 32-bit narrowKlass
-  ; instead of a full pointer. Currently this assumes uncompressed class pointers.
-  ; (Layout offsets -- oopDesc.klass_offset_in_bytes, arrayOopDesc.length_offset_in_bytes,
-  ; arrayOopDesc.base_offset_in_bytes -- are already CCP-aware because they flow through
-  ; oopDesc::klass_offset_in_bytes() / arrayOopDesc::base_offset_in_bytes() on the C++
-  ; side, so only the store width and the encoding (>> CompressedKlassPointers::shift())
-  ; need updating when CCP support is added. instance and array fast paths must be
-  ; upgraded together.)
-  store atomic ptr %klass, ptr addrspace(1) %klass_addr unordered, align 8
 
+  %use_compressed_klass = load i1, ptr @UseCompressedClassPointers
+  br i1 %use_compressed_klass, label %store_narrow_klass, label %store_wide_klass
+
+store_narrow_klass:
+  %narrow_klass = call hotspotcc i32 @jeandle.encode_klass(ptr %klass)
+  store atomic i32 %narrow_klass, ptr addrspace(1) %klass_addr unordered, align 4
+  br label %post_klass_store
+
+store_wide_klass:
+  store atomic ptr %klass, ptr addrspace(1) %klass_addr unordered, align 8
+  br label %post_klass_store
+
+post_klass_store:
   %zero_tlab = load i1, ptr @VMOptions.ZeroTLAB
   %skip_clear = and i1 %use_tlab, %zero_tlab
   br i1 %skip_clear, label %initialization_membar, label %clear_memory
@@ -391,15 +416,19 @@ array_fast_path:
   %prototype_value = load i64, ptr @markWord.prototype_value
 
   store atomic i64 %prototype_value, ptr addrspace(1) %mark_word_addr unordered, align 8
-  ; TODO: When UseCompressedClassPointers is enabled, klass should be stored as a 32-bit narrowKlass
-  ; instead of a full pointer. Currently this assumes uncompressed class pointers.
-  ; (Layout offsets -- oopDesc.klass_offset_in_bytes, arrayOopDesc.length_offset_in_bytes,
-  ; arrayOopDesc.base_offset_in_bytes -- are already CCP-aware because they flow through
-  ; oopDesc::klass_offset_in_bytes() / arrayOopDesc::base_offset_in_bytes() on the C++
-  ; side, so only the store width and the encoding (>> CompressedKlassPointers::shift())
-  ; need updating when CCP support is added. instance and array fast paths must be
-  ; upgraded together.)
+  %array_use_compressed_klass = load i1, ptr @UseCompressedClassPointers
+  br i1 %array_use_compressed_klass, label %array_store_narrow_klass, label %array_store_wide_klass
+
+array_store_narrow_klass:
+  %array_narrow_klass = call hotspotcc i32 @jeandle.encode_klass(ptr %array_klass)
+  store atomic i32 %array_narrow_klass, ptr addrspace(1) %klass_addr unordered, align 4
+  br label %array_post_klass_store
+
+array_store_wide_klass:
   store atomic ptr %array_klass, ptr addrspace(1) %klass_addr unordered, align 8
+  br label %array_post_klass_store
+
+array_post_klass_store:
   store atomic i32 %length, ptr addrspace(1) %length_addr unordered, align 4
 
   %zero_tlab = load i1, ptr @VMOptions.ZeroTLAB
@@ -469,7 +498,7 @@ array_return:
 ; addresses derived from oops, such as card-table addresses, which RS4GC does
 ; not track. Keeping them opaque until phase 9 prevents O3 from reusing those
 ; raw derived addresses across safepoints.
-declare hotspotcc void @jeandle.card_table_barrier(ptr addrspace(1) %addr) noinline "lower-phase"="9";
+declare hotspotcc void @jeandle.card_table_barrier(ptr addrspace(1) %addr)
 
 define private hotspotcc void @jeandle.g1_satb_enqueue(ptr addrspace(1) %pre_val) "lower-phase"="1" #0 {
 entry:
@@ -508,17 +537,31 @@ entry:
   %marking_adr = inttoptr i32 %marking_offset to ptr addrspace(2)
   %marking = load i8, ptr addrspace(2) %marking_adr
   %is_not_marking = icmp eq i8 %marking, 0
-  br i1 %is_not_marking, label %done, label %check_null
+  br i1 %is_not_marking, label %done, label %load_pre_value
 
 done:
   ret void
 
-check_null:
-  %pre_val = load atomic ptr addrspace(1), ptr addrspace(1) %addr unordered, align 8
-  %is_null = icmp eq ptr addrspace(1) %pre_val, null
-  br i1 %is_null, label %done, label %enqueue
+load_pre_value:
+  %use_compressed = load i1, ptr @UseCompressedOops
+  br i1 %use_compressed, label %compressed, label %uncompressed
+
+compressed:
+  %narrow_val = load atomic ptr addrspace(3), ptr addrspace(1) %addr unordered, align 4
+  %narrow_is_null = icmp eq ptr addrspace(3) %narrow_val, null
+  br i1 %narrow_is_null, label %done, label %decode_narrow
+
+decode_narrow:
+  %pre_val_c = addrspacecast ptr addrspace(3) %narrow_val to ptr addrspace(1)
+  br label %enqueue
+  
+uncompressed:
+  %pre_val_u = load atomic ptr addrspace(1), ptr addrspace(1) %addr unordered, align 8
+  %wide_is_null = icmp eq ptr addrspace(1) %pre_val_u, null
+  br i1 %wide_is_null, label %done, label %enqueue
 
 enqueue:
+  %pre_val = phi ptr addrspace(1) [ %pre_val_c, %decode_narrow ], [ %pre_val_u, %uncompressed ]
   call hotspotcc void @jeandle.g1_satb_enqueue(ptr addrspace(1) %pre_val)
   ret void
 }
@@ -610,10 +653,10 @@ store_in_buffer:
 }
 
 ; Declaration of Java pre barrier.
-declare hotspotcc void @jeandle.pre_barrier(ptr addrspace(1) %addr) noinline "lower-phase"="9";
+declare hotspotcc void @jeandle.pre_barrier(ptr addrspace(1) %addr)
 
 ; Declaration of Java post barrier.
-declare hotspotcc void @jeandle.post_barrier(ptr addrspace(1) %addr, ptr addrspace(1) nocapture %oop) noinline "lower-phase"="9";
+declare hotspotcc void @jeandle.post_barrier(ptr addrspace(1) %addr, ptr addrspace(1) nocapture %oop)
 
 ; Implementation of Java checkcast operation
 define hotspotcc i1 @jeandle.checkcast(ptr addrspace(0) nocapture %super_klass, ptr addrspace(1) nocapture %oop) noinline "lower-phase"="0" #0 {

@@ -94,7 +94,8 @@ public class TestDeoptUnload {
 
         ArrayList<String> commandForConstantUnload = new ArrayList<>();
         commandForConstantUnload.addAll(commandPrefix.subList(0, commandPrefix.size() - 1));
-        // Compiling `getJavaLangModuleAccess` method will trigger the deoptimization of unloaded constant. 
+        // Compiling `getJavaLangModuleAccess` method will trigger the deoptimization of unloaded constant.
+        commandForConstantUnload.add("-Xshare:off");
         commandForConstantUnload.add("-XX:CompileCommand=compileonly,jdk.internal.access.SharedSecrets::getJavaLangModuleAccess");
         commandForConstantUnload.add(commandPrefix.get(commandPrefix.size() - 1));
         runTestHelper(commandForConstantUnload, "testConstantUnload", "getJavaLangModuleAccess");

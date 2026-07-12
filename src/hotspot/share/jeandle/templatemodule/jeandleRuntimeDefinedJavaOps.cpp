@@ -37,6 +37,7 @@
 #include "gc/shared/tlab_globals.hpp"
 #include "oops/arrayOop.hpp"
 #include "oops/array.hpp"
+#include "oops/compressedOops.inline.hpp"
 #include "classfile/javaClasses.hpp"
 #include "oops/klass.hpp"
 #include "oops/objArrayKlass.hpp"
@@ -277,11 +278,17 @@ DEF_JAVA_OP(reference_refers_to, 1, llvm::Type::getInt32Ty(context),
   llvm::Value* offset = ir_builder.CreateLoad(ir_builder.getInt32Ty(), offset_gv);
   llvm::Value* referent_addr = ir_builder.CreateInBoundsGEP(ir_builder.getInt8Ty(), ref_obj, offset);
   llvm::Type* ref_type = llvm::PointerType::get(context, llvm::jeandle::AddrSpace::JavaHeapAddrSpace);
-  // Unordered atomic load: safe under concurrent GC writes (a plain non-atomic
-  // load has undefined behavior when the GC concurrently clears the referent).
-  // No GC barrier because refersTo0 uses AS_NO_KEEPALIVE semantics.
-  llvm::LoadInst* referent = ir_builder.CreateLoad(ref_type, referent_addr);
-  referent->setAtomic(llvm::AtomicOrdering::Unordered);
+  llvm::Value* referent = nullptr;
+  if (UseCompressedOops) {
+    llvm::Type* narrow_type = llvm::PointerType::get(context, llvm::jeandle::AddrSpace::NarrowOopAddrSpace);
+    llvm::LoadInst* narrow_oop = ir_builder.CreateLoad(narrow_type, referent_addr);
+    narrow_oop->setAtomic(llvm::AtomicOrdering::Unordered);
+    referent = ir_builder.CreateAddrSpaceCast(narrow_oop, ref_type);
+  } else {
+    llvm::LoadInst* wide_oop = ir_builder.CreateLoad(ref_type, referent_addr);
+    wide_oop->setAtomic(llvm::AtomicOrdering::Unordered);
+    referent = wide_oop;
+  }
   // CPUOrder fence: equivalent to C2's MemBarCPUOrder. Prevents the compiler from
   // CSE'ing this referent load across safepoints (GC can change the referent at
   // any safepoint). Singlethread scope ensures no hardware fence instructions.
@@ -309,11 +316,17 @@ DEF_JAVA_OP(reference_get, 1,
   llvm::Value* offset = ir_builder.CreateLoad(ir_builder.getInt32Ty(), offset_gv);
   llvm::Value* referent_addr = ir_builder.CreateInBoundsGEP(ir_builder.getInt8Ty(), ref_obj, offset);
   llvm::Type* ref_type = llvm::PointerType::get(context, llvm::jeandle::AddrSpace::JavaHeapAddrSpace);
-  // Unordered atomic load: matches C2's LoadNode::Unordered for Reference.get().
-  // Acquire is unnecessarily strong on AArch64/RISC-V; Unordered plus the fence
-  // below provides the same compiler-side ordering guarantee as C2's MemBarCPUOrder.
-  llvm::LoadInst* referent = ir_builder.CreateLoad(ref_type, referent_addr);
-  referent->setAtomic(llvm::AtomicOrdering::Unordered);
+  llvm::Value* referent = nullptr;
+  if (UseCompressedOops) {
+    llvm::Type* narrow_type = llvm::PointerType::get(context, llvm::jeandle::AddrSpace::NarrowOopAddrSpace);
+    llvm::LoadInst* narrow_oop = ir_builder.CreateLoad(narrow_type, referent_addr);
+    narrow_oop->setAtomic(llvm::AtomicOrdering::Unordered);
+    referent = ir_builder.CreateAddrSpaceCast(narrow_oop, ref_type);
+  } else {
+    llvm::LoadInst* wide_oop = ir_builder.CreateLoad(ref_type, referent_addr);
+    wide_oop->setAtomic(llvm::AtomicOrdering::Unordered);
+    referent = wide_oop;
+  }
   // G1 SATB pre-barrier: record the loaded referent value so concurrent marking
   // does not miss it. In C2, the ON_WEAK_OOP_REF decorator triggers this in the
   // GC barrier set; here we call the barrier directly with the already-loaded value.
@@ -331,6 +344,99 @@ DEF_JAVA_OP(reference_get, 1,
   ir_builder.CreateFence(llvm::AtomicOrdering::SequentiallyConsistent,
                          llvm::SyncScope::SingleThread);
   ir_builder.CreateRet(referent);
+JAVA_OP_END
+
+DEF_JAVA_OP(encode_heap_oop, 9, llvm::PointerType::get(context, llvm::jeandle::AddrSpace::NarrowOopAddrSpace),
+            llvm::PointerType::get(context, llvm::jeandle::AddrSpace::JavaHeapAddrSpace))
+  llvm::Value* obj_addr = func->getArg(0);
+  llvm::Value* obj_ptr = ir_builder.CreatePtrToInt(obj_addr, llvm::Type::getInt64Ty(context));
+  llvm::Value* narrow_ptr = nullptr;
+  if (CompressedOops::base() == nullptr) {
+    if (CompressedOops::shift() != 0) {
+      obj_ptr = ir_builder.CreateLShr(obj_ptr, llvm::ConstantInt::get(llvm::Type::getInt64Ty(context), CompressedOops::shift()));
+    }
+    narrow_ptr = ir_builder.CreateTrunc(obj_ptr, llvm::Type::getInt32Ty(context));
+  } else {
+    llvm::NamedMDNode* heap_base = template_module.getNamedMetadata(llvm::jeandle::Metadata::HeapBase);
+    assert(heap_base != nullptr, "heap_base metadata must exist");
+    llvm::Value* read_register_args[] = {llvm::MetadataAsValue::get(context, heap_base->getOperand(0))};
+    llvm::CallInst* base  = ir_builder.CreateIntrinsic(llvm::Intrinsic::read_register,
+                                                      llvm::Type::getInt64Ty(context),
+                                                      read_register_args);
+    llvm::Value* diff = ir_builder.CreateSub(obj_ptr, base);
+
+    llvm::Value* is_null = ir_builder.CreateIsNull(obj_addr);
+    llvm::Value* safe_diff = ir_builder.CreateSelect(is_null, llvm::ConstantInt::get(llvm::Type::getInt64Ty(context), 0), diff);
+
+    llvm::Value* shifted = ir_builder.CreateLShr(safe_diff, llvm::ConstantInt::get(llvm::Type::getInt64Ty(context), CompressedOops::shift()));
+
+    narrow_ptr = ir_builder.CreateTrunc(shifted, llvm::Type::getInt32Ty(context));
+  }
+  llvm::Value* narrow_addr = ir_builder.CreateIntToPtr(narrow_ptr, llvm::PointerType::get(context, llvm::jeandle::AddrSpace::NarrowOopAddrSpace));
+  ir_builder.CreateRet(narrow_addr);
+JAVA_OP_END
+
+DEF_JAVA_OP(decode_heap_oop, 9, llvm::PointerType::get(context, llvm::jeandle::AddrSpace::JavaHeapAddrSpace),
+            llvm::PointerType::get(context, llvm::jeandle::AddrSpace::NarrowOopAddrSpace))
+  llvm::Value* narrow_addr = func->getArg(0);
+  llvm::Value* narrow_ptr = ir_builder.CreatePtrToInt(narrow_addr, llvm::Type::getInt32Ty(context));
+  llvm::Value* obj_ptr = ir_builder.CreateZExt(narrow_ptr, llvm::Type::getInt64Ty(context));
+  if (CompressedOops::base() == nullptr) {
+    if (CompressedOops::shift() != 0) {
+      obj_ptr = ir_builder.CreateShl(obj_ptr, llvm::ConstantInt::get(llvm::Type::getInt64Ty(context), CompressedOops::shift()));
+    }
+  } else {
+    llvm::Value* shifted = ir_builder.CreateShl(obj_ptr, llvm::ConstantInt::get(llvm::Type::getInt64Ty(context), CompressedOops::shift()));
+    llvm::NamedMDNode* heap_base = template_module.getNamedMetadata(llvm::jeandle::Metadata::HeapBase);
+    assert(heap_base != nullptr, "heap_base metadata must exist");
+    llvm::Value* read_register_args[] = {llvm::MetadataAsValue::get(context, heap_base->getOperand(0))};
+    llvm::CallInst* base  = ir_builder.CreateIntrinsic(llvm::Intrinsic::read_register,
+                                                      llvm::Type::getInt64Ty(context),
+                                                      read_register_args);
+    llvm::Value* decoded = ir_builder.CreateAdd(shifted, base);
+
+    llvm::Value* is_null = ir_builder.CreateIsNull(narrow_addr);
+    obj_ptr = ir_builder.CreateSelect(is_null, llvm::ConstantInt::get(llvm::Type::getInt64Ty(context), 0), decoded);
+  }
+  llvm::Value* obj_addr = ir_builder.CreateIntToPtr(obj_ptr, llvm::PointerType::get(context, llvm::jeandle::AddrSpace::JavaHeapAddrSpace));
+  ir_builder.CreateRet(obj_addr);
+JAVA_OP_END
+
+DEF_JAVA_OP(encode_klass, 1, llvm::Type::getInt32Ty(context), llvm::PointerType::get(context, llvm::jeandle::AddrSpace::CHeapAddrSpace))
+  llvm::Value* klass_ptr = func->getArg(0);
+  llvm::Value* wide = ir_builder.CreatePtrToInt(klass_ptr, llvm::Type::getInt64Ty(context));
+
+  if (CompressedKlassPointers::base() != nullptr) {
+    wide = ir_builder.CreateSub(wide, llvm::ConstantInt::get(llvm::Type::getInt64Ty(context), (uint64_t)CompressedKlassPointers::base()));
+  }
+
+  if (CompressedKlassPointers::shift() != 0) {
+    assert(LogKlassAlignmentInBytes == CompressedKlassPointers::shift(), "decode alg wrong");
+    wide = ir_builder.CreateLShr(wide, llvm::ConstantInt::get(llvm::Type::getInt64Ty(context), CompressedKlassPointers::shift()));
+  }
+
+  llvm::Value* narrow_klass = ir_builder.CreateTrunc(wide, llvm::Type::getInt32Ty(context));
+
+  ir_builder.CreateRet(narrow_klass);
+JAVA_OP_END
+
+DEF_JAVA_OP(decode_klass, 1, llvm::PointerType::get(context, llvm::jeandle::AddrSpace::CHeapAddrSpace), llvm::Type::getInt32Ty(context))
+  llvm::Value* narrow_klass = func->getArg(0);
+  llvm::Value* wide = ir_builder.CreateZExt(narrow_klass, llvm::Type::getInt64Ty(context));
+
+  // wide = (narrow << shift) + base
+  // Klass* is never null, no null check needed.
+  if (CompressedKlassPointers::shift() != 0) {
+    assert(LogKlassAlignmentInBytes == CompressedKlassPointers::shift(), "decode alg wrong");
+    wide = ir_builder.CreateShl(wide, llvm::ConstantInt::get(llvm::Type::getInt64Ty(context), CompressedKlassPointers::shift()));
+  }
+
+  if (CompressedKlassPointers::base() != nullptr) {
+    wide = ir_builder.CreateAdd(wide, llvm::ConstantInt::get(llvm::Type::getInt64Ty(context), (uint64_t)CompressedKlassPointers::base()));
+  }
+
+  llvm::Value* klass_ptr = ir_builder.CreateIntToPtr(wide, llvm::PointerType::get(context, llvm::jeandle::AddrSpace::CHeapAddrSpace));
+  ir_builder.CreateRet(klass_ptr);
 JAVA_OP_END
 
 } // anonymous namespace
@@ -355,6 +461,10 @@ bool RuntimeDefinedJavaOps::define_all(llvm::Module& template_module) {
   define_get_class(template_module);
   define_reference_refers_to(template_module);
   define_reference_get(template_module);
+  define_encode_heap_oop(template_module);
+  define_decode_heap_oop(template_module);
+  define_encode_klass(template_module);
+  define_decode_klass(template_module);
 
   return failed();
 }
@@ -374,6 +484,13 @@ void RuntimeDefinedJavaOps::define_metadata(llvm::Module& template_module) {
     llvm::MDNode* stack_pointer = llvm::MDNode::get(context, {llvm::MDString::get(context, JeandleRegister::get_stack_pointer())});
     llvm::NamedMDNode* metadata_node = template_module.getOrInsertNamedMetadata(llvm::jeandle::Metadata::StackPointer);
     metadata_node->addOperand(stack_pointer);
+  }
+
+  // Heap base register (only reserved when compressed oops is enabled):
+  if (UseCompressedOops) {
+    llvm::MDNode* heap_base_register = llvm::MDNode::get(context, {llvm::MDString::get(context, JeandleRegister::get_heap_base_pointer())});
+    llvm::NamedMDNode* metadata_node = template_module.getOrInsertNamedMetadata(llvm::jeandle::Metadata::HeapBase);
+    metadata_node->addOperand(heap_base_register);
   }
 }
 
@@ -458,4 +575,7 @@ void RuntimeDefinedJavaOps::define_global_variables(llvm::Module& template_modul
 
   define_global("VMOptions.UseTLAB",                                int1_type, static_cast<uint64_t>(UseTLAB));
   define_global("VMOptions.ZeroTLAB",                               int1_type, static_cast<uint64_t>(ZeroTLAB));
+
+  define_global("UseCompressedClassPointers",                       int1_type,  static_cast<uint64_t>(UseCompressedClassPointers));
+  define_global("UseCompressedOops",                                int1_type,  static_cast<uint64_t>(UseCompressedOops));
 }

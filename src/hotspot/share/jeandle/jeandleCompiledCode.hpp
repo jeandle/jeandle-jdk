@@ -23,6 +23,7 @@
 
 #include "jeandle/__llvmHeadersBegin__.hpp"
 #include "llvm/ADT/DenseMap.h"
+#include "llvm/ADT/DenseSet.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ExecutionEngine/JITLink/JITLink.h"
 #include "llvm/IR/Statepoint.h"
@@ -60,13 +61,14 @@ public:
     ScalarValueType = 4,
     OrigPcSlotType = 5,
     MethodType = 6,
-    LastType = MethodType + 1
+    NarrowOopMarkerType = 7,
+    LastType = NarrowOopMarkerType + 1
   };
   DeoptValueEncoding(int index, DeoptValueType value_type, BasicType basic_type):
     _index(index), _value_type(value_type), _basic_type(basic_type) {
     assert(_value_type == LocalType || _value_type == StackType ||
            _value_type == MonitorType || _value_type == OrigPcSlotType ||
-           _value_type == MethodType,
+           _value_type == MethodType || _value_type == NarrowOopMarkerType,
            "Unsupported value type");
   }
 
@@ -97,6 +99,7 @@ public:
       case ScalarValueType: return "ScalarValueType";
       case OrigPcSlotType: return "OrigPcSlotType";
       case MethodType: return "MethodType";
+      case NarrowOopMarkerType: return "NarrowOopMarkerType";
       default: return "Unknown";
     }
   }
@@ -116,12 +119,10 @@ class CallSiteInfo : public JeandleCompilationResourceObj {
  public:
   CallSiteInfo(JeandleCompiledCall::Type type,
                address target,
-               int bci,
                bool is_method_handle_invoke = false,
                uint64_t statepoint_id = llvm::StatepointDirectives::DefaultStatepointID) :
                _type(type),
                _target(target),
-               _bci(bci),
                _is_method_handle_invoke(is_method_handle_invoke),
                _statepoint_id(statepoint_id) {
 #ifdef ASSERT
@@ -134,9 +135,6 @@ class CallSiteInfo : public JeandleCompilationResourceObj {
   }
 
 
-  int bci() const { return _bci; }
-  void set_bci(int bci) { _bci = bci; }
-
   JeandleCompiledCall::Type type() const { return _type; }
   uint64_t statepoint_id() const { return _statepoint_id; }
   address target() const { return _target; }
@@ -145,7 +143,6 @@ class CallSiteInfo : public JeandleCompilationResourceObj {
  private:
   JeandleCompiledCall::Type _type;
   address _target;
-  int _bci;
   bool _is_method_handle_invoke;
 
   // Used to distinguish each call site in stackmaps.
@@ -261,7 +258,6 @@ class JeandleCompiledCode : public StackObj {
     uint64_t new_statepoint_id = next_statepoint_id();
     push_non_routine_call_site(new CallSiteInfo(old_call_site->type(),
                                                 old_call_site->target(),
-                                                old_call_site->bci(),
                                                 old_call_site->is_method_handle_invoke(),
                                                 new_statepoint_id));
     return static_cast<int64_t>(new_statepoint_id);
@@ -361,7 +357,6 @@ class JeandleCompiledCode : public StackObj {
   JeandleStackMap* parse_stackmap(StackMapParser& stackmaps,
                                   StackMapParser::record_iterator& record,
                                   StackMapParser::RecordAccessor::location_iterator& location,
-                                  CallSiteInfo* call_info,
                                   int& num_deopts,
                                   const JeandleParseContext& parse_context,
                                   ciMethod*& next_inlinee);
