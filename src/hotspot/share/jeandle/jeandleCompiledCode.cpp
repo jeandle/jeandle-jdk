@@ -643,8 +643,10 @@ JeandleStackMap* JeandleCompiledCode::parse_stackmap(StackMapParser& stackmaps,
   if (num_deopts > 0) {
     assert(current_method != nullptr, "must be method compilation");
 
-    // should_reexecute flag goes first (explicitly set by intrinsic lowering to match C2 behavior)
-    bool forced_reexecute = ((location++)->getSmallConstant() != 0);
+    // should_reexecute flag goes first (explicitly set by intrinsic lowering to match C2 behavior).
+    // Pushed as i64 on the frontend side so it can't be mistaken for a duplicated-bci marker
+    // (see JeandleAbstractInterpreter::deopt_args), so read it with the wide-constant accessor.
+    bool forced_reexecute = (StackMapUtil::getConstantUlong(stackmaps, *(location++)) != 0);
     num_deopts--;
 
     // bci goes next in deopt operands

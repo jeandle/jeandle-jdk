@@ -269,7 +269,11 @@ llvm::SmallVector<llvm::Value*> JeandleVMState::deopt_args(llvm::IRBuilder<>& bu
   // should_reexecute is explicitly set by intrinsic lowering (e.g. addExact's
   // overflow trap) to force reexecution of the current bci on deopt, matching
   // C2's should_reexecute semantics for intrinsic-emitted uncommon traps.
-  args.push_back(builder.getInt32(should_reexecute ? 1 : 0));
+  //
+  // Pushed as i64 (not i32) so it can't be confused with the duplicated-BCI
+  // marker below: the marker is identified by two adjacent i32 values, and
+  // should_reexecute (0 or 1) can easily collide with a small bci value.
+  args.push_back(builder.getInt64(should_reexecute ? 1 : 0));
 
   // Duplicate the BCI as a BCI marker for the LLVM backend.
   // Keep TestScopeValues.java in sync with this duplicated-BCI convention.
