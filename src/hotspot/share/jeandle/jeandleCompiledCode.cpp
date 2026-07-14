@@ -558,6 +558,24 @@ void JeandleCompiledCode::fill_one_scope_value(const StackMapParser& stackmaps,
     }
     break;
   }
+  case T_ADDRESS: {
+#ifdef _LP64
+    if (is_constant) {
+      jlong const_addr = JeandleBitCast::bit_cast<jlong>(StackMapUtil::getConstantUlong(stackmaps, location));
+      array->append(new ConstantLongValue(const_addr));
+    } else {
+      array->append(new_location_value(location, Location::lng));
+    }
+#else
+    if (is_constant) {
+      jint const_addr = JeandleBitCast::bit_cast<jint>(StackMapUtil::getConstantUint(stackmaps, location));
+      array->append(new ConstantIntValue(const_addr));
+    } else {
+      array->append(new_location_value(location, Location::normal));
+    }
+#endif
+    break;
+  }
   case T_ILLEGAL: {
     uint32_t val = StackMapUtil::getConstantUint(stackmaps, location);
     assert(val == 0, "must be zero for T_ILLEGAL");

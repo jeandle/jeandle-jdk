@@ -23,6 +23,7 @@
 
 #include "jeandle/__llvmHeadersBegin__.hpp"
 #include "llvm/IR/BasicBlock.h"
+#include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/IR/BasicBlock.h"
 #include "llvm/IR/IRBuilder.h"
@@ -45,6 +46,7 @@
 // Used by the abstract interpreter to trace JVM states.
 class JeandleBasicBlock;
 class JeandleIntrinsicLowering;
+class JsrScopeData;
 class JeandleVMState : public JeandleCompilationResourceObj {
  public:
 
@@ -85,6 +87,9 @@ class JeandleVMState : public JeandleCompilationResourceObj {
 
   void dpush(llvm::Value* value) { push(BasicType::T_DOUBLE, value); }
   llvm::Value* dpop() { return pop(BasicType::T_DOUBLE); }
+
+  void addrpush(llvm::Value* value) { push(BasicType::T_ADDRESS, value); }
+  llvm::Value* addrpop() { return pop(BasicType::T_ADDRESS); }
 
   // Untyped manipulation (for dup_x1, etc.)
   void raw_push(TypedValue tv) { _stack.push_back(tv); }
@@ -133,6 +138,9 @@ class JeandleVMState : public JeandleCompilationResourceObj {
 
   llvm::Value* aload(int index) { return load(BasicType::T_OBJECT, index); }
   void astore(int index, llvm::Value* value) { store(BasicType::T_OBJECT, index, value); }
+
+  llvm::Value* addrload(int index) { return load(BasicType::T_ADDRESS, index); }
+  void addrstore(int index, llvm::Value* value) { store(BasicType::T_ADDRESS, index, value); }
 
   llvm::Value* load(BasicType type, int index);
   void store(BasicType type, int index, llvm::Value* value);
@@ -212,11 +220,18 @@ class JeandleBasicBlock : public JeandleCompilationResourceObj {
   llvm::BasicBlock* tail_llvm_block() { return _tail_llvm_block; }
   void set_tail_llvm_block(llvm::BasicBlock* block) { _tail_llvm_block = block; }
 
-  bool is_exception_handler() { return _ci_block->is_handler(); }
+  bool is_exception_handler() { return _ci_block != nullptr && _ci_block->is_handler(); }
   int exeption_range_start_bci() { return _ci_block->ex_start_bci(); }
   int exeption_range_limit_bci() { return _ci_block->ex_limit_bci(); }
+  ciBlock* ci_block() const { return _ci_block; }
+  bool ends_with_ret(ciMethod* method) const;
 
   void set_initial_jvm(JeandleVMState* initial_jvm) { _initial_jvm = initial_jvm; }
+
+  JsrScopeData* jsr_scope() const { return _jsr_scope; }
+  void set_jsr_scope(JsrScopeData* jsr_scope) { _jsr_scope = jsr_scope; }
+
+  void clone_metadata_from(JeandleBasicBlock* block);
 
  private:
   int _block_id;
@@ -236,11 +251,46 @@ class JeandleBasicBlock : public JeandleCompilationResourceObj {
   ciBlock* _ci_block;
 
   // The JeandleVMState recording the initial state of a loop header.
-  // When a loop tail block is interpreted, we need to update the loop header's
-  // phi nodes. Use this variable to find the right phi nodes to update.
+  // Blocks with phi nodes need to keep their entry state after interpretation
+  // mutates _jvm to the block exit state. Late predecessor merges update this
+  // saved entry state.
   JeandleVMState* _initial_jvm;
+  JsrScopeData* _jsr_scope;
 
   void initialize_VM_state_from(JeandleVMState* incoming_state, llvm::BasicBlock* incoming_block, MethodLivenessResult liveness, bool is_osr);
+};
+
+class JsrScopeData : public JeandleCompilationResourceObj {
+ public:
+  JsrScopeData(JsrScopeData* parent,
+               int jsr_entry_bci,
+               JeandleBasicBlock* jsr_continuation,
+               llvm::SmallVector<JeandleBasicBlock*>& bci2block,
+               ciMethod* method,
+               llvm::LLVMContext* context,
+               llvm::Function* llvm_func);
+
+  JsrScopeData* parent() const { return _parent; }
+  int jsr_entry_bci() const { return _jsr_entry_bci; }
+  int jsr_return_address_local() const { return _jsr_ret_addr_local; }
+  void set_jsr_return_address_local(int local) { _jsr_ret_addr_local = local; }
+  JeandleBasicBlock* jsr_continuation() const { return _jsr_continuation; }
+
+  llvm::SmallVector<JeandleBasicBlock*>& bci2block() { return _bci2block; }
+  JeandleBasicBlock* block_at(int bci);
+  void remove_dead_blocks();
+
+ private:
+  JsrScopeData* _parent;
+  int _jsr_entry_bci;
+  int _jsr_ret_addr_local;
+  JeandleBasicBlock* _jsr_continuation;
+  llvm::SmallVector<JeandleBasicBlock*> _bci2block;
+  llvm::DenseMap<JeandleBasicBlock*, JeandleBasicBlock*> _original_to_clone;
+  llvm::SmallVector<JeandleBasicBlock*> _created_blocks;
+  ciMethod* _method;
+  llvm::LLVMContext* _context;
+  llvm::Function* _llvm_func;
 };
 
 class BasicBlockBuilder : public JeandleCompilationResourceObj {
@@ -318,6 +368,7 @@ class JeandleAbstractInterpreter : public StackObj {
   // The JeandleBasicBlock and its JeandleVMState currently being interpreted.
   JeandleBasicBlock* _block;
   JeandleVMState* _jvm;
+  JsrScopeData* _jsr_scope_data;
 
   // When do_if_branch prunes a never-taken edge into an uncommon_trap, the
   // cold Java successor receives no LLVM edge from this block and must be
@@ -327,6 +378,10 @@ class JeandleAbstractInterpreter : public StackObj {
 
   // Contains all blocks to interpret. Sorted by reverse-post-order.
   llvm::SmallVector<JeandleBasicBlock*> _work_list;
+  llvm::SmallVector<JsrScopeData*> _jsr_scopes;
+
+  // Some bytecodes, such as jsr/ret, manually merge their real successors.
+  bool _skip_block_successors;
 
   // Object & Lock for synchronized method
   LockValue _sync_lock;
@@ -366,9 +421,18 @@ class JeandleAbstractInterpreter : public StackObj {
   void interpret_block(JeandleBasicBlock* block);
 
   void add_to_work_list(JeandleBasicBlock* block);
+  void add_to_work_list(JeandleBasicBlock* block, JsrScopeData* jsr_scope);
+
+  llvm::SmallVector<JeandleBasicBlock*>& current_bci2block();
+  JeandleBasicBlock* block_at(int bci);
+  bool parsing_jsr() const { return _jsr_scope_data != nullptr; }
+  JsrScopeData* push_scope_for_jsr(JeandleBasicBlock* jsr_continuation, int jsr_dest_bci);
+  void remove_dead_jsr_blocks();
 
   // Bytecode related process:
   void load_constant();
+  void do_aload(int index);
+  void do_astore(int index);
   void increment();
   void if_zero(llvm::CmpInst::Predicate p);
   void if_icmp(llvm::CmpInst::Predicate p);
@@ -386,6 +450,8 @@ class JeandleAbstractInterpreter : public StackObj {
   void lcmp();
   void merge_into_exception_handler(JeandleBasicBlock* handler_block);
   void goto_bci(int bci);
+  void jsr(int dest);
+  void ret(int index);
   void lookup_switch();
   void table_switch();
   void invoke();
