@@ -643,14 +643,20 @@ JeandleStackMap* JeandleCompiledCode::parse_stackmap(StackMapParser& stackmaps,
   if (num_deopts > 0) {
     assert(current_method != nullptr, "must be method compilation");
 
-    // bci goes first in deopt operands
+    // should_reexecute flag goes first (explicitly set by intrinsic lowering to match C2 behavior).
+    // Pushed as i64 on the frontend side so it can't be mistaken for a duplicated-bci marker
+    // (see JeandleAbstractInterpreter::deopt_args), so read it with the wide-constant accessor.
+    bool forced_reexecute = (StackMapUtil::getConstantUlong(stackmaps, *(location++)) != 0);
+    num_deopts--;
+
+    // bci goes next in deopt operands
     bci = (location++)->getSmallConstant();
     guarantee(bci == (int)((location++)->getSmallConstant()), "duplicated bci must match");
     num_deopts -= 2;
 
     if (bci != InvocationEntryBci) {
       Bytecodes::Code code = current_method->java_code_at_bci(bci);
-      reexecute = bytecode_should_reexecute(code); /* TODO: special case of multianewarray, please check GraphKit::should_reexecute_implied_by_bytecode */
+      reexecute = forced_reexecute || bytecode_should_reexecute(code); /* TODO: special case of multianewarray, please check GraphKit::should_reexecute_implied_by_bytecode */
     }
   }
 

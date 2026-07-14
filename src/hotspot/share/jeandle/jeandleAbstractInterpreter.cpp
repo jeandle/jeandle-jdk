@@ -233,7 +233,8 @@ void JeandleVMState::store(BasicType type, int index, llvm::Value* value) {
 llvm::SmallVector<llvm::Value*> JeandleVMState::deopt_args(llvm::IRBuilder<>& builder,
                                                            MethodLivenessResult liveness,
                                                            const JeandleParseContext& parse_context,
-                                                           int bci) {
+                                                           int bci,
+                                                           bool should_reexecute) {
 #ifdef ASSERT
   if (log_is_enabled(Trace, jeandle)) {
     tty->print_cr("Build deopt bundle at bci %d :", bci);
@@ -242,8 +243,8 @@ llvm::SmallVector<llvm::Value*> JeandleVMState::deopt_args(llvm::IRBuilder<>& bu
 
   llvm::SmallVector<llvm::Value*> args;
   // Total   deopt bundle: [Root deopt bundle] + [Inlined deopt bundle] + [Inlined deopt bundle] + ...
-  // Root    deopt bundle:                |--- bci ---|--- bci ---|--- locals ---|--- stack ---|--- monitor ---|--- orig_pc ---|
-  // Inlined deopt bundle: |--- method ---|--- bci ---|--- bci ---|--- locals ---|--- stack ---|--- monitor ---|--- orig_pc ---|
+  // Root    deopt bundle:                |--- should_reexecute ---|--- bci ---|--- bci ---|--- locals ---|--- stack ---|--- monitor ---|--- orig_pc ---|
+  // Inlined deopt bundle: |--- method ---|--- should_reexecute ---|--- bci ---|--- bci ---|--- locals ---|--- stack ---|--- monitor ---|--- orig_pc ---|
   // The duplicated BCI intentionally breaks the usual marker/value layout used
   // by other deopt values. After inlining, deopt bundles are appended scope by
   // scope: the root scope appears first, and the current method scope appears
@@ -264,6 +265,15 @@ llvm::SmallVector<llvm::Value*> JeandleVMState::deopt_args(llvm::IRBuilder<>& bu
     args.push_back(builder.getInt64(encode));
     args.push_back(builder.getInt64(uint64_t(parse_context.method())));
   }
+
+  // should_reexecute is explicitly set by intrinsic lowering (e.g. addExact's
+  // overflow trap) to force reexecution of the current bci on deopt, matching
+  // C2's should_reexecute semantics for intrinsic-emitted uncommon traps.
+  //
+  // Pushed as i64 (not i32) so it can't be confused with the duplicated-BCI
+  // marker below: the marker is identified by two adjacent i32 values, and
+  // should_reexecute (0 or 1) can easily collide with a small bci value.
+  args.push_back(builder.getInt64(should_reexecute ? 1 : 0));
 
   // Duplicate the BCI as a BCI marker for the LLVM backend.
   // Keep TestScopeValues.java in sync with this duplicated-BCI convention.
@@ -1470,7 +1480,7 @@ void JeandleAbstractInterpreter::interpret_block(JeandleBasicBlock* block) {
   }
 }
 
-void JeandleAbstractInterpreter::uncommon_trap(Deoptimization::DeoptReason reason, Deoptimization::DeoptAction action, llvm::BasicBlock* insert_block) {
+void JeandleAbstractInterpreter::uncommon_trap(Deoptimization::DeoptReason reason, Deoptimization::DeoptAction action, llvm::BasicBlock* insert_block, bool should_reexecute) {
 #ifdef ASSERT
   // Structural guard against trap-throttle drift: any deopt reason an intrinsic emits
   // must be in its trap-throttle mask, or try_lower_intrinsic's pre-check would not
@@ -1507,7 +1517,7 @@ void JeandleAbstractInterpreter::uncommon_trap(Deoptimization::DeoptReason reaso
       &_module, llvm::Intrinsic::experimental_deoptimize, {ret_type});
   deopt_decl->setCallingConv(llvm::CallingConv::Hotspot_JIT);
   llvm::CallInst* call = _ir_builder.CreateCall(
-      deopt_decl, {request}, {create_current_deopt_bundle()});
+      deopt_decl, {request}, {create_current_deopt_bundle(should_reexecute)});
   call->setCallingConv(llvm::CallingConv::Hotspot_JIT);
 
   // LangRef: the block holding this intrinsic must terminate with a `ret`
@@ -2482,7 +2492,7 @@ llvm::InvokeInst* JeandleAbstractInterpreter::call_java_op_ex(llvm::StringRef ja
   return invoke_inst;
 }
 
-llvm::OperandBundleDef JeandleAbstractInterpreter::create_current_deopt_bundle() {
+llvm::OperandBundleDef JeandleAbstractInterpreter::create_current_deopt_bundle(bool should_reexecute) {
   ensure_orig_pc_slot();
   int bci = _bytecodes.cur_bci();
   // Per-bci liveness lets deopt_args drop locals that are dead at this bci, so they
@@ -2490,7 +2500,7 @@ llvm::OperandBundleDef JeandleAbstractInterpreter::create_current_deopt_bundle()
   // liveness_at_bci caches the analysis in ciMethod after first use, so this is cheap;
   // in debug modes (retain locals / DeoptimizeALot) it returns all-live -> no pruning.
   MethodLivenessResult liveness = _method->liveness_at_bci(bci);
-  return llvm::OperandBundleDef("deopt", _jvm->deopt_args(_ir_builder, liveness, _parse_context, bci));
+  return llvm::OperandBundleDef("deopt", _jvm->deopt_args(_ir_builder, liveness, _parse_context, bci, should_reexecute));
 }
 
 TypedValue JeandleAbstractInterpreter::constant_to_value(ciConstant con) {
