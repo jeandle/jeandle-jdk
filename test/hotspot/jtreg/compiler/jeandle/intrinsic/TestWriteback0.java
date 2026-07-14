@@ -25,8 +25,9 @@
  * @requires os.arch=="amd64" | os.arch=="x86_64" | os.arch=="aarch64"
  * @library /test/lib /
  * @modules java.base/jdk.internal.misc
- * @build jdk.test.lib.Asserts
- * @run main/othervm compiler.jeandle.intrinsic.TestWriteback0
+ * @build jdk.test.lib.Asserts jdk.test.whitebox.WhiteBox
+ * @run driver jdk.test.lib.helpers.ClassFileInstaller jdk.test.whitebox.WhiteBox
+ * @run main/othervm -Xbootclasspath/a:. -XX:+UnlockDiagnosticVMOptions -XX:+WhiteBoxAPI compiler.jeandle.intrinsic.TestWriteback0
  */
 
 package compiler.jeandle.intrinsic;
@@ -41,6 +42,7 @@ import jdk.internal.misc.Unsafe;
 import jdk.test.lib.Asserts;
 import jdk.test.lib.process.OutputAnalyzer;
 import jdk.test.lib.process.ProcessTools;
+import jdk.test.whitebox.WhiteBox;
 
 public class TestWriteback0 {
     // Specific intrinsic patterns for precise validation
@@ -85,16 +87,48 @@ public class TestWriteback0 {
         // Verify LLVM IR contains platform-specific intrinsics.
         // writebackMemory is compiled directly, so intrinsics are lowered even in
         // non-optimized IR (no inlining required).
+        //
+        // The writeback instruction is selected at compile time based on what the
+        // CPU supports (mirroring C2's cache_wb() and Jeandle's lower_writeback0):
+        //   optimized = supports_clflushopt()
+        //   no_evict  = supports_clwb()
+        //   if (optimized) { no_evict ? CLWB : CLFLUSHOPT } else { CLFLUSH }
         String arch = System.getProperty("os.arch");
         FileCheck checker = new FileCheck(dumpPath,
                 Unsafe.class.getMethod("writebackMemory", long.class, long.class), false);
         if (arch.equals("amd64") || arch.equals("x86_64")) {
-            checker.checkPattern("@llvm\\.x86\\.clwb");
-            checker.checkPattern("@llvm\\.x86\\.sse\\.sfence");
+            boolean hasClflushopt = cpuSupports("clflushopt"); // == supports_clflushopt()
+            boolean hasClwb = cpuSupports("clwb");             // == supports_clwb()
+            String writebackPattern;
+            boolean expectSfence;
+            if (hasClflushopt && hasClwb) {
+                writebackPattern = "@llvm\\.x86\\.clwb";
+                expectSfence = true;
+            } else if (hasClflushopt) {
+                writebackPattern = "@llvm\\.x86\\.clflushopt";
+                expectSfence = true;
+            } else {
+                writebackPattern = "@llvm\\.x86\\.sse2\\.clflush";
+                expectSfence = false;
+            }
+            checker.checkPattern(writebackPattern);
+            if (expectSfence) {
+                checker.checkPattern("@llvm\\.x86\\.sse\\.sfence");
+            } else {
+                checker.checkNotPattern("@llvm\\.x86\\.sse\\.sfence");
+            }
         } else if (arch.equals("aarch64")) {
             checker.checkPattern("dc cvap");
             checker.checkPattern("@llvm\\.aarch64\\.dmb");
         }
+    }
+
+    // Whether the CPU supports a given feature, queried through WhiteBox's
+    // getCPUFeatures() (identical source to VM_Version::supports_*()).
+    private static boolean cpuSupports(String feature) {
+        String features = WhiteBox.getWhiteBox().getCPUFeatures();
+        return Pattern.compile("(?<![a-z0-9])" + Pattern.quote(feature) + "(?![a-z0-9])")
+                      .matcher(features).find();
     }
 
     // Test fallback when intrinsic is not supported
