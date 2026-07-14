@@ -24,6 +24,7 @@
  * @summary Test reverseBytes lowering
  * @requires os.arch=="amd64" | os.arch=="x86_64" | os.arch=="aarch64"
  * @library /test/lib /
+ * @modules java.base/jdk.internal.org.objectweb.asm
  * @build jdk.test.lib.Asserts
  * @run main/othervm compiler.jeandle.intrinsic.TestReverseBytes
  */
@@ -31,11 +32,15 @@
 package compiler.jeandle.intrinsic;
 
 import compiler.jeandle.fileCheck.FileCheck;
+import java.lang.reflect.Method;
 import java.nio.file.Files;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Random;
 
+import jdk.internal.org.objectweb.asm.ClassWriter;
+import jdk.internal.org.objectweb.asm.MethodVisitor;
+import jdk.internal.org.objectweb.asm.Opcodes;
 import jdk.test.lib.Asserts;
 import jdk.test.lib.process.OutputAnalyzer;
 import jdk.test.lib.process.ProcessTools;
@@ -46,6 +51,7 @@ public class TestReverseBytes {
 
         ArrayList<String> commandArgs = new ArrayList<>(List.of(
                 "-Xbatch", "-XX:-TieredCompilation", "-XX:+UseJeandleCompiler", "-Xcomp",
+                "--add-exports=java.base/jdk.internal.org.objectweb.asm=ALL-UNNAMED",
                 "-Xlog:jeandle=debug", "-XX:+JeandleDumpIR",
                 "-XX:JeandleDumpDirectory=" + dumpPath,
                 "-XX:CompileCommand=compileonly," + TestWrapper.class.getName() + "::reverseBytes_int",
@@ -58,6 +64,8 @@ public class TestReverseBytes {
                 "-XX:CompileCommand=compileonly," + TestWrapper.class.getName() + "::reverseBytes_char_array_to_int",
                 "-XX:CompileCommand=compileonly," + TestWrapper.class.getName() + "::reverseBytes_char_field_to_int",
                 "-XX:CompileCommand=compileonly," + TestWrapper.class.getName() + "::reverseBytes_short_cast_to_int",
+                "-XX:CompileCommand=compileonly," + RawReverseBytes.NAME + "::reverseChar",
+                "-XX:CompileCommand=compileonly," + RawReverseBytes.NAME + "::reverseShort",
                 TestWrapper.class.getName()));
 
         ProcessBuilder pb = ProcessTools.createLimitedTestJavaProcessBuilder(commandArgs);
@@ -69,38 +77,42 @@ public class TestReverseBytes {
               .shouldContain("Method `static jchar java.lang.Character.reverseBytes(jchar)` is parsed as intrinsic")
               .shouldContain("Method `static jshort java.lang.Short.reverseBytes(jshort)` is parsed as intrinsic");
 
-        boolean isAArch64 = System.getProperty("os.arch").equals("aarch64");
         new FileCheck(dumpPath, TestWrapper.class.getMethod("reverseBytes_int", int.class), false)
                 .checkPattern("llvm\\.bswap\\.i32");
         new FileCheck(dumpPath, TestWrapper.class.getMethod("reverseBytes_long", long.class), false)
                 .checkPattern("llvm\\.bswap\\.i64");
-        checkCharIR(dumpPath, "reverseBytes_char", isAArch64, char.class);
-        checkCharIR(dumpPath, "reverseBytes_char_to_int", isAArch64, char.class);
-        checkCharIR(dumpPath, "reverseBytes_char_cast_to_int", isAArch64, int.class);
-        checkCharIR(dumpPath, "reverseBytes_char_array_to_int", isAArch64, char[].class, int.class);
-        checkCharIR(dumpPath, "reverseBytes_char_field_to_int", isAArch64, TestWrapper.CharBox.class);
-        checkShortIR(dumpPath, "reverseBytes_short", isAArch64, short.class);
-        checkShortIR(dumpPath, "reverseBytes_short_to_int", isAArch64, short.class);
-        checkShortIR(dumpPath, "reverseBytes_short_cast_to_int", isAArch64, int.class);
+        checkCharIR(dumpPath, "reverseBytes_char", char.class);
+        checkCharIR(dumpPath, "reverseBytes_char_to_int", char.class);
+        checkCharIR(dumpPath, "reverseBytes_char_cast_to_int", int.class);
+        checkCharIR(dumpPath, "reverseBytes_char_array_to_int", char[].class, int.class);
+        checkCharIR(dumpPath, "reverseBytes_char_field_to_int", TestWrapper.CharBox.class);
+        checkShortIR(dumpPath, "reverseBytes_short", short.class);
+        checkShortIR(dumpPath, "reverseBytes_short_to_int", short.class);
+        checkShortIR(dumpPath, "reverseBytes_short_cast_to_int", int.class);
+
+        Class<?> rawClass = new RawLoader().define(RawReverseBytes.bytes());
+        FileCheck rawChar = new FileCheck(
+                dumpPath, rawClass.getMethod("reverseChar", int.class), false);
+        rawChar.checkPattern("llvm\\.bswap\\.i16");
+        rawChar.checkPattern("zext i16 .* to i32");
+        FileCheck rawShort = new FileCheck(
+                dumpPath, rawClass.getMethod("reverseShort", int.class), false);
+        rawShort.checkPattern("llvm\\.bswap\\.i16");
+        rawShort.checkPattern("sext i16 .* to i32");
     }
 
-    private static void checkCharIR(String dumpPath, String methodName, boolean isAArch64,
+    private static void checkCharIR(String dumpPath, String methodName,
                                     Class<?>... parameterTypes) throws Exception {
         FileCheck checker = new FileCheck(dumpPath, TestWrapper.class.getMethod(methodName, parameterTypes), false);
-        checker.checkPattern("llvm\\.bswap\\.i32");
-        checker.checkPattern(isAArch64 ? "llvm\\.fshr\\.i32" : "lshr i32 .*, 16");
+        checker.checkPattern("llvm\\.bswap\\.i16");
+        checker.checkPattern("zext i16 .* to i32");
     }
 
-    private static void checkShortIR(String dumpPath, String methodName, boolean isAArch64,
+    private static void checkShortIR(String dumpPath, String methodName,
                                      Class<?>... parameterTypes) throws Exception {
         FileCheck checker = new FileCheck(dumpPath, TestWrapper.class.getMethod(methodName, parameterTypes), false);
-        if (isAArch64) {
-            checker.checkPattern("llvm\\.bswap\\.i16");
-            checker.checkPattern("sext i16 .* to i32");
-        } else {
-            checker.checkPattern("llvm\\.bswap\\.i32");
-            checker.checkPattern("ashr i32 .*, 16");
-        }
+        checker.checkPattern("llvm\\.bswap\\.i16");
+        checker.checkPattern("sext i16 .* to i32");
     }
 
     static class TestWrapper {
@@ -109,7 +121,7 @@ public class TestReverseBytes {
         static char vc = Character.reverseBytes((char) 1); // Force load Character class
         static short vs = Short.reverseBytes((short) 1);  // Force load Short class
 
-        public static void main(String[] args) {
+        public static void main(String[] args) throws Exception {
             Random random = new Random();
 
             // --- Integer.reverseBytes corner cases ---
@@ -196,7 +208,28 @@ public class TestReverseBytes {
                                      "reverseBytes short-to-int mismatch for " + v);
             }
 
+            Class<?> rawClass = new RawLoader().define(RawReverseBytes.bytes());
+            rawClass.getMethod("resolveChar", int.class).invoke(null, 0);
+            rawClass.getMethod("resolveShort", int.class).invoke(null, 0);
+            Method rawChar = rawClass.getMethod("reverseChar", int.class);
+            Method rawShort = rawClass.getMethod("reverseShort", int.class);
+            int[] rawValues = {0, -1, 0x1234ABCD, 0xFFFF0080, 0x80000001};
+            for (int v : rawValues) {
+                checkRawReverseBytes(rawChar, rawShort, v);
+            }
+            for (int i = 0; i < 1000; i++) {
+                checkRawReverseBytes(rawChar, rawShort, random.nextInt());
+            }
+
             System.out.println("TestReverseBytes PASSED");
+        }
+
+        private static void checkRawReverseBytes(Method rawChar, Method rawShort, int value)
+                throws Exception {
+            Asserts.assertEquals(refRawC(value), (int) rawChar.invoke(null, value),
+                                 "raw Character.reverseBytes mismatch for " + value);
+            Asserts.assertEquals(refRawS(value), (int) rawShort.invoke(null, value),
+                                 "raw Short.reverseBytes mismatch for " + value);
         }
 
         public static int reverseBytes_int(int a) {
@@ -270,6 +303,50 @@ public class TestReverseBytes {
 
         static short refS(short v) {
             return (short) (((v & 0xFF) << 8) | ((v >>> 8) & 0xFF));
+        }
+
+        static int refRawC(int v) {
+            return ((v & 0xFF) << 8) | ((v >>> 8) & 0xFF);
+        }
+
+        static int refRawS(int v) {
+            return (short) refRawC(v);
+        }
+    }
+
+    static final class RawLoader extends ClassLoader {
+        Class<?> define(byte[] bytes) {
+            return defineClass(RawReverseBytes.NAME, bytes, 0, bytes.length);
+        }
+    }
+
+    static final class RawReverseBytes {
+        static final String NAME = "compiler.jeandle.intrinsic.RawReverseBytes";
+        private static final String INTERNAL_NAME = NAME.replace('.', '/');
+
+        static byte[] bytes() {
+            ClassWriter writer = new ClassWriter(0);
+            writer.visit(Opcodes.V1_8, Opcodes.ACC_PUBLIC | Opcodes.ACC_SUPER,
+                         INTERNAL_NAME, null, "java/lang/Object", null);
+            addMethod(writer, "resolveChar", "java/lang/Character", "(C)C");
+            addMethod(writer, "resolveShort", "java/lang/Short", "(S)S");
+            addMethod(writer, "reverseChar", "java/lang/Character", "(C)C");
+            addMethod(writer, "reverseShort", "java/lang/Short", "(S)S");
+            writer.visitEnd();
+            return writer.toByteArray();
+        }
+
+        private static void addMethod(ClassWriter writer, String name, String owner,
+                                      String targetDescriptor) {
+            MethodVisitor method = writer.visitMethod(
+                    Opcodes.ACC_PUBLIC | Opcodes.ACC_STATIC, name, "(I)I", null, null);
+            method.visitCode();
+            method.visitVarInsn(Opcodes.ILOAD, 0);
+            method.visitMethodInsn(Opcodes.INVOKESTATIC, owner, "reverseBytes",
+                                   targetDescriptor, false);
+            method.visitInsn(Opcodes.IRETURN);
+            method.visitMaxs(1, 1);
+            method.visitEnd();
         }
     }
 }

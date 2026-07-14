@@ -646,17 +646,8 @@ bool JeandleIntrinsicLowering::lower_count_zeros(vmIntrinsics::ID id,
 // ---- lower_reverse_bytes_narrow ----
 // Character.reverseBytes(char) / Short.reverseBytes(short). The value sits on
 // the operand stack as a computational int, but only the low 16 bits are
-// meaningful. Prefer target-specific C2-like IR when it can preserve those
-// semantics; otherwise use the portable i16 swap plus zero/sign extension.
+// meaningful. Swap those bits as i16, then restore Java's zero/sign extension.
 bool JeandleIntrinsicLowering::lower_reverse_bytes_narrow(vmIntrinsics::ID id) {
-  if (lower_reverse_bytes_narrow_arch(id)) {
-    return true;
-  }
-  return lower_reverse_bytes_narrow_portable(id);
-}
-
-// ---- lower_reverse_bytes_narrow_portable ----
-bool JeandleIntrinsicLowering::lower_reverse_bytes_narrow_portable(vmIntrinsics::ID id) {
   llvm::IRBuilder<>& builder = _interp->_ir_builder;
   bool is_char = (id == vmIntrinsics::_reverseBytes_c);
 

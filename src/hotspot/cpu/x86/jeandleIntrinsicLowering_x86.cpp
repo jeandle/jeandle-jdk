@@ -20,7 +20,6 @@
 
 #include "jeandle/__llvmHeadersBegin__.hpp"
 #include "llvm/IR/IRBuilder.h"
-#include "llvm/IR/Intrinsics.h"
 #include "llvm/IR/IntrinsicsX86.h"
 
 #include "jeandle/jeandleAbstractInterpreter.hpp"
@@ -56,23 +55,6 @@ bool JeandleIntrinsicLowering::cpu_supports_spin_wait() {
 // =============================================================================
 // Arch-specific intrinsic lowering (x86)
 // =============================================================================
-
-bool JeandleIntrinsicLowering::lower_reverse_bytes_narrow_arch(vmIntrinsics::ID id) {
-  if (id != vmIntrinsics::_reverseBytes_c && id != vmIntrinsics::_reverseBytes_s) {
-    return false;
-  }
-
-  llvm::IRBuilder<>& builder = _interp->_ir_builder;
-  llvm::Value* arg = _interp->_jvm->ipop();
-  llvm::Value* swapped =
-      builder.CreateIntrinsic(builder.getInt32Ty(), llvm::Intrinsic::bswap, {arg});
-  llvm::Value* shift = builder.getInt32(16);
-  llvm::Value* result = (id == vmIntrinsics::_reverseBytes_c)
-      ? builder.CreateLShr(swapped, shift)
-      : builder.CreateAShr(swapped, shift);
-  _interp->_jvm->ipush(result);
-  return true;
-}
 
 bool JeandleIntrinsicLowering::lower_spin_wait_hint() {
   llvm::IRBuilder<>& builder = _interp->_ir_builder;
