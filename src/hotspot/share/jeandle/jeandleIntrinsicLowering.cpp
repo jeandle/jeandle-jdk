@@ -22,6 +22,7 @@
 #include "jeandle/__llvmHeadersBegin__.hpp"
 #include "llvm/Analysis/ConstantFolding.h"
 #include "llvm/IR/Constants.h"
+#include "llvm/IR/MDBuilder.h"
 
 #include "jeandle/jeandleAbstractInterpreter.hpp"
 #include "jeandle/jeandleRuntimeRoutine.hpp"
@@ -157,6 +158,9 @@ bool JeandleIntrinsicLowering::is_supported(vmIntrinsics::ID id) {
     case vmIntrinsics::_reverseBytes_l:
     case vmIntrinsics::_reverseBytes_s:
     case vmIntrinsics::_reverseBytes_c:
+    // addExact
+    case vmIntrinsics::_addExactI:
+    case vmIntrinsics::_addExactL:
       return true;
     default:
       return false;
@@ -177,6 +181,9 @@ JeandleTrapReasonMask JeandleIntrinsicLowering::trap_throttle_mask(vmIntrinsics:
     case vmIntrinsics::_Preconditions_checkLongIndex:
       return trap_reason_mask_val(Deoptimization::Reason_intrinsic) |
              trap_reason_mask_val(Deoptimization::Reason_range_check);
+    case vmIntrinsics::_addExactI:
+    case vmIntrinsics::_addExactL:
+      return trap_reason_mask_val(Deoptimization::Reason_intrinsic);
     default:
       return 0;
   }
@@ -333,6 +340,11 @@ bool JeandleIntrinsicLowering::lower(vmIntrinsics::ID id, const ciMethod* target
     case vmIntrinsics::_compareUnsigned_i:
     case vmIntrinsics::_compareUnsigned_l:
       return lower_compare_unsigned(id);
+
+    // addExact
+    case vmIntrinsics::_addExactI:
+    case vmIntrinsics::_addExactL:
+      return lower_add_exact(id);
 
     default:
       return false;
@@ -787,5 +799,54 @@ bool JeandleIntrinsicLowering::lower_new_array() {
   result->addIncoming(slow_call, slow_normal_bb);
 
   _interp->_jvm->apush(result);
+  return true;
+}
+
+// ---- lower_add_exact ----
+// Math.addExact(int,int) / Math.addExact(long,long):
+//   Use llvm.sadd.with.overflow; on overflow take an uncommon_trap
+//   (Reason_intrinsic / Action_none) so the interpreter re-executes.
+//   Args are peeked (not popped) before the branch so the statepoint
+//   captures the full pre-call stack for correct deopt re-execution.
+bool JeandleIntrinsicLowering::lower_add_exact(vmIntrinsics::ID id) {
+  llvm::IRBuilder<>& builder = _interp->_ir_builder;
+  llvm::LLVMContext& ctx = *_interp->_context;
+  int cur_bci = _interp->_bytecodes.cur_bci();
+  bool is_long = (id == vmIntrinsics::_addExactL);
+
+  llvm::Type* ty = JeandleType::java2llvm(
+      is_long ? BasicType::T_LONG : BasicType::T_INT, ctx);
+
+  llvm::Value* arg2 = _interp->_jvm->peek_value(0).value();
+  llvm::Value* arg1 = _interp->_jvm->peek_value(1).value();
+
+  llvm::Value* res = builder.CreateIntrinsic(
+      llvm::Intrinsic::sadd_with_overflow, {ty}, {arg1, arg2});
+  llvm::Value* result   = builder.CreateExtractValue(res, 0);
+  llvm::Value* overflow = builder.CreateExtractValue(res, 1);
+
+  const std::string pfx = "bci_" + std::to_string(cur_bci) +
+                           (is_long ? "_addExactL" : "_addExactI");
+  llvm::BasicBlock* ok_bb = llvm::BasicBlock::Create(ctx, pfx + "_ok",       _interp->_llvm_func);
+  llvm::BasicBlock* ov_bb = llvm::BasicBlock::Create(ctx, pfx + "_overflow", _interp->_llvm_func);
+
+  llvm::MDNode* bwmd = llvm::MDBuilder(ctx).createBranchWeights(1, 9999);
+  builder.CreateCondBr(overflow, ov_bb, ok_bb, bwmd);
+  _interp->uncommon_trap(Deoptimization::Reason_intrinsic,
+                         Deoptimization::Action_none, ov_bb,
+                         true /* should_reexecute */);
+
+  builder.SetInsertPoint(ok_bb);
+  _interp->_block->set_tail_llvm_block(ok_bb);
+
+  if (is_long) {
+    _interp->_jvm->lpop(); // arg2
+    _interp->_jvm->lpop(); // arg1
+    _interp->_jvm->lpush(result);
+  } else {
+    _interp->_jvm->ipop(); // arg2
+    _interp->_jvm->ipop(); // arg1
+    _interp->_jvm->ipush(result);
+  }
   return true;
 }

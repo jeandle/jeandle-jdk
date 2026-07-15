@@ -235,6 +235,25 @@ ciMethod* jeandle_callback_method(uintptr_t method) {
   return (ciMethod*)method;
 }
 
+JeandleInlineReason jeandle_inline_reason_from_llvm(int reason) {
+  switch (static_cast<llvm::jeandle::JeandleInlineReason>(reason)) {
+    case llvm::jeandle::JeandleInlineReason::RootCalleeUnsupported:
+      return JeandleInlineReason::LLVMRootCalleeUnsupported;
+    case llvm::jeandle::JeandleInlineReason::GetInlineCalleeIRFailed:
+      return JeandleInlineReason::LLVMGetInlineCalleeIRFailed;
+    case llvm::jeandle::JeandleInlineReason::MissingInlineCalleeDefinition:
+      return JeandleInlineReason::LLVMMissingInlineCalleeDefinition;
+    case llvm::jeandle::JeandleInlineReason::NotInlineViable:
+      return JeandleInlineReason::LLVMNotInlineViable;
+    case llvm::jeandle::JeandleInlineReason::LLVMInlineFailed:
+      return JeandleInlineReason::LLVMInlineFailed;
+    case llvm::jeandle::JeandleInlineReason::InlineSuccess:
+      ShouldNotReachHere();
+  }
+  ShouldNotReachHere();
+  return JeandleInlineReason::LLVMInlineFailed;
+}
+
 bool jeandle_is_ok_to_inline(int scope_id, int bci, uintptr_t callee_method) {
   JeandleCompilation* comp = JeandleCompilation::current();
   assert(comp != nullptr, "Must be called in compile thread");
@@ -244,23 +263,35 @@ bool jeandle_is_ok_to_inline(int scope_id, int bci, uintptr_t callee_method) {
   if (caller_tree->callee_at(bci, callee) != nullptr) {
     return true;
   }
-  return caller_tree->ok_to_inline(comp, callee, bci);
+  JeandleInlineReason reason = JeandleInlineReason::InlineHot;
+  if (!caller_tree->ok_to_inline(comp, callee, bci, reason)) {
+    comp->record_inline_failure(scope_id, bci, callee, reason);
+    return false;
+  }
+
+  JeandleInlineTree* callee_tree = comp->prepare_inline_tree_for_callee(scope_id, bci, callee);
+  assert(callee_tree != nullptr, "callee inline tree must be prepared before LLVM inline");
+  callee_tree->set_reason(reason);
+  return true;
 }
 
-bool jeandle_record_inline_success(int scope_id, int bci, uintptr_t callee_method) {
+bool jeandle_record_inline_result(int scope_id, int bci, uintptr_t callee_method, int result) {
   JeandleCompilation* comp = JeandleCompilation::current();
   assert(comp != nullptr, "Must be called in compile thread");
   ciMethod* callee = jeandle_callback_method(callee_method);
 
-  // LLVM calls this callback only after the inline transformation succeeds.
-  // Keep Jeandle's inline tree in sync at that point so later policy checks
-  // account for the bytecodes that were actually inlined.
-  JeandleInlineTree* callee_tree = comp->build_inline_tree_for_callee(scope_id, bci, callee);
-  // TODO: Allocate the callee inline tree before asking LLVM to inline. Today
-  // this callback is reached after LLVM has already changed IR, so failing to
-  // build the tree here would leave frontend inline metadata out of sync with
-  // backend IR.
-  guarantee(callee_tree != nullptr, "callee inline tree must be recorded after a successful inline");
+  llvm::jeandle::JeandleInlineReason llvm_reason =
+      static_cast<llvm::jeandle::JeandleInlineReason>(result);
+  if (llvm_reason == llvm::jeandle::JeandleInlineReason::InlineSuccess) {
+    // IsOkToInline has already prepared this tree, so a successful result only
+    // commits metadata in the same successful-inline order as LLVM's InlineScopes.
+    comp->commit_inline_tree_for_callee(scope_id, bci, callee);
+  } else {
+    comp->record_inline_failure(scope_id,
+                                bci,
+                                callee,
+                                jeandle_inline_reason_from_llvm(result));
+  }
   return true;
 }
 
@@ -325,7 +356,7 @@ void register_jeandle_vm_callbacks() {
   callbacks.GetInlineCalleeIR = &jeandle_get_inline_callee_ir;
   callbacks.GetNewStatepointID = &jeandle_get_new_statepoint_id;
   callbacks.IsOkToInline = &jeandle_is_ok_to_inline;
-  callbacks.RecordInlineSuccess = &jeandle_record_inline_success;
+  callbacks.RecordInlineResult = &jeandle_record_inline_result;
   callbacks.RecordInliningComplete = &jeandle_record_inlining_complete;
   llvm::jeandle::registerVMCallbacks(callbacks);
 

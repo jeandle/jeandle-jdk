@@ -150,11 +150,15 @@ public class TestInline {
     private static int countMethod(List<String> tree, String method) {
         int count = 0;
         for (int i = 1; i < tree.size(); i++) {
-            if (containsMethodName(tree.get(i), method)) {
+            if (isSuccessfulInline(tree.get(i)) && containsMethodName(tree.get(i), method)) {
                 count++;
             }
         }
         return count;
+    }
+
+    private static boolean isSuccessfulInline(String line) {
+        return !line.contains("[failed:");
     }
 
     private static boolean containsMethodName(String line, String method) {
@@ -164,7 +168,7 @@ public class TestInline {
             return false;
         }
         int end = idx + marker.length();
-        return end == line.length() || line.charAt(end) == '(';
+        return end == line.length() || line.charAt(end) == '(' || Character.isWhitespace(line.charAt(end));
     }
 
     private static String formatTree(List<String> tree) {
