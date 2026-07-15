@@ -25,6 +25,7 @@
 #include "jeandle/templatemodule/jeandleRuntimeDefinedJavaOps.hpp"
 #include "jeandle/jeandleRuntimeRoutine.hpp"
 #include "jeandle/jeandleRegister.hpp"
+#include "jeandle/jeandleCompiledCall.hpp"
 
 #include "jeandle/__hotspotHeadersBegin__.hpp"
 #include "ci/ciUtilities.hpp"
@@ -491,6 +492,17 @@ void RuntimeDefinedJavaOps::define_metadata(llvm::Module& template_module) {
     llvm::MDNode* heap_base_register = llvm::MDNode::get(context, {llvm::MDString::get(context, JeandleRegister::get_heap_base_pointer())});
     llvm::NamedMDNode* metadata_node = template_module.getOrInsertNamedMetadata(llvm::jeandle::Metadata::HeapBase);
     metadata_node->addOperand(heap_base_register);
+  }
+
+  // Static call patch size.
+  {
+    llvm::NamedMDNode* patch_node = template_module.getOrInsertNamedMetadata(llvm::jeandle::Metadata::StaticCallPatchSize);
+    assert(patch_node != nullptr, "invalid patch node");
+    llvm::Metadata* patch_size_md =
+      llvm::ConstantAsMetadata::get(
+        llvm::ConstantInt::get(llvm::Type::getInt32Ty(context),
+                                  JeandleCompiledCall::call_site_patch_size(JeandleCompiledCall::STATIC_CALL)));
+    patch_node->addOperand(llvm::MDNode::get(context, patch_size_md));
   }
 }
 

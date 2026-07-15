@@ -1074,13 +1074,6 @@ void JeandleCompilation::setup_llvm_module(llvm::MemoryBuffer* template_buffer) 
 
   llvm::NamedMDNode* metadata_node = _llvm_module->getOrInsertNamedMetadata(llvm::jeandle::Metadata::JavaMethodCompilation);
   assert(metadata_node != nullptr, "invalid metadata node");
-  llvm::NamedMDNode* patch_node = _llvm_module->getOrInsertNamedMetadata(llvm::jeandle::Metadata::StaticCallPatchSize);
-  assert(patch_node != nullptr, "invalid patch node");
-  llvm::Metadata* patch_size_md =
-    llvm::ConstantAsMetadata::get(
-      llvm::ConstantInt::get(llvm::Type::getInt32Ty(*_context),
-                                JeandleCompiledCall::call_site_patch_size(JeandleCompiledCall::STATIC_CALL)));
-  patch_node->addOperand(llvm::MDNode::get(*_context, patch_size_md));
 }
 
 static std::string construct_dump_path(const std::string& method_name,

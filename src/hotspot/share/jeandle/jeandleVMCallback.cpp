@@ -375,11 +375,6 @@ llvm::jeandle::CHAOptInfo optimize_virtual_call(ciMethod* caller,
                             Klass* receiver_klass, bool is_exact) {
   ciEnv* env = ciEnv::current();
 
-  // Same fast paths as C2's Compile::optimize_inlining.
-  if (callee->can_be_statically_bound()) {
-    return {};
-  }
-
   if (receiver_klass == nullptr)
     return {};
 
