@@ -27,6 +27,7 @@
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ExecutionEngine/JITLink/JITLink.h"
 #include "llvm/IR/Statepoint.h"
+#include "llvm/IR/Jeandle/Deoptimization.h"
 #include "llvm/Object/ELFObjectFile.h"
 #include "llvm/Object/StackMapParser.h"
 #include "llvm/Support/DynamicLibrary.h"
@@ -38,7 +39,6 @@
 #include "jeandle/jeandleReadELF.hpp"
 #include "jeandle/jeandleResourceObj.hpp"
 #include "jeandle/jeandleUtils.hpp"
-#include "llvm/IR/Jeandle/Deoptimization.h"
 
 #include "jeandle/__hotspotHeadersBegin__.hpp"
 #include "asm/codeBuffer.hpp"
