@@ -505,7 +505,7 @@ void JeandleCompiledCode::fill_one_scope_value(const StackMapParser& stackmaps,
                                                GrowableArray<ScopeValue*>* array) {
   assert(array != nullptr, "sanity");
   bool is_constant = StackMapUtil::is_constant(location);
-  switch (encode._basic_type) {
+  switch (static_cast<BasicType>(encode.basicType())) {
   case T_INT: {
     if (is_constant) {
       jint const_int = JeandleBitCast::bit_cast<jint>(StackMapUtil::getConstantUint(stackmaps, location));
@@ -576,7 +576,7 @@ void JeandleCompiledCode::fill_one_monitor_value(const StackMapParser& stackmaps
                                                  const StackMapParser::LocationAccessor& lock,
                                                  GrowableArray<MonitorValue*>* array) {
   assert(array != nullptr, "sanity");
-  assert(encode._basic_type == T_OBJECT, "should be");
+  assert(static_cast<BasicType>(encode.basicType()) == T_OBJECT, "should be");
 
   bool is_constant = StackMapUtil::is_constant(object);
   ScopeValue* locked_object = nullptr;
@@ -646,11 +646,14 @@ JeandleStackMap* JeandleCompiledCode::parse_stackmap(StackMapParser& stackmaps,
     // should_reexecute flag goes first (explicitly set by intrinsic lowering to match C2 behavior).
     // Pushed as i64 on the frontend side so it can't be mistaken for a duplicated-bci marker
     // (see JeandleAbstractInterpreter::deopt_args), so read it with the wide-constant accessor.
+    assert(location != record->location_end(), "must be in range");
     bool forced_reexecute = (StackMapUtil::getConstantUlong(stackmaps, *(location++)) != 0);
     num_deopts--;
 
     // bci goes next in deopt operands
+    assert(location != record->location_end(), "must be in range");
     bci = (location++)->getSmallConstant();
+    assert(location != record->location_end(), "must be in range");
     guarantee(bci == (int)((location++)->getSmallConstant()), "duplicated bci must match");
     num_deopts -= 2;
 
@@ -679,11 +682,11 @@ JeandleStackMap* JeandleCompiledCode::parse_stackmap(StackMapParser& stackmaps,
 
     uint64_t encode = StackMapUtil::getConstantUlong(stackmaps, encode_location);
     DeoptValueEncoding enc = DeoptValueEncoding::decode(encode);
-    int type = enc._value_type;
+    int type = enc.valueType();
 
 #ifdef ASSERT
     if (log_is_enabled(Trace, jeandle)) {
-      enc.print();
+      print_deopt_value(enc);
     }
 #endif
 

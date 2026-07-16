@@ -289,7 +289,7 @@ class JeandleCompilation : public StackObj {
 
   const std::string name() { return _name; }
 
-  bool is_osr_compilation() { return _entry_bci != InvocationEntryBci; }
+  bool is_osr_compilation() const { return _entry_bci != InvocationEntryBci; }
   bool over_inlining_cutoff() const;
   void* replay_inline_data() const { return _replay_inline_data; }
 
