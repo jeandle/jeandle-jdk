@@ -347,7 +347,6 @@ compiler/loopopts/TestRemoveEmptyLoop.java                                      
 ###
 compiler/cha/AbstractRootMethod.java                                                           linux-aarch64,linux-x64
 compiler/cha/DefaultRootMethod.java                                                            linux-aarch64,linux-x64
-compiler/cha/StrengthReduceInterfaceCall.java                                                  linux-aarch64,linux-x64
 
 ###
 # CodeEntryAlignment

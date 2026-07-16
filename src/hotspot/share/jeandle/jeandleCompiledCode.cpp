@@ -505,7 +505,7 @@ void JeandleCompiledCode::fill_one_scope_value(const StackMapParser& stackmaps,
                                                GrowableArray<ScopeValue*>* array) {
   assert(array != nullptr, "sanity");
   bool is_constant = StackMapUtil::is_constant(location);
-  switch (encode._basic_type) {
+  switch (static_cast<BasicType>(encode.basicType())) {
   case T_INT: {
     if (is_constant) {
       jint const_int = JeandleBitCast::bit_cast<jint>(StackMapUtil::getConstantUint(stackmaps, location));
@@ -576,7 +576,7 @@ void JeandleCompiledCode::fill_one_monitor_value(const StackMapParser& stackmaps
                                                  const StackMapParser::LocationAccessor& lock,
                                                  GrowableArray<MonitorValue*>* array) {
   assert(array != nullptr, "sanity");
-  assert(encode._basic_type == T_OBJECT, "should be");
+  assert(static_cast<BasicType>(encode.basicType()) == T_OBJECT, "should be");
 
   bool is_constant = StackMapUtil::is_constant(object);
   ScopeValue* locked_object = nullptr;
@@ -679,11 +679,11 @@ JeandleStackMap* JeandleCompiledCode::parse_stackmap(StackMapParser& stackmaps,
 
     uint64_t encode = StackMapUtil::getConstantUlong(stackmaps, encode_location);
     DeoptValueEncoding enc = DeoptValueEncoding::decode(encode);
-    int type = enc._value_type;
+    int type = enc.valueType();
 
 #ifdef ASSERT
     if (log_is_enabled(Trace, jeandle)) {
-      enc.print();
+      print_deopt_value(enc);
     }
 #endif
 

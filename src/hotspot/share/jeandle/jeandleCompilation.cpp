@@ -18,17 +18,20 @@
  *
  */
 
+#include "compiler/compilerDefinitions.hpp"
 #include "jeandle/__llvmHeadersBegin__.hpp"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/Bitcode/BitcodeReader.h"
 #include "llvm/Jeandle/Jeandle.h"
 #include "llvm/IR/CallingConv.h"
+#include "llvm/IR/Constants.h"
 #include "llvm/IR/Jeandle/Attributes.h"
 #include "llvm/IR/Jeandle/GCStrategy.h"
 #include "llvm/IR/Jeandle/Metadata.h"
 #include "llvm/IR/Jeandle/VMCallbackLog.h"
 #include "llvm/IR/InstIterator.h"
 #include "llvm/IR/LLVMContext.h"
+#include "llvm/IR/Metadata.h"
 #include "llvm/IR/LegacyPassManager.h"
 #include "llvm/IR/IRBuilder.h"
 #include "llvm/IR/Module.h"
@@ -258,7 +261,7 @@ JeandleCompilation::JeandleCompilation(llvm::TargetMachine* target_machine,
                                        _inline_tree_root(nullptr),
                                        _oops(),
                                        _oop_idx(0),
-                                       _code(env, method),
+                                       _code(env, method, entry_bci != InvocationEntryBci),
                                        _error_msg(nullptr),
                                        _has_monitors(false),
                                        _const_section_alignment(-1) {
@@ -428,7 +431,8 @@ bool JeandleCompilation::over_inlining_cutoff() const {
     return true;
   }
 
-  std::string root_name = JeandleFuncSig::method_name_with_signature(_method);
+  std::string root_name = JeandleFuncSig::method_name_with_signature(
+      _method, is_osr_compilation());
   llvm::Function* root = _llvm_module->getFunction(root_name);
   assert(root != nullptr, "root Java method function must exist");
 
@@ -1238,7 +1242,7 @@ void JeandleCompilation::dump_inline_callee_replay_module() {
   assert(_llvm_module != nullptr, "llvm module must exist");
   std::unique_ptr<llvm::Module> replay_module = llvm::CloneModule(*_llvm_module);
   assert(replay_module != nullptr, "failed to clone inline callee replay module");
-  std::string root_name = JeandleFuncSig::method_name_with_signature(_method);
+  std::string root_name = JeandleFuncSig::method_name_with_signature(_method, is_osr_compilation());
 
   // Keep only non-root Java method bodies for replay. Calls inside those methods
   // may still reference helper/runtime declarations, so non-replay functions are
