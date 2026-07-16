@@ -3623,8 +3623,9 @@ void JeandleAbstractInterpreter::shared_unlock(LockValue lock) {
   _ir_builder.SetInsertPoint(monitorexit_slow_path);
   llvm::FunctionCallee monitorexit_callee = JeandleRuntimeRoutine::SharedRuntime_complete_monitor_unlocking_C_callee(_module);
   llvm::CallInst* current_thread = call_java_op("jeandle.current_thread", {});
-  llvm::CallInst* call_monitorexit = _ir_builder.CreateCall(monitorexit_callee, {lock.object().value(), lock.lock(), current_thread});
-  call_monitorexit->setCallingConv(llvm::CallingConv::C);
+  // Use create_call_ex (InvokeInst) so that IllegalMonitorStateException from
+  // complete_monitor_unlocking_C can be caught by Java exception handlers.
+  create_call_ex(monitorexit_callee, {lock.object().value(), lock.lock(), current_thread}, llvm::CallingConv::C);
   _ir_builder.CreateBr(monitor_exited);
 
   _ir_builder.SetInsertPoint(monitor_exited);
