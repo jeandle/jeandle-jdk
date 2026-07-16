@@ -19,6 +19,7 @@
  */
 
 #include "jeandle/__llvmHeadersBegin__.hpp"
+#include "llvm/IR/InlineAsm.h"
 #include "llvm/IR/IRBuilder.h"
 #include "llvm/IR/IntrinsicsAArch64.h"
 
