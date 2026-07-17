@@ -22,6 +22,7 @@
 #include "jeandle/__llvmHeadersBegin__.hpp"
 #include "llvm/Analysis/ConstantFolding.h"
 #include "llvm/IR/Constants.h"
+#include "llvm/IR/DerivedTypes.h"
 #include "llvm/IR/MDBuilder.h"
 
 #include "jeandle/jeandleAbstractInterpreter.hpp"
@@ -39,6 +40,7 @@
 #include "oops/klass.hpp"
 #include "runtime/deoptimization.hpp"
 #include "runtime/globals.hpp"
+#include "utilities/globalDefinitions.hpp"
 
 // =============================================================================
 // Call-site IR annotation helpers (migrated from JeandleIntrinsicIRSemantics)
@@ -93,6 +95,9 @@ bool JeandleIntrinsicLowering::is_supported(vmIntrinsics::ID id) {
 
     case vmIntrinsics::_onSpinWait:
       return cpu_supports_spin_wait();
+
+    case vmIntrinsics::_vectorizedMismatch:
+      return UseVectorizedMismatchIntrinsic;
 
     default: break;
   }
@@ -370,6 +375,9 @@ bool JeandleIntrinsicLowering::lower(vmIntrinsics::ID id, const ciMethod* target
     case vmIntrinsics::_PhantomReference_refersTo0:
       return lower_java_op("jeandle.reference_refers_to",
                            {CTRL_NONE, MEM_READ | MEM_NEEDS_GC_STATE});
+
+    case vmIntrinsics::_vectorizedMismatch:
+      return lower_vectorized_mismatch();
 
     // newArray
     case vmIntrinsics::_newArray:
@@ -861,6 +869,261 @@ bool JeandleIntrinsicLowering::lower_new_array() {
 
   _interp->_jvm->apush(result);
   return true;
+}
+
+// ---- lower_vectorized_mismatch ----
+//
+// Use LLVM IR for byte ranges too small to benefit from the platform stub. The
+// larger ranges retain the platform StubRoutines implementation, including its
+// vector tiers where available.
+bool JeandleIntrinsicLowering::lower_vectorized_mismatch() {
+  if (!UseVectorizedMismatchIntrinsic ||
+      JeandleRuntimeRoutine::find_routine_entry("StubRoutines_vectorizedMismatch") == nullptr) {
+    return false;
+  }
+
+  llvm::IRBuilder<>& b = _interp->_ir_builder;
+  llvm::Type* i8 = b.getInt8Ty();
+
+  // Operand stack, top to bottom:
+  //   scale, length, bOffset, b, aOffset, a
+  // All support checks above must complete before these values are consumed.
+  llvm::Value* scale = _interp->_jvm->ipop();
+  llvm::Value* length = _interp->_jvm->ipop();
+  llvm::Value* b_offset = _interp->_jvm->lpop();
+  llvm::Value* b_obj = _interp->_jvm->apop();
+  llvm::Value* a_offset = _interp->_jvm->lpop();
+  llvm::Value* a_obj = _interp->_jvm->apop();
+
+  llvm::Value* a_addr = b.CreateGEP(i8, a_obj, a_offset, "mismatch_a_addr");
+  llvm::Value* b_addr = b.CreateGEP(i8, b_obj, b_offset, "mismatch_b_addr");
+
+  llvm::LLVMContext& ctx = *_interp->_context;
+  llvm::Type* i32 = b.getInt32Ty();
+  llvm::Type* i64 = b.getInt64Ty();
+  llvm::Function* f = _interp->_llvm_func;
+
+  static constexpr unsigned small_path_limit = 16;
+  static constexpr unsigned medium_path_limit = 64;
+
+  // Compute in i64 so a large i32 length shifted by scale cannot wrap into an
+  // inline tier. The VM guarantees scale is a valid element-size logarithm.
+  llvm::Value* scale64 = b.CreateZExt(scale, i64, "mismatch_scale64");
+  llvm::Value* byte_length = b.CreateShl(b.CreateZExt(length, i64), scale64,
+                                         "mismatch_byte_length");
+  llvm::Value* is_small = b.CreateICmpULT(
+      byte_length, llvm::ConstantInt::get(i64, small_path_limit),
+      "mismatch_inline_small");
+  llvm::Value* is_medium = b.CreateICmpULT(
+      byte_length, llvm::ConstantInt::get(i64, medium_path_limit),
+      "mismatch_inline_medium");
+
+  llvm::BasicBlock* small_bb = llvm::BasicBlock::Create(ctx, "mismatch_inline_small", f);
+  llvm::BasicBlock* dispatch_bb = llvm::BasicBlock::Create(ctx, "mismatch_dispatch_medium", f);
+  llvm::BasicBlock* medium_bb = llvm::BasicBlock::Create(ctx, "mismatch_inline_medium", f);
+  llvm::BasicBlock* stub_bb = llvm::BasicBlock::Create(ctx, "mismatch_stub", f);
+  llvm::BasicBlock* done_bb = llvm::BasicBlock::Create(ctx, "mismatch_done", f);
+  b.CreateCondBr(is_small, small_bb, dispatch_bb);
+
+  // Tier 1: inline scalar IR for ranges shorter than 16 bytes.
+  b.SetInsertPoint(small_bb);
+  llvm::Value* small_result = emit_vectorized_mismatch_small(a_addr, b_addr, byte_length, scale64);
+  llvm::BasicBlock* small_done_bb = b.GetInsertBlock();
+  b.CreateBr(done_bb);
+
+  // Tier 2 is available only when the target can lower the fixed-width vector
+  // IR efficiently. Unsupported targets skip directly to the platform stub.
+  b.SetInsertPoint(dispatch_bb);
+  if (cpu_supports_string_simd()) {
+    b.CreateCondBr(is_medium, medium_bb, stub_bb);
+  } else {
+    b.CreateBr(stub_bb);
+  }
+
+  // Tier 2: inline 128-bit vector IR for byte lengths in [16, 64).
+  b.SetInsertPoint(medium_bb);
+  llvm::Value* medium_result = emit_vectorized_mismatch_medium(a_addr, b_addr, byte_length, scale64);
+  llvm::BasicBlock* medium_done_bb = b.GetInsertBlock();
+  b.CreateBr(done_bb);
+
+  // Tier 3: use the platform stub for large ranges, or as the fallback when
+  // fixed-width vector IR is not enabled on the target.
+  b.SetInsertPoint(stub_bb);
+  static constexpr CallSiteAttributeMetadata attrs = {CTRL_NONE, MEM_READ};
+  llvm::CallBase* call = emit_callsite(
+      JeandleRuntimeRoutine::StubRoutines_vectorizedMismatch_callee(_interp->_module),
+      llvm::CallingConv::C, {a_addr, b_addr, length, scale}, attrs,
+      /*is_gc_leaf_entry=*/true);
+  llvm::BasicBlock* stub_done_bb = b.GetInsertBlock();
+  b.CreateBr(done_bb);
+
+  // All three tiers produce the same element-index result.
+  b.SetInsertPoint(done_bb);
+  llvm::PHINode* result = b.CreatePHI(i32, 3, "mismatch_result");
+  result->addIncoming(small_result, small_done_bb);
+  result->addIncoming(medium_result, medium_done_bb);
+  result->addIncoming(call, stub_done_bb);
+  _interp->_block->set_tail_llvm_block(done_bb);
+  _interp->_jvm->ipush(result);
+  return true;
+}
+
+llvm::Value* JeandleIntrinsicLowering::emit_vectorized_mismatch_small(
+    llvm::Value* a_addr, llvm::Value* b_addr, llvm::Value* byte_length, llvm::Value* scale) {
+  llvm::LLVMContext& ctx = *_interp->_context;
+  llvm::IRBuilder<>& b = _interp->_ir_builder;
+  llvm::Type* i32 = b.getInt32Ty();
+  llvm::Type* i64 = b.getInt64Ty();
+  llvm::Function* f = _interp->_llvm_func;
+
+  llvm::BasicBlock* first_check = llvm::BasicBlock::Create(ctx, "mismatch_inline_small_check", f);
+  llvm::BasicBlock* done = llvm::BasicBlock::Create(ctx, "mismatch_inline_small_done", f);
+  llvm::PHINode* result = llvm::PHINode::Create(i32, 5, "mismatch_inline_small_result", done);
+  b.CreateBr(first_check);
+
+  // Compare the largest exact chunk first. All loads use Align(1), since
+  // vectorizedMismatch also accepts direct, non-aligned Unsafe addresses.
+  static constexpr unsigned widths[] = {8, 4, 2, 1};
+  static constexpr const char* suffixes[] = {"i64", "i32", "i16", "i8"};
+  llvm::BasicBlock* check = first_check;
+  llvm::Value* pos = llvm::ConstantInt::get(i64, 0);
+  for (unsigned index = 0; index < sizeof(widths) / sizeof(widths[0]); index++) {
+    const unsigned width = widths[index];
+    const char* suffix = suffixes[index];
+    llvm::Type* chunk_ty = llvm::IntegerType::get(ctx, width * BitsPerByte);
+    llvm::BasicBlock* load = llvm::BasicBlock::Create(ctx, "mismatch_inline_small_load", f);
+    llvm::BasicBlock* hit = llvm::BasicBlock::Create(ctx, "mismatch_inline_small_hit", f);
+    llvm::BasicBlock* equal = llvm::BasicBlock::Create(ctx, "mismatch_inline_small_equal", f);
+    llvm::BasicBlock* next_check = llvm::BasicBlock::Create(ctx, "mismatch_inline_small_check", f);
+
+    // Use this width only when the unprocessed suffix is large enough.
+    b.SetInsertPoint(check);
+    llvm::Value* remaining = b.CreateSub(byte_length, pos, "mismatch_inline_small_remaining");
+    b.CreateCondBr(b.CreateICmpUGE(remaining, llvm::ConstantInt::get(i64, width)), load, next_check);
+
+    // Loads are explicitly unaligned because either base may be a raw Unsafe
+    // address rather than an aligned Java array base.
+    b.SetInsertPoint(load);
+    llvm::Value* a_ptr = b.CreateGEP(b.getInt8Ty(), a_addr, pos, "mismatch_inline_small_a_addr");
+    llvm::Value* b_ptr = b.CreateGEP(b.getInt8Ty(), b_addr, pos, "mismatch_inline_small_b_addr");
+    llvm::Value* a_chunk = b.CreateAlignedLoad(
+        chunk_ty, a_ptr, llvm::Align(1), llvm::Twine("mismatch_inline_small_a_") + suffix);
+    llvm::Value* b_chunk = b.CreateAlignedLoad(
+        chunk_ty, b_ptr, llvm::Align(1), llvm::Twine("mismatch_inline_small_b_") + suffix);
+    llvm::Value* diff = b.CreateXor(a_chunk, b_chunk, "mismatch_inline_small_diff");
+    b.CreateCondBr(b.CreateICmpNE(diff, llvm::ConstantInt::get(chunk_ty, 0)), hit, equal);
+
+    // cttz identifies the first differing bit in the loaded little-endian
+    // chunk. Convert it first to a byte index, then to an element index.
+    b.SetInsertPoint(hit);
+    llvm::Value* first_bit = b.CreateIntrinsic(llvm::Intrinsic::cttz, {chunk_ty},
+        {diff, b.getInt1(true)}, nullptr, "mismatch_inline_small_cttz");
+    llvm::Value* byte_in_chunk = b.CreateLShr(first_bit,
+        llvm::ConstantInt::get(chunk_ty, LogBitsPerByte), "mismatch_inline_small_byte_in_chunk");
+    llvm::Value* byte_index = b.CreateAdd(pos, b.CreateZExtOrTrunc(byte_in_chunk, i64),
+                                           "mismatch_inline_small_byte_index");
+    llvm::Value* element_index = b.CreateTrunc(
+        b.CreateLShr(byte_index, scale), i32, "mismatch_inline_small_element_index");
+    result->addIncoming(element_index, hit);
+    b.CreateBr(done);
+
+    // This chunk matched. Advance by its width and try the next smaller width.
+    b.SetInsertPoint(equal);
+    llvm::Value* next_pos = b.CreateAdd(pos, llvm::ConstantInt::get(i64, width),
+                                        "mismatch_inline_small_next_pos");
+    b.CreateBr(next_check);
+
+    b.SetInsertPoint(next_check);
+    llvm::PHINode* merged_pos = b.CreatePHI(i64, 2, "mismatch_inline_small_pos");
+    merged_pos->addIncoming(pos, check);
+    merged_pos->addIncoming(next_pos, equal);
+    pos = merged_pos;
+    check = next_check;
+  }
+
+  // No width found a difference, so the complete range matched.
+  b.SetInsertPoint(check);
+  result->addIncoming(llvm::ConstantInt::getSigned(i32, -1), check);
+  b.CreateBr(done);
+
+  b.SetInsertPoint(done);
+  return result;
+}
+
+llvm::Value* JeandleIntrinsicLowering::emit_vectorized_mismatch_medium(
+    llvm::Value* a_addr, llvm::Value* b_addr, llvm::Value* byte_length, llvm::Value* scale) {
+  llvm::LLVMContext& ctx = *_interp->_context;
+  llvm::IRBuilder<>& b = _interp->_ir_builder;
+  llvm::Type* i8 = b.getInt8Ty();
+  llvm::Type* i16 = b.getInt16Ty();
+  llvm::Type* i32 = b.getInt32Ty();
+  llvm::Type* i64 = b.getInt64Ty();
+  static constexpr unsigned vector_bytes = 16;
+  llvm::Type* vec_ty = llvm::FixedVectorType::get(i8, vector_bytes);
+  llvm::Function* f = _interp->_llvm_func;
+
+  llvm::BasicBlock* pred = b.GetInsertBlock();
+  llvm::BasicBlock* head = llvm::BasicBlock::Create(ctx, "mismatch_inline_vector_head", f);
+  llvm::BasicBlock* hit = llvm::BasicBlock::Create(ctx, "mismatch_inline_vector_hit", f);
+  llvm::BasicBlock* matched = llvm::BasicBlock::Create(ctx, "mismatch_inline_vector_matched", f);
+  llvm::BasicBlock* advance = llvm::BasicBlock::Create(ctx, "mismatch_inline_vector_advance", f);
+  llvm::BasicBlock* done = llvm::BasicBlock::Create(ctx, "mismatch_inline_vector_done", f);
+
+  // The final vector load starts at byte_length - 16. When the range is not a
+  // multiple of 16, this overlaps the preceding load and covers the tail
+  // without an out-of-bounds access or a scalar cleanup loop.
+  llvm::Value* last_start = b.CreateSub(
+      byte_length, llvm::ConstantInt::get(i64, vector_bytes),
+      "mismatch_inline_vector_last_start");
+  b.CreateBr(head);
+
+  // Compare one 16-byte window and reduce the per-byte comparison to a mask.
+  b.SetInsertPoint(head);
+  llvm::PHINode* pos = b.CreatePHI(i64, 2, "mismatch_inline_vector_pos");
+  pos->addIncoming(llvm::ConstantInt::get(i64, 0), pred);
+  llvm::Value* a_ptr = b.CreateGEP(i8, a_addr, pos, "mismatch_inline_vector_a_addr");
+  llvm::Value* b_ptr = b.CreateGEP(i8, b_addr, pos, "mismatch_inline_vector_b_addr");
+  llvm::Value* va = b.CreateAlignedLoad(vec_ty, a_ptr, llvm::Align(1),
+                                        "mismatch_inline_vector_a");
+  llvm::Value* vb = b.CreateAlignedLoad(vec_ty, b_ptr, llvm::Align(1),
+                                        "mismatch_inline_vector_b");
+  llvm::Value* byte_diff = b.CreateICmpNE(va, vb, "mismatch_inline_vector_diff");
+  llvm::Value* mask = b.CreateBitCast(byte_diff, i16, "mismatch_inline_vector_mask");
+  b.CreateCondBr(b.CreateICmpNE(mask, llvm::ConstantInt::get(i16, 0)), hit, matched);
+
+  // Each bit in the mask represents one byte. cttz therefore gives the first
+  // differing byte directly.
+  b.SetInsertPoint(hit);
+  llvm::Value* first_byte = b.CreateIntrinsic(llvm::Intrinsic::cttz, {i16},
+      {mask, b.getInt1(true)}, nullptr, "mismatch_inline_vector_cttz");
+  llvm::Value* byte_index = b.CreateAdd(pos, b.CreateZExt(first_byte, i64),
+                                        "mismatch_inline_vector_byte_index");
+  llvm::Value* element_index = b.CreateTrunc(b.CreateLShr(byte_index, scale), i32,
+                                              "mismatch_inline_vector_element_index");
+  b.CreateBr(done);
+
+  // Reaching last_start means the entire byte range has been compared.
+  b.SetInsertPoint(matched);
+  b.CreateCondBr(b.CreateICmpEQ(pos, last_start), done, advance);
+
+  // Advance normally when another full vector fits. Otherwise compare the
+  // overlapping final window at last_start.
+  b.SetInsertPoint(advance);
+  llvm::Value* sequential = b.CreateAdd(
+      pos, llvm::ConstantInt::get(i64, vector_bytes),
+      "mismatch_inline_vector_sequential");
+  llvm::Value* sequential_end = b.CreateAdd(
+      sequential, llvm::ConstantInt::get(i64, vector_bytes));
+  llvm::Value* next_pos = b.CreateSelect(b.CreateICmpULE(sequential_end, byte_length), sequential,
+                                         last_start, "mismatch_inline_vector_next");
+  pos->addIncoming(next_pos, advance);
+  b.CreateBr(head);
+
+  b.SetInsertPoint(done);
+  llvm::PHINode* result = b.CreatePHI(i32, 2, "mismatch_inline_vector_result");
+  result->addIncoming(element_index, hit);
+  result->addIncoming(llvm::ConstantInt::getSigned(i32, -1), matched);
+  return result;
 }
 
 // ---- lower_add_exact ----

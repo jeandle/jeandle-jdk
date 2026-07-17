@@ -6463,6 +6463,291 @@ class StubGenerator: public StubCodeGenerator {
     return entry;
   }
 
+  // Arguments:
+  //   c_rarg0 - first array/raw memory address
+  //   c_rarg1 - second array/raw memory address
+  //   c_rarg2 - element length
+  //   c_rarg3 - log2(element size in bytes)
+  //
+  // Result:
+  //   r0 >= 0 - first mismatching element index
+  //   r0 == -1 - all requested elements match
+  address generate_vectorizedMismatch() {
+    __ align(CodeEntryAlignment);
+    StubCodeMark mark(this, "StubRoutines", "vectorizedMismatch");
+    address entry = __ pc();
+
+    const Register obja = c_rarg0;
+    const Register objb = c_rarg1;
+    const Register length = c_rarg2;
+    const Register scale = c_rarg3;
+    const Register result = r0;
+    const Register byte_index = r4;
+    const Register byte_length = r5;
+    const Register tmp1 = r6;
+    const Register tmp2 = r7;
+    const Register tmp3 = r8;
+    const Register tmp4 = r9;
+    const Register a_ptr = r10;
+    const Register b_ptr = r11;
+    const Register a_load_ptr = r12;
+    const Register b_load_ptr = r13;
+
+    Label LOOP256, CHECK64, LOOP64;
+    Label LOOP16, TAIL16, TAIL8, TAIL4, TAIL1, BYTES_LOOP;
+    Label DIFF256, DIFF64, DIFF_LOW, DIFF_HIGH, DIFF4, DIFF_BYTE;
+    Label SAME_TILL_END, DONE;
+
+    __ mov(byte_index, zr);
+    __ mov(a_ptr, obja);
+    __ mov(b_ptr, objb);
+    // length is a Java int, but the byte length can exceed 32 bits for large
+    // int/long arrays. Zero-extend before scaling so the shift cannot wrap.
+    __ movw(byte_length, length);
+    __ lslv(byte_length, byte_length, scale);
+    __ mov(tmp3, 256);
+
+    // Use the four-way unrolled loop while at least 256 bytes remain. Shorter
+    // ranges start with the 64-byte loop or the scalar tail.
+    __ cmp(byte_length, tmp3);
+    __ br(__ GE, LOOP256);
+
+    __ bind(CHECK64);
+    __ cmp(byte_length, (u1)64);
+    __ br(__ LT, TAIL16);
+    __ b(LOOP64);
+
+    // Match C2's vector-tier approach by checking four vector blocks together.
+    // The per-block differences stay live, so a mismatch can still fall back to
+    // the original 64-byte locator without changing the result semantics.
+    __ bind(LOOP256);
+      __ mov(a_load_ptr, a_ptr);
+      __ mov(b_load_ptr, b_ptr);
+
+      // Bytes [0, 64).
+      __ ld1(v0, v1, v2, v3, __ T16B, Address(a_ptr));
+      __ ld1(v4, v5, v6, v7, __ T16B, Address(b_ptr));
+      __ eor(v0, __ T16B, v0, v4);
+      __ eor(v1, __ T16B, v1, v5);
+      __ eor(v2, __ T16B, v2, v6);
+      __ eor(v3, __ T16B, v3, v7);
+      __ orr(v0, __ T16B, v0, v1);
+      __ orr(v2, __ T16B, v2, v3);
+      __ orr(v16, __ T16B, v0, v2);
+
+      // Bytes [64, 128).
+      __ add(a_load_ptr, a_load_ptr, (u1)64);
+      __ add(b_load_ptr, b_load_ptr, (u1)64);
+      __ ld1(v0, v1, v2, v3, __ T16B, Address(a_load_ptr));
+      __ ld1(v4, v5, v6, v7, __ T16B, Address(b_load_ptr));
+      __ eor(v0, __ T16B, v0, v4);
+      __ eor(v1, __ T16B, v1, v5);
+      __ eor(v2, __ T16B, v2, v6);
+      __ eor(v3, __ T16B, v3, v7);
+      __ orr(v0, __ T16B, v0, v1);
+      __ orr(v2, __ T16B, v2, v3);
+      __ orr(v17, __ T16B, v0, v2);
+
+      // Bytes [128, 192).
+      __ add(a_load_ptr, a_load_ptr, (u1)64);
+      __ add(b_load_ptr, b_load_ptr, (u1)64);
+      __ ld1(v0, v1, v2, v3, __ T16B, Address(a_load_ptr));
+      __ ld1(v4, v5, v6, v7, __ T16B, Address(b_load_ptr));
+      __ eor(v0, __ T16B, v0, v4);
+      __ eor(v1, __ T16B, v1, v5);
+      __ eor(v2, __ T16B, v2, v6);
+      __ eor(v3, __ T16B, v3, v7);
+      __ orr(v0, __ T16B, v0, v1);
+      __ orr(v2, __ T16B, v2, v3);
+      __ orr(v18, __ T16B, v0, v2);
+
+      // Bytes [192, 256).
+      __ add(a_load_ptr, a_load_ptr, (u1)64);
+      __ add(b_load_ptr, b_load_ptr, (u1)64);
+      __ ld1(v0, v1, v2, v3, __ T16B, Address(a_load_ptr));
+      __ ld1(v4, v5, v6, v7, __ T16B, Address(b_load_ptr));
+      __ eor(v0, __ T16B, v0, v4);
+      __ eor(v1, __ T16B, v1, v5);
+      __ eor(v2, __ T16B, v2, v6);
+      __ eor(v3, __ T16B, v3, v7);
+      __ orr(v0, __ T16B, v0, v1);
+      __ orr(v2, __ T16B, v2, v3);
+      __ orr(v19, __ T16B, v0, v2);
+
+      // Reduce the four block differences to one branch condition, while
+      // retaining v16-v19 so DIFF256 can identify the first differing block.
+      __ orr(v1, __ T16B, v16, v17);
+      __ orr(v2, __ T16B, v18, v19);
+      __ orr(v1, __ T16B, v1, v2);
+      __ umov(tmp1, v1, __ D, 0);
+      __ umov(tmp2, v1, __ D, 1);
+      __ orr(tmp1, tmp1, tmp2);
+      __ cbnz(tmp1, DIFF256);
+
+      // All 256 bytes matched. Advance every cursor to the next block.
+      __ add(a_ptr, a_ptr, tmp3);
+      __ add(b_ptr, b_ptr, tmp3);
+      __ add(byte_index, byte_index, tmp3);
+      __ sub(byte_length, byte_length, tmp3);
+      __ cmp(byte_length, tmp3);
+      __ br(__ GE, LOOP256);
+      __ b(CHECK64);
+
+    // Compare one 64-byte block with four NEON registers.
+    __ bind(LOOP64);
+      __ ld1(v0, v1, v2, v3, __ T16B, Address(a_ptr));
+      __ ld1(v4, v5, v6, v7, __ T16B, Address(b_ptr));
+      __ eor(v0, __ T16B, v0, v4);
+      __ eor(v1, __ T16B, v1, v5);
+      __ eor(v2, __ T16B, v2, v6);
+      __ eor(v3, __ T16B, v3, v7);
+      __ orr(v0, __ T16B, v0, v1);
+      __ orr(v2, __ T16B, v2, v3);
+      __ orr(v0, __ T16B, v0, v2);
+      __ umov(tmp1, v0, __ D, 0);
+      __ umov(tmp2, v0, __ D, 1);
+      __ orr(tmp1, tmp1, tmp2);
+      __ cbnz(tmp1, DIFF64);
+      __ add(a_ptr, a_ptr, (u1)64);
+      __ add(b_ptr, b_ptr, (u1)64);
+      __ add(byte_index, byte_index, (u1)64);
+      __ sub(byte_length, byte_length, (u1)64);
+      __ cmp(byte_length, (u1)64);
+      __ br(__ GE, LOOP64);
+      __ b(TAIL16);
+
+    // Locate the first differing 64-byte sub-block in the unrolled chunk.
+    // DIFF64 then refines that block to the exact byte.
+    __ bind(DIFF256);
+      __ umov(tmp1, v16, __ D, 0);
+      __ umov(tmp2, v16, __ D, 1);
+      __ orr(tmp1, tmp1, tmp2);
+      __ cbnz(tmp1, DIFF64);
+      __ add(a_ptr, a_ptr, (u1)64);
+      __ add(b_ptr, b_ptr, (u1)64);
+      __ add(byte_index, byte_index, (u1)64);
+
+      __ umov(tmp1, v17, __ D, 0);
+      __ umov(tmp2, v17, __ D, 1);
+      __ orr(tmp1, tmp1, tmp2);
+      __ cbnz(tmp1, DIFF64);
+      __ add(a_ptr, a_ptr, (u1)64);
+      __ add(b_ptr, b_ptr, (u1)64);
+      __ add(byte_index, byte_index, (u1)64);
+
+      __ umov(tmp1, v18, __ D, 0);
+      __ umov(tmp2, v18, __ D, 1);
+      __ orr(tmp1, tmp1, tmp2);
+      __ cbnz(tmp1, DIFF64);
+      // The aggregate check guarantees the remaining fourth block differs.
+      __ add(a_ptr, a_ptr, (u1)64);
+      __ add(b_ptr, b_ptr, (u1)64);
+      __ add(byte_index, byte_index, (u1)64);
+      __ b(DIFF64);
+
+    // Scalar tail: consume complete 16-byte chunks with paired 64-bit loads.
+    __ bind(TAIL16);
+      __ cmp(byte_length, (u1)16);
+      __ br(__ LT, TAIL8);
+
+    __ bind(LOOP16);
+      __ ldp(tmp1, tmp2, Address(a_ptr));
+      __ ldp(tmp3, tmp4, Address(b_ptr));
+      __ eor(tmp1, tmp1, tmp3);
+      __ eor(tmp2, tmp2, tmp4);
+      __ cbnz(tmp1, DIFF_LOW);
+      __ cbnz(tmp2, DIFF_HIGH);
+      __ add(a_ptr, a_ptr, (u1)16);
+      __ add(b_ptr, b_ptr, (u1)16);
+      __ add(byte_index, byte_index, (u1)16);
+      __ sub(byte_length, byte_length, (u1)16);
+      __ cmp(byte_length, (u1)16);
+      __ br(__ GE, LOOP16);
+
+    // Consume an optional 8-byte chunk.
+    __ bind(TAIL8);
+      __ cmp(byte_length, (u1)8);
+      __ br(__ LT, TAIL4);
+      __ ldr(tmp1, Address(a_ptr));
+      __ ldr(tmp2, Address(b_ptr));
+      __ eor(tmp1, tmp1, tmp2);
+      __ cbnz(tmp1, DIFF_LOW);
+      __ add(a_ptr, a_ptr, (u1)8);
+      __ add(b_ptr, b_ptr, (u1)8);
+      __ add(byte_index, byte_index, (u1)8);
+      __ sub(byte_length, byte_length, (u1)8);
+
+    // Consume an optional 4-byte chunk.
+    __ bind(TAIL4);
+      __ cmp(byte_length, (u1)4);
+      __ br(__ LT, TAIL1);
+      __ ldrw(tmp1, Address(a_ptr));
+      __ ldrw(tmp2, Address(b_ptr));
+      __ eorw(tmp1, tmp1, tmp2);
+      __ cbnzw(tmp1, DIFF4);
+      __ add(a_ptr, a_ptr, (u1)4);
+      __ add(b_ptr, b_ptr, (u1)4);
+      __ add(byte_index, byte_index, (u1)4);
+      __ sub(byte_length, byte_length, (u1)4);
+
+    // Compare the remaining one to three bytes individually.
+    __ bind(TAIL1);
+      __ cbz(byte_length, SAME_TILL_END);
+
+    __ bind(BYTES_LOOP);
+      __ ldrb(tmp1, Address(a_ptr));
+      __ ldrb(tmp2, Address(b_ptr));
+      __ eorw(tmp1, tmp1, tmp2);
+      __ cbnzw(tmp1, DIFF_BYTE);
+      __ add(a_ptr, a_ptr, (u1)1);
+      __ add(b_ptr, b_ptr, (u1)1);
+      __ add(byte_index, byte_index, (u1)1);
+      __ subs(byte_length, byte_length, (u1)1);
+      __ br(__ NE, BYTES_LOOP);
+
+    // Every requested byte matched.
+    __ bind(SAME_TILL_END);
+      __ mov(result, -1);
+      __ ret(lr);
+
+    // A 64-byte vector block differed. Reuse the 16-byte locator to find the
+    // exact differing word and byte.
+    __ bind(DIFF64);
+      __ mov(byte_length, (u1)64);
+      __ b(LOOP16);
+
+    // The high 64-bit word of a 16-byte pair differed.
+    __ bind(DIFF_HIGH);
+      __ add(byte_index, byte_index, (u1)8);
+      __ mov(tmp1, tmp2);
+
+    // rbit + clz counts from the least-significant differing bit, which is the
+    // first differing byte at the current little-endian memory address.
+    __ bind(DIFF_LOW);
+      __ rbit(tmp1, tmp1);
+      __ clz(tmp1, tmp1);
+      __ add(result, byte_index, tmp1, __ LSR, LogBitsPerByte);
+      __ b(DONE);
+
+    // Apply the same bit-to-byte conversion to a differing 32-bit word.
+    __ bind(DIFF4);
+      __ rbit(tmp1, tmp1);
+      __ clz(tmp1, tmp1);
+      __ add(result, byte_index, tmp1, __ LSR, LogBitsPerByte);
+      __ b(DONE);
+
+    __ bind(DIFF_BYTE);
+      __ mov(result, byte_index);
+
+    // The search tracks byte offsets. Convert the result back to the element
+    // index required by ArraysSupport.vectorizedMismatch.
+    __ bind(DONE);
+      __ lsrv(result, result, scale);
+      __ ret(lr);
+
+    return entry;
+  }
+
   /**
    *  Arguments:
    *
@@ -8680,6 +8965,10 @@ class StubGenerator: public StubCodeGenerator {
     }
 
     StubRoutines::aarch64::_spin_wait = generate_spin_wait();
+
+    if (UseVectorizedMismatchIntrinsic) {
+      StubRoutines::_vectorizedMismatch = generate_vectorizedMismatch();
+    }
 
     if (UsePoly1305Intrinsics) {
       StubRoutines::_poly1305_processBlocks = generate_poly1305_processBlocks();

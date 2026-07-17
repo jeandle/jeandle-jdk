@@ -270,7 +270,10 @@ void VM_Version::initialize() {
     FLAG_SET_DEFAULT(UseAdler32Intrinsics, true);
   }
 
-  if (UseVectorizedMismatchIntrinsic) {
+  if (UseJeandleCompiler && FLAG_IS_DEFAULT(UseVectorizedMismatchIntrinsic)) {
+    FLAG_SET_DEFAULT(UseVectorizedMismatchIntrinsic, true);
+  }
+  if (UseVectorizedMismatchIntrinsic && !UseJeandleCompiler) {
     warning("UseVectorizedMismatchIntrinsic specified, but not available on this CPU.");
     FLAG_SET_DEFAULT(UseVectorizedMismatchIntrinsic, false);
   }

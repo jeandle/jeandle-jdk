@@ -25,6 +25,7 @@ package compiler.intrinsics;
 
 /*
  * @test
+ * @requires vm.opt.final.UseJeandleCompiler == false
  * @requires vm.opt.final.UseVectorizedMismatchIntrinsic == true
  * @modules java.base/jdk.internal.misc
  *          java.base/jdk.internal.util

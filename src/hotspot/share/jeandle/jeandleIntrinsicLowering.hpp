@@ -133,6 +133,7 @@ class JeandleIntrinsicLowering : public StackObj {
   static bool cpu_supports_rounding();          // floor/ceil/rint
   static bool cpu_supports_popcount();          // bitCount_i/bitCount_l
   static bool cpu_supports_spin_wait();         // onSpinWait
+  static bool cpu_supports_string_simd();       // >=128-bit integer SIMD
 
   // ========================================================================
   // Shared emit helpers
@@ -181,6 +182,15 @@ class JeandleIntrinsicLowering : public StackObj {
   bool lower_compare_unsigned(vmIntrinsics::ID id);
   bool lower_add_exact(vmIntrinsics::ID id);
   bool lower_new_array();
+  bool lower_vectorized_mismatch();
+  llvm::Value* emit_vectorized_mismatch_small(llvm::Value* a_addr,
+                                              llvm::Value* b_addr,
+                                              llvm::Value* byte_length,
+                                              llvm::Value* scale);
+  llvm::Value* emit_vectorized_mismatch_medium(llvm::Value* a_addr,
+                                               llvm::Value* b_addr,
+                                               llvm::Value* byte_length,
+                                               llvm::Value* scale);
 
   };
 

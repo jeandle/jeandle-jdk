@@ -52,6 +52,10 @@ bool JeandleIntrinsicLowering::cpu_supports_spin_wait() {
   return true;
 }
 
+bool JeandleIntrinsicLowering::cpu_supports_string_simd() {
+  return false;
+}
+
 // =============================================================================
 // Arch-specific intrinsic lowering (x86)
 // =============================================================================
