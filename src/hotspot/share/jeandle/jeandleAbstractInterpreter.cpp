@@ -3121,7 +3121,7 @@ void JeandleAbstractInterpreter::dispatch_exception_to_handler(llvm::Value* exce
     if (handler->is_rethrow()) {
       // unlock before the exception is rethrown out of the synchronized method
       if (_method && _method->is_synchronized()) {
-        shared_unlock(_sync_lock);
+        shared_unlock(_sync_lock, false /* needs_exception_handling */);
       }
       throw_exception(exception_oop, landingpad);
       return;
@@ -3601,7 +3601,7 @@ void JeandleAbstractInterpreter::shared_lock(LockValue lock) {
   _block->set_tail_llvm_block(monitor_entered);
 }
 
-void JeandleAbstractInterpreter::shared_unlock(LockValue lock) {
+void JeandleAbstractInterpreter::shared_unlock(LockValue lock, bool needs_exception_handling) {
   assert(!lock.is_null(), "sanity");
 
   int cur_bci = _bytecodes.cur_bci();
@@ -3623,9 +3623,16 @@ void JeandleAbstractInterpreter::shared_unlock(LockValue lock) {
   _ir_builder.SetInsertPoint(monitorexit_slow_path);
   llvm::FunctionCallee monitorexit_callee = JeandleRuntimeRoutine::SharedRuntime_complete_monitor_unlocking_C_callee(_module);
   llvm::CallInst* current_thread = call_java_op("jeandle.current_thread", {});
-  // Use create_call_ex (InvokeInst) so that IllegalMonitorStateException from
-  // complete_monitor_unlocking_C can be caught by Java exception handlers.
-  create_call_ex(monitorexit_callee, {lock.object().value(), lock.lock(), current_thread}, llvm::CallingConv::C);
+  if (needs_exception_handling) {
+    // Use InvokeInst so that IllegalMonitorStateException from
+    // complete_monitor_unlocking_C can be caught by Java exception handlers.
+    create_call_ex(monitorexit_callee, {lock.object().value(), lock.lock(), current_thread}, llvm::CallingConv::C);
+  } else {
+    // Use CallInst when exception handling is not needed (e.g., rethrow or
+    // return_current paths) to avoid recursive dispatch_exception_for_invoke.
+    llvm::CallInst* call_monitorexit = _ir_builder.CreateCall(monitorexit_callee, {lock.object().value(), lock.lock(), current_thread});
+    call_monitorexit->setCallingConv(llvm::CallingConv::C);
+  }
   _ir_builder.CreateBr(monitor_exited);
 
   _ir_builder.SetInsertPoint(monitor_exited);
@@ -3647,7 +3654,7 @@ void JeandleAbstractInterpreter::monitorexit() {
   LockValue lock = _jvm->pop_lock();
   assert(basic_lock_slot_at(_jvm->locks_size()) == lock.lock(), "unbalanced monitors");
 
-  shared_unlock(lock);
+  shared_unlock(lock, true /* needs_exception_handling */);
 }
 
 void JeandleAbstractInterpreter::null_check(llvm::Value* obj) {
@@ -3759,7 +3766,7 @@ void JeandleAbstractInterpreter::return_current(llvm::Value* value) {
   if (_method && _method->is_synchronized()) {
     LockValue lock = _jvm->pop_lock();
     assert(lock.equals(_sync_lock), "sanity");
-    shared_unlock(lock);
+    shared_unlock(lock, false /* needs_exception_handling */);
   }
 
   if (value == nullptr) {
