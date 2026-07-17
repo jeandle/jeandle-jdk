@@ -481,7 +481,7 @@ class JeandleAbstractInterpreter : public StackObj {
   void do_new();
 
   void shared_lock(LockValue lock);
-  void shared_unlock(LockValue lock, bool needs_exception_handling = false);
+  void shared_unlock(LockValue lock);
   void monitorenter();
   void monitorexit();
 
