@@ -161,6 +161,25 @@ bool JeandleIntrinsicLowering::is_supported(vmIntrinsics::ID id) {
     case vmIntrinsics::_doubleToRawLongBits:
     case vmIntrinsics::_longBitsToDouble:
 
+    // floatToIntBits/doubleToLongBits: no CPU gating needed, same bucket as
+    // the other InlineMathNatives-only intrinsics above (min/max/fma) --
+    // disabled_by_jvm_flags() only checks InlineMathNatives for these two IDs,
+    // no hardware feature check. The NaN-canonicalizing compare+select this
+    // lowers to (see lower_fp_to_bits_canonical) is always legal IR.
+    case vmIntrinsics::_floatToIntBits:
+    case vmIntrinsics::_doubleToLongBits:
+
+    // floatToFloat16/float16ToFloat: no CPU gating needed either --
+    // disabled_by_jvm_flags() only checks the generic InlineIntrinsics flag
+    // for these two IDs (unlike fmaD/fmaF's UseFMA check), because
+    // `fptrunc float to half` / `fpext half to float` always lower validly on
+    // every target Jeandle supports: hardware conversion when available,
+    // otherwise LLVM inserts a __truncsfhf2/__extendhfsf2 libcall
+    // automatically. Never gated behind a target feature the way e.g.
+    // AVX512-FP16 gates C2's ConvF2HFNode/ConvHF2FNode.
+    case vmIntrinsics::_floatToFloat16:
+    case vmIntrinsics::_float16ToFloat:
+
     // fence
     case vmIntrinsics::_loadFence:
     case vmIntrinsics::_storeFence:
@@ -382,6 +401,16 @@ bool JeandleIntrinsicLowering::lower(vmIntrinsics::ID id, const ciMethod* target
     case vmIntrinsics::_longBitsToDouble:
       return lower_llvm_bitcast();
 
+    // floatToIntBits/doubleToLongBits
+    case vmIntrinsics::_floatToIntBits:
+    case vmIntrinsics::_doubleToLongBits:
+      return lower_fp_to_bits_canonical(id);
+
+    // floatToFloat16/float16ToFloat
+    case vmIntrinsics::_floatToFloat16:
+    case vmIntrinsics::_float16ToFloat:
+      return lower_float16_convert(id);
+
     // fence
     case vmIntrinsics::_loadFence:
     case vmIntrinsics::_storeFence:
@@ -565,6 +594,64 @@ bool JeandleIntrinsicLowering::lower_llvm_bitcast() {
   llvm::Value* src = _interp->_jvm->pop(src_type);
   llvm::Value* cast = builder.CreateBitCast(src, JeandleType::java2llvm(dst_type, ctx));
   _interp->_jvm->push(dst_type, cast);
+  return true;
+}
+
+// ---- lower_fp_to_bits_canonical ----
+// Float.floatToIntBits(float) / Double.doubleToLongBits(double): like the raw
+// bitcast variants, but NaN inputs are canonicalized to the single NaN bit
+// pattern Java specifies, instead of preserving whatever NaN payload/sign the
+// input happened to carry. Mirrors C2's LibraryCallKit::inline_fp_conversions:
+// arg != arg (unordered compare) is true only for NaN; select between the
+// canonical NaN constant and the plain bitcast result.
+bool JeandleIntrinsicLowering::lower_fp_to_bits_canonical(vmIntrinsics::ID id) {
+  llvm::IRBuilder<>& builder = _interp->_ir_builder;
+  bool is_double = (id == vmIntrinsics::_doubleToLongBits);
+
+  if (is_double) {
+    llvm::Value* arg = _interp->_jvm->dpop();
+    llvm::Value* is_nan = builder.CreateFCmpUNE(arg, arg);
+    llvm::Value* bits = builder.CreateBitCast(arg, builder.getInt64Ty());
+    llvm::Value* canonical_nan = builder.getInt64(0x7ff8000000000000ULL);
+    _interp->_jvm->lpush(builder.CreateSelect(is_nan, canonical_nan, bits));
+  } else {
+    llvm::Value* arg = _interp->_jvm->fpop();
+    llvm::Value* is_nan = builder.CreateFCmpUNE(arg, arg);
+    llvm::Value* bits = builder.CreateBitCast(arg, builder.getInt32Ty());
+    llvm::Value* canonical_nan = builder.getInt32(0x7fc00000);
+    _interp->_jvm->ipush(builder.CreateSelect(is_nan, canonical_nan, bits));
+  }
+  return true;
+}
+
+// ---- lower_float16_convert ----
+// Float.floatToFloat16(float) / Float.float16ToFloat(short): float16 values
+// are carried as the raw bit pattern in a Java short, never as a distinct
+// value type, so the conversion is a real narrowing/widening fp convert
+// (fptrunc/fpext through LLVM's `half` type) plus a bitcast to move between
+// `half` and the integer bits -- not a plain bitcast like the 32/64-bit
+// variants above. No NaN special-casing: C2's ConvF2HFNode/ConvHF2FNode don't
+// canonicalize NaN for this conversion either.
+//
+// Java short is a computational-int type on the JVM stack (like the
+// reverseBytes_s/_c narrow variants above), so the i16 bit pattern is
+// sign-extended to i32 on push, and truncated back from the popped i32 on the
+// way in.
+bool JeandleIntrinsicLowering::lower_float16_convert(vmIntrinsics::ID id) {
+  llvm::IRBuilder<>& builder = _interp->_ir_builder;
+  bool to_f16 = (id == vmIntrinsics::_floatToFloat16);
+
+  if (to_f16) {
+    llvm::Value* arg = _interp->_jvm->fpop();
+    llvm::Value* half = builder.CreateFPTrunc(arg, builder.getHalfTy());
+    llvm::Value* bits = builder.CreateBitCast(half, builder.getInt16Ty());
+    _interp->_jvm->ipush(builder.CreateSExt(bits, builder.getInt32Ty()));
+  } else {
+    llvm::Value* arg = _interp->_jvm->ipop();
+    llvm::Value* bits = builder.CreateTrunc(arg, builder.getInt16Ty());
+    llvm::Value* half = builder.CreateBitCast(bits, builder.getHalfTy());
+    _interp->_jvm->fpush(builder.CreateFPExt(half, builder.getFloatTy()));
+  }
   return true;
 }
 
