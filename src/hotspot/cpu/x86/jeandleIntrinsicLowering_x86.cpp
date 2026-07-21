@@ -27,6 +27,7 @@
 
 #include "jeandle/__hotspotHeadersBegin__.hpp"
 #include "runtime/globals.hpp"
+#include "runtime/vm_version.hpp"
 
 // =============================================================================
 // Arch-specific CPU feature checks (x86)
@@ -52,6 +53,12 @@ bool JeandleIntrinsicLowering::cpu_supports_spin_wait() {
   return true;
 }
 
+bool JeandleIntrinsicLowering::cpu_supports_cache_writeback() {
+  // Matches C2's predicate for Op_CacheWB/Op_CacheWBPreSync/Op_CacheWBPostSync:
+  // predicate(VM_Version::supports_data_cache_line_flush())
+  return VM_Version::supports_data_cache_line_flush();
+}
+
 // =============================================================================
 // Arch-specific intrinsic lowering (x86)
 // =============================================================================
@@ -64,5 +71,52 @@ bool JeandleIntrinsicLowering::lower_spin_wait_hint() {
   builder.CreateIntrinsic(
       llvm::Intrinsic::x86_sse2_pause, llvm::ArrayRef<llvm::Type*>{}, {});
   // void return: nothing to push on the JVM operand stack
+  return true;
+}
+
+bool JeandleIntrinsicLowering::lower_writeback0() {
+  llvm::IRBuilder<>& builder = _interp->_ir_builder;
+  llvm::LLVMContext& ctx = builder.getContext();
+
+  // Pop address (long) and receiver (Unsafe) from the JVM stack.
+  llvm::Value* address = _interp->_jvm->lpop();
+  _interp->_jvm->apop(); // Unsafe receiver — unused
+
+  // Cast long address to pointer, matching C2's CastX2PNode.
+  llvm::PointerType* ptr_ty = llvm::PointerType::get(ctx, 0);
+  llvm::Value* addr_ptr = builder.CreateIntToPtr(address, ptr_ty);
+
+  // x86: Select best cache writeback instruction, matching C2's cache_wb().
+  bool optimized = VM_Version::supports_clflushopt();
+  bool no_evict = VM_Version::supports_clwb();
+
+  if (optimized) {
+    if (no_evict) {
+      builder.CreateIntrinsic(llvm::Intrinsic::x86_clwb, {}, {addr_ptr});
+    } else {
+      builder.CreateIntrinsic(llvm::Intrinsic::x86_clflushopt, {}, {addr_ptr});
+    }
+  } else {
+    // CLFLUSH is part of SSE2 and guaranteed available on x86-64 when
+    // supports_data_cache_line_flush() returns true.
+    builder.CreateIntrinsic(llvm::Intrinsic::x86_sse2_clflush, {}, {addr_ptr});
+  }
+  return true;
+}
+
+bool JeandleIntrinsicLowering::lower_writeback_sync(vmIntrinsics::ID id) {
+  llvm::IRBuilder<>& builder = _interp->_ir_builder;
+  _interp->_jvm->apop(); // Unsafe receiver — unused
+
+  // x86: SFENCE is needed for post-sync when using CLWB or CLFLUSHOPT.
+  // Pre-sync is a no-op for all cases
+  if (id == vmIntrinsics::_writebackPostSync0) {
+    if (VM_Version::supports_clwb() || VM_Version::supports_clflushopt()) {
+      builder.CreateIntrinsic(
+          llvm::Intrinsic::x86_sse_sfence, llvm::ArrayRef<llvm::Type*>{}, {});
+    }
+    // else: CLFLUSH is serializing, no fence needed.
+  }
+
   return true;
 }

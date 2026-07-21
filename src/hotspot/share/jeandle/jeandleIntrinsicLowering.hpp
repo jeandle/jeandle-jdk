@@ -133,6 +133,7 @@ class JeandleIntrinsicLowering : public StackObj {
   static bool cpu_supports_rounding();          // floor/ceil/rint
   static bool cpu_supports_popcount();          // bitCount_i/bitCount_l
   static bool cpu_supports_spin_wait();         // onSpinWait
+  static bool cpu_supports_cache_writeback();   // writeback0
 
   // ========================================================================
   // Shared emit helpers
@@ -178,6 +179,8 @@ class JeandleIntrinsicLowering : public StackObj {
   bool lower_llvm_fence(vmIntrinsics::ID id);
   bool lower_preconditions_check_index(vmIntrinsics::ID id);
   bool lower_spin_wait_hint();       // arch-specific
+  bool lower_writeback0();           // arch-specific
+  bool lower_writeback_sync(vmIntrinsics::ID id); // arch-specific
   bool lower_compare_unsigned(vmIntrinsics::ID id);
   bool lower_add_exact(vmIntrinsics::ID id);
   bool lower_new_array();
