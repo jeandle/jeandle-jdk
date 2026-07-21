@@ -72,6 +72,7 @@ jobs:
           repository: ${{ github.event.pull_request.head.repo.full_name }}
           ref: ${{ github.event.pull_request.head.ref }}
           fetch-depth: 1
+          allow-unsafe-pr-checkout: true
 
       - name: 'Get the BootJDK'
         id: bootjdk
