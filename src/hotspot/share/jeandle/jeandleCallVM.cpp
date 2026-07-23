@@ -83,6 +83,15 @@ void JeandleCallVM::generate_call_VM(const char* name, address routine_address, 
   call_routine_address->addFnAttr(id_attr);
   call_routine_address->addFnAttr(patch_bytes_attr);
 
+  // Clear the last_Java_sp and last_Java_pc before checking exceptions.
+  // This must be done on both the exception and no-exception paths to avoid
+  // stale values causing invalid stack walks during GC. See C2's GraphKit::gen_stub.
+  ir_builder.CreateStore(ir_builder.getInt64((intptr_t)nullptr), last_Java_sp_ptr);
+
+  llvm::Value* last_Java_pc_ptr = ir_builder.CreateIntToPtr(ir_builder.getInt64((uint64_t)JavaThread::last_Java_pc_offset()),
+                                                            llvm::PointerType::get(context, llvm::jeandle::AddrSpace::TLSAddrSpace));
+  ir_builder.CreateStore(ir_builder.getInt64((intptr_t)nullptr), last_Java_pc_ptr);
+
   // Check exceptions.
   llvm::Value* pending_exception_addr = ir_builder.CreateIntToPtr(ir_builder.getInt64((uint64_t)Thread::pending_exception_offset()),
                                                                   llvm::PointerType::get(context, llvm::jeandle::AddrSpace::TLSAddrSpace));
@@ -116,14 +125,6 @@ void JeandleCallVM::generate_call_VM(const char* name, address routine_address, 
   }
 
   ir_builder.SetInsertPoint(no_exception_block);
-
-  // Clear the last_Java_sp.
-  ir_builder.CreateStore(ir_builder.getInt64((intptr_t)nullptr), last_Java_sp_ptr);
-
-  // Clear the last_Java_pc.
-  llvm::Value* last_Java_pc_ptr = ir_builder.CreateIntToPtr(ir_builder.getInt64((uint64_t)JavaThread::last_Java_pc_offset()),
-                                                            llvm::PointerType::get(context, llvm::jeandle::AddrSpace::TLSAddrSpace));
-  ir_builder.CreateStore(ir_builder.getInt64((intptr_t)nullptr), last_Java_pc_ptr);
 
   // Return.
   if (func_type->getReturnType()->isVoidTy()) {
