@@ -91,7 +91,7 @@ public class TestReferenceRefersTo {
         fc.checkPattern("define.*jeandle.reference_refers_to");
 
         // Verify the load is unordered atomic (appears before the fence in IR)
-        fc.checkPattern("load atomic ptr addrspace\\(1\\).*unordered");
+        fc.checkPattern("load atomic ptr addrspace\\([13]\\).*unordered");
 
         // Verify a fence with seq_cst ordering is present (CPUOrder fence)
         fc.checkPattern("fence.*seq_cst");

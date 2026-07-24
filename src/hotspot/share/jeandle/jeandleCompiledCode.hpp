@@ -23,9 +23,11 @@
 
 #include "jeandle/__llvmHeadersBegin__.hpp"
 #include "llvm/ADT/DenseMap.h"
+#include "llvm/ADT/DenseSet.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ExecutionEngine/JITLink/JITLink.h"
 #include "llvm/IR/Statepoint.h"
+#include "llvm/IR/Jeandle/Deoptimization.h"
 #include "llvm/Object/ELFObjectFile.h"
 #include "llvm/Object/StackMapParser.h"
 #include "llvm/Support/DynamicLibrary.h"
@@ -33,6 +35,7 @@
 
 #include "jeandle/jeandleExceptionHandlerTable.hpp"
 #include "jeandle/jeandleCompiledCall.hpp"
+#include "jeandle/jeandleParseContext.hpp"
 #include "jeandle/jeandleReadELF.hpp"
 #include "jeandle/jeandleResourceObj.hpp"
 #include "jeandle/jeandleUtils.hpp"
@@ -48,76 +51,38 @@
 
 class JeandleReloc;
 
-class DeoptValueEncoding {
-  friend class JeandleCompiledCode;
-public:
-  enum DeoptValueType {
-    LocalType = 0,
-    StackType = 1,
-    ArgumentType = 2,
-    MonitorType = 3,
-    ScalarValueType = 4,
-    OrigPcSlotType = 5,
-    LastType = OrigPcSlotType + 1
-  };
-  DeoptValueEncoding(int index, DeoptValueType value_type, BasicType basic_type):
-    _index(index), _value_type(value_type), _basic_type(basic_type) {
-    assert(_value_type == LocalType || _value_type == StackType ||
-           _value_type == MonitorType || _value_type == OrigPcSlotType,
-           "Unsupported value type");
-  }
-
-  uint64_t encode() {
-    // encode format
-    // |--- index ---|--- value_type ---|--- basic_type ---|
-    // |0          31|32              47|48              63|
-    return ((uint64_t)_index << 32) | ((uint64_t)(_value_type << 16)) | (uint64_t)(_basic_type);
-  }
-
-  static DeoptValueEncoding decode(uint64_t encode) {
-    int index = (int)(encode >> 32);
-    assert(index >= 0, "must be");
-    int val_type = (int)((encode & 0xffff0000UL) >> 16);
-    assert(val_type >= 0 && val_type < DeoptValueType::LastType, "must be");
-    int basic_type = (int)((encode & 0xffffUL));
-    assert(basic_type >= 0 && basic_type <= BasicType::T_ILLEGAL, "must be");
-    return {index, (DeoptValueType)(val_type), (BasicType)(basic_type)};
-  }
+using llvm::jeandle::DeoptValueEncoding;
 
 #ifdef ASSERT
-  const char* value_type_name(DeoptValueType t) {
-    switch (t) {
-      case LocalType: return "LocalType";
-      case StackType: return "StackType";
-      case ArgumentType: return "ArgumentType";
-      case MonitorType: return "MonitorType";
-      case ScalarValueType: return "ScalarValueType";
-      case OrigPcSlotType: return "OrigPcSlotType";
-      default: return "Unknown";
-    }
+// The print helper function for print_deopt_value should have same ASSERT macro with the usage.
+// So we keep them in jdk side instead of a method in DeoptValueEncoding.
+static inline const char* value_type_name(DeoptValueEncoding::DeoptValueType t) {
+  switch (t) {
+    case DeoptValueEncoding::LocalType: return "LocalType";
+    case DeoptValueEncoding::StackType: return "StackType";
+    case DeoptValueEncoding::ArgumentType: return "ArgumentType";
+    case DeoptValueEncoding::MonitorType: return "MonitorType";
+    case DeoptValueEncoding::ScalarValueType: return "ScalarValueType";
+    case DeoptValueEncoding::OrigPcSlotType: return "OrigPcSlotType";
+    default: return "Unknown";
   }
-  void print() {
-    ttyLocker ttyl;
-    tty->print_cr("DeoptValueEncoding: index: %d value_type: %s, basic_type: %s",
-                  _index, value_type_name(_value_type), type2name(_basic_type));
-  }
+}
+
+static inline void print_deopt_value(DeoptValueEncoding deopt_value) {
+  ttyLocker ttyl;
+  tty->print_cr("DeoptValueEncoding: index: %d value_type: %s, basic_type: %s",
+                deopt_value.index(), value_type_name(deopt_value.valueType()), type2name(static_cast<BasicType>(deopt_value.basicType())));
+}
 #endif
-private:
-  int _index;
-  DeoptValueType _value_type;
-  BasicType _basic_type;
-};
 
 class CallSiteInfo : public JeandleCompilationResourceObj {
  public:
   CallSiteInfo(JeandleCompiledCall::Type type,
                address target,
-               int bci,
                bool is_method_handle_invoke = false,
                uint64_t statepoint_id = llvm::StatepointDirectives::DefaultStatepointID) :
                _type(type),
                _target(target),
-               _bci(bci),
                _is_method_handle_invoke(is_method_handle_invoke),
                _statepoint_id(statepoint_id) {
 #ifdef ASSERT
@@ -130,30 +95,30 @@ class CallSiteInfo : public JeandleCompilationResourceObj {
   }
 
 
-  int bci() const { return _bci; }
-  void set_bci(int bci) { _bci = bci; }
-
   JeandleCompiledCall::Type type() const { return _type; }
+  void set_type(JeandleCompiledCall::Type type) { _type = type; }
   uint64_t statepoint_id() const { return _statepoint_id; }
   address target() const { return _target; }
+  void set_target(address target) { _target = target; }
   bool is_method_handle_invoke() const { return _is_method_handle_invoke; }
 
  private:
   JeandleCompiledCall::Type _type;
   address _target;
-  int _bci;
   bool _is_method_handle_invoke;
 
   // Used to distinguish each call site in stackmaps.
   uint64_t _statepoint_id;
 };
 
-class JeandleStackMap {
+class JeandleStackMap : public JeandleCompilationResourceObj {
 public:
-  JeandleStackMap(OopMap* oop_map, GrowableArray<ScopeValue*>* locals, GrowableArray<ScopeValue*>* stack, GrowableArray<MonitorValue*>* monitors, bool reexecute) :
-      _oop_map(oop_map), _locals(locals), _stack(stack), _monitors(monitors), _reexecute(reexecute) {
+  JeandleStackMap(int bci, ciMethod* method, OopMap* oop_map, GrowableArray<ScopeValue*>* locals, GrowableArray<ScopeValue*>* stack, GrowableArray<MonitorValue*>* monitors, bool reexecute) :
+      _bci(bci), _method(method), _oop_map(oop_map), _locals(locals), _stack(stack), _monitors(monitors), _reexecute(reexecute) {
   }
 
+  int bci() const { return _bci; }
+  ciMethod* method() const { return _method; }
   OopMap* oop_map() const { return _oop_map; }
   GrowableArray<ScopeValue*>* locals() const { return _locals; }
   GrowableArray<ScopeValue*>* stack() const { return _stack; }
@@ -161,6 +126,8 @@ public:
   bool reexecute() const { return _reexecute; }
 
 private:
+  int _bci;
+  ciMethod* _method;
   OopMap* _oop_map;
   GrowableArray<ScopeValue*>* _locals;
   GrowableArray<ScopeValue*>* _stack;
@@ -188,7 +155,8 @@ class JeandleCompiledCode : public StackObj {
  public:
   // For compiled Java methods.
   JeandleCompiledCode(ciEnv* env,
-                      ciMethod* method) :
+                      ciMethod* method,
+                      bool is_osr_entry) :
                       _obj(nullptr),
                       _elf(nullptr),
                       _code_buffer("JeandleCompiledCode"),
@@ -206,7 +174,7 @@ class JeandleCompiledCode : public StackObj {
                       _env(env),
                       _method(method),
                       _routine_entry(nullptr),
-                      _func_name(JeandleFuncSig::method_name_with_signature(_method)),
+                      _func_name(JeandleFuncSig::method_name_with_signature(_method, is_osr_entry)),
                       _orig_pc_slot(nullptr),
                       _orig_pc_offset_in_bytes(-1),
                       _interpreter_frame_size_in_bytes(0),
@@ -241,6 +209,23 @@ class JeandleCompiledCode : public StackObj {
 
   void push_non_routine_call_site(CallSiteInfo* call_site) { _non_routine_call_sites.push_back(call_site); }
   uint64_t next_statepoint_id() { return _non_routine_call_sites.size(); }
+  int64_t duplicate_non_routine_call_site(uint64_t old_statepoint_id) {
+    assert(old_statepoint_id < _non_routine_call_sites.size(), "old statepoint id must exist");
+    CallSiteInfo* old_call_site = _non_routine_call_sites[old_statepoint_id];
+    assert(old_call_site != nullptr, "non-routine call site must exist");
+    assert(old_call_site->statepoint_id() == old_statepoint_id,
+           "statepoint id must match its call-site index");
+
+    // LLVM may duplicate an inlined call site. Keep the stackmap contract that
+    // a non-routine statepoint id directly indexes _non_routine_call_sites.
+    uint64_t new_statepoint_id = next_statepoint_id();
+    push_non_routine_call_site(new CallSiteInfo(old_call_site->type(),
+                                                old_call_site->target(),
+                                                old_call_site->is_method_handle_invoke(),
+                                                new_statepoint_id));
+    return static_cast<int64_t>(new_statepoint_id);
+  }
+  llvm::SmallVector<CallSiteInfo*>& non_routine_call_sites() { return _non_routine_call_sites; }
 
   int find_or_insert_oop(ciObject* oop);
   ciObject* oop_at(int oop_id);
@@ -328,9 +313,17 @@ class JeandleCompiledCode : public StackObj {
 
   // Lookup address of const section in CodeBuffer.
   address lookup_const_section(llvm::StringRef name, JeandleAssembler& assembler);
+  address resolve_const_reloc_site(LinkBlock& block, LinkEdge& edge, JeandleAssembler& assembler);
   address resolve_const_edge(LinkBlock& block, LinkEdge& edge, JeandleAssembler& assembler);
 
-  JeandleStackMap* parse_stackmap(StackMapParser& stackmaps, StackMapParser::record_iterator& record, CallSiteInfo* call_info);
+  int parse_stackmap_prologue(StackMapParser::record_iterator& record,
+                              StackMapParser::RecordAccessor::location_iterator& location);
+  JeandleStackMap* parse_stackmap(StackMapParser& stackmaps,
+                                  StackMapParser::record_iterator& record,
+                                  StackMapParser::RecordAccessor::location_iterator& location,
+                                  int& num_deopts,
+                                  const JeandleParseContext& parse_context,
+                                  ciMethod*& next_inlinee);
   LocationValue* new_location_value(const StackMapParser::LocationAccessor& location, Location::Type type);
   void fill_one_scope_value(const StackMapParser& stackmaps, const DeoptValueEncoding& encode,
                             const StackMapParser::LocationAccessor& location, GrowableArray<ScopeValue*>* array);

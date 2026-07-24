@@ -23,13 +23,14 @@
 
 #include "jeandle/__llvmHeadersBegin__.hpp"
 #include "llvm/IR/BasicBlock.h"
-#include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/IR/BasicBlock.h"
 #include "llvm/IR/IRBuilder.h"
 #include "llvm/IR/LLVMContext.h"
 
 #include "jeandle/jeandleCompilation.hpp"
+#include "jeandle/jeandleParseContext.hpp"
+#include "jeandle/jeandleProfile.hpp"
 #include "jeandle/jeandleType.hpp"
 
 #include "jeandle/__hotspotHeadersBegin__.hpp"
@@ -148,7 +149,11 @@ class JeandleVMState : public JeandleCompilationResourceObj {
   size_t locks_size() const { return _locks.size(); }
   LockValue lock_at(int index) { return _locks[index]; }
 
-  llvm::SmallVector<llvm::Value*> deopt_args(llvm::IRBuilder<> &builder, int bci);
+  llvm::SmallVector<llvm::Value*> deopt_args(llvm::IRBuilder<> &builder,
+                                             MethodLivenessResult liveness,
+                                             const JeandleParseContext& parse_context,
+                                             int bci,
+                                             bool should_reexecute = false);
 
   int interpreter_frame_size_in_bytes();
  private:
@@ -284,7 +289,7 @@ class BasicBlockBuilder : public JeandleCompilationResourceObj {
 // Convert java bytecodes to llvm ir.
 class JeandleAbstractInterpreter : public StackObj {
  public:
-  JeandleAbstractInterpreter(ciMethod* method,
+  JeandleAbstractInterpreter(const JeandleParseContext& parse_context,
                              int entry_bci,
                              llvm::Module& target_module,
                              JeandleCompiledCode& code,
@@ -293,7 +298,9 @@ class JeandleAbstractInterpreter : public StackObj {
  private:
   friend class JeandleIntrinsicLowering;
 
+  JeandleParseContext _parse_context;
   ciMethod* _method;
+  JeandleProfile _profile; // Read-only view of the method's MDO. 
   llvm::Function* _llvm_func;
   int _entry_bci;
   llvm::LLVMContext* _context;
@@ -308,12 +315,15 @@ class JeandleAbstractInterpreter : public StackObj {
   // is declared in that intrinsic's trap-throttle mask (see kTrapThrottleTable).
   DEBUG_ONLY(vmIntrinsics::ID _lowering_intrinsic_id = vmIntrinsics::_none;)
 
-  // Record oop values.
-  llvm::DenseMap<jobject, llvm::Value*> _oops;
-
   // The JeandleBasicBlock and its JeandleVMState currently being interpreted.
   JeandleBasicBlock* _block;
   JeandleVMState* _jvm;
+
+  // When do_if_branch prunes a never-taken edge into an uncommon_trap, the
+  // cold Java successor receives no LLVM edge from this block and must be
+  // skipped by the post-loop successor merge. Reset at the start of every
+  // block.
+  JeandleBasicBlock* _pruned_successor;
 
   // Contains all blocks to interpret. Sorted by reverse-post-order.
   llvm::SmallVector<JeandleBasicBlock*> _work_list;
@@ -324,25 +334,24 @@ class JeandleAbstractInterpreter : public StackObj {
   // Cumulative traps
   uint* _trap_hist;
 
-  // Reuse stack allocation for monitor: each monitor nesting level maps to a
-  // fixed BasicLock slot on the stack. When the same nesting level is entered
-  // again, the existing slot is reused rather than allocating a new one, so
-  // that phi nodes and deopt info can consistently reference the same stack
-  // location for a given monitor depth.
-  llvm::SmallVector<llvm::Value*> _allocated_basic_lock;
+  // Reuse BasicLock stack slots within the current LLVM function: each monitor
+  // nesting level maps to a fixed slot. Inline currently cannot reuse BasicLock
+  // slots across caller/callee functions because the slot is a function-local
+  // alloca. A later LLVM pass should hoist or merge these slots after inlining.
+  llvm::SmallVector<llvm::Value*> _basic_lock_slots;
 
-  bool need_alloc_for(int monitor_nest_level) {
-    return (int)_allocated_basic_lock.size() <= monitor_nest_level;
+  bool needs_new_basic_lock_slot(int monitor_nest_level) {
+    return (int)_basic_lock_slots.size() <= monitor_nest_level;
   };
 
-  void push_allocated_basic_lock(llvm::Value* basic_lock) {
+  void add_basic_lock_slot(llvm::Value* basic_lock) {
     assert(basic_lock != nullptr, "basic_lock should not be nullptr");
-    return _allocated_basic_lock.push_back(basic_lock);
+    return _basic_lock_slots.push_back(basic_lock);
   };
 
-  llvm::Value* allocated_basic_lock_at(int index) {
-    assert(index >= 0 && index < (int)_allocated_basic_lock.size(), "index out of bound");
-    return _allocated_basic_lock[index];
+  llvm::Value* basic_lock_slot_at(int index) {
+    assert(index >= 0 && index < (int)_basic_lock_slots.size(), "index out of bound");
+    return _basic_lock_slots[index];
   };
 
   bool is_osr() { return _entry_bci != InvocationEntryBci; }
@@ -365,6 +374,14 @@ class JeandleAbstractInterpreter : public StackObj {
   void if_icmp(llvm::CmpInst::Predicate p);
   void if_acmp(llvm::CmpInst::Predicate p);
   void if_null(llvm::CmpInst::Predicate p);
+  // Shared emission for if_* helpers. Either prunes a strict-zero edge into
+  // an uncommon_trap, or emits a two-way branch with MDO weights. Must be
+  // called before the if_* helper pops its operands, so a pruned trap's deopt
+  // bundle still captures the pre-if operand stack.
+  void do_if_branch(llvm::Value* cond);
+  bool path_is_suitable_for_unstable_if_prune(int bci, JeandleProfile::BranchCounts counts);
+  void attach_branch_weights(llvm::BranchInst* br, int bci);
+  void attach_switch_weights(llvm::SwitchInst* switch_inst, int bci);
   void fcmp(BasicType type, bool true_if_unordered);
   void lcmp();
   void merge_into_exception_handler(JeandleBasicBlock* handler_block);
@@ -393,13 +410,13 @@ class JeandleAbstractInterpreter : public StackObj {
                                    llvm::CallingConv::ID calling_conv,
                                    llvm::ArrayRef<llvm::OperandBundleDef> deopt_bundle = {});
 
-  llvm::OperandBundleDef create_current_deopt_bundle();
+  llvm::OperandBundleDef create_current_deopt_bundle(bool should_reexecute = false);
 
   void add_safepoint_poll();
+  void add_return_safepoint_poll();
 
   llvm::SmallVector<JeandleBasicBlock*>& bci2block() { return _block_builder->bci2block(); }
 
-  llvm::Value* find_or_insert_oop(ciObject* oop);
   TypedValue constant_to_value(ciConstant con);
 
   // Implementation of _get* and _put* bytecodes.
@@ -426,7 +443,7 @@ class JeandleAbstractInterpreter : public StackObj {
   void do_array_load(BasicType basic_type);
   void do_array_store(BasicType basic_type);
   llvm::Value* do_array_load_inner(BasicType basic_type, llvm::Type* load_type);
-  void do_array_store_inner(BasicType basic_type, llvm::Type* store_type, llvm::Value* value);
+  llvm::Value* do_array_store_inner(BasicType basic_type, llvm::Type* store_type, llvm::Value* value);
   void array_store_check(llvm::Value* value, llvm::Value* array_ref);
   llvm::Value* compute_array_element_address(BasicType basic_type, llvm::Type* type);
 
@@ -436,8 +453,9 @@ class JeandleAbstractInterpreter : public StackObj {
   } DispatchedDest;
 
   DispatchedDest dispatch_exception_for_invoke(); // Dispatch exceptions raised by invoke.
-  void dispatch_exception_to_handler(llvm::Value* exception_oop); // Generate a series of IR to dispatch an exception to its handler.
-  void throw_exception(llvm::Value* exception_oop);
+  // Generate a series of IR to dispatch an exception to its handler.
+  void dispatch_exception_to_handler(llvm::Value* exception_oop, llvm::LandingPadInst* landingpad = nullptr);
+  void throw_exception(llvm::Value* exception_oop, llvm::LandingPadInst* landingpad = nullptr);
   void uncommon_trap_if_should_post_on_exceptions(Deoptimization::DeoptReason reason);
   bool has_exception_handler();
   void builtin_throw(Deoptimization::DeoptReason reason, llvm::BasicBlock *insert_block);
@@ -473,7 +491,7 @@ class JeandleAbstractInterpreter : public StackObj {
 
   void boundary_check(llvm::Value* array_oop, llvm::Value* index);
 
-  void uncommon_trap(Deoptimization::DeoptReason, Deoptimization::DeoptAction, llvm::BasicBlock* insert_block = nullptr);
+  void uncommon_trap(Deoptimization::DeoptReason, Deoptimization::DeoptAction, llvm::BasicBlock* insert_block = nullptr, bool should_reexecute = false);
 
   void return_current(llvm::Value* value);
 

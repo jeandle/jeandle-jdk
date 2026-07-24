@@ -35,6 +35,10 @@ public:
     return r15->name();
   }
 
+  static const char* get_heap_base_pointer() {
+    return r12->name();
+  }
+
   static const bool is_stack_pointer(Register reg) {
     return reg == rsp;
   }

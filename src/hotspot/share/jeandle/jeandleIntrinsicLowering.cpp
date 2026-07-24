@@ -22,6 +22,7 @@
 #include "jeandle/__llvmHeadersBegin__.hpp"
 #include "llvm/Analysis/ConstantFolding.h"
 #include "llvm/IR/Constants.h"
+#include "llvm/IR/MDBuilder.h"
 
 #include "jeandle/jeandleAbstractInterpreter.hpp"
 #include "jeandle/jeandleRuntimeRoutine.hpp"
@@ -112,6 +113,37 @@ bool JeandleIntrinsicLowering::is_supported(vmIntrinsics::ID id) {
     case vmIntrinsics::_dlog10:
     case vmIntrinsics::_dexp:
 
+    // min/max: no CPU gating needed. llvm.smin/smax always lower to a
+    // compare+select/cmov sequence and llvm.minimum/maximum always lower to
+    // a NaN/signed-zero-correct sequence on every target Jeandle supports;
+    // neither ever falls back to a libcall the way llvm.floor/ceil/rint can.
+    // Math and StrictMath share the same vmIntrinsics ID space and identical
+    // javadoc-specified semantics here (strictfp has no effect on min/max),
+    // so one lowering covers both.
+    case vmIntrinsics::_min:
+    case vmIntrinsics::_max:
+    case vmIntrinsics::_min_strict:
+    case vmIntrinsics::_max_strict:
+    case vmIntrinsics::_minF:
+    case vmIntrinsics::_maxF:
+    case vmIntrinsics::_minD:
+    case vmIntrinsics::_maxD:
+    case vmIntrinsics::_minF_strict:
+    case vmIntrinsics::_maxF_strict:
+    case vmIntrinsics::_minD_strict:
+    case vmIntrinsics::_maxD_strict:
+
+    // fmaD/fmaF: no separate cpu_supports_fma() gate needed. Unlike
+    // rounding/popcount (which have no shared-infrastructure flag check),
+    // vmIntrinsics::is_disabled_by_flags() already requires UseFMA for these
+    // two IDs and runs unconditionally after is_supported() in
+    // try_lower_intrinsic(), so a hardware-less target is rejected there.
+    // (apply_vm_flag_feature_overrides() also strips the LLVM "fma" target
+    // feature when UseFMA is off, so even a hypothetical direct call here
+    // would still lower correctly, just via a libcall instead of hardware.)
+    case vmIntrinsics::_fmaD:
+    case vmIntrinsics::_fmaF:
+
     // getClass
     case vmIntrinsics::_getClass:
 
@@ -141,6 +173,25 @@ bool JeandleIntrinsicLowering::is_supported(vmIntrinsics::ID id) {
     // compare unsigned
     case vmIntrinsics::_compareUnsigned_i:
     case vmIntrinsics::_compareUnsigned_l:
+
+    // count leading/trailing zeros
+    // No CPU gating: LLVM lowers ctlz/cttz to native sequences on both x86-64
+    // (bsr/bsf fallback when LZCNT/TZCNT are absent) and aarch64 (CLZ, RBIT+CLZ),
+    // never to a libcall. Matches C2, which always intrinsifies these.
+    case vmIntrinsics::_numberOfLeadingZeros_i:
+    case vmIntrinsics::_numberOfLeadingZeros_l:
+    case vmIntrinsics::_numberOfTrailingZeros_i:
+    case vmIntrinsics::_numberOfTrailingZeros_l:
+
+    // reverseBytes: full-width variants are direct bswap; narrow variants need
+    // explicit zero/sign-extension semantics.
+    case vmIntrinsics::_reverseBytes_i:
+    case vmIntrinsics::_reverseBytes_l:
+    case vmIntrinsics::_reverseBytes_s:
+    case vmIntrinsics::_reverseBytes_c:
+    // addExact
+    case vmIntrinsics::_addExactI:
+    case vmIntrinsics::_addExactL:
       return true;
     default:
       return false;
@@ -161,6 +212,9 @@ JeandleTrapReasonMask JeandleIntrinsicLowering::trap_throttle_mask(vmIntrinsics:
     case vmIntrinsics::_Preconditions_checkLongIndex:
       return trap_reason_mask_val(Deoptimization::Reason_intrinsic) |
              trap_reason_mask_val(Deoptimization::Reason_range_check);
+    case vmIntrinsics::_addExactI:
+    case vmIntrinsics::_addExactL:
+      return trap_reason_mask_val(Deoptimization::Reason_intrinsic);
     default:
       return 0;
   }
@@ -197,9 +251,56 @@ bool JeandleIntrinsicLowering::lower(vmIntrinsics::ID id, const ciMethod* target
       return emit_llvm_builtin(llvm::Intrinsic::abs,
                                 {_interp->_ir_builder.getInt1(false)});
 
+    // Math/StrictMath.min|max(int,int): plain two's-complement signed min/max,
+    // identical for both classes.
+    case vmIntrinsics::_min:
+    case vmIntrinsics::_min_strict:
+      return emit_llvm_builtin(llvm::Intrinsic::smin);
+    case vmIntrinsics::_max:
+    case vmIntrinsics::_max_strict:
+      return emit_llvm_builtin(llvm::Intrinsic::smax);
+
+    // Math/StrictMath.min|max(float|double,...): llvm.minimum/maximum
+    // implement IEEE-754-2019 minimum/maximum (NaN propagates, -0.0 < +0.0),
+    // matching the Math.{min,max} javadoc contract exactly.
+    case vmIntrinsics::_minF:
+    case vmIntrinsics::_minF_strict:
+    case vmIntrinsics::_minD:
+    case vmIntrinsics::_minD_strict:
+      return emit_llvm_builtin(llvm::Intrinsic::minimum);
+    case vmIntrinsics::_maxF:
+    case vmIntrinsics::_maxF_strict:
+    case vmIntrinsics::_maxD:
+    case vmIntrinsics::_maxD_strict:
+      return emit_llvm_builtin(llvm::Intrinsic::maximum);
+
+    // Math.fma(float|double,...): llvm.fma is always a correctly-rounded
+    // single-rounding fused multiply-add (never contracted like
+    // llvm.fmuladd), matching the Math.fma javadoc contract.
+    case vmIntrinsics::_fmaD:
+    case vmIntrinsics::_fmaF:
+      return emit_llvm_builtin(llvm::Intrinsic::fma);
+
     case vmIntrinsics::_bitCount_i:
     case vmIntrinsics::_bitCount_l:
       return lower_bit_count(id);
+
+    case vmIntrinsics::_numberOfLeadingZeros_i:
+    case vmIntrinsics::_numberOfLeadingZeros_l:
+      return lower_count_zeros(id, llvm::Intrinsic::ctlz);
+    case vmIntrinsics::_numberOfTrailingZeros_i:
+    case vmIntrinsics::_numberOfTrailingZeros_l:
+      return lower_count_zeros(id, llvm::Intrinsic::cttz);
+
+    // Keep full-width variants as direct IR instead of relying on fallback
+    // invoke inlining to recover llvm.bswap.
+    case vmIntrinsics::_reverseBytes_i:
+    case vmIntrinsics::_reverseBytes_l:
+      return emit_llvm_builtin(llvm::Intrinsic::bswap);
+    // char/short need a narrow swap plus zero/sign extension (see handler).
+    case vmIntrinsics::_reverseBytes_c:
+    case vmIntrinsics::_reverseBytes_s:
+      return lower_reverse_bytes_narrow(id);
 
     // Dual-path libm (JeandleUseHotspotIntrinsics selects the path)
     // TODO/FIXME: LLVM's `llvm.sin`, `llvm.cos`, etc. do **not** guarantee
@@ -300,6 +401,11 @@ bool JeandleIntrinsicLowering::lower(vmIntrinsics::ID id, const ciMethod* target
     case vmIntrinsics::_compareUnsigned_i:
     case vmIntrinsics::_compareUnsigned_l:
       return lower_compare_unsigned(id);
+
+    // addExact
+    case vmIntrinsics::_addExactI:
+    case vmIntrinsics::_addExactL:
+      return lower_add_exact(id);
 
     default:
       return false;
@@ -583,6 +689,51 @@ bool JeandleIntrinsicLowering::lower_bit_count(vmIntrinsics::ID id) {
   return true;
 }
 
+// ---- lower_count_zeros ----
+// numberOfLeadingZeros  -> llvm.ctlz
+// numberOfTrailingZeros -> llvm.cttz
+// The _l variants return int in Java but llvm.ctlz/cttz.i64 returns i64, so trunc.
+bool JeandleIntrinsicLowering::lower_count_zeros(vmIntrinsics::ID id,
+                                                 llvm::Intrinsic::ID llvm_id) {
+  llvm::LLVMContext& ctx = *_interp->_context;
+  llvm::IRBuilder<>& builder = _interp->_ir_builder;
+  bool is_long = (id == vmIntrinsics::_numberOfLeadingZeros_l ||
+                  id == vmIntrinsics::_numberOfTrailingZeros_l);
+
+  llvm::Value* arg = is_long ? _interp->_jvm->lpop() : _interp->_jvm->ipop();
+  llvm::Type* arg_ty = arg->getType(); // i32 or i64
+
+  // ctlz/cttz take a trailing i1 is_zero_poison flag; pass false so that
+  // numberOf{Leading,Trailing}Zeros(0) is the bit width (32/64), not poison.
+  llvm::CallInst* call =
+      builder.CreateIntrinsic(arg_ty, llvm_id, {arg, builder.getInt1(false)});
+
+  if (is_long) {
+    _interp->_jvm->ipush(builder.CreateTrunc(call, JeandleType::java2llvm(BasicType::T_INT, ctx)));
+  } else {
+    _interp->_jvm->ipush(call);
+  }
+  return true;
+}
+
+// ---- lower_reverse_bytes_narrow ----
+// Character.reverseBytes(char) / Short.reverseBytes(short). The value sits on
+// the operand stack as a computational int, but only the low 16 bits are
+// meaningful. Swap those bits as i16, then restore Java's zero/sign extension.
+bool JeandleIntrinsicLowering::lower_reverse_bytes_narrow(vmIntrinsics::ID id) {
+  llvm::IRBuilder<>& builder = _interp->_ir_builder;
+  bool is_char = (id == vmIntrinsics::_reverseBytes_c);
+
+  llvm::Value* arg = _interp->_jvm->ipop();
+  llvm::Value* narrow = builder.CreateTrunc(arg, builder.getInt16Ty());
+  llvm::Value* swapped =
+      builder.CreateIntrinsic(builder.getInt16Ty(), llvm::Intrinsic::bswap, {narrow});
+  llvm::Value* result = is_char ? builder.CreateZExt(swapped, builder.getInt32Ty())
+                                : builder.CreateSExt(swapped, builder.getInt32Ty());
+  _interp->_jvm->ipush(result);
+  return true;
+}
+
 // ---- lower_new_array ----
 //
 // Generates inline IR for Array.newInstance(Class<?>, int):
@@ -655,6 +806,25 @@ bool JeandleIntrinsicLowering::lower_new_array() {
   // FastAllocateSizeLimit bounds the byte size to <= FastAllocateSizeLimit << LogBytesPerLong
   // (~1MB) for any element type, so size_in_bytes cannot overflow i32. Larger reflective arrays
   // fall to the slow path.
+  // TODO: this cap is a flat limit on element count, applied the same way regardless of element
+  // type. Because it isn't scaled by element size, it effectively assumes every element is 8
+  // bytes wide, so arrays of smaller elements (byte[], or reference arrays under compressed oops)
+  // fall back to the slow path far earlier than their real byte size requires. The constant-klass
+  // bytecode path (emit_jeandle_newarray) already scales it by element size:
+  //     FastAllocateSizeLimit << (LogBytesPerLong - log2_esize)
+  // We can do the same here using the log2_esize decoded just above -- one shift, covers every
+  // element type, no extra branching.
+  //
+  // Going further like C2 (speculatively assuming a reference array so the whole layout folds to
+  // constants) isn't worth it here: C2's real gain comes from optimizing the code after the
+  // allocation -- folding a trailing arraycopy's address math and deleting the now-redundant
+  // zeroing. Neither is reachable for us: the zeroing lives inside the opaque jeandle.new_array
+  // helper, and this reflection site just returns the array with no copy to merge with.
+  //
+  // If that after-allocation win is ever worth pursuing, the path forward is not C2's guard but
+  // making the zeroing removable at the call site: expose it as stores the optimizer can see (or
+  // flag the region as already-zeroed) so a following overwrite can delete it, and let the
+  // allocation fuse with the arraycopy.
   llvm::Value* length_limit = builder.getInt32((int)FastAllocateSizeLimit);
 
   static constexpr CallSiteAttributeMetadata fast_attrs =
@@ -690,5 +860,54 @@ bool JeandleIntrinsicLowering::lower_new_array() {
   result->addIncoming(slow_call, slow_normal_bb);
 
   _interp->_jvm->apush(result);
+  return true;
+}
+
+// ---- lower_add_exact ----
+// Math.addExact(int,int) / Math.addExact(long,long):
+//   Use llvm.sadd.with.overflow; on overflow take an uncommon_trap
+//   (Reason_intrinsic / Action_none) so the interpreter re-executes.
+//   Args are peeked (not popped) before the branch so the statepoint
+//   captures the full pre-call stack for correct deopt re-execution.
+bool JeandleIntrinsicLowering::lower_add_exact(vmIntrinsics::ID id) {
+  llvm::IRBuilder<>& builder = _interp->_ir_builder;
+  llvm::LLVMContext& ctx = *_interp->_context;
+  int cur_bci = _interp->_bytecodes.cur_bci();
+  bool is_long = (id == vmIntrinsics::_addExactL);
+
+  llvm::Type* ty = JeandleType::java2llvm(
+      is_long ? BasicType::T_LONG : BasicType::T_INT, ctx);
+
+  llvm::Value* arg2 = _interp->_jvm->peek_value(0).value();
+  llvm::Value* arg1 = _interp->_jvm->peek_value(1).value();
+
+  llvm::Value* res = builder.CreateIntrinsic(
+      llvm::Intrinsic::sadd_with_overflow, {ty}, {arg1, arg2});
+  llvm::Value* result   = builder.CreateExtractValue(res, 0);
+  llvm::Value* overflow = builder.CreateExtractValue(res, 1);
+
+  const std::string pfx = "bci_" + std::to_string(cur_bci) +
+                           (is_long ? "_addExactL" : "_addExactI");
+  llvm::BasicBlock* ok_bb = llvm::BasicBlock::Create(ctx, pfx + "_ok",       _interp->_llvm_func);
+  llvm::BasicBlock* ov_bb = llvm::BasicBlock::Create(ctx, pfx + "_overflow", _interp->_llvm_func);
+
+  llvm::MDNode* bwmd = llvm::MDBuilder(ctx).createBranchWeights(1, 9999);
+  builder.CreateCondBr(overflow, ov_bb, ok_bb, bwmd);
+  _interp->uncommon_trap(Deoptimization::Reason_intrinsic,
+                         Deoptimization::Action_none, ov_bb,
+                         true /* should_reexecute */);
+
+  builder.SetInsertPoint(ok_bb);
+  _interp->_block->set_tail_llvm_block(ok_bb);
+
+  if (is_long) {
+    _interp->_jvm->lpop(); // arg2
+    _interp->_jvm->lpop(); // arg1
+    _interp->_jvm->lpush(result);
+  } else {
+    _interp->_jvm->ipop(); // arg2
+    _interp->_jvm->ipop(); // arg1
+    _interp->_jvm->ipush(result);
+  }
   return true;
 }

@@ -35,6 +35,11 @@ public:
     return "x28";
   }
 
+  static const char* get_heap_base_pointer() {
+    // rheapbase is x27 on aarch64
+    return "x27";
+  }
+
   static const bool is_stack_pointer(Register reg) {
     return reg == r31_sp;
   }

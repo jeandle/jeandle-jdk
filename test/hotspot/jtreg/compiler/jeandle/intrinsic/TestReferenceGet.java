@@ -84,7 +84,7 @@ public class TestReferenceGet {
         fc.checkPattern("define.*jeandle.reference_get");
 
         // Verify the load is unordered atomic (appears first in the function)
-        fc.checkPattern("load atomic ptr addrspace\\(1\\).*unordered");
+        fc.checkPattern("load atomic ptr addrspace\\([13]\\).*unordered");
 
         // Verify G1 pre-barrier call is present (under G1GC)
         fc.checkPattern("jeandle.g1_pre_barrier_loaded");

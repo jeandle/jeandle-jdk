@@ -150,6 +150,11 @@
 //      arg1_type       ,
 //         ...          ,
 //      argn_type       )
+//
+// is_leaf is a Jeandle leaf-runtime contract, not only an is-gc-leaf hint.
+// A leaf routine must not trigger GC, reach a safepoint, or produce Java-visible
+// exceptional control flow. It is emitted with both gc-leaf-function and
+// nounwind so LLVM can skip statepoint rewriting and EH edges for the call.
 #define ALL_JEANDLE_DIRECT_ROUTINES(def)                                            \
   def(StubRoutines_dsin,                                                            \
       StubRoutines::dsin(),                                                         \
@@ -193,7 +198,7 @@
       llvm::Type::getDoubleTy(context),                                             \
       llvm::Type::getDoubleTy(context))                                             \
                                                                                     \
-  def(uncommon_trap,                                                                \
+  def(__llvm_deoptimize,                                                            \
       SharedRuntime::uncommon_trap_blob()->entry_point(),                           \
       true,                                                                         \
       false,                                                                        \
@@ -341,6 +346,7 @@ class JeandleRuntimeRoutine : public AllStatic {
       llvm::Function* func = llvm::cast<llvm::Function>(callee.getCallee());                                           \
       func->setCallingConv(llvm::CallingConv::C);                                                                      \
       if (is_leaf) {                                                                                                   \
+        func->addFnAttr(llvm::Attribute::NoUnwind);                                                                     \
         func->addFnAttr(llvm::Attribute::get(context, "gc-leaf-function"));                                            \
       }                                                                                                                \
       return callee;                                                                                                   \
