@@ -70,6 +70,17 @@
 @VMOptions.UseTLAB = external global i1
 @VMOptions.ZeroTLAB = external global i1
 
+; TLAB allocation prefetch flags. The helper below implements Style 1 only;
+; Styles 2 and 3 are warned about at JVM startup and produce no prefetch in IR.
+; All five are marked constant by the VM at template module init
+; (jeandleRuntimeDefinedJavaOps.cpp), so IPSCCP folds their loads to immediates
+; and LoopFullUnrollPass fully unrolls the prefetch loop.
+@VMOptions.AllocatePrefetchStyle           = external global i32
+@VMOptions.AllocatePrefetchLines           = external global i32
+@VMOptions.AllocateInstancePrefetchLines   = external global i32
+@VMOptions.AllocatePrefetchDistance        = external global i32
+@VMOptions.AllocatePrefetchStepSize        = external global i32
+
 ; Byte offsets for java.lang.ref.Reference instance fields.
 @java_lang_ref_Reference.referent_offset = external global i32
 
@@ -265,10 +276,74 @@ check_subtype:
   ret i32 %is_subtype_ext
 }
 
+; TLAB allocation prefetch helper.
+;
+; Implements only AllocatePrefetchStyle == 1 -- a fixed-count per-allocation prefetch
+; that issues N write-prefetches at %tlab_top + AllocatePrefetchDistance + i*step. This is
+; the default style in HotSpot.
+; Styles 0, 2, and 3 emit no prefetch in IR: style 0 is "off" by design; styles 2 (TLAB
+; watermark) and 3 (per-cache-line / SPARC BIS) are unsupported in Jeandle and produce a
+; one-shot startup warning via compilerDefinitions.cpp. We treat unsupported styles as 0
+; in IR rather than silently degrading to Style 1 -- the warning is the signal to the user.
+;
+; Caller passes %is_array as a compile-time constant (i1 true/false), so after this helper
+; is inlined into its caller at JavaOperationLower(0), constant propagation collapses the
+; select on %is_array down to either AllocatePrefetchLines or AllocateInstancePrefetchLines.
+;
+; CRITICAL UNROLL CONTRACT:
+; The for-loop below is intentionally written as a runtime loop in source IR, but is REQUIRED
+; to be fully unrolled in the lowered output. The unroll is delivered by LoopFullUnrollPass,
+; which jeandle-llvm runs as part of buildO1FunctionSimplificationPipeline (-O1) or
+; buildFunctionSimplificationPipeline (-O2/-O3), both reached via the
+; buildPerModuleDefaultPipeline(level) call jeandle issues before JavaOperationLower(1). The
+; chain works because every loop input -- AllocatePrefetchStyle, AllocatePrefetchLines,
+; AllocateInstancePrefetchLines, AllocatePrefetchDistance, AllocatePrefetchStepSize -- is
+; defined as a `constant` template global (setConstant(true) in jeandleRuntimeDefinedJavaOps.cpp),
+; so IPSCCP folds them to immediates and gives the loop a known trip count. If LoopFullUnroll
+; ever leaves the jeandle-llvm pipeline, this loop will silently fall back to a runtime loop
+; and prefetch quality will collapse -- the verification step is to
+; grep N straight @llvm.prefetch calls in the post-lower-phase=1 IR dump.
+;
+; Prefetch is a hint instruction. AArch64 prfm (aarch64.ad:7621-7633) and x86 prefetcht0/
+; prefetchw are documented as safe with invalid addresses (no fault), so we do not guard
+; against %tlab_top + distance landing past %tlab_end or outside the heap. Same convention
+; as HotSpot C2 macro.cpp:1841-1862.
+define private hotspotcc void @__jeandle_tlab_prefetch(ptr addrspace(1) %tlab_top, i1 %is_array) noinline "lower-phase"="0" {
+entry:
+  %style = load i32, ptr @VMOptions.AllocatePrefetchStyle
+  %style_on = icmp eq i32 %style, 1
+  br i1 %style_on, label %prefetch_setup, label %prefetch_done
+
+prefetch_setup:
+  %instance_lines = load i32, ptr @VMOptions.AllocateInstancePrefetchLines
+  %array_lines    = load i32, ptr @VMOptions.AllocatePrefetchLines
+  %lines = select i1 %is_array, i32 %array_lines, i32 %instance_lines
+  %distance = load i32, ptr @VMOptions.AllocatePrefetchDistance
+  %step     = load i32, ptr @VMOptions.AllocatePrefetchStepSize
+  br label %prefetch_loop
+
+prefetch_loop:
+  %i = phi i32 [ 0, %prefetch_setup ], [ %i_next, %prefetch_emit ]
+  %loop_done = icmp uge i32 %i, %lines
+  br i1 %loop_done, label %prefetch_done, label %prefetch_emit
+
+prefetch_emit:
+  %i_step = mul i32 %i, %step
+  %i_off  = add i32 %i_step, %distance
+  %addr   = getelementptr i8, ptr addrspace(1) %tlab_top, i32 %i_off
+  ; rw=1 (write), locality=3 (L1 keep), cachetype=1 (data). All must be ImmArg per
+  ; LLVM intrinsic spec; the backend lowers to prfm PSTL1KEEP (AArch64) or prefetchw / prefetcht0 (x86).
+  call void @llvm.prefetch.p1(ptr addrspace(1) %addr, i32 1, i32 3, i32 1)
+  %i_next = add i32 %i, 1
+  br label %prefetch_loop
+
+prefetch_done:
+  ret void
+}
+
 declare hotspotcc ptr addrspace(1) @new_instance(ptr, ptr)
 
 ; Implementation of Java new object
-; TODO: Support prefetch instructions for next allocations.
 define private hotspotcc ptr addrspace(1) @jeandle.new_instance(ptr %klass, i32 %size_in_bytes) noinline "lower-phase"="1" {
 entry:
   %use_tlab = load i1, ptr @VMOptions.UseTLAB
@@ -295,6 +370,12 @@ alloc_slow_path:
 
 alloc_fast_path:
   store ptr addrspace(1) %tlab_new_top, ptr addrspace(2) %tlab_top_ptr, align 8
+
+  ; Prefetch cache lines for the NEXT allocation in this TLAB. Constant i1 false picks
+  ; AllocateInstancePrefetchLines after inline + constant propagation. See
+  ; __jeandle_tlab_prefetch above for the unroll contract.
+  call hotspotcc void @__jeandle_tlab_prefetch(ptr addrspace(1) %tlab_new_top, i1 false)
+
   %mark_word_offset = load i32, ptr @oopDesc.mark_offset_in_bytes
   %mark_word_addr = getelementptr i8, ptr addrspace(1) %tlab_old_top, i32 %mark_word_offset
 
@@ -401,6 +482,11 @@ array_slow_path:
 
 array_fast_path:
   store ptr addrspace(1) %tlab_new_top, ptr addrspace(2) %tlab_top_ptr, align 8
+
+  ; Prefetch cache lines for the NEXT allocation in this TLAB. Constant i1 true picks
+  ; AllocatePrefetchLines (array setting) after inline + constant propagation. See
+  ; __jeandle_tlab_prefetch above for the unroll contract.
+  call hotspotcc void @__jeandle_tlab_prefetch(ptr addrspace(1) %tlab_new_top, i1 true)
 
   ; Header: mark word, klass pointer, length. No inter-field barriers; the
   ; trailing release fence publishes the whole object as a unit.

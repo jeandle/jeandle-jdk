@@ -657,6 +657,16 @@ void CompilerConfig::ergo_initialize() {
       warning("VMContinuations is disabled until jeandle supports virtual threads.");
     }
     VMContinuations = false;
+
+    // Jeandle implements only AllocatePrefetchStyle == 1 (per-allocation prefetch).
+    // Style 2 (TLAB watermark) and Style 3 (per-cache-line / SPARC BIS) are not
+    // implemented; selecting them is treated as Style 0 (no prefetch) in compiled IR.
+    if (AllocatePrefetchStyle == 2 || AllocatePrefetchStyle == 3) {
+      warning("Jeandle does not implement AllocatePrefetchStyle=" INTX_FORMAT
+              "; no prefetch will be emitted. Use AllocatePrefetchStyle=1 (default) "
+              "to enable prefetch, or 0 to disable explicitly.",
+              AllocatePrefetchStyle);
+    }
   }
 #endif // JEANDLE
 }

@@ -248,10 +248,11 @@ void ThreadLocalAllocBuffer::startup_initialization() {
   // extra space is reserved for all combinations of
   // AllocatePrefetchStyle and AllocatePrefetchInstr.
   //
-  // If the C2 compiler is not present, no space is reserved.
+  // If the C2 compiler is not present, no space is reserved. Jeandle emits the same
+  // Style 1 prefetch pattern as C2's per-allocation prefetch, so include it here too.
 
   // +1 for rounding up to next cache line, +1 to be safe
-  if (CompilerConfig::is_c2_or_jvmci_compiler_enabled()) {
+  if (CompilerConfig::is_c2_or_jvmci_compiler_enabled() || UseJeandleCompiler) {
     int lines =  MAX2(AllocatePrefetchLines, AllocateInstancePrefetchLines) + 2;
     _reserve_for_allocation_prefetch = (AllocatePrefetchDistance + AllocatePrefetchStepSize * lines) /
                                        (int)HeapWordSize;

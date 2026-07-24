@@ -588,6 +588,31 @@ void RuntimeDefinedJavaOps::define_global_variables(llvm::Module& template_modul
   define_global("VMOptions.UseTLAB",                                int1_type, static_cast<uint64_t>(UseTLAB));
   define_global("VMOptions.ZeroTLAB",                               int1_type, static_cast<uint64_t>(ZeroTLAB));
 
+  // TLAB allocation prefetch flag values.
+  //
+  // The template-side prefetch helper (template.ll:__jeandle_tlab_prefetch) implements only
+  // AllocatePrefetchStyle == 1 -- the simple per-allocation prefetch mode. Styles 2 (TLAB
+  // watermark) and 3 (per-cache-line / SPARC BIS) are unsupported and emit no prefetch in
+  // IR; users that set those values get a one-shot startup warning from compilerDefinitions.cpp.
+  //
+  // These flags are normalized during JVM ergonomics (e.g. AllocatePrefetchDistance default
+  // -1 is replaced by a CPU-derived positive value in Arguments::set_ergonomics_flags).
+  // The template module is built after ergonomics, so the values seen here are the final
+  // ones.
+  //
+  // Note: these globals are marked constant (define_global() above calls setConstant(true)),
+  // which lets IPSCCP fold their loads to immediates in template.ll. Combined with
+  // LoopFullUnrollPass (PassBuilderPipelines.cpp:528, runs as part of
+  // buildPerModuleDefaultPipeline), this lets the prefetch helper write the prefetch sequence
+  // as a constant-trip-count for-loop in IR and rely on LLVM to fully unroll it. Without
+  // that unroll the loop overhead would dominate the prefetch benefit.
+  assert(AllocatePrefetchDistance >= 0, "AllocatePrefetchDistance must be normalized by ergonomics before template module init");
+  assert(AllocatePrefetchStepSize > 0,  "AllocatePrefetchStepSize must be positive");
+  define_global("VMOptions.AllocatePrefetchStyle",                  int32_type, static_cast<uint64_t>(AllocatePrefetchStyle));
+  define_global("VMOptions.AllocatePrefetchLines",                  int32_type, static_cast<uint64_t>(AllocatePrefetchLines));
+  define_global("VMOptions.AllocateInstancePrefetchLines",          int32_type, static_cast<uint64_t>(AllocateInstancePrefetchLines));
+  define_global("VMOptions.AllocatePrefetchDistance",               int32_type, static_cast<uint64_t>(AllocatePrefetchDistance));
+  define_global("VMOptions.AllocatePrefetchStepSize",               int32_type, static_cast<uint64_t>(AllocatePrefetchStepSize));
   define_global("UseCompressedClassPointers",                       int1_type,  static_cast<uint64_t>(UseCompressedClassPointers));
   define_global("UseCompressedOops",                                int1_type,  static_cast<uint64_t>(UseCompressedOops));
 }
