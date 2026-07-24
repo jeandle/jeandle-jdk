@@ -69,18 +69,19 @@ void JeandleAssembler::patch_static_call_site(int inst_offset, CallSiteInfo* cal
   }
 
   address call_address = __ addr_at(inst_offset);
+  const int method_index = call->attached_method() == nullptr ? 0 : __ oop_recorder()->find_index(call->attached_method());
 
   int insts_end_offset = __ code()->insts_end() - __ code()->insts_begin();
   __ code()->set_insts_end(call_address);
 
-  relocInfo::relocType rtype;
+  RelocationHolder rspec;
   if (call->target() == SharedRuntime::get_resolve_opt_virtual_call_stub()) {
-    rtype = relocInfo::opt_virtual_call_type;
+    rspec = opt_virtual_call_Relocation::spec(method_index);
   } else {
     assert(call->target() == SharedRuntime::get_resolve_static_call_stub(), "illegal call target");
-    rtype = relocInfo::static_call_type;
+    rspec = static_call_Relocation::spec(method_index);
   }
-  Address call_addr = Address(call->target(), rtype);
+  Address call_addr = Address(call->target(), rspec);
   // emit trampoline call for patch
   address tpc = __ trampoline_call(call_addr);
   if (tpc == nullptr) {
@@ -144,7 +145,8 @@ void JeandleAssembler::patch_ic_call_site(int inst_offset, CallSiteInfo* call) {
   __ code()->set_insts_end(call_address);
 
   // Patch
-  address tpc = __ ic_call(call->target());
+  const int method_index = call->attached_method() == nullptr ? 0 : __ oop_recorder()->find_index(call->attached_method());
+  address tpc = __ ic_call(call->target(), method_index);
   if (tpc == nullptr) {
     JEANDLE_REPORT_ERROR_AND_RET_VOID("trampoline stub overflow");
   }

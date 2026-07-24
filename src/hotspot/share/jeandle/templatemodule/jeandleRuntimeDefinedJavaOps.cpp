@@ -440,6 +440,18 @@ DEF_JAVA_OP(decode_klass, 1, llvm::PointerType::get(context, llvm::jeandle::Addr
   ir_builder.CreateRet(klass_ptr);
 JAVA_OP_END
 
+static inline void insert_patch_size_metadata(
+  llvm::Module &template_module, llvm::LLVMContext &context,
+  const char *patch_type, int patch_size) {
+    llvm::NamedMDNode* patch_node = template_module.getOrInsertNamedMetadata(patch_type);
+    assert(patch_node != nullptr, "invalid patch node");
+    llvm::Metadata* patch_size_md =
+    llvm::ConstantAsMetadata::get(
+      llvm::ConstantInt::get(llvm::Type::getInt32Ty(context),
+      patch_size));
+      patch_node->addOperand(llvm::MDNode::get(context, patch_size_md));
+    }
+
 } // anonymous namespace
 
 const char* RuntimeDefinedJavaOps::_error_msg = nullptr;
@@ -494,15 +506,14 @@ void RuntimeDefinedJavaOps::define_metadata(llvm::Module& template_module) {
     metadata_node->addOperand(heap_base_register);
   }
 
-  // Static call patch size.
+  // Call patch size info.
   {
-    llvm::NamedMDNode* patch_node = template_module.getOrInsertNamedMetadata(llvm::jeandle::Metadata::StaticCallPatchSize);
-    assert(patch_node != nullptr, "invalid patch node");
-    llvm::Metadata* patch_size_md =
-      llvm::ConstantAsMetadata::get(
-        llvm::ConstantInt::get(llvm::Type::getInt32Ty(context),
-                                  JeandleCompiledCall::call_site_patch_size(JeandleCompiledCall::STATIC_CALL)));
-    patch_node->addOperand(llvm::MDNode::get(context, patch_size_md));
+    insert_patch_size_metadata(template_module, context,
+        llvm::jeandle::Metadata::StaticCallPatchSize,
+        JeandleCompiledCall::call_site_patch_size(JeandleCompiledCall::STATIC_CALL));
+    insert_patch_size_metadata(template_module, context,
+        llvm::jeandle::Metadata::DynamicCallPatchSize,
+        JeandleCompiledCall::call_site_patch_size(JeandleCompiledCall::DYNAMIC_CALL));
   }
 }
 

@@ -343,12 +343,6 @@ runtime/ClassUnload/UnloadTestWithVerifyDuringGC.java                           
 compiler/loopopts/TestRemoveEmptyLoop.java                                                     linux-aarch64,linux-x64
 
 ###
-# CHA - Class Hierarchy Analysis deoptimization not supported
-###
-compiler/cha/AbstractRootMethod.java                                                           linux-aarch64,linux-x64
-compiler/cha/DefaultRootMethod.java                                                            linux-aarch64,linux-x64
-
-###
 # CodeEntryAlignment
 ###
 compiler/arguments/TestCodeEntryAlignment.java                                                 linux-x64

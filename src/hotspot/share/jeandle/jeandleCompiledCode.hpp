@@ -32,6 +32,7 @@
 #include "llvm/Object/StackMapParser.h"
 #include "llvm/Support/DynamicLibrary.h"
 #include "llvm/Support/MemoryBuffer.h"
+#include "llvm/IR/Jeandle/Deoptimization.h"
 
 #include "jeandle/jeandleExceptionHandlerTable.hpp"
 #include "jeandle/jeandleCompiledCall.hpp"
@@ -84,6 +85,7 @@ class CallSiteInfo : public JeandleCompilationResourceObj {
                _type(type),
                _target(target),
                _is_method_handle_invoke(is_method_handle_invoke),
+               _attached_method(nullptr),
                _statepoint_id(statepoint_id) {
 #ifdef ASSERT
     // We don't need to assign a unique statepoint id for each routine call site, only call type and target is used.
@@ -101,11 +103,14 @@ class CallSiteInfo : public JeandleCompilationResourceObj {
   address target() const { return _target; }
   void set_target(address target) { _target = target; }
   bool is_method_handle_invoke() const { return _is_method_handle_invoke; }
+  Method* attached_method() const { return _attached_method; }
+  void set_attached_method(Method* method) { _attached_method = method; }
 
  private:
   JeandleCompiledCall::Type _type;
   address _target;
   bool _is_method_handle_invoke;
+  Method* _attached_method;
 
   // Used to distinguish each call site in stackmaps.
   uint64_t _statepoint_id;

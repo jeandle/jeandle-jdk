@@ -658,6 +658,14 @@ declare hotspotcc void @jeandle.pre_barrier(ptr addrspace(1) %addr)
 ; Declaration of Java post barrier.
 declare hotspotcc void @jeandle.post_barrier(ptr addrspace(1) %addr, ptr addrspace(1) nocapture %oop)
 
+; Identity marker for Java type narrowing.
+; Semantically returns the same oop. The java-klass return attribute is attached
+; at call sites, not here.
+define hotspotcc ptr addrspace(1) @jeandle.assume_java_type(ptr addrspace(1) %oop) noinline "lower-phase"="1" #0 {
+entry:
+  ret ptr addrspace(1) %oop
+}
+
 ; Implementation of Java checkcast operation
 define hotspotcc i1 @jeandle.checkcast(ptr addrspace(0) nocapture %super_klass, ptr addrspace(1) nocapture %oop) noinline "lower-phase"="0" #0 {
 entry:

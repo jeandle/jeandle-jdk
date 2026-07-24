@@ -61,6 +61,7 @@ void JeandleAssembler::patch_static_call_site(int inst_offset, CallSiteInfo* cal
   assert(inst_offset >= 0, "invalid call instruction address");
   assert(call->type() == JeandleCompiledCall::STATIC_CALL, "legal call type");
   address call_address =  __ addr_at(inst_offset);
+  const int method_index = call->attached_method() == nullptr ? 0 : __ oop_recorder()->find_index(call->attached_method());
 
   // Set insts_end to where to patch.
   int insts_end_offset = __ code()->insts_end() - __ code()->insts_begin();
@@ -68,10 +69,10 @@ void JeandleAssembler::patch_static_call_site(int inst_offset, CallSiteInfo* cal
 
   // Patch.
   if (call->target() == SharedRuntime::get_resolve_opt_virtual_call_stub()) {
-    __ call(AddressLiteral(call->target(), relocInfo::opt_virtual_call_type));
+    __ call(AddressLiteral(call->target(), opt_virtual_call_Relocation::spec(method_index)));
   } else {
     assert(call->target() == SharedRuntime::get_resolve_static_call_stub(), "illegal call target");
-    __ call(AddressLiteral(call->target(), relocInfo::static_call_type));
+    __ call(AddressLiteral(call->target(), static_call_Relocation::spec(method_index)));
   }
   assert(__ offset() % 4 == 0, "must be aligned for MT-safe patch");
 
@@ -110,7 +111,8 @@ void JeandleAssembler::patch_ic_call_site(int inst_offset, CallSiteInfo* call) {
   __ code()->set_insts_end(call_address);
 
   // Patch.
-  __ ic_call(call->target());
+  const int method_index = call->attached_method() == nullptr ? 0 : __ oop_recorder()->find_index(call->attached_method());
+  __ ic_call(call->target(), method_index);
   assert(__ offset() % 4 == 0, "must be aligned for MT-safe patch");
 
   // Recover insts_end.
