@@ -2896,11 +2896,10 @@ void JeandleAbstractInterpreter::do_array_load(BasicType basic_type) {
   }
 }
 
-llvm::Value* JeandleAbstractInterpreter::do_array_store_inner(BasicType basic_type, llvm::Type* store_type, llvm::Value* value) {
+void JeandleAbstractInterpreter::do_array_store_inner(BasicType basic_type, llvm::Type* store_type, llvm::Value* value) {
   llvm::Value* element_address = compute_array_element_address(basic_type, store_type);
   llvm::StoreInst* store_inst = _ir_builder.CreateStore(value, element_address);
   store_inst->setAtomic(llvm::AtomicOrdering::Unordered);
-  return element_address;
 }
 
 void JeandleAbstractInterpreter::do_array_store(BasicType basic_type) {
@@ -2946,18 +2945,13 @@ void JeandleAbstractInterpreter::do_array_store(BasicType basic_type) {
     }
     case T_OBJECT: {
       value = _jvm->apop();
-      llvm::Value* element_address;
+      llvm::Type* store_type = llvm::PointerType::get(*_context, UseCompressedOops
+          ? llvm::jeandle::AddrSpace::NarrowOopAddrSpace
+          : llvm::jeandle::AddrSpace::JavaHeapAddrSpace);
       if (UseCompressedOops) {
-        llvm::Type* store_type = llvm::PointerType::get(*_context, llvm::jeandle::AddrSpace::NarrowOopAddrSpace);
-        element_address = do_array_store_inner(T_OBJECT, store_type, _ir_builder.CreateAddrSpaceCast(value, store_type));
-      } else {
-        llvm::Type* store_type = llvm::PointerType::get(*_context, llvm::jeandle::AddrSpace::JavaHeapAddrSpace);
-        element_address = do_array_store_inner(T_OBJECT, store_type, value);
+        value = _ir_builder.CreateAddrSpaceCast(value, store_type);
       }
-      // TODO: A workaround for card table barrier of array element, not to block the development progress.
-      // Currently, we can't get array type in LLVM pass. Once a clearer design is available, the barrier
-      // insertion operation will be moved to the LLVM pass.
-      call_java_op("jeandle.post_barrier", {element_address, value});
+      do_array_store_inner(T_OBJECT, store_type, value);
       break;
     }
     case T_BYTE: {
