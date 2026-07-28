@@ -119,6 +119,7 @@ class JeandleVMState : public JeandleCompilationResourceObj {
   size_t max_locals() const { return _locals.size(); }
 
   void invalidate_local(int index) { _locals[index] = TypedValue::null_value(); }
+  void invalidate_debug_only_locals(MethodLivenessResult raw_liveness);
 
   llvm::Value* locals_at(int index) { return _locals[index].value(); }
   BasicType locals_type_at(int index) { return _locals[index].actual_type(); }
@@ -203,6 +204,13 @@ class JeandleBasicBlock : public JeandleCompilationResourceObj {
   JeandleVMState* VM_state() { return _jvm; }
   void set_VM_state(JeandleVMState* jvm) { _jvm = jvm; }
 
+  // A normal predecessor contributes one successful VM-state merge for each
+  // incoming CFG edge. Exception handlers are kept conservative because their
+  // incoming states are created at individual throwing bytecodes.
+  bool is_ready() const {
+    return _merged_predecessor_count == _predecessors.size();
+  }
+
   int block_id() const { return _block_id; }
   int start_bci() const { return _start_bci; }
   int limit_bci() const { return _limit_bci; }
@@ -226,6 +234,7 @@ class JeandleBasicBlock : public JeandleCompilationResourceObj {
   int _reverse_post_order;
 
   JeandleVMState* _jvm;
+  size_t _merged_predecessor_count;
 
   // Use vector to allow duplicate predecessors/successors, except for exception handlers.
   llvm::SmallVector<JeandleBasicBlock*, 8> _predecessors;
@@ -235,11 +244,12 @@ class JeandleBasicBlock : public JeandleCompilationResourceObj {
   llvm::BasicBlock* _tail_llvm_block;
   ciBlock* _ci_block;
 
-  // The JeandleVMState recording the initial state of a loop header.
-  // When a loop tail block is interpreted, we need to update the loop header's
-  // phi nodes. Use this variable to find the right phi nodes to update.
+  // The JeandleVMState recording the initial state of a block entered through
+  // PHIs. If another predecessor is visited after the block was interpreted,
+  // use this state to update its entry PHIs.
   JeandleVMState* _initial_jvm;
 
+  bool record_predecessor_merge(bool merged);
   void initialize_VM_state_from(JeandleVMState* incoming_state, llvm::BasicBlock* incoming_block, MethodLivenessResult liveness, bool is_osr);
 };
 
@@ -375,10 +385,10 @@ class JeandleAbstractInterpreter : public StackObj {
   void if_acmp(llvm::CmpInst::Predicate p);
   void if_null(llvm::CmpInst::Predicate p);
   // Shared emission for if_* helpers. Either prunes a strict-zero edge into
-  // an uncommon_trap, or emits a two-way branch with MDO weights. Must be
-  // called before the if_* helper pops its operands, so a pruned trap's deopt
-  // bundle still captures the pre-if operand stack.
-  void do_if_branch(llvm::Value* cond);
+  // an uncommon_trap, or emits a two-way branch with MDO weights. It consumes
+  // the if operands after emitting a pruned trap's deopt bundle but before
+  // merging normal Java successors.
+  void do_if_branch(llvm::Value* cond, unsigned operands);
   bool path_is_suitable_for_unstable_if_prune(int bci, JeandleProfile::BranchCounts counts);
   void attach_branch_weights(llvm::BranchInst* br, int bci);
   void attach_switch_weights(llvm::SwitchInst* switch_inst, int bci);
