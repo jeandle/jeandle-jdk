@@ -25,7 +25,6 @@ package compiler.jeandle.intrinsic;
 
 /*
  * @test
- * @requires vm.opt.final.UseJeandleCompiler == true
  * @requires vm.opt.final.UseVectorizedMismatchIntrinsic == true
  * @summary Test Jeandle vectorizedMismatch intrinsic lowering and semantics
  * @modules java.base/jdk.internal.misc
@@ -57,6 +56,7 @@ import java.util.stream.Stream;
 
 import jdk.internal.misc.Unsafe;
 import jdk.internal.util.ArraysSupport;
+import jdk.test.lib.Platform;
 import jdk.test.lib.process.OutputAnalyzer;
 import jdk.test.lib.process.ProcessTools;
 
@@ -69,6 +69,8 @@ public class VectorizedMismatchTest {
             "(?m)\\bmismatch_inline_small_a_i64\\b");
     private static final Pattern INLINE_VECTOR_LOAD = Pattern.compile(
             "(?m)\\bmismatch_inline_vector_a\\b");
+    private static final Pattern ARRAY_OPERATION_PARTIAL_INLINE_SIZE = Pattern.compile(
+            "(?m)^\\s*intx\\s+ArrayOperationPartialInlineSize\\s*=\\s*(\\d+)\\b");
     private static final Pattern DIRECT_MEMORY_GEP = Pattern.compile(
             "(?m)getelementptr i8, ptr addrspace\\(1\\) null");
 
@@ -575,6 +577,7 @@ public class VectorizedMismatchTest {
                 "-Xbatch", "-XX:-TieredCompilation",
                 "-XX:+UnlockDiagnosticVMOptions", "-XX:+UseJeandleCompiler",
                 "-XX:+UseVectorizedMismatchIntrinsic",
+                "-XX:+PrintFlagsFinal",
                 "-Xlog:jeandle=debug", "-XX:+JeandleDumpIR",
                 "-XX:JeandleDumpDirectory=" + dumpDirectory,
                 "-XX:CompileCommand=quiet",
@@ -605,8 +608,19 @@ public class VectorizedMismatchTest {
             }
             boolean foundInlineVectorPath = irFiles.stream()
                                                     .anyMatch(VectorizedMismatchTest::containsInlineVectorPath);
-            if (!foundInlineVectorPath) {
+            var inlineSizeMatcher =
+                    ARRAY_OPERATION_PARTIAL_INLINE_SIZE.matcher(output.getOutput());
+            if (!inlineSizeMatcher.find()) {
+                throw new AssertionError("ArrayOperationPartialInlineSize is missing from VM flags");
+            }
+            int partialInlineSize = Integer.parseInt(inlineSizeMatcher.group(1));
+            boolean expectInlineVectorPath =
+                    Platform.isAArch64() && partialInlineSize >= 16;
+            if (expectInlineVectorPath && !foundInlineVectorPath) {
                 throw new AssertionError("compiled IR does not contain inline vector mismatch loads");
+            } else if (!expectInlineVectorPath && foundInlineVectorPath) {
+                throw new AssertionError(
+                        "compiled IR unexpectedly contains inline vector mismatch loads");
             }
             boolean foundDirectMemoryGep = irFiles.stream()
                                                    .anyMatch(VectorizedMismatchTest::containsDirectMemoryGep);

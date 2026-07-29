@@ -904,7 +904,6 @@ bool JeandleIntrinsicLowering::lower_vectorized_mismatch() {
   llvm::Function* f = _interp->_llvm_func;
 
   static constexpr unsigned small_path_limit = 16;
-  static constexpr unsigned medium_path_limit = 64;
 
   // Compute in i64 so a large i32 length shifted by scale cannot wrap into an
   // inline tier. The VM guarantees scale is a valid element-size logarithm.
@@ -914,13 +913,15 @@ bool JeandleIntrinsicLowering::lower_vectorized_mismatch() {
   llvm::Value* is_small = b.CreateICmpULT(
       byte_length, llvm::ConstantInt::get(i64, small_path_limit),
       "mismatch_inline_small");
-  llvm::Value* is_medium = b.CreateICmpULT(
-      byte_length, llvm::ConstantInt::get(i64, medium_path_limit),
-      "mismatch_inline_medium");
 
+  const uint64_t medium_path_limit =
+      static_cast<uint64_t>(ArrayOperationPartialInlineSize);
+  const bool use_medium_path = supports_vectorized_mismatch_medium_path() &&
+                               medium_path_limit >= small_path_limit;
   llvm::BasicBlock* small_bb = llvm::BasicBlock::Create(ctx, "mismatch_inline_small", f);
   llvm::BasicBlock* dispatch_bb = llvm::BasicBlock::Create(ctx, "mismatch_dispatch_medium", f);
-  llvm::BasicBlock* medium_bb = llvm::BasicBlock::Create(ctx, "mismatch_inline_medium", f);
+  llvm::BasicBlock* medium_bb = use_medium_path
+      ? llvm::BasicBlock::Create(ctx, "mismatch_inline_medium", f) : nullptr;
   llvm::BasicBlock* stub_bb = llvm::BasicBlock::Create(ctx, "mismatch_stub", f);
   llvm::BasicBlock* done_bb = llvm::BasicBlock::Create(ctx, "mismatch_done", f);
   b.CreateCondBr(is_small, small_bb, dispatch_bb);
@@ -931,20 +932,26 @@ bool JeandleIntrinsicLowering::lower_vectorized_mismatch() {
   llvm::BasicBlock* small_done_bb = b.GetInsertBlock();
   b.CreateBr(done_bb);
 
+  llvm::Value* medium_result = nullptr;
+  llvm::BasicBlock* medium_done_bb = nullptr;
+
   // Tier 2 is available only when the target can lower the fixed-width vector
   // IR efficiently. Unsupported targets skip directly to the platform stub.
   b.SetInsertPoint(dispatch_bb);
-  if (cpu_supports_string_simd()) {
+  if (use_medium_path) {
+    llvm::Value* is_medium = b.CreateICmpULE(
+        byte_length, llvm::ConstantInt::get(i64, medium_path_limit),
+        "mismatch_inline_medium");
     b.CreateCondBr(is_medium, medium_bb, stub_bb);
+
+    // Tier 2: inline 128-bit vector IR up to ArrayOperationPartialInlineSize.
+    b.SetInsertPoint(medium_bb);
+    medium_result = emit_vectorized_mismatch_medium(a_addr, b_addr, byte_length, scale64);
+    medium_done_bb = b.GetInsertBlock();
+    b.CreateBr(done_bb);
   } else {
     b.CreateBr(stub_bb);
   }
-
-  // Tier 2: inline 128-bit vector IR for byte lengths in [16, 64).
-  b.SetInsertPoint(medium_bb);
-  llvm::Value* medium_result = emit_vectorized_mismatch_medium(a_addr, b_addr, byte_length, scale64);
-  llvm::BasicBlock* medium_done_bb = b.GetInsertBlock();
-  b.CreateBr(done_bb);
 
   // Tier 3: use the platform stub for large ranges, or as the fallback when
   // fixed-width vector IR is not enabled on the target.
@@ -957,11 +964,13 @@ bool JeandleIntrinsicLowering::lower_vectorized_mismatch() {
   llvm::BasicBlock* stub_done_bb = b.GetInsertBlock();
   b.CreateBr(done_bb);
 
-  // All three tiers produce the same element-index result.
+  // All enabled tiers produce the same element-index result.
   b.SetInsertPoint(done_bb);
-  llvm::PHINode* result = b.CreatePHI(i32, 3, "mismatch_result");
+  llvm::PHINode* result = b.CreatePHI(i32, use_medium_path ? 3 : 2, "mismatch_result");
   result->addIncoming(small_result, small_done_bb);
-  result->addIncoming(medium_result, medium_done_bb);
+  if (use_medium_path) {
+    result->addIncoming(medium_result, medium_done_bb);
+  }
   result->addIncoming(call, stub_done_bb);
   _interp->_block->set_tail_llvm_block(done_bb);
   _interp->_jvm->ipush(result);

@@ -133,7 +133,7 @@ class JeandleIntrinsicLowering : public StackObj {
   static bool cpu_supports_rounding();          // floor/ceil/rint
   static bool cpu_supports_popcount();          // bitCount_i/bitCount_l
   static bool cpu_supports_spin_wait();         // onSpinWait
-  static bool cpu_supports_string_simd();       // >=128-bit integer SIMD
+  static bool supports_vectorized_mismatch_medium_path();
 
   // ========================================================================
   // Shared emit helpers
