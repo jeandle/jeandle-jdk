@@ -21,6 +21,9 @@
 #ifndef SHARE_JEANDLE_VM_CALLBACK_HPP
 #define SHARE_JEANDLE_VM_CALLBACK_HPP
 
+#include "jeandle/__llvmHeadersBegin__.hpp"
+#include "llvm/IR/Jeandle/VMCallback.h"
+
 #include "memory/allocation.hpp"
 #include <string>
 
@@ -48,8 +51,7 @@ class JeandleVMCallback : public AllStatic {
   static bool      is_effectively_final(uintptr_t klass_ptr);
 
   // Constant field folding.
-  static int64_t   get_constant_field_value(int oop_id, int offset);
-  static int       get_constant_field_info(int oop_id, int offset);
+  static llvm::jeandle::ConstantFieldResult get_constant_field(int oop_id, int offset);
 
   // Oop handles.
   static std::string get_oop_handle_name(int oop_id);

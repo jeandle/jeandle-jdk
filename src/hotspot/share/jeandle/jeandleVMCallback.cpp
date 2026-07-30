@@ -241,16 +241,14 @@ bool JeandleVMCallback::is_unverified_interface(uintptr_t klass_ptr) {
 // Constant field folding
 // ---------------------------------------------------------------------------
 
-int64_t JeandleVMCallback::get_constant_field_value(int oop_id, int offset) {
+llvm::jeandle::ConstantFieldResult
+JeandleVMCallback::get_constant_field(int oop_id, int offset) {
   ciField* field = nullptr;
   ciConstant con;
-  // Callers must confirm foldability via get_constant_field_info first
-  // (it returns the HotSpot BasicType >= 0, or -1 when not foldable). This
-  // function is only reached on that path; constancy is decided solely by
-  // get_constant_field_info, never by the value returned here.
-  bool foldable = constant_field(oop_id, offset, &field, &con);
-  assert(foldable, "get_constant_field_value called on a non-foldable "
-                   "field; caller must verify via get_constant_field_info");
+  if (!constant_field(oop_id, offset, &field, &con))
+    return {-1, 0};
+
+  int basic_type = field->layout_type();
 
   if (field->is_call_site_target()) {
     ciObject* base_oop = oop_by_id(oop_id);
@@ -262,40 +260,33 @@ int64_t JeandleVMCallback::get_constant_field_value(int oop_id, int offset) {
     }
   }
 
-  switch (field->layout_type()) {
+  switch (basic_type) {
   case T_BOOLEAN:
   case T_BYTE:
   case T_CHAR:
   case T_SHORT:
   case T_INT:
-    return static_cast<int64_t>(con.as_int());
+    return {basic_type, static_cast<int64_t>(con.as_int())};
   case T_LONG:
-    return con.as_long();
+    return {basic_type, con.as_long()};
   case T_FLOAT:
-    return static_cast<int64_t>(static_cast<uint32_t>(jint_cast(con.as_float())));
+    return {basic_type,
+            static_cast<int64_t>(static_cast<uint32_t>(jint_cast(con.as_float())))};
   case T_DOUBLE:
-    return jlong_cast(con.as_double());
+    return {basic_type, jlong_cast(con.as_double())};
   case T_OBJECT:
   case T_ARRAY: {
     ciObject* object = con.as_object();
     if (object->is_null_object()) {
-      return static_cast<int64_t>(-1);
+      return {basic_type, -1};
     }
     JeandleCompiledCode* compiled_code = JeandleCompilation::current()->compiled_code();
     int result_id = compiled_code->find_or_insert_oop(object);
-    return static_cast<int64_t>(result_id);
+    return {basic_type, static_cast<int64_t>(result_id)};
   }
   default:
     ShouldNotReachHere();
   }
-}
-
-int JeandleVMCallback::get_constant_field_info(int oop_id, int offset) {
-  ciField* field = nullptr;
-  ciConstant con;
-  if (!constant_field(oop_id, offset, &field, &con))
-    return -1;
-  return field->layout_type();
 }
 
 // ---------------------------------------------------------------------------
@@ -726,8 +717,7 @@ void JeandleVMCallback::register_callbacks() {
   callbacks.IsObjectKlass = &JeandleVMCallback::is_object_klass;
   callbacks.IsUnverifiedInterface = &JeandleVMCallback::is_unverified_interface;
   callbacks.IsEffectivelyFinal = &JeandleVMCallback::is_effectively_final;
-  callbacks.GetConstantFieldValue = &JeandleVMCallback::get_constant_field_value;
-  callbacks.GetConstantFieldInfo = &JeandleVMCallback::get_constant_field_info;
+  callbacks.GetConstantField = &JeandleVMCallback::get_constant_field;
   callbacks.GetOopHandleName = &JeandleVMCallback::get_oop_handle_name;
   callbacks.GetOopKlass = &JeandleVMCallback::get_oop_klass;
   callbacks.GetInlineCalleeIR = &JeandleVMCallback::get_inline_callee_ir;
