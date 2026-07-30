@@ -184,6 +184,24 @@ bool JeandleVMState::update_phi_nodes(JeandleVMState* income_jvm, llvm::BasicBlo
   return true;
 }
 
+void JeandleVMState::invalidate_debug_only_locals(MethodLivenessResult raw_liveness) {
+  if (!raw_liveness.is_valid()) {
+    return;
+  }
+  assert((size_t)raw_liveness.size() == _locals.size(), "liveness size must match locals");
+
+  for (size_t i = 0; i < _locals.size(); ++i) {
+    if (raw_liveness.at(i) || _locals[i].is_null()) {
+      continue;
+    }
+
+    llvm::PHINode* phi_node = llvm::cast<llvm::PHINode>(_locals[i].value());
+    assert(phi_node->use_empty(), "debug-only local must be unused before block parsing");
+    phi_node->eraseFromParent();
+    invalidate_local(i);
+  }
+}
+
 // Stack operations:
 
 void JeandleVMState::push(BasicType type, llvm::Value* value) {
@@ -410,12 +428,24 @@ JeandleBasicBlock::JeandleBasicBlock(int block_id,
                                      _limit_bci(limit_bci),
                                      _reverse_post_order(-1),
                                      _jvm(nullptr),
+                                     _merged_predecessor_count(0),
                                      _predecessors(),
                                      _successors(),
                                      _header_llvm_block(header_llvm_block),
                                      _tail_llvm_block(header_llvm_block),
                                      _ci_block(ci_block),
                                      _initial_jvm(nullptr) {}
+
+bool JeandleBasicBlock::record_predecessor_merge(bool merged) {
+  // Handler incoming states are generated per throwing bytecode rather than
+  // per static CFG edge, and handler readiness is handled conservatively.
+  if (merged && !is_exception_handler()) {
+    assert(_merged_predecessor_count < _predecessors.size(),
+           "more successful predecessor merges than CFG predecessor edges");
+    ++_merged_predecessor_count;
+  }
+  return merged;
+}
 
 bool JeandleBasicBlock::merge_VM_state_from(JeandleVMState* vm_state, llvm::BasicBlock* incoming, ciMethod* method, bool is_osr) {
   if (_jvm == nullptr) {
@@ -435,24 +465,30 @@ bool JeandleBasicBlock::merge_VM_state_from(JeandleVMState* vm_state, llvm::Basi
       initialize_VM_state_from(vm_state, incoming, method->liveness_at_bci(_start_bci), is_osr);
     }
 
-    return true;
+    return record_predecessor_merge(true);
 
   } else if (!is_set(is_compiled) && !is_set(is_loop_header)) {
     assert(_predecessors.size() > 1 || is_exception_handler(), "more than one predecessors are needed for phi nodes");
-    return _jvm->update_phi_nodes(vm_state, incoming, is_osr);
-  } else if (is_set(is_loop_header)) {
+    return record_predecessor_merge(_jvm->update_phi_nodes(vm_state, incoming, is_osr));
+  } else if (is_set(is_loop_header) || _initial_jvm != nullptr) {
     if (_initial_jvm == nullptr) {
-      return _jvm->update_phi_nodes(vm_state, incoming, is_osr);
+      assert(is_set(is_loop_header), "only an uncompiled loop header can lack an initial VM state");
+      return record_predecessor_merge(_jvm->update_phi_nodes(vm_state, incoming, is_osr));
     }
-    assert(_initial_jvm != nullptr, "loop header initial JeandleVMState is needed");
-    return _initial_jvm->update_phi_nodes(vm_state, incoming, is_osr);
+    // The block may already have been compiled before all of its predecessors
+    // were visited. Update the PHIs in its saved entry state rather than the
+    // VM state mutated while interpreting the block.
+    return record_predecessor_merge(_initial_jvm->update_phi_nodes(vm_state, incoming, is_osr));
   }
 
   // Bad bytecodes.
   return false;
 }
 
-void JeandleBasicBlock::initialize_VM_state_from(JeandleVMState* incoming_state, llvm::BasicBlock* incoming_block, MethodLivenessResult liveness, bool is_osr) {
+void JeandleBasicBlock::initialize_VM_state_from(JeandleVMState* incoming_state,
+                                                 llvm::BasicBlock* incoming_block,
+                                                 MethodLivenessResult liveness,
+                                                 bool is_osr) {
   assert(_jvm == nullptr, "cannot initialize twice");
 
   llvm::IRBuilder<> ir_builder(_header_llvm_block);
@@ -1139,8 +1175,24 @@ void JeandleAbstractInterpreter::interpret_block(JeandleBasicBlock* block) {
     return;
   }
 
-  if (block->is_set(JeandleBasicBlock::is_loop_header)) {
-    // Copy loop header's initial JeandleVMState.
+  if (block->is_set(JeandleBasicBlock::is_loop_header) ||
+      block->is_exception_handler() ||
+      !block->is_ready()) {
+    // A local kept alive only for debugging is never read by bytecodes from
+    // this block. If an incoming edge can arrive after the block is parsed, its
+    // first value does not establish a stable LLVM PHI type. Keep the local
+    // unavailable instead of consulting another compiler's type-flow analysis.
+    _jvm->invalidate_debug_only_locals(_method->raw_liveness_at_bci(block->start_bci()));
+
+    // This follows C2's Parse::do_all_blocks(): loop headers and exception
+    // handlers always preserve their entry state, and a block that is not ready
+    // preserves it for late predecessor merges. C2 gates the readiness check
+    // with has_irreducible because ciTypeFlow models irreducible loops and its
+    // RPO guarantees that ordinary blocks in reducible control flow are ready.
+    // Jeandle builds a separate OSR-rooted CFG and does not model
+    // irreducibility, so check readiness directly. This may preserve an extra
+    // state for a dead or pruned predecessor, but does not delay parsing or
+    // affect correctness.
     block->set_initial_jvm(_jvm->copy());
   }
 
@@ -1666,12 +1718,18 @@ bool JeandleAbstractInterpreter::path_is_suitable_for_unstable_if_prune(
   return !too_many_traps(_method, bci, Deoptimization::Reason_unstable_if);
 }
 
-void JeandleAbstractInterpreter::do_if_branch(llvm::Value* cond) {
+void JeandleAbstractInterpreter::do_if_branch(llvm::Value* cond, unsigned operands) {
   int bci = _bytecodes.cur_bci();
   JeandleBasicBlock* taken_jbb = bci2block()[_bytecodes.get_dest()];
   JeandleBasicBlock* fallthrough_jbb = bci2block()[_bytecodes.next_bci()];
   llvm::BasicBlock* taken_block = taken_jbb->header_llvm_block();
   llvm::BasicBlock* fallthrough_block = fallthrough_jbb->header_llvm_block();
+  auto consume_operands = [&]() {
+    while (operands != 0) {
+      --operands;
+      _jvm->raw_pop();
+    }
+  };
 
   // Degenerate `if (cond) {}` where taken == fallthrough. BasicBlockBuilder
   // pushes the shared target into _successors twice, so the post-loop merge
@@ -1679,7 +1737,10 @@ void JeandleAbstractInterpreter::do_if_branch(llvm::Value* cond) {
   // skip branch weights and the unstable-if prune; !prof on a same-target CondBr trips a
   // verifier null-deref on LLVM 22 aarch64.
   if (taken_jbb == fallthrough_jbb) {
+    consume_operands();
     if (taken_jbb->is_exception_handler()) {
+      // The CondBr contributes two distinct CFG edges to the shared target.
+      merge_into_exception_handler(taken_jbb);
       merge_into_exception_handler(taken_jbb);
     }
     _ir_builder.CreateCondBr(cond, taken_block, fallthrough_block);
@@ -1687,18 +1748,14 @@ void JeandleAbstractInterpreter::do_if_branch(llvm::Value* cond) {
   }
 
   // Unstable-if prune: strict-zero one-side prune into uncommon_trap(Reason_unstable_if).
-  // Operands are still on the stack here -- if_* helpers defer the pop until
-  // after this returns so the trap deopt bundle sees pre-if state, same effect
-  // as C2's repush_if_args() without re-pushing.
+  // Operands are still on the stack here so the trap deopt bundle sees the
+  // pre-if state, same effect as C2's repush_if_args() without re-pushing.
   JeandleProfile::BranchCounts counts = _profile.branch_at(bci);
   if (path_is_suitable_for_unstable_if_prune(bci, counts)) {
     auto emit_pruned_branch = [&](JeandleBasicBlock* hot_jbb,
                                   llvm::BasicBlock* hot_block,
                                   bool cond_true_is_hot,
                                   JeandleBasicBlock* pruned_jbb) {
-      if (hot_jbb->is_exception_handler()) {
-        merge_into_exception_handler(hot_jbb);
-      }
       llvm::BasicBlock* trap_block =
           llvm::BasicBlock::Create(*_context, "unstable_if_trap", _llvm_func);
       llvm::BranchInst* br =
@@ -1715,6 +1772,10 @@ void JeandleAbstractInterpreter::do_if_branch(llvm::Value* cond) {
       // then the liveness info will be more accurate.
       uncommon_trap(Deoptimization::Reason_unstable_if,
                     Deoptimization::Action_reinterpret, trap_block);
+      consume_operands();
+      if (hot_jbb->is_exception_handler()) {
+        merge_into_exception_handler(hot_jbb);
+      }
       // Skip the pruned JBB in the post-loop successor merge; its preallocated
       // header_llvm_block is reclaimed by remove_dead_blocks.
       _pruned_successor = pruned_jbb;
@@ -1732,6 +1793,7 @@ void JeandleAbstractInterpreter::do_if_branch(llvm::Value* cond) {
     }
   }
 
+  consume_operands();
   if (taken_jbb->is_exception_handler()) {
     merge_into_exception_handler(taken_jbb);
   }
@@ -1749,8 +1811,7 @@ void JeandleAbstractInterpreter::if_zero(llvm::CmpInst::Predicate p) {
   // Peek (do not pop): a pruned uncommon_trap must see the operand on the stack.
   llvm::Value* v = _jvm->raw_peek(0).value();
   llvm::Value* cond = _ir_builder.CreateICmp(p, v, JeandleType::int_const(_ir_builder, 0));
-  do_if_branch(cond);
-  _jvm->ipop();
+  do_if_branch(cond, 1);
 }
 
 void JeandleAbstractInterpreter::if_icmp(llvm::CmpInst::Predicate p) {
@@ -1761,9 +1822,7 @@ void JeandleAbstractInterpreter::if_icmp(llvm::CmpInst::Predicate p) {
   llvm::Value* r = _jvm->raw_peek(0).value();
   llvm::Value* l = _jvm->raw_peek(1).value();
   llvm::Value* cond = _ir_builder.CreateICmp(p, l, r);
-  do_if_branch(cond);
-  _jvm->ipop();
-  _jvm->ipop();
+  do_if_branch(cond, 2);
 }
 
 void JeandleAbstractInterpreter::lcmp() {
@@ -1784,9 +1843,7 @@ void JeandleAbstractInterpreter::if_acmp(llvm::CmpInst::Predicate p) {
   llvm::Value* r = _jvm->raw_peek(0).value();
   llvm::Value* l = _jvm->raw_peek(1).value();
   llvm::Value* cond = _ir_builder.CreateICmp(p, l, r);
-  do_if_branch(cond);
-  _jvm->apop();
-  _jvm->apop();
+  do_if_branch(cond, 2);
 }
 
 void JeandleAbstractInterpreter::if_null(llvm::CmpInst::Predicate p) {
@@ -1796,8 +1853,7 @@ void JeandleAbstractInterpreter::if_null(llvm::CmpInst::Predicate p) {
   // Peek (do not pop): a pruned uncommon_trap must see the operand on the stack.
   llvm::Value* v = _jvm->raw_peek(0).value();
   llvm::Value* cond = _ir_builder.CreateICmp(p, v, llvm::ConstantPointerNull::get(llvm::cast<llvm::PointerType>(v->getType())));
-  do_if_branch(cond);
-  _jvm->apop();
+  do_if_branch(cond, 1);
 }
 
 /*
