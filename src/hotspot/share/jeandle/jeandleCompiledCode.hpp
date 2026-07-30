@@ -81,11 +81,12 @@ class CallSiteInfo : public JeandleCompilationResourceObj {
   CallSiteInfo(JeandleCompiledCall::Type type,
                address target,
                bool is_method_handle_invoke = false,
-               uint64_t statepoint_id = llvm::StatepointDirectives::DefaultStatepointID) :
+               uint64_t statepoint_id = llvm::StatepointDirectives::DefaultStatepointID,
+               Method *attached_method = nullptr) :
                _type(type),
                _target(target),
                _is_method_handle_invoke(is_method_handle_invoke),
-               _attached_method(nullptr),
+               _attached_method(attached_method),
                _statepoint_id(statepoint_id) {
 #ifdef ASSERT
     // We don't need to assign a unique statepoint id for each routine call site, only call type and target is used.
@@ -227,7 +228,8 @@ class JeandleCompiledCode : public StackObj {
     push_non_routine_call_site(new CallSiteInfo(old_call_site->type(),
                                                 old_call_site->target(),
                                                 old_call_site->is_method_handle_invoke(),
-                                                new_statepoint_id));
+                                                new_statepoint_id,
+                                                old_call_site->attached_method()));
     return static_cast<int64_t>(new_statepoint_id);
   }
   llvm::SmallVector<CallSiteInfo*>& non_routine_call_sites() { return _non_routine_call_sites; }

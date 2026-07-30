@@ -138,6 +138,9 @@ llvm::Function* JeandleFuncSig::create_llvm_func(ciMethod* method, llvm::Module&
                                                 llvm::Function::ExternalLinkage,
                                                 func_name,
                                                 target_module);
+  if (PreserveFramePointer) {
+    func->addFnAttr("frame-pointer", "all");
+  }
   func->addFnAttr(llvm::Attribute::get(context,
       llvm::jeandle::Attribute::JavaMethod,
       std::to_string(reinterpret_cast<uintptr_t>(method))));

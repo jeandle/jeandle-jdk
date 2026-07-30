@@ -444,7 +444,6 @@ llvm::jeandle::CHAOptInfo optimize_method_handle_intrinsic(
         return {};
       }
       ciMethod* target = oop->as_method_handle()->get_vmtarget();
-      const int vtable_index = Method::invalid_vtable_index;
       if (!ciMethod::is_consistent_info(callee, target)) {
         log_debug(jeandle)(
           "optimize_method_handle_intrinsic: _invokeBasic: signatures mismatch %s %s",
@@ -454,7 +453,10 @@ llvm::jeandle::CHAOptInfo optimize_method_handle_intrinsic(
       }
       return {reinterpret_cast<uintptr_t>(target->holder()->constant_encoding()),
               reinterpret_cast<uintptr_t>(target),
-              /*Unused.*/0, JeandleFuncSig::method_name_with_signature(target)};
+              llvm::jeandle::CHAOptInfo::packDeoptreasonInfo(
+                target->is_static(), target->is_accessor(),
+                llvm::jeandle::Deoptimization::Reason_none),
+              JeandleFuncSig::method_name_with_signature(target)};
     }
     break;
   case vmIntrinsics::_linkToVirtual:
@@ -514,10 +516,12 @@ llvm::jeandle::CHAOptInfo optimize_invokeinterface(ciMethod* caller,
     constraint = (constraint->is_subclass_of(singleton) ? constraint : singleton);
     ciEnv::current()->dependencies()->assert_unique_implementor(holder, singleton);
     ciEnv::current()->dependencies()->assert_unique_concrete_method(holder, cha_monomorphic_target, holder, callee);
+    assert(!cha_monomorphic_target->is_static(), "should not be static");
     return {reinterpret_cast<uintptr_t>(constraint->constant_encoding()),
       reinterpret_cast<uintptr_t>(cha_monomorphic_target),
-      llvm::jeandle::CHAOptInfo::packDeoptreasonInfo(cha_monomorphic_target->is_accessor(), 
-                                                     llvm::jeandle::Deoptimization::Reason_class_check),
+      llvm::jeandle::CHAOptInfo::packDeoptreasonInfo(
+        0, cha_monomorphic_target->is_accessor(), 
+        llvm::jeandle::Deoptimization::Reason_class_check),
       JeandleFuncSig::method_name_with_signature(cha_monomorphic_target)};
   }
   return {};
@@ -534,10 +538,12 @@ llvm::jeandle::CHAOptInfo optimize_virtual_call(ciMethod* caller,
   if (receiver_klass->is_array_klass()) {
     if (callee->holder() == env->Object_klass() &&
         callee->name() != ciSymbols::finalize_method_name()) {
+      assert(!callee->is_static(), "should not be static");
       return {reinterpret_cast<uintptr_t>(callee->holder()->constant_encoding()),
         reinterpret_cast<uintptr_t>(callee),
-        llvm::jeandle::CHAOptInfo::packDeoptreasonInfo(callee->is_accessor(), 
-                                                       llvm::jeandle::Deoptimization::Reason_receiver_constraint),
+        llvm::jeandle::CHAOptInfo::packDeoptreasonInfo(
+          0, callee->is_accessor(),
+          llvm::jeandle::Deoptimization::Reason_receiver_constraint),
         JeandleFuncSig::method_name_with_signature(callee)};
     }
     return {};
@@ -571,20 +577,24 @@ llvm::jeandle::CHAOptInfo optimize_virtual_call(ciMethod* caller,
         cha_monomorphic_target,
         holder, callee);
     }
+    assert(!cha_monomorphic_target->is_static(), "should not be static");
     return {reinterpret_cast<uintptr_t>(cha_monomorphic_target->holder()->constant_encoding()),
       reinterpret_cast<uintptr_t>(cha_monomorphic_target),
-      llvm::jeandle::CHAOptInfo::packDeoptreasonInfo(cha_monomorphic_target->is_accessor(), 
-                                                     llvm::jeandle::Deoptimization::Reason_receiver_constraint),
+      llvm::jeandle::CHAOptInfo::packDeoptreasonInfo(
+        0, cha_monomorphic_target->is_accessor(),
+        llvm::jeandle::Deoptimization::Reason_receiver_constraint),
       JeandleFuncSig::method_name_with_signature(cha_monomorphic_target)};
   }
 
   if (actual_receiver_is_exact) {
     ciMethod* exact_method = callee->resolve_invoke(caller->holder(), actual_receiver);
     if (exact_method != nullptr) {
+      assert(!exact_method->is_static(), "should not be static");
       return {reinterpret_cast<uintptr_t>(exact_method->holder()->constant_encoding()),
         reinterpret_cast<uintptr_t>(exact_method),
-        llvm::jeandle::CHAOptInfo::packDeoptreasonInfo(exact_method->is_accessor(), 
-                                                       llvm::jeandle::Deoptimization::Reason_receiver_constraint),
+        llvm::jeandle::CHAOptInfo::packDeoptreasonInfo(
+          0, exact_method->is_accessor(),
+          llvm::jeandle::Deoptimization::Reason_receiver_constraint),
         JeandleFuncSig::method_name_with_signature(exact_method)};
     }
   }
