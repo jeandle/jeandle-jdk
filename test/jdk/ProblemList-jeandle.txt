@@ -65,18 +65,6 @@ java/lang/management/MemoryMXBean/MemoryTest.java#ZSinglegen                    
 jdk/jfr/event/gc/configuration/TestGCConfigurationEvent.java               linux-aarch64,linux-x64
 
 ###
-# Bug - JVM crash in Jeandle implementation
-###
-# JVM crash (SIGABRT, exit code 134) during HTTP client test
-java/net/httpclient/ShortResponseBodyGet.java                              linux-aarch64
-
-# JVM crash (SIGSEGV, exit code 139) during HTTP client test
-java/net/httpclient/ShortResponseBodyPost.java                             linux-aarch64,linux-x64
-
-# JVM crash (SIGABRT, exit code 134) during HTTP client test
-java/net/httpclient/ShortResponseBodyPostWithRetry.java                    linux-aarch64,linux-x64
-
-###
 # Environment/Infrastructure issues (not Jeandle-specific)
 ###
 # Network interface aliasing in container (eth0/p0 share same IP/MAC)
