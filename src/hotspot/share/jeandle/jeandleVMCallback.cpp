@@ -485,8 +485,8 @@ llvm::jeandle::CHAOptInfo optimize_method_handle_intrinsic(
       return {reinterpret_cast<uintptr_t>(target->holder()) | 1,
           reinterpret_cast<uintptr_t>(target),
           llvm::jeandle::CHAOptInfo::packTargetInfo(
-              target->is_static(), target->can_be_statically_bound(),
-              target->signature()->count()),
+              target->is_static(), target->is_accessor(), 
+              target->can_be_statically_bound(), target->signature()->count()),
           JeandleFuncSig::method_name_with_signature(target)};
     }
     break;
@@ -690,7 +690,11 @@ bool JeandleVMCallback::update_call_site(int64_t id, int dest, uintptr_t attache
 
 uintptr_t JeandleVMCallback::get_signature_accessing_klass(uintptr_t method) {
   ciMethod* m = jeandle_callback_method(method);
-  return reinterpret_cast<uintptr_t>(m->signature()->accessing_klass()->constant_encoding());
+  ciKlass* k = m->signature()->accessing_klass();
+  if (!k->is_loaded()) {
+    return 0;
+   }
+  return reinterpret_cast<uintptr_t>(k->constant_encoding());
 }
 
 int64_t JeandleVMCallback::get_signature_arg_type(uintptr_t method, int index) {
@@ -703,7 +707,15 @@ int64_t JeandleVMCallback::get_signature_arg_type(uintptr_t method, int index) {
 
 uintptr_t JeandleVMCallback::get_signature_arg_type_klass(uintptr_t method, int index) {
   ciMethod* m = jeandle_callback_method(method);
-  return reinterpret_cast<uintptr_t>(m->signature()->type_at(index)->as_klass()->constant_encoding());
+  ciType* t = m->signature()->type_at(index);
+  if (!t->is_klass()) {
+    return 0;
+  }
+  ciKlass* k = t->as_klass();
+  if (!k->is_loaded()) {
+    return 0;
+  }
+  return reinterpret_cast<uintptr_t>(k->constant_encoding());
 }
 
 void JeandleVMCallback::register_callbacks() {
