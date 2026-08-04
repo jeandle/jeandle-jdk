@@ -387,7 +387,6 @@ void JeandleCompiledCode::resolve_reloc_info(JeandleAssembler& assembler) {
         if (record->getID() == JeandleRuntimeRoutine::return_poll_statepoint_id()) {
           call_info->set_is_poll_return(true);
         }
-        relocs.push_back(new JeandleCallReloc(inst_end_offset, _env, _method, parse_stackmap(stackmaps, record, call_info), call_info));
         auto location = record->location_begin();
         int num_deopts = parse_stackmap_prologue(record, location);
         JeandleCallReloc* reloc = new JeandleCallReloc(inst_end_offset, _env, _method, call_info);

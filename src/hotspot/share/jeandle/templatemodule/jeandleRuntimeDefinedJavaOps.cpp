@@ -107,7 +107,6 @@ JAVA_OP_END
 
 
 DEF_JAVA_OP(safepoint_poll, 1, llvm::Type::getVoidTy(context), llvm::Type::getInt1Ty(context))
-DEF_JAVA_OP(safepoint_poll, 1, llvm::Type::getVoidTy(context))
   // safepoint_poll may trigger GC and throw asynchronous exceptions,
   // so it must not be nounwind or gc-leaf-function.
   func->removeFnAttr(llvm::Attribute::NoUnwind);

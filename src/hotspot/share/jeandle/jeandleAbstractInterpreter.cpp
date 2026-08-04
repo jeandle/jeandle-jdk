@@ -2832,7 +2832,21 @@ void JeandleAbstractInterpreter::add_return_safepoint_poll() {
   if (!_parse_context.is_root()) {
     return;
   }
-  add_safepoint_poll();
+  add_safepoint_poll(true);
+  // Read the exception oop from thread local storage.
+  llvm::Value* exception_oop_addr = _ir_builder.CreateIntToPtr(_ir_builder.getInt64((uint64_t)JavaThread::exception_oop_offset()), llvm::PointerType::get(*_context, llvm::jeandle::AddrSpace::TLSAddrSpace));
+  llvm::Value* exception_oop = _ir_builder.CreateLoad(JeandleType::java2llvm(BasicType::T_OBJECT, *_context), exception_oop_addr, true /* is_volatile */);
+  llvm::Value* null_oop = llvm::ConstantPointerNull::get(llvm::cast<llvm::PointerType>(JeandleType::java2llvm(T_OBJECT, *_context)));
+
+  // Check exceptions.
+  llvm::Value* if_not_null = _ir_builder.CreateICmp(llvm::CmpInst::ICMP_NE, exception_oop, null_oop);
+  llvm::BasicBlock* forward_exception_block = llvm::BasicBlock::Create(*_context, "forward_exception", _llvm_func);
+  llvm::BasicBlock* no_exception_block = llvm::BasicBlock::Create(*_context, "no_exception", _llvm_func); _ir_builder.CreateCondBr(if_not_null, forward_exception_block, no_exception_block);
+
+  _ir_builder.SetInsertPoint(forward_exception_block);
+  throw_exception(exception_oop);
+
+  _ir_builder.SetInsertPoint(no_exception_block);
 }
 
 void JeandleAbstractInterpreter::arraylength() {

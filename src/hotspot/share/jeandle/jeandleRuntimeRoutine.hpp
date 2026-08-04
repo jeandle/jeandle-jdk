@@ -271,12 +271,6 @@
       true,                                                                         \
       llvm::Type::getVoidTy(context))                                               \
                                                                                     \
-  def(install_exceptional_return_for_return_poll,                                   \
-      JeandleRuntimeRoutine::install_exceptional_return_for_return_poll,            \
-      false,                                                                        \
-      true,                                                                         \
-      llvm::Type::getVoidTy(context))                                               \
-                                                                                    \
   def(SharedRuntime_complete_monitor_unlocking_C,                                   \
       SharedRuntime::complete_monitor_unlocking_C,                                  \
       false,                                                                        \
@@ -412,9 +406,6 @@ class JeandleRuntimeRoutine : public AllStatic {
 
   // Install exceptional_return into call_VM stub frame, for checking exceptions during call_VM.
   static void install_exceptional_return_for_call_vm();
-
-  // Install exceptional_return into the Java frame returning through a return poll.
-  static void install_exceptional_return_for_return_poll();
 
   static address get_exception_handler(JavaThread* current);
 
