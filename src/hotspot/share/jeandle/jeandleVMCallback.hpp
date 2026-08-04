@@ -68,6 +68,9 @@ class JeandleVMCallback : public AllStatic {
   // Oop handles.
   static std::string get_oop_handle_name(int oop_id);
   static uintptr_t   get_oop_klass(int oop_id);
+  static uintptr_t   get_mirror_klass(int oop_id);
+  static int         get_klass_layout_helper(uintptr_t klass_ptr);
+  static bool        is_klass_initialized(uintptr_t klass_ptr);
 
   // Returns the oop id of the java.lang.Class mirror for a VM Klass pointer,
   // or -1 if unavailable. Used by PEA's foldGetClass.
