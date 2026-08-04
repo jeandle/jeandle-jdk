@@ -52,6 +52,9 @@
 #include "interpreter/linkResolver.hpp"
 #include "jfr/jfrEvents.hpp"
 #include "jvm.h"
+#ifdef JEANDLE
+#include "jeandle/jeandleCompilation.hpp"
+#endif
 #include "logging/log.hpp"
 #include "memory/allocation.inline.hpp"
 #include "memory/oopFactory.hpp"
@@ -1619,22 +1622,30 @@ void ciEnv::find_dynamic_call_sites() {
 void ciEnv::dump_compile_data(outputStream* out) {
   CompileTask* task = this->task();
   if (task) {
-#ifdef COMPILER2
-    if (!task->compiler()->is_jeandle() && ReplayReduce && compiler_data() != nullptr) {
-      // Dump C2 "reduced" inlining data.
-      ((Compile*)compiler_data())->dump_inline_data_reduced(out);
-    }
-#endif
     Method* method = task->method();
     int entry_bci = task->osr_bci();
     int comp_level = task->comp_level();
+    if (ReplayReduce && compiler_data() != nullptr) {
+      if (task->compiler()->is_jeandle()) {
+#ifdef JEANDLE
+        // Dump Jeandle "reduced" inlining data.
+        ((JeandleCompilation*)compiler_data())->dump_inline_data_reduced(out);
+#endif
+      } else if (is_c2_compile(comp_level)) {
+#ifdef COMPILER2
+        // Dump C2 "reduced" inlining data.
+        ((Compile*)compiler_data())->dump_inline_data_reduced(out);
+#endif
+      }
+    }
     out->print("compile ");
     get_method(method)->dump_name_as_ascii(out);
     out->print(" %d %d", entry_bci, comp_level);
     if (compiler_data() != nullptr) {
       if (task->compiler()->is_jeandle()) {
 #ifdef JEANDLE
-        // TODO: handle dump_inline_data in jeandle compiler
+        // Dump Jeandle inlining data.
+        ((JeandleCompilation*)compiler_data())->dump_inline_data(out);
 #endif
       } else if (is_c2_compile(comp_level)) {
 #ifdef COMPILER2

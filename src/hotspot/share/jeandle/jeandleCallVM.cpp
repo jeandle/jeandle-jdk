@@ -37,7 +37,7 @@ void JeandleCallVM::generate_call_VM(const char* name, address routine_address, 
                                                      llvm::Function::ExternalLinkage,
                                                      name,
                                                      target_module);
-  JeandleFuncSig::setup_description(llvm_func, true /* is_stub */);
+  JeandleFuncSig::setup_description(llvm_func, nullptr /* method */, true /* is_stub */);
   llvm::LLVMContext& context = target_module.getContext();
 
   // Add needed metadatas.
@@ -73,7 +73,7 @@ void JeandleCallVM::generate_call_VM(const char* name, address routine_address, 
   call_routine_address->setCallingConv(llvm::CallingConv::C);
   JeandleCompiledCall::Type call_type = JeandleCompiledCall::STUB_C_CALL;
   uint64_t statepoint_id = code.next_statepoint_id();
-  code.push_non_routine_call_site(new CallSiteInfo(call_type, routine_address, -1 /* bci */, false, statepoint_id));
+  code.push_non_routine_call_site(new CallSiteInfo(call_type, routine_address, false, statepoint_id));
   llvm::Attribute id_attr = llvm::Attribute::get(context,
                                                  llvm::jeandle::Attribute::StatepointID,
                                                  std::to_string(statepoint_id));
@@ -96,6 +96,12 @@ void JeandleCallVM::generate_call_VM(const char* name, address routine_address, 
   ir_builder.CreateCondBr(if_not_null, forward_exception_block, no_exception_block);
   ir_builder.SetInsertPoint(forward_exception_block);
 
+  llvm::CallInst* install_exceptional_return_call_inst = ir_builder.CreateCall(JeandleRuntimeRoutine::install_exceptional_return_for_call_vm_callee(target_module), {});
+  install_exceptional_return_call_inst->addFnAttr(llvm::Attribute::NoUnwind);
+  install_exceptional_return_call_inst->addFnAttr(llvm::Attribute::get(install_exceptional_return_call_inst->getContext(), "gc-leaf-function"));
+  install_exceptional_return_call_inst->setCallingConv(llvm::CallingConv::C);
+
+  // Return
   llvm::Type* ret_type = func_type->getReturnType();
 
   auto emit_default_return = [&]() {

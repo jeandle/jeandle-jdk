@@ -63,7 +63,7 @@ public class TestReferenceGetSerialGC {
         fc.checkPattern("define.*jeandle.reference_get");
 
         // Verify the load is unordered atomic
-        fc.checkPattern("load atomic ptr addrspace\\(1\\).*unordered");
+        fc.checkPattern("load atomic ptr addrspace\\([13]\\).*unordered");
 
         // CPUOrder fence must still be present (GC-independent)
         fc.checkPattern("fence.*seq_cst");

@@ -104,7 +104,12 @@ void JeandleCompiler::initialize() {
 
   // Per JeandleCompiler initialization:
   if (should_perform_init()) {
-    _data_layout = _target_machine->createDataLayout();
+    llvm::DataLayout target_data_layout = _target_machine->createDataLayout();
+    std::string data_layout_string = target_data_layout.getStringRepresentation();
+    if (UseCompressedOops) {
+      data_layout_string += "-p3:32:32:32"; // for narrow oop
+    }
+    _data_layout = llvm::DataLayout(data_layout_string);
 
     install_jeandle_llvm_fatal_error_handler();
 
@@ -129,14 +134,14 @@ void JeandleCompiler::initialize() {
       assert(DynamicLibrary::SearchForAddressOfSymbol(routine_entry.first().data()) == nullptr, "overlapping symbol");
     }
 #endif
-    register_jeandle_vm_callbacks();
+    JeandleVMCallback::register_callbacks();
     set_state(initialized);
   }
 }
 
 void JeandleCompiler::compile_method(ciEnv* env, ciMethod* target, int entry_bci, bool install_code, DirectiveSet* directive) {
   ResourceMark rm;
-  JeandleCompilation compilation(target_machine(), data_layout(), env, target, entry_bci, install_code, _template_buffer.get());
+  JeandleCompilation compilation(target_machine(), data_layout(), env, target, entry_bci, install_code, directive, _template_buffer.get());
 }
 
 void JeandleCompiler::print_timers() {

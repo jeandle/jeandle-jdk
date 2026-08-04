@@ -22,6 +22,7 @@
 #include "llvm/IR/Jeandle/Attributes.h"
 #include "llvm/IR/Jeandle/GCStrategy.h"
 #include "llvm/TargetParser/SubtargetFeature.h"
+#include <string>
 
 #include "jeandle/jeandleUtils.hpp"
 
@@ -61,12 +62,20 @@ void apply_vm_flag_feature_overrides(llvm::SubtargetFeatures& features) {
   }
 }
 
-void JeandleFuncSig::setup_description(llvm::Function* func, bool is_stub) {
+void JeandleFuncSig::setup_description(llvm::Function* func, ciMethod* method, bool is_stub) {
   func->setCallingConv(llvm::CallingConv::Hotspot_JIT);
 
   func->setGC(llvm::jeandle::JeandleGC);
 
   if (!is_stub) {
+    assert(method != nullptr, "Java method function must have a ciMethod");
+    func->addFnAttr(llvm::Attribute::get(func->getContext(),
+                                         llvm::jeandle::Attribute::JavaMethod,
+                                         std::to_string((uintptr_t)method)));
+    if (method->is_accessor()) {
+      func->addFnAttr(llvm::Attribute::get(func->getContext(),
+                                           llvm::jeandle::Attribute::JavaAccessorMethod));
+    }
     llvm::GlobalVariable* personality_func = func->getParent()->getGlobalVariable("jeandle.personality");
     assert(personality_func != nullptr, "no personality function");
     func->setPersonalityFn(personality_func);

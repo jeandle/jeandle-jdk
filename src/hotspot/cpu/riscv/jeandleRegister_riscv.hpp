@@ -35,6 +35,10 @@ class JeandleRegister : public AllStatic {
     return "x23";
   }
 
+  static const char* get_heap_base_pointer() {
+    return "x27";
+  }
+
   static const bool is_stack_pointer(Register reg) {
     return reg == x2;
   }

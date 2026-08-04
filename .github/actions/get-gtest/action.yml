@@ -45,6 +45,7 @@ runs:
         repository: google/googletest
         ref: 'v${{ steps.version.outputs.value }}'
         path: gtest
+        allow-unsafe-pr-checkout: true
 
     - name: 'Export path to where GTest is installed'
       id: path-name

@@ -76,18 +76,21 @@ class JeandleReloc {
 
 class JeandleCallReloc : public JeandleReloc {
  public:
-  JeandleCallReloc(int inst_end_offset, ciEnv* env, ciMethod* method, JeandleStackMap* stack_map, CallSiteInfo* call);
+  JeandleCallReloc(int inst_end_offset, ciEnv* env, ciMethod* method, CallSiteInfo* call);
 
   void emit_reloc(JeandleAssembler& assembler) override;
 
  private:
   ciEnv* _env;
   ciMethod* _method;
-  JeandleStackMap* _stack_map;
   CallSiteInfo* _call;
+  llvm::SmallVector<JeandleStackMap*, 2> _stack_maps;
   int inst_end_offset();
 
   void process_stack_map();
+
+ public:
+  void add_stack_map(JeandleStackMap* stack_map) { _stack_maps.push_back(stack_map); }
 };
 
 class JeandleSectionWordReloc : public JeandleReloc {

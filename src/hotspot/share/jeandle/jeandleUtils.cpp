@@ -103,6 +103,15 @@ void attach_java_klass_ret_attr(llvm::CallBase* call,
 }
 
 llvm::Function* JeandleFuncSig::create_llvm_func(ciMethod* method, llvm::Module& target_module, bool is_osr_entry) {
+  std::string func_name = method_name_with_signature(method, is_osr_entry);
+
+  llvm::Function* existing = target_module.getFunction(func_name);
+  if (existing != nullptr) {
+    assert(existing->getFnAttribute(llvm::jeandle::Attribute::JavaMethod).isStringAttribute(),
+           "existing Java method function must carry a ciMethod pointer");
+    return existing;
+  }
+
   llvm::SmallVector<llvm::Type*> args;
   llvm::LLVMContext& context = target_module.getContext();
 
@@ -127,8 +136,11 @@ llvm::Function* JeandleFuncSig::create_llvm_func(ciMethod* method, llvm::Module&
                               false);
   llvm::Function* func = llvm::Function::Create(func_type,
                                                 llvm::Function::ExternalLinkage,
-                                                method_name_with_signature(method),
+                                                func_name,
                                                 target_module);
+  func->addFnAttr(llvm::Attribute::get(context,
+      llvm::jeandle::Attribute::JavaMethod,
+      std::to_string(reinterpret_cast<uintptr_t>(method))));
 
   if (!is_osr_entry) {
     // Attach java-klass type attributes to parameters.
@@ -187,7 +199,7 @@ llvm::Function* JeandleFuncSig::create_llvm_func(ciMethod* method, llvm::Module&
     }
   }
 
-  setup_description(func);
+  setup_description(func, method);
 
   return func;
 }
@@ -202,9 +214,13 @@ std::string JeandleFuncSig::method_name(ciMethod* method) {
   return class_name + "_" + method_name;
 }
 
-std::string JeandleFuncSig::method_name_with_signature(ciMethod* method) {
+std::string JeandleFuncSig::method_name_with_signature(ciMethod* method, bool is_osr_entry) {
   std::string signature = std::string(method->signature()->as_symbol()->as_utf8());
-  return method_name(method) + signature;
+  signature = method_name(method) + signature;
+  if (is_osr_entry) {
+    signature = "__jeandle_osr." + signature;
+  }
+  return signature;
 }
 
 bool is_jeandle_compiler_thread(Thread* t) {

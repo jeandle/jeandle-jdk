@@ -35,6 +35,9 @@
 ; System word size
 @WordSize = external global i64
 
+@UseCompressedClassPointers = external global i1
+@UseCompressedOops = external global i1
+
 ; Byte offsets of Array<Klass*> structure fields.
 @KlassArray.base_offset_in_bytes = external global i32
 @KlassArray.length_offset_in_bytes = external global i32
@@ -121,24 +124,42 @@
 @G1BarrierSetRuntime.write_ref_field_post_entry = external global i64
 
 ; Keep use to lately-used java operations, until it is lowered.
-@llvm.used = appending addrspace(1) global [5 x ptr] [
+@llvm.used = appending addrspace(1) global [7 x ptr] [
   ptr @jeandle.card_table_barrier,
   ptr @jeandle.g1_pre_barrier,
   ptr @jeandle.g1_post_barrier,
   ptr @jeandle.pre_barrier,
-  ptr @jeandle.post_barrier
+  ptr @jeandle.post_barrier,
+  ptr @jeandle.encode_heap_oop,
+  ptr @jeandle.decode_heap_oop
 ], section "llvm.metadata"
 
+declare hotspotcc ptr addrspace(0) @jeandle.decode_klass(i32)
+declare hotspotcc i32 @jeandle.encode_klass(ptr addrspace(0))
+
+declare hotspotcc ptr addrspace(1) @jeandle.decode_heap_oop(ptr addrspace(3))
+declare hotspotcc ptr addrspace(3) @jeandle.encode_heap_oop(ptr addrspace(1))
+
 ; Load klass pointer from oop
-define hotspotcc ptr addrspace(0) @jeandle.load_klass(ptr addrspace(1) nocapture %oop) noinline "lower-phase"="0" {
+define hotspotcc ptr addrspace(0) @jeandle.load_klass(ptr addrspace(1) nocapture %oop) noinline "lower-phase"="0" #0 {
   %klass_offset = load i32, ptr @oopDesc.klass_offset_in_bytes
   %klass_addr = getelementptr inbounds i8, ptr addrspace(1) %oop, i32 %klass_offset
-  %klass = load atomic ptr addrspace(0), ptr addrspace(1) %klass_addr unordered, align 8
-  ret ptr addrspace(0) %klass
+
+  %use_compressed = load i1, ptr @UseCompressedClassPointers
+  br i1 %use_compressed, label %compressed, label %uncompressed
+
+compressed:
+  %narrow = load atomic i32, ptr addrspace(1) %klass_addr unordered, align 4
+  %decoded = call hotspotcc ptr addrspace(0) @jeandle.decode_klass(i32 %narrow)
+  ret ptr addrspace(0) %decoded
+
+uncompressed:
+  %wide = load atomic ptr addrspace(0), ptr addrspace(1) %klass_addr unordered, align 8
+  ret ptr addrspace(0) %wide
 }
 
 ; This is the slow path for subtype checking when the fast path fails.
-define hotspotcc i1 @jeandle.check_klass_subtype_slow_path(ptr addrspace(0) nocapture %sub_klass, ptr addrspace(0) nocapture %super_klass) "lower-phase"="0" {
+define hotspotcc i1 @jeandle.check_klass_subtype_slow_path(ptr addrspace(0) nocapture %sub_klass, ptr addrspace(0) nocapture %super_klass) "lower-phase"="0" #0 {
 entry:
   ; Load secondary_supers array and secondary_super_cache.
   %secondary_supers_offset = load i32, ptr @Klass.secondary_supers_offset
@@ -188,7 +209,7 @@ return_false:
 ; Check if the sub_klass extends from the super_klass using both primary and secondary supers.
 ; Fast path: checks primary super chain.
 ; Slow path: scans secondary supers array if needed.
-define hotspotcc i1 @jeandle.check_klass_subtype(ptr addrspace(0) nocapture %sub_klass, ptr addrspace(0) nocapture %super_klass) "lower-phase"="0" {
+define hotspotcc i1 @jeandle.check_klass_subtype(ptr addrspace(0) nocapture %sub_klass, ptr addrspace(0) nocapture %super_klass) "lower-phase"="0" #0 {
 entry:
   %is_same_klass = icmp eq ptr addrspace(0) %sub_klass, %super_klass
   br i1 %is_same_klass, label %return_true, label %check_primary_supers
@@ -222,7 +243,7 @@ return_false:
   ret i1 false
 }
 
-define hotspotcc i1 @jeandle.check_instanceof(ptr addrspace(0) nocapture %super_klass, ptr addrspace(1) nocapture nonnull %oop) noinline "lower-phase"="1" {
+define hotspotcc i1 @jeandle.check_instanceof(ptr addrspace(0) nocapture %super_klass, ptr addrspace(1) nocapture nonnull %oop) noinline "lower-phase"="1" #0 {
 entry:
   %sub_klass = call hotspotcc ptr addrspace(0) @jeandle.load_klass(ptr addrspace(1) nonnull %oop)
   %is_subtype = call hotspotcc i1 @jeandle.check_klass_subtype(ptr addrspace(0) %sub_klass, ptr addrspace(0) %super_klass)
@@ -230,7 +251,7 @@ entry:
 }
 
 ; Implementation of Java instanceof operation.
-define hotspotcc i32 @jeandle.instanceof(ptr addrspace(0) nocapture %super_klass, ptr addrspace(1) nocapture %oop) noinline "lower-phase"="0" {
+define hotspotcc i32 @jeandle.instanceof(ptr addrspace(0) nocapture %super_klass, ptr addrspace(1) nocapture %oop) noinline "lower-phase"="0" #0 {
 entry:
   %is_null = icmp eq ptr addrspace(1) %oop, null
   br i1 %is_null, label %return_false, label %check_subtype
@@ -283,10 +304,20 @@ alloc_fast_path:
   %prototype_value = load i64, ptr @markWord.prototype_value
 
   store atomic i64 %prototype_value, ptr addrspace(1) %mark_word_addr unordered, align 8
-  ; TODO: When UseCompressedClassPointers is enabled, klass should be stored as a 32-bit narrowKlass
-  ; instead of a full pointer. Currently this assumes uncompressed class pointers.
-  store atomic ptr %klass, ptr addrspace(1) %klass_addr unordered, align 8
 
+  %use_compressed_klass = load i1, ptr @UseCompressedClassPointers
+  br i1 %use_compressed_klass, label %store_narrow_klass, label %store_wide_klass
+
+store_narrow_klass:
+  %narrow_klass = call hotspotcc i32 @jeandle.encode_klass(ptr %klass)
+  store atomic i32 %narrow_klass, ptr addrspace(1) %klass_addr unordered, align 4
+  br label %post_klass_store
+
+store_wide_klass:
+  store atomic ptr %klass, ptr addrspace(1) %klass_addr unordered, align 8
+  br label %post_klass_store
+
+post_klass_store:
   %zero_tlab = load i1, ptr @VMOptions.ZeroTLAB
   %skip_clear = and i1 %use_tlab, %zero_tlab
   br i1 %skip_clear, label %initialization_membar, label %clear_memory
@@ -312,7 +343,7 @@ return_block:
 }
 
 ; Implementation of Java arraylength operation.
-define hotspotcc i32 @jeandle.arraylength(ptr addrspace(1) nocapture readonly %array_oop) noinline "lower-phase"="0"  {
+define hotspotcc i32 @jeandle.arraylength(ptr addrspace(1) nocapture readonly %array_oop) noinline "lower-phase"="0" #0 {
 entry:
   %length_offset = load i32, ptr @arrayOopDesc.length_offset_in_bytes
   %length_addr = getelementptr inbounds i8, ptr addrspace(1) %array_oop, i32 %length_offset
@@ -323,20 +354,153 @@ entry:
 declare hotspotcc ptr @jeandle.current_thread()
 declare hotspotcc ptr addrspace(1) @new_array(ptr, i32, ptr)
 
+; IR-level runtime target that RewriteStatepointsForGC lowers each
+; llvm.experimental.deoptimize call onto (RewriteStatepointsForGC.cpp). Declared
+; here rather than synthesized per-method so every compilation module starts with
+; it. The `hotspotcc` convention (= CallingConv::Hotspot_JIT) MUST match the
+; uncommon_trap_blob entry resolved at JIT link time (jeandleRuntimeRoutine.hpp);
+; do not simplify to the default CC -- RS4GC would otherwise synthesize a
+; default-CC declaration and the lowered call would mismatch the runtime entry.
+declare hotspotcc void @__llvm_deoptimize(i32)
+
 ; Unified array allocation JavaOp.  Both bytecode (newarray/anewarray) and intrinsic
 ; (_newArray / Array.newInstance) paths call this function.
 ; LLVM passes identify array allocation by matching on this function name.
-define private hotspotcc ptr addrspace(1) @jeandle.new_array(ptr %array_klass, i32 %length) noinline "lower-phase"="1" {
+define private hotspotcc ptr addrspace(1) @jeandle.new_array(ptr %array_klass, i32 %length, i32 %size_in_bytes, i32 %base_offset, i32 %length_limit) noinline "lower-phase"="1" {
 entry:
+  ; Fast-path length cap. %length_limit is a size-derived bound (FastAllocateSizeLimit, scaled
+  ; by element size on the caller side) chosen so %size_in_bytes cannot overflow i32 -- it is
+  ; NOT arrayOopDesc::max_array_length(), which is ~max_jint on LP64 and would let a large
+  ; length wrap the size computation. The unsigned compare also routes a negative %length
+  ; (e.g. -1) to the slow path, where the runtime raises NegativeArraySizeException.
+  %too_long = icmp ugt i32 %length, %length_limit
+  br i1 %too_long, label %array_slow_path, label %check_tlab
+
+check_tlab:
+  %use_tlab = load i1, ptr @VMOptions.UseTLAB
+  br i1 %use_tlab, label %test_tlab, label %array_slow_path
+
+test_tlab:
+  %tlab_top_offset = load i64, ptr @JavaThread.tlab_top_offset
+  %tlab_end_offset = load i64, ptr @JavaThread.tlab_end_offset
+
+  %tlab_top_ptr = inttoptr i64 %tlab_top_offset to ptr addrspace(2)
+  %tlab_end_ptr = inttoptr i64 %tlab_end_offset to ptr addrspace(2)
+
+  %tlab_old_top = load ptr addrspace(1), ptr addrspace(2) %tlab_top_ptr, align 8
+  %tlab_end = load ptr addrspace(1), ptr addrspace(2) %tlab_end_ptr, align 8
+
+  %tlab_new_top = getelementptr i8, ptr addrspace(1) %tlab_old_top, i32 %size_in_bytes
+  %if_tlab_full = icmp uge ptr addrspace(1) %tlab_new_top, %tlab_end
+  br i1 %if_tlab_full, label %array_slow_path, label %array_fast_path
+
+array_slow_path:
   %current_thread = call hotspotcc ptr @jeandle.current_thread()
-  %array_oop = call hotspotcc ptr addrspace(1) @new_array(ptr %array_klass, i32 %length, ptr %current_thread) [ "deopt"() ]
+  %slow_array_oop = call hotspotcc ptr addrspace(1) @new_array(ptr %array_klass, i32 %length, ptr %current_thread) [ "deopt"() ]
+  br label %array_return
+
+array_fast_path:
+  store ptr addrspace(1) %tlab_new_top, ptr addrspace(2) %tlab_top_ptr, align 8
+
+  ; Header: mark word, klass pointer, length. No inter-field barriers; the
+  ; trailing release fence publishes the whole object as a unit.
+  %mark_word_offset = load i32, ptr @oopDesc.mark_offset_in_bytes
+  %mark_word_addr = getelementptr i8, ptr addrspace(1) %tlab_old_top, i32 %mark_word_offset
+
+  %klass_offset = load i32, ptr @oopDesc.klass_offset_in_bytes
+  %klass_addr = getelementptr i8, ptr addrspace(1) %tlab_old_top, i32 %klass_offset
+
+  %length_offset = load i32, ptr @arrayOopDesc.length_offset_in_bytes
+  %length_addr = getelementptr i8, ptr addrspace(1) %tlab_old_top, i32 %length_offset
+
+  %prototype_value = load i64, ptr @markWord.prototype_value
+
+  store atomic i64 %prototype_value, ptr addrspace(1) %mark_word_addr unordered, align 8
+  %array_use_compressed_klass = load i1, ptr @UseCompressedClassPointers
+  br i1 %array_use_compressed_klass, label %array_store_narrow_klass, label %array_store_wide_klass
+
+array_store_narrow_klass:
+  %array_narrow_klass = call hotspotcc i32 @jeandle.encode_klass(ptr %array_klass)
+  store atomic i32 %array_narrow_klass, ptr addrspace(1) %klass_addr unordered, align 4
+  br label %array_post_klass_store
+
+array_store_wide_klass:
+  store atomic ptr %array_klass, ptr addrspace(1) %klass_addr unordered, align 8
+  br label %array_post_klass_store
+
+array_post_klass_store:
+  store atomic i32 %length, ptr addrspace(1) %length_addr unordered, align 4
+
+  %zero_tlab = load i1, ptr @VMOptions.ZeroTLAB
+  %skip_clear = and i1 %use_tlab, %zero_tlab
+  br i1 %skip_clear, label %array_init_membar, label %array_clear_memory
+
+array_clear_memory:
+  ; Explicit 8-byte-stride zero loop. We do NOT use @llvm.memset because LLVM's
+  ; default lowering produces poor code for both target backends we care about:
+  ;   - AArch64 (without MOPS): every memset, constant size or not, falls back
+  ;     to a per-byte strb loop -- the target hook in AArch64SelectionDAGInfo
+  ;     just `return SDValue()` and lets the generic SelectionDAG byte expansion
+  ;     take over. That's ~10x slower than the str xzr / stp xzr,xzr sequence
+  ;     HotSpot C1 emits.
+  ;   - x86: constant-size memset gets the rep stosq fast path, but variable
+  ;     size is bailed out by X86SelectionDAGInfo (`if (!ConstantSize) return
+  ;     SDValue();`) and ends up in the same generic per-byte loop. So variable-
+  ;     length arrays (the common `new T[N]` case in real workloads) regress on
+  ;     x86 too, not just AArch64.
+  ;
+  ; The stores must be `volatile` -- otherwise LLVM's LoopIdiomRecognize pass
+  ; folds an idiomatic "for(i=0;i<n;i++) p[i]=0" loop right back into
+  ; @llvm.memset, which round-trips through the same broken lowering. Volatile
+  ; stores are exempt from idiom recognition, so they survive into codegen as
+  ; plain str xzr (AArch64) / `mov qword ptr [...], 0` (x86) 8-byte stores.
+  ; LoopFullUnroll still applies for constant trip counts, so `new T[N]` with
+  ; N a compile-time constant becomes a fully unrolled sequence.
+  ;
+  ; TODO: For payloads larger than ~256 bytes (HotSpot AArch64
+  ; BlockZeroingLowLimit default), HotSpot's MacroAssembler::zero_words calls
+  ; the zero_blocks stub, which uses `dc zva` (64-byte cache-line zero). The
+  ; single-str loop here is ~4x slower than `dc zva` for large arrays; emitting
+  ; platform-specific inline asm or an LLVM target intrinsic for that tier is a
+  ; follow-up. The current loop already closes the biggest gap (per-byte ->
+  ; per-word).
+  ;
+  ; size_in_bytes is aligned to MinObjAlignmentInBytes (8) on the caller side,
+  ; and base_offset is always a multiple of 8, so payload_size is exactly
+  ; divisible by 8.
+  %base_addr = getelementptr i8, ptr addrspace(1) %tlab_old_top, i32 %base_offset
+  %payload_size = sub i32 %size_in_bytes, %base_offset
+  %payload_words = lshr exact i32 %payload_size, 3
+  %has_payload = icmp ne i32 %payload_words, 0
+  br i1 %has_payload, label %array_zero_loop, label %array_init_membar
+
+array_zero_loop:
+  %zi = phi i32 [ 0, %array_clear_memory ], [ %zi_next, %array_zero_loop ]
+  %zaddr = getelementptr i64, ptr addrspace(1) %base_addr, i32 %zi
+  store volatile i64 0, ptr addrspace(1) %zaddr, align 8
+  %zi_next = add nuw nsw i32 %zi, 1
+  %zero_done = icmp eq i32 %zi_next, %payload_words
+  br i1 %zero_done, label %array_init_membar, label %array_zero_loop
+
+array_init_membar:
+  ; TODO: Same plan as new_instance -- replace atomic stores + fence release with plain
+  ; stores plus a lightweight publish barrier once the supporting LLVM pass lands.
+  fence release
+  br label %array_return
+
+array_return:
+  %array_oop = phi ptr addrspace(1) [ %tlab_old_top, %array_init_membar ], [ %slow_array_oop, %array_slow_path ]
   ret ptr addrspace(1) %array_oop
 }
 
 ; Declaration of Java card table barrier.
-declare hotspotcc void @jeandle.card_table_barrier(ptr addrspace(1) %addr) noinline "lower-phase"="1";
+; Phase 9 barrier JavaOps are lowered after RS4GC. They materialize raw
+; addresses derived from oops, such as card-table addresses, which RS4GC does
+; not track. Keeping them opaque until phase 9 prevents O3 from reusing those
+; raw derived addresses across safepoints.
+declare hotspotcc void @jeandle.card_table_barrier(ptr addrspace(1) %addr)
 
-define private hotspotcc void @jeandle.g1_satb_enqueue(ptr addrspace(1) %pre_val) "lower-phase"="1" {
+define private hotspotcc void @jeandle.g1_satb_enqueue(ptr addrspace(1) %pre_val) "lower-phase"="1" #0 {
 entry:
   %index_offset = load i32, ptr @G1ThreadLocalData.satb_mark_queue_index_offset
   %buffer_offset = load i32, ptr @G1ThreadLocalData.satb_mark_queue_buffer_offset
@@ -367,29 +531,43 @@ done:
 }
 
 ; Implementation of Java g1 pre barrier.
-define private hotspotcc void @jeandle.g1_pre_barrier(ptr addrspace(1) %addr) noinline "lower-phase"="1" {
+define private hotspotcc void @jeandle.g1_pre_barrier(ptr addrspace(1) %addr) noinline "lower-phase"="9" #0 {
 entry:
   %marking_offset = load i32, ptr @G1ThreadLocalData.satb_mark_queue_active_offset
   %marking_adr = inttoptr i32 %marking_offset to ptr addrspace(2)
   %marking = load i8, ptr addrspace(2) %marking_adr
   %is_not_marking = icmp eq i8 %marking, 0
-  br i1 %is_not_marking, label %done, label %check_null
+  br i1 %is_not_marking, label %done, label %load_pre_value
 
 done:
   ret void
 
-check_null:
-  %pre_val = load atomic ptr addrspace(1), ptr addrspace(1) %addr unordered, align 8
-  %is_null = icmp eq ptr addrspace(1) %pre_val, null
-  br i1 %is_null, label %done, label %enqueue
+load_pre_value:
+  %use_compressed = load i1, ptr @UseCompressedOops
+  br i1 %use_compressed, label %compressed, label %uncompressed
+
+compressed:
+  %narrow_val = load atomic ptr addrspace(3), ptr addrspace(1) %addr unordered, align 4
+  %narrow_is_null = icmp eq ptr addrspace(3) %narrow_val, null
+  br i1 %narrow_is_null, label %done, label %decode_narrow
+
+decode_narrow:
+  %pre_val_c = addrspacecast ptr addrspace(3) %narrow_val to ptr addrspace(1)
+  br label %enqueue
+  
+uncompressed:
+  %pre_val_u = load atomic ptr addrspace(1), ptr addrspace(1) %addr unordered, align 8
+  %wide_is_null = icmp eq ptr addrspace(1) %pre_val_u, null
+  br i1 %wide_is_null, label %done, label %enqueue
 
 enqueue:
+  %pre_val = phi ptr addrspace(1) [ %pre_val_c, %decode_narrow ], [ %pre_val_u, %uncompressed ]
   call hotspotcc void @jeandle.g1_satb_enqueue(ptr addrspace(1) %pre_val)
   ret void
 }
 
 ; Implementation of Java g1 pre barrier loaded.
-define private hotspotcc void @jeandle.g1_pre_barrier_loaded(ptr addrspace(1) %pre_val) noinline "lower-phase"="1" {
+define private hotspotcc void @jeandle.g1_pre_barrier_loaded(ptr addrspace(1) %pre_val) noinline "lower-phase"="9" #0 {
 entry:
   %marking_offset = load i32, ptr @G1ThreadLocalData.satb_mark_queue_active_offset
   %marking_adr = inttoptr i32 %marking_offset to ptr addrspace(2)
@@ -410,7 +588,7 @@ enqueue:
 }
 
 ; Implementation of Java g1 post barrier.
-define private hotspotcc void @jeandle.g1_post_barrier(ptr addrspace(1) %addr, ptr addrspace(1) captures(none) %oop) noinline "lower-phase"="1" {
+define private hotspotcc void @jeandle.g1_post_barrier(ptr addrspace(1) %addr, ptr addrspace(1) captures(none) %oop) noinline "lower-phase"="9" #0 {
 entry:
   %index_offset = load i32, ptr @G1ThreadLocalData.dirty_card_queue_index_offset
   %buffer_offset = load i32, ptr @G1ThreadLocalData.dirty_card_queue_buffer_offset
@@ -475,13 +653,13 @@ store_in_buffer:
 }
 
 ; Declaration of Java pre barrier.
-declare hotspotcc void @jeandle.pre_barrier(ptr addrspace(1) %addr) noinline "lower-phase"="1";
+declare hotspotcc void @jeandle.pre_barrier(ptr addrspace(1) %addr)
 
 ; Declaration of Java post barrier.
-declare hotspotcc void @jeandle.post_barrier(ptr addrspace(1) %addr, ptr addrspace(1) nocapture %oop) noinline "lower-phase"="1";
+declare hotspotcc void @jeandle.post_barrier(ptr addrspace(1) %addr, ptr addrspace(1) nocapture %oop)
 
 ; Implementation of Java checkcast operation
-define hotspotcc i1 @jeandle.checkcast(ptr addrspace(0) nocapture %super_klass, ptr addrspace(1) nocapture %oop) noinline "lower-phase"="0" {
+define hotspotcc i1 @jeandle.checkcast(ptr addrspace(0) nocapture %super_klass, ptr addrspace(1) nocapture %oop) noinline "lower-phase"="0" #0 {
 entry:
   %is_null = icmp eq ptr addrspace(1) %oop, null
   br i1 %is_null, label %return_true, label %check_subtype
@@ -496,7 +674,7 @@ check_subtype:
 }
 
 ; Implementation of array store check operation
-define hotspotcc i1 @jeandle.array_store_check(ptr addrspace(1) nocapture %oop, ptr addrspace(1) nocapture %array_oop) noinline "lower-phase"="0" {
+define hotspotcc i1 @jeandle.array_store_check(ptr addrspace(1) nocapture %oop, ptr addrspace(1) nocapture %array_oop) noinline "lower-phase"="0" #0 {
 entry:
   %is_null = icmp eq ptr addrspace(1) %oop, null
   br i1 %is_null, label %return_true, label %check_subtype
@@ -515,7 +693,7 @@ check_subtype:
 }
 
 ; Implementation of Java idiv operation
-define hotspotcc i32 @jeandle.idiv(i32 %dividend, i32 %divisor) noinline "lower-phase"="0" {
+define hotspotcc i32 @jeandle.idiv(i32 %dividend, i32 %divisor) noinline "lower-phase"="0" #0 {
 entry:
   ; Check if dividend == Integer.MIN_VALUE (-2147483648)
   %is_min_int = icmp eq i32 %dividend, -2147483648
@@ -534,7 +712,7 @@ normal_idiv:
 }
 
 ; Implementation of Java irem operation
-define hotspotcc i32 @jeandle.irem(i32 %dividend, i32 %divisor) noinline "lower-phase"="0" {
+define hotspotcc i32 @jeandle.irem(i32 %dividend, i32 %divisor) noinline "lower-phase"="0" #0 {
 entry:
   ; Check if dividend == Integer.MIN_VALUE (-2147483648)
   %is_min_int = icmp eq i32 %dividend, -2147483648
@@ -553,7 +731,7 @@ normal_irem:
 }
 
 ; Implementation of Java ldiv operation
-define hotspotcc i64 @jeandle.ldiv(i64 %dividend, i64 %divisor) noinline "lower-phase"="0" {
+define hotspotcc i64 @jeandle.ldiv(i64 %dividend, i64 %divisor) noinline "lower-phase"="0" #0 {
 entry:
   ; Check if dividend == Long.MIN_VALUE (-9223372036854775808)
   %is_min_long = icmp eq i64 %dividend, -9223372036854775808
@@ -572,7 +750,7 @@ normal_ldiv:
 }
 
 ; Implementation of Java lrem operation
-define hotspotcc i64 @jeandle.lrem(i64 %dividend, i64 %divisor) noinline "lower-phase"="0" {
+define hotspotcc i64 @jeandle.lrem(i64 %dividend, i64 %divisor) noinline "lower-phase"="0" #0 {
 entry:
   ; Check if dividend == Long.MIN_VALUE (-9223372036854775808)
   %is_min_long = icmp eq i64 %dividend, -9223372036854775808
@@ -591,7 +769,7 @@ normal_lrem:
 }
 
 ; Check if the object is value based
-define hotspotcc i1 @jeandle.check_if_value_based(ptr addrspace(1) nocapture %obj) "lower-phase"="0" {
+define hotspotcc i1 @jeandle.check_if_value_based(ptr addrspace(1) nocapture %obj) "lower-phase"="0" #0 {
 entry:
   %obj_klass = call hotspotcc ptr addrspace(0) @jeandle.load_klass(ptr addrspace(1) %obj)
   %access_flags_offset = load i32, ptr @Klass.access_flags_offset
@@ -604,7 +782,7 @@ entry:
 }
 
 ; Check if the lock is inflated
-define hotspotcc i1 @jeandle.check_inflated(i64 %mark_word) "lower-phase"="0" {
+define hotspotcc i1 @jeandle.check_inflated(i64 %mark_word) "lower-phase"="0" #0 {
 entry:
   %markWord_monitor_value = load i64, ptr @markWord.monitor_value
   %masked_value = and i64 %mark_word, %markWord_monitor_value
@@ -613,7 +791,7 @@ entry:
 }
 
 ; Try to acquire the monitor lock when the lock is inflated
-define hotspotcc i1 @jeandle.try_acquire_monitor_lock(i64 %mark_word, ptr addrspace(0) nocapture %lock) "lower-phase"="0" {
+define hotspotcc i1 @jeandle.try_acquire_monitor_lock(i64 %mark_word, ptr addrspace(0) nocapture %lock) "lower-phase"="0" #0 {
 entry:
   %monitor_ptr = inttoptr i64 %mark_word to ptr
   %owner_offset_no_monitor_value = load i32, ptr @ObjectMonitor.owner_offset_no_monitor_value
@@ -649,7 +827,7 @@ return_false:
 }
 
 ; Increment held_monitor_count in JavaThread
-define hotspotcc void @jeandle.increment_lock_count() "lower-phase"="0" {
+define hotspotcc void @jeandle.increment_lock_count() "lower-phase"="0" #0 {
 entry:
   %held_monitor_count_offset = load i32, ptr @JavaThread.held_monitor_count_offset
   %held_monitor_count_offset_zext = zext i32 %held_monitor_count_offset to i64
@@ -661,7 +839,7 @@ entry:
 }
 
 ; Decrement held_monitor_count in JavaThread
-define hotspotcc void @jeandle.decrement_lock_count() "lower-phase"="0" {
+define hotspotcc void @jeandle.decrement_lock_count() "lower-phase"="0" #0 {
 entry:
   %held_monitor_count_offset = load i32, ptr @JavaThread.held_monitor_count_offset
   %held_monitor_count_offset_zext = zext i32 %held_monitor_count_offset to i64
@@ -673,7 +851,7 @@ entry:
 }
 
 ; clear the lock stack top oop in debug mode
-define hotspotcc void @jeandle.clear_oop_in_lock_stack_top(i32 %lock_stack_top) "lower-phase"="0" {
+define hotspotcc void @jeandle.clear_oop_in_lock_stack_top(i32 %lock_stack_top) "lower-phase"="0" #0 {
 entry:
   %is_debug = load i1, ptr @DEBUG_MODE
   br i1 %is_debug, label %debug_path, label %release_path
@@ -689,7 +867,7 @@ release_path:
 }
 
 ; Fast path implementation of monitorenter when LockingMode == 0
-define hotspotcc i1 @jeandle.monitorenter_with_monitor_lock(ptr addrspace(1) nocapture %obj, ptr addrspace(0) nocapture %lock) "lower-phase"="0" {
+define hotspotcc i1 @jeandle.monitorenter_with_monitor_lock(ptr addrspace(1) nocapture %obj, ptr addrspace(0) nocapture %lock) "lower-phase"="0" #0 {
 entry:
   %mark_offset = load i32, ptr @oopDesc.mark_offset_in_bytes
   %mark_word_addr = getelementptr inbounds i8, ptr addrspace(1) %obj, i32 %mark_offset
@@ -710,7 +888,7 @@ return_false:
 }
 
 ; Fast path implementation of monitorenter when LockingMode == 1
-define hotspotcc i1 @jeandle.monitorenter_with_thin_lock(ptr addrspace(1) nocapture %obj, ptr addrspace(0) nocapture %lock) "lower-phase"="0" {
+define hotspotcc i1 @jeandle.monitorenter_with_thin_lock(ptr addrspace(1) nocapture %obj, ptr addrspace(0) nocapture %lock) "lower-phase"="0" #0 {
 entry:
   %mark_offset = load i32, ptr @oopDesc.mark_offset_in_bytes
   %mark_word_addr = getelementptr inbounds i8, ptr addrspace(1) %obj, i32 %mark_offset
@@ -750,7 +928,7 @@ return_false:
 }
 
 ; Fast path implementation of monitorenter when LockingMode == 2
-define hotspotcc i1 @jeandle.monitorenter_with_lightweight_lock(ptr addrspace(1) nocapture %obj, ptr addrspace(0) nocapture %lock) "lower-phase"="0" {
+define hotspotcc i1 @jeandle.monitorenter_with_lightweight_lock(ptr addrspace(1) nocapture %obj, ptr addrspace(0) nocapture %lock) "lower-phase"="0" #0 {
 entry:
   %mark_offset = load i32, ptr @oopDesc.mark_offset_in_bytes
   %mark_word_addr = getelementptr inbounds i8, ptr addrspace(1) %obj, i32 %mark_offset
@@ -798,7 +976,7 @@ return_false:
 }
 
 ; Fast path implementation of monitorexit when LockingMode == 0
-define hotspotcc i1 @jeandle.monitorexit_with_monitor_lock(ptr addrspace(1) nocapture %obj, ptr addrspace(0) nocapture %lock) "lower-phase"="0" {
+define hotspotcc i1 @jeandle.monitorexit_with_monitor_lock(ptr addrspace(1) nocapture %obj, ptr addrspace(0) nocapture %lock) "lower-phase"="0" #0 {
 entry:
   %mark_offset = load i32, ptr @oopDesc.mark_offset_in_bytes
   %mark_word_addr = getelementptr inbounds i8, ptr addrspace(1) %obj, i32 %mark_offset
@@ -815,7 +993,7 @@ return_false:
 }
 
 ; Fast path implementation of monitorexit when LockingMode == 1
-define hotspotcc i1 @jeandle.monitorexit_with_thin_lock(ptr addrspace(1) nocapture %obj, ptr addrspace(0) nocapture %lock) "lower-phase"="0" {
+define hotspotcc i1 @jeandle.monitorexit_with_thin_lock(ptr addrspace(1) nocapture %obj, ptr addrspace(0) nocapture %lock) "lower-phase"="0" #0 {
 entry:
   %displaced_header_offset = load i32, ptr @BasicLock.displaced_header_offset_in_bytes
   %displaced_header_addr = getelementptr inbounds i8, ptr %lock, i32 %displaced_header_offset
@@ -849,7 +1027,7 @@ return_false:
 }
 
 ; Fast path implementation of monitorexit when LockingMode == 2
-define hotspotcc i1 @jeandle.monitorexit_with_lightweight_lock(ptr addrspace(1) nocapture %obj, ptr addrspace(0) nocapture %lock) "lower-phase"="0" {
+define hotspotcc i1 @jeandle.monitorexit_with_lightweight_lock(ptr addrspace(1) nocapture %obj, ptr addrspace(0) nocapture %lock) "lower-phase"="0" #0 {
 entry:
   %mark_offset = load i32, ptr @oopDesc.mark_offset_in_bytes
   %mark_word_addr = getelementptr inbounds i8, ptr addrspace(1) %obj, i32 %mark_offset
@@ -897,4 +1075,4 @@ return_false:
   ret i1 false
 }
 
-attributes #0 = { "gc-leaf-function" } 
+attributes #0 = { nounwind "gc-leaf-function" }

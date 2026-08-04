@@ -59,6 +59,19 @@
   product(bool, JeandleRecordVMCallbacks, false,                            \
           "Record VM callback invocations for standalone LLVM testing")     \
                                                                             \
+  product(bool, JeandleUseProfile, true,                                    \
+          "Use interpreter/C1 profile (MDO) for branch/switch weights, "    \
+          "unstable-if branch pruning")                                     \
+                                                                            \
+  product(intx, JeandleNodeCountInliningCutoff, 18000,                      \
+          "If root LLVM IR instruction count exceeds limit stop inlining."  \
+          "This value roughly follows C2's cutoff today; tune it later"     \
+          "with real Jeandle workloads")                                    \
+          range(0, max_jint)                                                \
+                                                                            \
+  product(bool, JeandlePrintInlineTree, false,                              \
+          "Print Jeandle inline tree before installing compiled code")      \
+                                                                            \
 
 // end of JEANDLE_FLAGS
 
