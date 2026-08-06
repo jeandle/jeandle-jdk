@@ -104,6 +104,9 @@ class CallSiteInfo : public JeandleCompilationResourceObj {
   address target() const { return _target; }
   void set_target(address target) { _target = target; }
   bool is_method_handle_invoke() const { return _is_method_handle_invoke; }
+  void set_is_method_handle_invoke(bool is_method_handle_invoke) {
+    _is_method_handle_invoke = is_method_handle_invoke;
+  }
   Method* attached_method() const { return _attached_method; }
   void set_attached_method(Method* method) { _attached_method = method; }
 
