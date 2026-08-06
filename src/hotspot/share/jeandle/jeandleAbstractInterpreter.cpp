@@ -801,7 +801,7 @@ JeandleAbstractInterpreter::JeandleAbstractInterpreter(const JeandleParseContext
                                                        _parse_context(parse_context),
                                                        _method(parse_context.method()),
                                                        _profile(_method),
-                                                       _llvm_func(JeandleFuncSig::create_llvm_func(_method, target_module, entry_bci != InvocationEntryBci)),
+                                                       _llvm_func(JeandleFuncSig::create_llvm_func(_method, target_module, _parse_context.is_root(), entry_bci != InvocationEntryBci)),
                                                        _entry_bci(entry_bci),
                                                        _context(&target_module.getContext()),
                                                        _bytecodes(_method),
@@ -2224,8 +2224,6 @@ void JeandleAbstractInterpreter::invoke() {
   if (dest == SharedRuntime::get_resolve_opt_virtual_call_stub()) {
     assert(receiver, "opt virtual call must have a receiver");
     invoke->addParamAttr(0, llvm::Attribute::NoUndef);
-    invoke->addParamAttr(0, llvm::Attribute::get(
-        *_context, llvm::jeandle::Attribute::RuntimeLive));
   }
   if (call_type != JeandleCompiledCall::DYNAMIC_CALL) {
     invoke->addFnAttr(llvm::Attribute::get(*_context,

@@ -183,7 +183,7 @@ class JeandleCompiledCode : public StackObj {
                       _env(env),
                       _method(method),
                       _routine_entry(nullptr),
-                      _func_name(JeandleFuncSig::method_name_with_signature(_method, is_osr_entry)),
+                       _func_name(JeandleFuncSig::root_method_name(_method, is_osr_entry)),
                       _orig_pc_slot(nullptr),
                       _orig_pc_offset_in_bytes(-1),
                       _interpreter_frame_size_in_bytes(0),
