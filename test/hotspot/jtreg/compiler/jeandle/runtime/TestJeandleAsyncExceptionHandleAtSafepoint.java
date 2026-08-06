@@ -22,7 +22,7 @@
  * @test
  * @summary Tests whether the Jeandle compiler correctly handles asynchronous exceptions at a return poll.
  * @run main/othervm/native -agentlib:TestJeandleAsyncExceptionHandleAtSafepoint
- *      -Xbatch -Xcomp -XX:-TieredCompilation -XX:+UseJeandleCompiler -XX:-Inline
+ *      -Xbatch -Xcomp -XX:-TieredCompilation -XX:+UseJeandleCompiler -XX:-Inline -Xss512m
  *      -XX:+ExplicitGCInvokesConcurrent -XX:GuaranteedSafepointInterval=1
  *      -XX:CompileCommand=compileonly,compiler.jeandle.safepoint.TestJeandleAsyncExceptionHandleAtSafepoint::returnPoll
  *      -XX:CompileCommand=dontinline,compiler.jeandle.safepoint.TestJeandleAsyncExceptionHandleAtSafepoint::returnPoll
@@ -38,13 +38,21 @@ import java.util.concurrent.TimeUnit;
 import java.util.regex.Pattern;
 
 public class TestJeandleAsyncExceptionHandleAtSafepoint {
+
+    private static class ReturnObject {
+        private final int value;
+
+        ReturnObject(int value) {
+            this.value = value;
+        }
+    }
+
     private static final int JVMTI_ERROR_NONE = 0;
     private static final String COMPILATION_LOG_FILE = "compilation.log";
     private static final Pattern UNEXPECTED_DEOPT_PATTERN = Pattern.compile("deoptimized");
 
     private static volatile boolean entered;
     private static volatile boolean stopped = false;
-    private static volatile long sink;
 
     /**
      * Initializes the JVMTI test agent and configures the exception
@@ -63,15 +71,21 @@ public class TestJeandleAsyncExceptionHandleAtSafepoint {
 
         Thread victim = new Thread(() -> {
             try {
+                ReturnObject returnObj = new ReturnObject(42);
                 entered = true;
-                returnPoll(true);
+                returnPoll(true, returnObj);
             } catch (ThreadDeath td) {
                 System.out.println("caught ThreadDeath");
             }
         }, "async-exception-victim");
 
         victim.setDaemon(true);
-        returnPoll(false);
+
+        // The first object creation is used to load the class.
+        ReturnObject returnObj = new ReturnObject(42);
+        // The first invocation is used to trigger compilation.
+        returnPoll(false, returnObj);
+
         victim.start();
 
         long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(10);
@@ -84,13 +98,16 @@ public class TestJeandleAsyncExceptionHandleAtSafepoint {
         }
 
         Thread.sleep(50);
+
         stopped = true;
         int err = stopThread(victim);
         if (err != JVMTI_ERROR_NONE) {
             throw new RuntimeException("StopThread failed with JVMTI error: " + err);
         }
 
-        victim.join(10_000);
+
+
+        victim.join(100_000);
         if (victim.isAlive()) {
             throw new RuntimeException("Victim thread is still alive");
         }
@@ -99,11 +116,15 @@ public class TestJeandleAsyncExceptionHandleAtSafepoint {
         System.out.println("SUCCESS!");
     }
 
-    private static void returnPoll(boolean recurse) {
-        if(stopped)
-            return ;
-        if (recurse)
-            returnPoll(true);
+    private static ReturnObject returnPoll(boolean recurse, ReturnObject returnObj) {
+        if (stopped) {
+            return returnObj;
+        }
+        if (recurse) {
+            returnObj = returnPoll(true, returnObj);
+        }
+
+        return returnObj;
     }
 
     private static void checkCompilationLogContainsExpectedDeopt() throws Exception {

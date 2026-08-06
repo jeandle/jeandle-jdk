@@ -96,11 +96,22 @@ void JeandleCallVM::generate_call_VM(const char* name, address routine_address, 
   ir_builder.CreateCondBr(if_not_null, forward_exception_block, no_exception_block);
   ir_builder.SetInsertPoint(forward_exception_block);
 
+  // For return poll pending exceptions, preserve the exception for the Java return path to handle.
   if (std::strcmp(name, "safepoint_handler") == 0) {
     assert(args.size() == 2, "safepoint_handler must have current thread and at_return_poll arguments");
+    assert(args[1]->getType()->isIntegerTy(1), "at_return_poll must be an i1");
+
+    llvm::BasicBlock* return_poll_exception_block = llvm::BasicBlock::Create(context, "return_poll_exception", llvm_func);
+    llvm::BasicBlock* normal_exception_block = llvm::BasicBlock::Create(context, "normal_exception", llvm_func);
+    ir_builder.CreateCondBr(args[1], return_poll_exception_block, normal_exception_block);
+
+    ir_builder.SetInsertPoint(return_poll_exception_block);
     llvm::Value* exception_oop_addr = ir_builder.CreateIntToPtr(ir_builder.getInt64((uint64_t)JavaThread::exception_oop_offset()), llvm::PointerType::get(context, llvm::jeandle::AddrSpace::TLSAddrSpace));
     ir_builder.CreateStore(pending_exception, exception_oop_addr, true /* is_volatile */);
     ir_builder.CreateStore(null_oop, pending_exception_addr, true /* is_volatile */);
+    ir_builder.CreateBr(no_exception_block);
+
+    ir_builder.SetInsertPoint(normal_exception_block);
   } else {
     llvm::CallInst* install_exceptional_return_call_inst = ir_builder.CreateCall(JeandleRuntimeRoutine::install_exceptional_return_for_call_vm_callee(target_module), {});
     install_exceptional_return_call_inst->addFnAttr(llvm::Attribute::NoUnwind);
