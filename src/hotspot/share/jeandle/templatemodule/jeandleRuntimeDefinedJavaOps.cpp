@@ -139,30 +139,21 @@ DEF_JAVA_OP(safepoint_poll, 1, llvm::Type::getVoidTy(context), llvm::Type::getIn
     return;
   }
 
+  // ***** Do Safepoint Block *****
+  ir_builder.SetInsertPoint(do_normal_safepoint_block);
+  llvm::CallInst* current_thread = ir_builder.CreateCall(current_thread_func);
+  current_thread->setCallingConv(llvm::CallingConv::Hotspot_JIT);
+  // Call safepoint handler.
+  llvm::CallInst* call_inst = ir_builder.CreateCall(JeandleRuntimeRoutine::safepoint_handler_callee(template_module), {current_thread, at_return_poll},
+                                                    {create_empty_deopt_bundle()});
+  call_inst ->setCallingConv(llvm::CallingConv::Hotspot_JIT);
+  ir_builder.CreateBr(return_block);
+
   // ***** Do Return Safepoint Block *****
   ir_builder.SetInsertPoint(do_return_safepoint_block);
-  llvm::CallInst* return_current_thread = ir_builder.CreateCall(current_thread_func);
-  return_current_thread->setCallingConv(llvm::CallingConv::Hotspot_JIT);
-
-  llvm::CallInst* return_call_inst = ir_builder.CreateCall(JeandleRuntimeRoutine::safepoint_handler_callee(template_module), {return_current_thread, at_return_poll},
-		  					   {create_empty_deopt_bundle()});
-  return_call_inst->setCallingConv(llvm::CallingConv::Hotspot_JIT);
-
   llvm::Attribute id_attr = llvm::Attribute::get(context,llvm::jeandle::Attribute::StatepointID, std::to_string(JeandleRuntimeRoutine::return_poll_statepoint_id()));
-  return_call_inst->addFnAttr(id_attr);
-
-  ir_builder.CreateBr(return_block);
-
-  // ***** Do Normal Safepoint Block *****
-  ir_builder.SetInsertPoint(do_normal_safepoint_block);
-  llvm::CallInst* normal_current_thread = ir_builder.CreateCall(current_thread_func);
-  normal_current_thread->setCallingConv(llvm::CallingConv::Hotspot_JIT);
-
-  llvm::CallInst* normal_call_inst = ir_builder.CreateCall(JeandleRuntimeRoutine::safepoint_handler_callee(template_module), {normal_current_thread, at_return_poll},
-		  					   {create_empty_deopt_bundle()});
-  normal_call_inst->setCallingConv(llvm::CallingConv::Hotspot_JIT);
-
-  ir_builder.CreateBr(return_block);
+  call_inst ->addFnAttr(id_attr);
+  ir_builder.CreateBr(do_normal_safepoint_block);
 
   // ******** Return Block ********
   ir_builder.SetInsertPoint(return_block);

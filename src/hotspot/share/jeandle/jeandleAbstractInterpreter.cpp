@@ -2833,18 +2833,27 @@ void JeandleAbstractInterpreter::add_return_safepoint_poll() {
     return;
   }
   add_safepoint_poll(true);
-  // Read the exception oop from thread local storage.
-  llvm::Value* exception_oop_addr = _ir_builder.CreateIntToPtr(_ir_builder.getInt64((uint64_t)JavaThread::exception_oop_offset()), llvm::PointerType::get(*_context, llvm::jeandle::AddrSpace::TLSAddrSpace));
-  llvm::Value* exception_oop = _ir_builder.CreateLoad(JeandleType::java2llvm(BasicType::T_OBJECT, *_context), exception_oop_addr, true /* is_volatile */);
+  // Read the pending exception oop from thread local storage.
+  llvm::Value* pending_exception_oop_addr = _ir_builder.CreateIntToPtr(_ir_builder.getInt64((uint64_t)JavaThread::pending_exception_offset()), llvm::PointerType::get(*_context, llvm::jeandle::AddrSpace::TLSAddrSpace));
+  llvm::Value* pending_exception_oop = _ir_builder.CreateLoad(JeandleType::java2llvm(BasicType::T_OBJECT, *_context), pending_exception_oop_addr, true /* is_volatile */);
   llvm::Value* null_oop = llvm::ConstantPointerNull::get(llvm::cast<llvm::PointerType>(JeandleType::java2llvm(T_OBJECT, *_context)));
 
-  // Check exceptions.
-  llvm::Value* if_not_null = _ir_builder.CreateICmp(llvm::CmpInst::ICMP_NE, exception_oop, null_oop);
+  // Check pending exceptions.
+  llvm::Value* if_not_null = _ir_builder.CreateICmp(llvm::CmpInst::ICMP_NE, pending_exception_oop, null_oop);
   llvm::BasicBlock* forward_exception_block = llvm::BasicBlock::Create(*_context, "forward_exception", _llvm_func);
   llvm::BasicBlock* no_exception_block = llvm::BasicBlock::Create(*_context, "no_exception", _llvm_func); _ir_builder.CreateCondBr(if_not_null, forward_exception_block, no_exception_block);
 
   _ir_builder.SetInsertPoint(forward_exception_block);
-  throw_exception(exception_oop);
+  // Clear the pending exception oop field in thread local storage.
+  _ir_builder.CreateStore(llvm::ConstantPointerNull::get(llvm::cast<llvm::PointerType>(JeandleType::java2llvm(BasicType::T_OBJECT, *_context))),
+                          pending_exception_oop_addr,
+                          true /* is_volatile */);
+
+  // Call install_exceptional_return.
+  llvm::CallInst* current_thread = call_java_op("jeandle.current_thread", {});
+  llvm::CallInst* call_inst = create_call(JeandleRuntimeRoutine::install_exceptional_return_callee(_module),
+                                          {pending_exception_oop, current_thread}, llvm::CallingConv::Hotspot_JIT);
+  _ir_builder.CreateBr(no_exception_block);
 
   _ir_builder.SetInsertPoint(no_exception_block);
 }
