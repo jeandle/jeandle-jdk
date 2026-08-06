@@ -426,10 +426,7 @@ bool JeandleVMCallback::record_inlining_complete() {
 
 namespace {
 
-// File-local CHA helpers. They return llvm::jeandle::CHAOptInfo, an LLVM-side
-// type that cannot appear in the pure-HotSpot jeandleVMCallback.hpp, so they
-// stay free functions here (internal linkage) and are only called by
-// JeandleVMCallback::get_cha_opt_info below.
+// File-local CHA helpers.
 
 llvm::jeandle::CHAOptInfo optimize_method_handle_intrinsic(
     ciMethod* callee, uintptr_t oop_id, Klass* receiver_klass, bool is_exact) {
