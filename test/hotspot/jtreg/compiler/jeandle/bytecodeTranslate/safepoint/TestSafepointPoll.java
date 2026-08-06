@@ -66,6 +66,7 @@ public class TestSafepointPoll {
                                                 TestSafepointPoll.class.getDeclaredMethod("test"),
                                                 false);
             fileCheck.check("define private hotspotcc void @jeandle.safepoint_poll(i1 %0)");
+
             fileCheck.checkNext("entry:");
             fileCheck.checkNext("%1 = load volatile i64, ptr addrspace(2) inttoptr");
             fileCheck.checkNext("%2 = and i64 %1, 1");
@@ -79,13 +80,11 @@ public class TestSafepointPoll {
             fileCheck.checkNext("br i1 %0, label %do_return_safepoint, label %do_normal_safepoint");
 
             fileCheck.checkNext("do_return_safepoint:");
-            fileCheck.checkNext("%4 = call hotspotcc ptr @jeandle.current_thread()");
-            fileCheck.checkNext("call hotspotcc void @safepoint_handler(ptr %4, i1 %0)");
-            fileCheck.checkNext("br label %return");
+	    fileCheck.checkNext("br label %do_normal_safepoint");
 
             fileCheck.checkNext("do_normal_safepoint:");
-            fileCheck.checkNext("%5 = call hotspotcc ptr @jeandle.current_thread()");
-            fileCheck.checkNext("call hotspotcc void @safepoint_handler(ptr %5, i1 %0)");
+            fileCheck.checkNext("%4 = call hotspotcc ptr @jeandle.current_thread()");
+            fileCheck.checkNext("call hotspotcc void @safepoint_handler(ptr %4, i1 %0)");
             fileCheck.checkNext("br label %return");
             fileCheck.checkNext("}");
         }
