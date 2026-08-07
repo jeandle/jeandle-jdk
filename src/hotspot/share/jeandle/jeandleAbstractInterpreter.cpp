@@ -18,6 +18,7 @@
  *
  */
 
+#include "classfile/vmIntrinsics.hpp"
 #include "jeandle/__llvmHeadersBegin__.hpp"
 #include "llvm/Analysis/ConstantFolding.h"
 #include "llvm/Analysis/LoopInfo.h"
@@ -30,6 +31,7 @@
 #include "llvm/IR/Jeandle/GCStrategy.h"
 #include "llvm/IR/Jeandle/JavaType.h"
 #include "llvm/IR/Jeandle/Metadata.h"
+#include <string>
 
 #include "jeandle/jeandleAbstractInterpreter.hpp"
 #include "jeandle/jeandleCompiledCall.hpp"
@@ -799,7 +801,7 @@ JeandleAbstractInterpreter::JeandleAbstractInterpreter(const JeandleParseContext
                                                        _parse_context(parse_context),
                                                        _method(parse_context.method()),
                                                        _profile(_method),
-                                                       _llvm_func(JeandleFuncSig::create_llvm_func(_method, target_module, entry_bci != InvocationEntryBci)),
+                                                       _llvm_func(JeandleFuncSig::create_llvm_func(_method, target_module, _parse_context.is_root(), entry_bci != InvocationEntryBci)),
                                                        _entry_bci(entry_bci),
                                                        _context(&target_module.getContext()),
                                                        _bytecodes(_method),
@@ -2219,9 +2221,18 @@ void JeandleAbstractInterpreter::invoke() {
   invoke->addFnAttr(patch_bytes_attr);
   invoke->addFnAttr(bc_attr);
   invoke->addFnAttr(declared_holder_attr);
-  if (target->can_be_statically_bound()) {
+  if (dest == SharedRuntime::get_resolve_opt_virtual_call_stub()) {
+    assert(receiver, "opt virtual call must have a receiver");
+    invoke->addParamAttr(0, llvm::Attribute::NoUndef);
+  }
+  if (call_type != JeandleCompiledCall::DYNAMIC_CALL) {
     invoke->addFnAttr(llvm::Attribute::get(*_context,
                                             llvm::jeandle::Attribute::MonomorphicTarget));
+  }
+  if (target->is_method_handle_intrinsic()) {
+    llvm::Attribute method_handle_intrinsic_name = llvm::Attribute::get(
+        *_context, llvm::jeandle::Attribute::MhIntrinsicName, vmIntrinsics::name_at(target->intrinsic_id()));
+      invoke->addFnAttr(method_handle_intrinsic_name);
   }
 
   // Attach java-klass return type attribute to the call site.

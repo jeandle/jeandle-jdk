@@ -65,8 +65,11 @@ class JeandleVMCallback : public AllStatic {
   // CHA devirtualization.
   static std::string get_cha_opt_info(uintptr_t caller_ptr, uintptr_t callee_ptr,
                                       uintptr_t holder_ptr, uintptr_t receiver_klass_ptr,
-                                      bool is_exact, int bytecode);
-  static bool update_to_static_opt_virtual_call(int64_t id);
+                                      bool is_exact, int bytecode, int oop_id);
+  static bool update_call_site(int64_t id, int dest, bool need_attached, uintptr_t method);
+  static uintptr_t get_signature_accessing_klass(uintptr_t method);
+  static int64_t get_signature_arg_type(uintptr_t method, int index);
+  static uintptr_t get_signature_arg_type_klass(uintptr_t method, int index);
 
   // Replaces the now-removed ciEnv::get_instance_klass_for_klass: maps a raw
   // receiver Klass* to a ciInstanceKlass*, preserving the null-check + assert +

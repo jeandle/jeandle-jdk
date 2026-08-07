@@ -19,6 +19,8 @@
  */
 
 #include "jeandle/__llvmHeadersBegin__.hpp"
+
+#include "llvm/IR/Instructions.h"
 #include "llvm/IR/Jeandle/VMCallback.h"
 #include "llvm/IR/Jeandle/VMCallbackLog.h"
 #include "llvm/IR/Jeandle/InvokeType.h"
@@ -37,6 +39,7 @@
 #include "ci/ciInstanceKlass.hpp"
 #include "ci/ciKlass.hpp"
 #include "ci/ciSymbols.hpp"
+#include "ci/ciMemberName.hpp"
 #include "classfile/systemDictionary.hpp"
 #include "classfile/vmClasses.hpp"
 #include "ci/ciField.hpp"
@@ -140,6 +143,20 @@ JeandleInlineReason inline_reason_from_llvm(int reason) {
   }
   ShouldNotReachHere();
   return JeandleInlineReason::LLVMInlineFailed;
+}
+
+ciObject* jeandle_oop_by_id(int oop_id) {
+  JeandleCompilation* compilation = JeandleCompilation::current();
+  if (compilation == nullptr) {
+    return nullptr;
+  }
+
+  return compilation->compiled_code()->oop_at(oop_id);
+}
+
+ciMethod* jeandle_callback_method(uintptr_t method) {
+  assert(method != 0, "callback method pointer must not be null");
+  return (ciMethod*)method;
 }
 
 } // anonymous namespace
@@ -370,7 +387,8 @@ bool JeandleVMCallback::get_inline_callee_ir(uintptr_t callee_method) {
   }
 
   JeandleParseContext parse_context = JeandleParseContext::inlinee(callee);
-  JeandleAbstractInterpreter interpret(parse_context, -1, *M, *comp->compiled_code(), comp->trap_hist());
+  JeandleAbstractInterpreter interpret(parse_context, -1, *M,
+                                       *comp->compiled_code(), comp->trap_hist());
   llvm::Function* resolved_func = M->getFunction(callee_name);
   assert(resolved_func != nullptr, "callee function not found");
   if (comp->error_occurred()) {
@@ -408,10 +426,76 @@ bool JeandleVMCallback::record_inlining_complete() {
 
 namespace {
 
-// File-local CHA helpers. They return llvm::jeandle::CHAOptInfo, an LLVM-side
-// type that cannot appear in the pure-HotSpot jeandleVMCallback.hpp, so they
-// stay free functions here (internal linkage) and are only called by
-// JeandleVMCallback::get_cha_opt_info below.
+// File-local CHA helpers.
+
+llvm::jeandle::CHAOptInfo optimize_method_handle_intrinsic(
+    ciMethod* callee, uintptr_t oop_id, Klass* receiver_klass, bool is_exact) {
+  vmIntrinsics::ID iid = callee->intrinsic_id();
+  bool input_not_const = true;
+  switch (iid) {
+  case vmIntrinsics::_invokeBasic:
+    {
+      ciObject* oop = jeandle_oop_by_id(oop_id);
+      if (oop == nullptr) {
+        log_debug(jeandle)("optimize_method_handle_intrinsic: _invokeBasic: receiver is always null");
+        return {};
+      }
+      ciMethod* target = oop->as_method_handle()->get_vmtarget();
+      if (!ciMethod::is_consistent_info(callee, target)) {
+        log_debug(jeandle)(
+          "optimize_method_handle_intrinsic: _invokeBasic: signatures mismatch %s %s",
+          callee->name()->as_utf8(),
+          target->name()->as_utf8());
+        return {};
+      }
+      return {reinterpret_cast<uintptr_t>(target->holder()->constant_encoding()),
+              reinterpret_cast<uintptr_t>(target),
+              llvm::jeandle::CHAOptInfo::packDeoptreasonInfo(
+                target->is_static(), target->is_accessor(),
+                llvm::jeandle::Deoptimization::Reason_none),
+              JeandleFuncSig::method_name_with_signature(target)};
+    }
+    break;
+  case vmIntrinsics::_linkToVirtual:
+  case vmIntrinsics::_linkToStatic:
+  case vmIntrinsics::_linkToSpecial:
+  case vmIntrinsics::_linkToInterface:
+    {
+      // Get MemberName argument:
+      ciObject* member_name = jeandle_oop_by_id(oop_id);
+      if (member_name == nullptr) {
+        log_debug(jeandle)("optimize_method_handle_intrinsic: _linkTo*: member_name not constant");
+        return {};
+      }
+      ciMethod* target = member_name->as_member_name()->get_vmtarget();
+
+      if (!ciMethod::is_consistent_info(callee, target)) {
+        log_debug(jeandle)("optimize_method_handle_intrinsic: _linkTo*: signatures mismatch %s %s", callee->name()->as_utf8(), target->name()->as_utf8());
+        return {};
+      }
+
+      // In lambda forms we erase signature types to avoid resolving issues
+      // involving class loaders.  When we optimize a method handle invoke
+      // to a direct call we must cast the receiver and arguments to its
+      // actual types.
+      const int is_static = target->is_static() ? 1 : 0;
+      return {reinterpret_cast<uintptr_t>(target->holder()) | 1,
+          reinterpret_cast<uintptr_t>(target),
+          llvm::jeandle::CHAOptInfo::packTargetInfo(
+              target->is_static(), target->is_accessor(), 
+              target->can_be_statically_bound(), target->signature()->count()),
+          JeandleFuncSig::method_name_with_signature(target)};
+    }
+    break;
+    case vmIntrinsics::_linkToNative:
+      log_debug(jeandle)("optimize_method_handle_intrinsic: _linkToNative: native call");
+      break;
+    default:
+      fatal("unexpected intrinsic %d: %s", vmIntrinsics::as_int(iid), vmIntrinsics::name_at(iid));
+      break;
+  }
+  return {};
+}
 
 llvm::jeandle::CHAOptInfo optimize_invokeinterface(ciMethod* caller,
                               ciMethod* callee, ciInstanceKlass* holder) {
@@ -429,9 +513,12 @@ llvm::jeandle::CHAOptInfo optimize_invokeinterface(ciMethod* caller,
     constraint = (constraint->is_subclass_of(singleton) ? constraint : singleton);
     ciEnv::current()->dependencies()->assert_unique_implementor(holder, singleton);
     ciEnv::current()->dependencies()->assert_unique_concrete_method(holder, cha_monomorphic_target, holder, callee);
+    assert(!cha_monomorphic_target->is_static(), "should not be static");
     return {reinterpret_cast<uintptr_t>(constraint->constant_encoding()),
       reinterpret_cast<uintptr_t>(cha_monomorphic_target),
-      llvm::jeandle::Deoptimization::Reason_class_check,
+      llvm::jeandle::CHAOptInfo::packDeoptreasonInfo(
+        0, cha_monomorphic_target->is_accessor(), 
+        llvm::jeandle::Deoptimization::Reason_class_check),
       JeandleFuncSig::method_name_with_signature(cha_monomorphic_target)};
   }
   return {};
@@ -448,9 +535,12 @@ llvm::jeandle::CHAOptInfo optimize_virtual_call(ciMethod* caller,
   if (receiver_klass->is_array_klass()) {
     if (callee->holder() == env->Object_klass() &&
         callee->name() != ciSymbols::finalize_method_name()) {
+      assert(!callee->is_static(), "should not be static");
       return {reinterpret_cast<uintptr_t>(callee->holder()->constant_encoding()),
         reinterpret_cast<uintptr_t>(callee),
-        llvm::jeandle::Deoptimization::Reason_receiver_constraint,
+        llvm::jeandle::CHAOptInfo::packDeoptreasonInfo(
+          0, callee->is_accessor(),
+          llvm::jeandle::Deoptimization::Reason_receiver_constraint),
         JeandleFuncSig::method_name_with_signature(callee)};
     }
     return {};
@@ -484,18 +574,24 @@ llvm::jeandle::CHAOptInfo optimize_virtual_call(ciMethod* caller,
         cha_monomorphic_target,
         holder, callee);
     }
+    assert(!cha_monomorphic_target->is_static(), "should not be static");
     return {reinterpret_cast<uintptr_t>(cha_monomorphic_target->holder()->constant_encoding()),
       reinterpret_cast<uintptr_t>(cha_monomorphic_target),
-      llvm::jeandle::Deoptimization::Reason_receiver_constraint,
+      llvm::jeandle::CHAOptInfo::packDeoptreasonInfo(
+        0, cha_monomorphic_target->is_accessor(),
+        llvm::jeandle::Deoptimization::Reason_receiver_constraint),
       JeandleFuncSig::method_name_with_signature(cha_monomorphic_target)};
   }
 
   if (actual_receiver_is_exact) {
     ciMethod* exact_method = callee->resolve_invoke(caller->holder(), actual_receiver);
     if (exact_method != nullptr) {
+      assert(!exact_method->is_static(), "should not be static");
       return {reinterpret_cast<uintptr_t>(exact_method->holder()->constant_encoding()),
         reinterpret_cast<uintptr_t>(exact_method),
-        llvm::jeandle::Deoptimization::Reason_receiver_constraint,
+        llvm::jeandle::CHAOptInfo::packDeoptreasonInfo(
+          0, exact_method->is_accessor(),
+          llvm::jeandle::Deoptimization::Reason_receiver_constraint),
         JeandleFuncSig::method_name_with_signature(exact_method)};
     }
   }
@@ -515,8 +611,8 @@ ciInstanceKlass* JeandleVMCallback::get_receiver_instance_klass(Klass* receiver_
 }
 
 std::string JeandleVMCallback::get_cha_opt_info(uintptr_t caller_ptr, uintptr_t callee_ptr,
-                                                uintptr_t holder_ptr, uintptr_t receiver_klass_ptr,
-                                                bool is_exact, int bytecode) {
+                                     uintptr_t holder_ptr, uintptr_t receiver_klass_ptr,
+                                     bool is_exact, int bytecode, int oop_id) {
   if (caller_ptr == 0 || callee_ptr == 0 || holder_ptr == 0) {
     return "";
   }
@@ -528,25 +624,34 @@ std::string JeandleVMCallback::get_cha_opt_info(uintptr_t caller_ptr, uintptr_t 
 
   llvm::jeandle::CHAOptInfo opt_info;
   log_debug(jeandle)("jeandle_get_cha_constraint::callee name: %s, callee holder: %s", callee->name()->as_utf8(), holder->name()->as_utf8());
+  if (callee->is_method_handle_intrinsic()) {
+    log_debug(jeandle)("jeandle_get_cha_constraint::method handle intrinsic");
+    opt_info = optimize_method_handle_intrinsic(callee, oop_id, receiver_klass, is_exact);
+    if (opt_info.Method == 0) {
+      return "";
+    }
+    return opt_info.encode();
+  }
+
   if (bytecode == llvm::jeandle::InvokeInterface || bytecode == llvm::jeandle::InvokeVirtual) {
     log_debug(jeandle)("jeandle_get_cha_constraint::invokevirtual");
     opt_info = optimize_virtual_call(caller, callee, holder, receiver_klass, is_exact);
   }
 
-  if (!opt_info.Constraint && bytecode == llvm::jeandle::InvokeInterface) {
+  if (!opt_info.constraint() && bytecode == llvm::jeandle::InvokeInterface) {
     log_debug(jeandle)("jeandle_get_cha_constraint::invokeinterface");
     opt_info = optimize_invokeinterface(caller, callee, holder);
   }
 
-  if (opt_info.Constraint) {
-    log_debug(jeandle)("jeandle_get_cha_constraint::constraint, " PTR_FORMAT, (long unsigned int)(opt_info.Constraint));
+  if (opt_info.constraint()) {
+    log_debug(jeandle)("jeandle_get_cha_constraint::constraint, " PTR_FORMAT, (long unsigned int)(opt_info.constraint()));
     return opt_info.encode();
   }
   return "";
 }
 
-// Change a virtual callsite to opt virtual call site.
-bool JeandleVMCallback::update_to_static_opt_virtual_call(int64_t id) {
+// Returns true if the call site was updated
+bool JeandleVMCallback::update_call_site(int64_t id, int dest, bool need_attched, uintptr_t method) {
   JeandleCompilation* compilation = JeandleCompilation::current();
   assert(compilation != nullptr, "no active compilation");
   JeandleCompiledCode* cc = compilation->compiled_code();
@@ -554,9 +659,62 @@ bool JeandleVMCallback::update_to_static_opt_virtual_call(int64_t id) {
     return false;
   }
   CallSiteInfo* call_site = cc->non_routine_call_sites()[id];
-  call_site->set_type(JeandleCompiledCall::STATIC_CALL);
-  call_site->set_target(SharedRuntime::get_resolve_opt_virtual_call_stub());
+  switch(static_cast<llvm::jeandle::CHADestKind>(dest)) {
+    case llvm::jeandle::StaticCall:
+      call_site->set_type(JeandleCompiledCall::STATIC_CALL);
+      call_site->set_target(SharedRuntime::get_resolve_static_call_stub());
+      break;
+    case llvm::jeandle::VirtualCall:
+      call_site->set_type(JeandleCompiledCall::DYNAMIC_CALL);
+      call_site->set_target(SharedRuntime::get_resolve_virtual_call_stub());
+      break;
+    case llvm::jeandle::OptVirtualCall:
+      call_site->set_type(JeandleCompiledCall::STATIC_CALL);
+      call_site->set_target(SharedRuntime::get_resolve_opt_virtual_call_stub());
+      break;
+    default:
+      return false;
+  }
+  ciMethod* ci_method = reinterpret_cast<ciMethod*>(method);
+  call_site->set_is_method_handle_invoke(ci_method->is_method_handle_intrinsic() ||
+                                         ci_method->is_compiled_lambda_form());
+  // False means this update does not provide a new attached method.
+  // Preserve an existing one from an earlier MethodHandle intrinsic rewrite.
+  if (need_attched) {
+    Method* method = reinterpret_cast<Method*>(ci_method->constant_encoding());
+    call_site->set_attached_method(method);
+  }
   return true;
+}
+
+uintptr_t JeandleVMCallback::get_signature_accessing_klass(uintptr_t method) {
+  ciMethod* m = jeandle_callback_method(method);
+  ciKlass* k = m->signature()->accessing_klass();
+  if (!k->is_loaded()) {
+    return 0;
+   }
+  return reinterpret_cast<uintptr_t>(k->constant_encoding());
+}
+
+int64_t JeandleVMCallback::get_signature_arg_type(uintptr_t method, int index) {
+  ciMethod* m = jeandle_callback_method(method);
+  if (index == -1) {
+    return m->signature()->return_type()->basic_type();
+  }
+  return m->signature()->type_at(index)->basic_type();
+}
+
+uintptr_t JeandleVMCallback::get_signature_arg_type_klass(uintptr_t method, int index) {
+  ciMethod* m = jeandle_callback_method(method);
+  ciType* t = m->signature()->type_at(index);
+  if (!t->is_klass()) {
+    return 0;
+  }
+  ciKlass* k = t->as_klass();
+  if (!k->is_loaded()) {
+    return 0;
+  }
+  return reinterpret_cast<uintptr_t>(k->constant_encoding());
 }
 
 void JeandleVMCallback::register_callbacks() {
@@ -578,7 +736,10 @@ void JeandleVMCallback::register_callbacks() {
   callbacks.RecordInlineResult = &JeandleVMCallback::record_inline_result;
   callbacks.RecordInliningComplete = &JeandleVMCallback::record_inlining_complete;
   callbacks.GetCHAOptInfo = &JeandleVMCallback::get_cha_opt_info;
-  callbacks.UpdateToStaticOptVirtualCall = &JeandleVMCallback::update_to_static_opt_virtual_call;
+  callbacks.UpdateCallSite = &JeandleVMCallback::update_call_site;
+  callbacks.GetSignatureAccessingKlass = &JeandleVMCallback::get_signature_accessing_klass;
+  callbacks.GetSignatureArgType = &JeandleVMCallback::get_signature_arg_type;
+  callbacks.GetSignatureArgTypeKlass = &JeandleVMCallback::get_signature_arg_type_klass;
   llvm::jeandle::registerVMCallbacks(callbacks);
 
   if (JeandleRecordVMCallbacks) {

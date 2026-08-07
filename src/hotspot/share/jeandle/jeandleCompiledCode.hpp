@@ -32,6 +32,7 @@
 #include "llvm/Object/StackMapParser.h"
 #include "llvm/Support/DynamicLibrary.h"
 #include "llvm/Support/MemoryBuffer.h"
+#include "llvm/IR/Jeandle/Deoptimization.h"
 
 #include "jeandle/jeandleExceptionHandlerTable.hpp"
 #include "jeandle/jeandleCompiledCall.hpp"
@@ -86,6 +87,11 @@ class CallSiteInfo : public JeandleCompilationResourceObj {
                _target(target),
                _is_method_handle_invoke(is_method_handle_invoke),
                _is_poll_return(is_poll_return),
+               Method *attached_method = nullptr) :
+               _type(type),
+               _target(target),
+               _is_method_handle_invoke(is_method_handle_invoke),
+               _attached_method(attached_method),
                _statepoint_id(statepoint_id) {
 #ifdef ASSERT
     // We don't need to assign a unique statepoint id for each routine call site, only call type and target is used.
@@ -105,12 +111,18 @@ class CallSiteInfo : public JeandleCompilationResourceObj {
   bool is_method_handle_invoke() const { return _is_method_handle_invoke; }
   bool is_poll_return() const { return _is_poll_return; }
   void set_is_poll_return(bool is_poll_return) { _is_poll_return = is_poll_return; }
+  void set_is_method_handle_invoke(bool is_method_handle_invoke) {
+    _is_method_handle_invoke = is_method_handle_invoke;
+  }
+  Method* attached_method() const { return _attached_method; }
+  void set_attached_method(Method* method) { _attached_method = method; }
 
  private:
   JeandleCompiledCall::Type _type;
   address _target;
   bool _is_method_handle_invoke;
   bool _is_poll_return;
+  Method* _attached_method;
 
   // Used to distinguish each call site in stackmaps.
   uint64_t _statepoint_id;
@@ -179,7 +191,7 @@ class JeandleCompiledCode : public StackObj {
                       _env(env),
                       _method(method),
                       _routine_entry(nullptr),
-                      _func_name(JeandleFuncSig::method_name_with_signature(_method, is_osr_entry)),
+                      _func_name(JeandleFuncSig::root_method_name(_method, is_osr_entry)),
                       _orig_pc_slot(nullptr),
                       _orig_pc_offset_in_bytes(-1),
                       _interpreter_frame_size_in_bytes(0),
@@ -227,7 +239,8 @@ class JeandleCompiledCode : public StackObj {
     push_non_routine_call_site(new CallSiteInfo(old_call_site->type(),
                                                 old_call_site->target(),
                                                 old_call_site->is_method_handle_invoke(),
-                                                new_statepoint_id));
+                                                new_statepoint_id,
+                                                old_call_site->attached_method()));
     return static_cast<int64_t>(new_statepoint_id);
   }
   llvm::SmallVector<CallSiteInfo*>& non_routine_call_sites() { return _non_routine_call_sites; }
