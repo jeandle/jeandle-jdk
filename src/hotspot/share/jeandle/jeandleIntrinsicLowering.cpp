@@ -197,6 +197,30 @@ bool JeandleIntrinsicLowering::is_supported(vmIntrinsics::ID id) {
     // addExact
     case vmIntrinsics::_addExactI:
     case vmIntrinsics::_addExactL:
+
+    // Math.{subtract,multiply,increment,decrement,negate}Exact: same
+    // shared-safety-net pattern as addExact above -- UseMathExactIntrinsics
+    // and InlineMathNatives are enforced by vmIntrinsics::disabled_by_jvm_flags(),
+    // which the caller (try_lower_intrinsic()) already invokes unconditionally
+    // after is_supported() returns true, so no extra check is needed here.
+    case vmIntrinsics::_subtractExactI:
+    case vmIntrinsics::_subtractExactL:
+    case vmIntrinsics::_multiplyExactI:
+    case vmIntrinsics::_multiplyExactL:
+    case vmIntrinsics::_incrementExactI:
+    case vmIntrinsics::_incrementExactL:
+    case vmIntrinsics::_decrementExactI:
+    case vmIntrinsics::_decrementExactL:
+    case vmIntrinsics::_negateExactI:
+    case vmIntrinsics::_negateExactL:
+
+    // Math.multiplyHigh/unsignedMultiplyHigh: no CPU gating and no dedicated
+    // VM flag either (unlike e.g. CRC32/AES/FMA) -- disabled_by_jvm_flags()
+    // doesn't gate these IDs at all. The widen-to-i128/multiply/shift IR
+    // always lowers validly: plain integer multiply and shift on i128 are
+    // legal on every target Jeandle supports.
+    case vmIntrinsics::_multiplyHigh:
+    case vmIntrinsics::_unsignedMultiplyHigh:
       return true;
     default:
       return false;
@@ -219,6 +243,16 @@ JeandleTrapReasonMask JeandleIntrinsicLowering::trap_throttle_mask(vmIntrinsics:
              trap_reason_mask_val(Deoptimization::Reason_range_check);
     case vmIntrinsics::_addExactI:
     case vmIntrinsics::_addExactL:
+    case vmIntrinsics::_subtractExactI:
+    case vmIntrinsics::_subtractExactL:
+    case vmIntrinsics::_multiplyExactI:
+    case vmIntrinsics::_multiplyExactL:
+    case vmIntrinsics::_incrementExactI:
+    case vmIntrinsics::_incrementExactL:
+    case vmIntrinsics::_decrementExactI:
+    case vmIntrinsics::_decrementExactL:
+    case vmIntrinsics::_negateExactI:
+    case vmIntrinsics::_negateExactL:
       return trap_reason_mask_val(Deoptimization::Reason_intrinsic);
     default:
       return 0;
@@ -414,6 +448,28 @@ bool JeandleIntrinsicLowering::lower(vmIntrinsics::ID id, const ciMethod* target
     case vmIntrinsics::_addExactI:
     case vmIntrinsics::_addExactL:
       return lower_add_exact(id);
+
+    // subtractExact/decrementExact/negateExact all reduce to
+    // llvm.ssub.with.overflow (see lower_exact_arith).
+    case vmIntrinsics::_subtractExactI:
+    case vmIntrinsics::_subtractExactL:
+    case vmIntrinsics::_decrementExactI:
+    case vmIntrinsics::_decrementExactL:
+    case vmIntrinsics::_negateExactI:
+    case vmIntrinsics::_negateExactL:
+      return lower_exact_arith(id, llvm::Intrinsic::ssub_with_overflow);
+
+    case vmIntrinsics::_multiplyExactI:
+    case vmIntrinsics::_multiplyExactL:
+      return lower_exact_arith(id, llvm::Intrinsic::smul_with_overflow);
+
+    case vmIntrinsics::_incrementExactI:
+    case vmIntrinsics::_incrementExactL:
+      return lower_exact_arith(id, llvm::Intrinsic::sadd_with_overflow);
+
+    case vmIntrinsics::_multiplyHigh:
+    case vmIntrinsics::_unsignedMultiplyHigh:
+      return lower_multiply_high(id);
 
     default:
       return false;
@@ -1181,5 +1237,106 @@ bool JeandleIntrinsicLowering::lower_add_exact(vmIntrinsics::ID id) {
     _interp->_jvm->ipop(); // arg1
     _interp->_jvm->ipush(result);
   }
+  return true;
+}
+
+// ---- lower_exact_arith ----
+// Math.subtractExact/multiplyExact/incrementExact/decrementExact/negateExact
+// (int and long): same overflow-trap shape as lower_add_exact above --
+// llvm.s{sub,mul}.with.overflow, branch on the overflow bit to an
+// uncommon_trap (Reason_intrinsic/Action_none) so the interpreter
+// re-executes. Args are peeked (not popped) before the branch for the same
+// deopt re-execution reason as lower_add_exact.
+//
+// increment/decrement/negate are unary in Java but all three reduce to the
+// with-overflow intrinsic on a synthesized second operand: a+1, a-1, and 0-a
+// respectively -- negation overflows exactly when a == MIN_VALUE, which is
+// exactly when 0-a overflows the signed range, so ssub.with.overflow(0, a)
+// detects it correctly without a separate check.
+bool JeandleIntrinsicLowering::lower_exact_arith(vmIntrinsics::ID id,
+                                                 llvm::Intrinsic::ID overflow_id) {
+  llvm::IRBuilder<>& builder = _interp->_ir_builder;
+  llvm::LLVMContext& ctx = *_interp->_context;
+  int cur_bci = _interp->_bytecodes.cur_bci();
+
+  bool is_long = (id == vmIntrinsics::_subtractExactL || id == vmIntrinsics::_multiplyExactL ||
+                  id == vmIntrinsics::_incrementExactL || id == vmIntrinsics::_decrementExactL ||
+                  id == vmIntrinsics::_negateExactL);
+  bool unary = (id == vmIntrinsics::_incrementExactI || id == vmIntrinsics::_incrementExactL ||
+                id == vmIntrinsics::_decrementExactI || id == vmIntrinsics::_decrementExactL ||
+                id == vmIntrinsics::_negateExactI     || id == vmIntrinsics::_negateExactL);
+
+  llvm::Type* ty = JeandleType::java2llvm(
+      is_long ? BasicType::T_LONG : BasicType::T_INT, ctx);
+
+  llvm::Value* arg1;
+  llvm::Value* arg2;
+  if (unary) {
+    llvm::Value* a = _interp->_jvm->peek_value(0).value();
+    bool is_negate = (id == vmIntrinsics::_negateExactI || id == vmIntrinsics::_negateExactL);
+    if (is_negate) {
+      arg1 = llvm::ConstantInt::get(ty, 0);
+      arg2 = a;
+    } else {
+      arg1 = a;
+      arg2 = llvm::ConstantInt::get(ty, 1);
+    }
+  } else {
+    arg2 = _interp->_jvm->peek_value(0).value();
+    arg1 = _interp->_jvm->peek_value(1).value();
+  }
+
+  llvm::Value* res = builder.CreateIntrinsic(overflow_id, {ty}, {arg1, arg2});
+  llvm::Value* result   = builder.CreateExtractValue(res, 0);
+  llvm::Value* overflow = builder.CreateExtractValue(res, 1);
+
+  // vmIntrinsics::name_at(id) yields e.g. "_subtractExactI", matching the
+  // addExactI/addExactL block-label convention lower_add_exact uses above.
+  const std::string pfx = "bci_" + std::to_string(cur_bci) + vmIntrinsics::name_at(id);
+  llvm::BasicBlock* ok_bb = llvm::BasicBlock::Create(ctx, pfx + "_ok",       _interp->_llvm_func);
+  llvm::BasicBlock* ov_bb = llvm::BasicBlock::Create(ctx, pfx + "_overflow", _interp->_llvm_func);
+
+  llvm::MDNode* bwmd = llvm::MDBuilder(ctx).createBranchWeights(1, 9999);
+  builder.CreateCondBr(overflow, ov_bb, ok_bb, bwmd);
+  _interp->uncommon_trap(Deoptimization::Reason_intrinsic,
+                         Deoptimization::Action_none, ov_bb,
+                         true /* should_reexecute */);
+
+  builder.SetInsertPoint(ok_bb);
+  _interp->_block->set_tail_llvm_block(ok_bb);
+
+  if (is_long) {
+    _interp->_jvm->lpop();
+    if (!unary) _interp->_jvm->lpop();
+    _interp->_jvm->lpush(result);
+  } else {
+    _interp->_jvm->ipop();
+    if (!unary) _interp->_jvm->ipop();
+    _interp->_jvm->ipush(result);
+  }
+  return true;
+}
+
+// ---- lower_multiply_high ----
+// Math.multiplyHigh(long,long) / Math.unsignedMultiplyHigh(long,long): the
+// most significant 64 bits of the signed (resp. unsigned) 128-bit product of
+// the two 64-bit operands. Sign/zero-extend both operands to i128, multiply,
+// and shift right 64 -- the canonical wide-multiply idiom LLVM's instruction
+// selection recognizes and lowers to a single hardware mul-high instruction
+// (e.g. imulq/mulq on x86-64) rather than a real 128-bit multiply routine.
+bool JeandleIntrinsicLowering::lower_multiply_high(vmIntrinsics::ID id) {
+  llvm::IRBuilder<>& builder = _interp->_ir_builder;
+  bool is_unsigned = (id == vmIntrinsics::_unsignedMultiplyHigh);
+
+  llvm::Value* y = _interp->_jvm->lpop();
+  llvm::Value* x = _interp->_jvm->lpop();
+
+  llvm::Type* wide_ty = builder.getIntNTy(128);
+  llvm::Value* x_wide = is_unsigned ? builder.CreateZExt(x, wide_ty) : builder.CreateSExt(x, wide_ty);
+  llvm::Value* y_wide = is_unsigned ? builder.CreateZExt(y, wide_ty) : builder.CreateSExt(y, wide_ty);
+  llvm::Value* product = builder.CreateMul(x_wide, y_wide);
+  llvm::Value* high = builder.CreateLShr(product, 64);
+
+  _interp->_jvm->lpush(builder.CreateTrunc(high, builder.getInt64Ty()));
   return true;
 }
