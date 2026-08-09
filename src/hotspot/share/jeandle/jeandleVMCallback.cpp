@@ -19,8 +19,8 @@
  */
 
 #include "jeandle/__llvmHeadersBegin__.hpp"
-
 #include "llvm/IR/Instructions.h"
+#include "llvm/IR/Jeandle/Deoptimization.h"
 #include "llvm/IR/Jeandle/VMCallback.h"
 #include "llvm/IR/Jeandle/VMCallbackLog.h"
 #include "llvm/IR/Jeandle/InvokeType.h"
@@ -473,7 +473,7 @@ llvm::jeandle::CHAOptInfo optimize_method_handle_intrinsic(
       return {reinterpret_cast<uintptr_t>(target->holder()) | 1,
           reinterpret_cast<uintptr_t>(target),
           llvm::jeandle::CHAOptInfo::packTargetInfo(
-              target->is_static(), target->is_accessor(), 
+              target->is_static(), target->is_accessor(),
               target->can_be_statically_bound(), target->signature()->count()),
           JeandleFuncSig::method_name_with_signature(target)};
     }
@@ -489,7 +489,7 @@ llvm::jeandle::CHAOptInfo optimize_method_handle_intrinsic(
 }
 
 llvm::jeandle::CHAOptInfo optimize_invokeinterface(ciMethod* caller,
-                              ciMethod* callee, ciInstanceKlass* holder) {
+                                    ciMethod* callee, ciInstanceKlass* holder) {
   ciInstanceKlass* singleton = holder->unique_implementor();
   if (singleton == nullptr) {
     return {};
@@ -508,7 +508,7 @@ llvm::jeandle::CHAOptInfo optimize_invokeinterface(ciMethod* caller,
     return {reinterpret_cast<uintptr_t>(constraint->constant_encoding()),
       reinterpret_cast<uintptr_t>(cha_monomorphic_target),
       llvm::jeandle::CHAOptInfo::packDeoptreasonInfo(
-        0, cha_monomorphic_target->is_accessor(), 
+        0, cha_monomorphic_target->is_accessor(),
         llvm::jeandle::Deoptimization::Reason_class_check),
       JeandleFuncSig::method_name_with_signature(cha_monomorphic_target)};
   }
@@ -516,8 +516,8 @@ llvm::jeandle::CHAOptInfo optimize_invokeinterface(ciMethod* caller,
 }
 
 llvm::jeandle::CHAOptInfo optimize_virtual_call(ciMethod* caller,
-                            ciMethod* callee, ciInstanceKlass* holder,
-                            Klass* receiver_klass, bool is_exact) {
+                                 ciMethod* callee, ciInstanceKlass* holder,
+                                 Klass* receiver_klass, bool is_exact) {
   ciEnv* env = ciEnv::current();
 
   if (receiver_klass == nullptr)
@@ -601,11 +601,11 @@ ciInstanceKlass* JeandleVMCallback::get_receiver_instance_klass(Klass* receiver_
   return ciEnv::current()->get_instance_klass(receiver_klass);
 }
 
-std::string JeandleVMCallback::get_cha_opt_info(uintptr_t caller_ptr, uintptr_t callee_ptr,
-                                     uintptr_t holder_ptr, uintptr_t receiver_klass_ptr,
-                                     bool is_exact, int bytecode, int oop_id) {
+llvm::jeandle::CHAOptResult JeandleVMCallback::get_cha_opt_info(uintptr_t caller_ptr, uintptr_t callee_ptr,
+                                                                uintptr_t holder_ptr, uintptr_t receiver_klass_ptr,
+                                                                bool is_exact, int bytecode, int oop_id) {
   if (caller_ptr == 0 || callee_ptr == 0 || holder_ptr == 0) {
-    return "";
+    return {};
   }
 
   ciMethod* caller = reinterpret_cast<ciMethod*>(caller_ptr);
@@ -619,9 +619,10 @@ std::string JeandleVMCallback::get_cha_opt_info(uintptr_t caller_ptr, uintptr_t 
     log_debug(jeandle)("jeandle_get_cha_constraint::method handle intrinsic");
     opt_info = optimize_method_handle_intrinsic(callee, oop_id, receiver_klass, is_exact);
     if (opt_info.Method == 0) {
-      return "";
+      return {};
     }
-    return opt_info.encode();
+    return {opt_info.ConstraintOrHolder, opt_info.Method,
+            opt_info.DeoptReasonOrTargetInfo, std::move(opt_info.MethodName)};
   }
 
   if (bytecode == llvm::jeandle::InvokeInterface || bytecode == llvm::jeandle::InvokeVirtual) {
@@ -636,9 +637,10 @@ std::string JeandleVMCallback::get_cha_opt_info(uintptr_t caller_ptr, uintptr_t 
 
   if (opt_info.constraint()) {
     log_debug(jeandle)("jeandle_get_cha_constraint::constraint, " PTR_FORMAT, (long unsigned int)(opt_info.constraint()));
-    return opt_info.encode();
+    return {opt_info.ConstraintOrHolder, opt_info.Method,
+            opt_info.DeoptReasonOrTargetInfo, std::move(opt_info.MethodName)};
   }
-  return "";
+  return {};
 }
 
 // Returns true if the call site was updated
