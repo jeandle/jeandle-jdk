@@ -334,10 +334,10 @@ class JeandleRuntimeRoutine : public AllStatic {
     return _gc_leaf_routines.contains(addr);
   }
 
-  static constexpr uint64_t ReturnPollStatepointID = llvm::StatepointDirectives::DefaultStatepointID + 1;
+  static constexpr uint64_t PollReturnStatepointID = llvm::StatepointDirectives::DefaultStatepointID + 1;
 
-  static constexpr uint64_t return_poll_statepoint_id() {
-    return ReturnPollStatepointID;
+  static constexpr uint64_t poll_return_statepoint_id() {
+    return PollReturnStatepointID;
   }
 
 #ifdef ASSERT
@@ -399,7 +399,7 @@ class JeandleRuntimeRoutine : public AllStatic {
 
   // C/C++ routine implementations:
 
-  static void safepoint_handler(JavaThread* current, bool at_return_poll);
+  static void safepoint_handler(JavaThread* current, bool at_poll_return);
 
   // Install exceptional_return into the current java frame, for throwing exceptions.
   static void install_exceptional_return(oopDesc* exception, JavaThread* current);

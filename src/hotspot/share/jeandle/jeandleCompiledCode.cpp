@@ -384,7 +384,7 @@ void JeandleCompiledCode::resolve_reloc_info(JeandleAssembler& assembler) {
         call_info = _routine_call_sites[inst_end_offset];
       }
       if (call_info) {
-        if (record->getID() == JeandleRuntimeRoutine::return_poll_statepoint_id()) {
+        if (record->getID() == JeandleRuntimeRoutine::poll_return_statepoint_id()) {
           call_info->set_is_poll_return(true);
         }
         auto location = record->location_begin();

@@ -115,7 +115,7 @@ DEF_JAVA_OP(safepoint_poll, 1, llvm::Type::getVoidTy(context), llvm::Type::getIn
   llvm::BasicBlock* do_safepoint_block = llvm::BasicBlock::Create(context, "do_safepoint", func);
   llvm::BasicBlock* do_return_safepoint_block = llvm::BasicBlock::Create(context, "do_return_safepoint", func);
   llvm::BasicBlock* do_normal_safepoint_block = llvm::BasicBlock::Create(context, "do_normal_safepoint", func);
-  llvm::Value* at_return_poll = func->getArg(0);
+  llvm::Value* at_poll_return  = func->getArg(0);
 
   llvm::Type* intptr_type = ir_builder.getIntPtrTy(template_module.getDataLayout());
 
@@ -131,7 +131,7 @@ DEF_JAVA_OP(safepoint_poll, 1, llvm::Type::getVoidTy(context), llvm::Type::getIn
 
   // ***** Do Safepoint Block *****
   ir_builder.SetInsertPoint(do_safepoint_block);
-  ir_builder.CreateCondBr(at_return_poll, do_return_safepoint_block, do_normal_safepoint_block);
+  ir_builder.CreateCondBr(at_poll_return, do_return_safepoint_block, do_normal_safepoint_block);
 
   // ***** Do Normal Safepoint Block *****
   ir_builder.SetInsertPoint(do_normal_safepoint_block);
@@ -143,14 +143,14 @@ DEF_JAVA_OP(safepoint_poll, 1, llvm::Type::getVoidTy(context), llvm::Type::getIn
   llvm::CallInst* current_thread = ir_builder.CreateCall(current_thread_func);
   current_thread->setCallingConv(llvm::CallingConv::Hotspot_JIT);
   // Call safepoint handler.
-  llvm::CallInst* call_inst = ir_builder.CreateCall(JeandleRuntimeRoutine::safepoint_handler_callee(template_module), {current_thread, at_return_poll},
+  llvm::CallInst* call_inst = ir_builder.CreateCall(JeandleRuntimeRoutine::safepoint_handler_callee(template_module), {current_thread, at_poll_return},
                                                     {create_empty_deopt_bundle()});
   call_inst->setCallingConv(llvm::CallingConv::Hotspot_JIT);
   ir_builder.CreateBr(return_block);
 
   // ***** Do Return Safepoint Block *****
   ir_builder.SetInsertPoint(do_return_safepoint_block);
-  llvm::Attribute id_attr = llvm::Attribute::get(context,llvm::jeandle::Attribute::StatepointID, std::to_string(JeandleRuntimeRoutine::return_poll_statepoint_id()));
+  llvm::Attribute id_attr = llvm::Attribute::get(context,llvm::jeandle::Attribute::StatepointID, std::to_string(JeandleRuntimeRoutine::poll_return_statepoint_id()));
   call_inst ->addFnAttr(id_attr);
   ir_builder.CreateBr(do_normal_safepoint_block);
 

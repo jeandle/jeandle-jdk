@@ -92,7 +92,7 @@ static bool check_jeandle_compiled_frame(JavaThread* thread) {
 }
 #endif // ASSERT
 
-JRT_ENTRY(void, JeandleRuntimeRoutine::safepoint_handler(JavaThread* current, bool at_return_poll))
+JRT_ENTRY(void, JeandleRuntimeRoutine::safepoint_handler(JavaThread* current, bool at_poll_return))
   RegisterMap r_map(current,
                     RegisterMap::UpdateMap::skip,
                     RegisterMap::ProcessFrames::include,
@@ -102,7 +102,7 @@ JRT_ENTRY(void, JeandleRuntimeRoutine::safepoint_handler(JavaThread* current, bo
   guarantee(trap_cb != nullptr && trap_cb->is_compiled_by_jeandle(), "safepoint handler must be called from jeandle compiled method");
 
   ThreadSafepointState* state = current->safepoint_state();
-  if (at_return_poll) {
+  if (at_poll_return) {
     StackWatermarkSet::after_unwind(current);
     SafepointMechanism::process_if_requested_with_exit_check(current, true /* check asyncs */);
   } else {

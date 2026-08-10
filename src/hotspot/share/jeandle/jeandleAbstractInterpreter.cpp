@@ -2835,8 +2835,8 @@ void JeandleAbstractInterpreter::store_to_address(llvm::Value* addr, llvm::Value
   }
 }
 
-void JeandleAbstractInterpreter::add_safepoint_poll(bool at_return_poll) {
-  call_java_op_ex("jeandle.safepoint_poll", {at_return_poll ? _ir_builder.getTrue() : _ir_builder.getFalse()}, {create_current_deopt_bundle()});
+void JeandleAbstractInterpreter::add_safepoint_poll(bool at_poll_return) {
+  call_java_op_ex("jeandle.safepoint_poll", {at_poll_return  ? _ir_builder.getTrue() : _ir_builder.getFalse()}, {create_current_deopt_bundle()});
 }
 
 void JeandleAbstractInterpreter::add_return_safepoint_poll() {
