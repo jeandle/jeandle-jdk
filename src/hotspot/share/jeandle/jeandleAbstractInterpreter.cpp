@@ -3682,6 +3682,11 @@ void JeandleAbstractInterpreter::shared_unlock(LockValue lock) {
   _ir_builder.SetInsertPoint(monitorexit_slow_path);
   llvm::FunctionCallee monitorexit_callee = JeandleRuntimeRoutine::SharedRuntime_complete_monitor_unlocking_C_callee(_module);
   llvm::CallInst* current_thread = call_java_op("jeandle.current_thread", {});
+  // complete_monitor_unlocking_C is declared as JRT_LEAF and uses ExceptionMark
+  // internally, so it cannot produce Java-visible exceptional control flow.
+  // Using CallInst (instead of InvokeInst) is safe here and avoids recursive
+  // dispatch_exception_for_invoke when shared_unlock is called from rethrow
+  // or return_current paths.
   llvm::CallInst* call_monitorexit = _ir_builder.CreateCall(monitorexit_callee, {lock.object().value(), lock.lock(), current_thread});
   call_monitorexit->setCallingConv(llvm::CallingConv::C);
   _ir_builder.CreateBr(monitor_exited);
