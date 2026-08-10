@@ -133,7 +133,7 @@ DEF_JAVA_OP(safepoint_poll, 1, llvm::Type::getVoidTy(context), llvm::Type::getIn
   ir_builder.SetInsertPoint(do_safepoint_block);
   ir_builder.CreateCondBr(at_return_poll, do_return_safepoint_block, do_normal_safepoint_block);
 
-  // ***** Do Safepoint Block *****
+  // ***** Do Normal Safepoint Block *****
   ir_builder.SetInsertPoint(do_normal_safepoint_block);
   llvm::Function* current_thread_func = template_module.getFunction("jeandle.current_thread");
   if (!current_thread_func) {

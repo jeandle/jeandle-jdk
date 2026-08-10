@@ -96,30 +96,23 @@ void JeandleCallVM::generate_call_VM(const char* name, address routine_address, 
   ir_builder.CreateCondBr(if_not_null, forward_exception_block, no_exception_block);
   ir_builder.SetInsertPoint(forward_exception_block);
 
-  // For return poll pending exceptions, preserve the exception for the Java return path to handle.
-  if (std::strcmp(name, "safepoint_handler") == 0) {
-    assert(args.size() == 2, "safepoint_handler must have current thread and at_return_poll arguments");
-    assert(args[1]->getType()->isIntegerTy(1), "at_return_poll must be an i1");
-    ir_builder.CreateCondBr(args[1], no_exception_block, forward_exception_block);
-  } else {
-    llvm::CallInst* install_exceptional_return_call_inst = ir_builder.CreateCall(JeandleRuntimeRoutine::install_exceptional_return_for_call_vm_callee(target_module), {});
-    install_exceptional_return_call_inst->addFnAttr(llvm::Attribute::NoUnwind);
-    install_exceptional_return_call_inst->addFnAttr(llvm::Attribute::get(install_exceptional_return_call_inst->getContext(), "gc-leaf-function"));
-    install_exceptional_return_call_inst->setCallingConv(llvm::CallingConv::C);
+  llvm::CallInst* install_exceptional_return_call_inst = ir_builder.CreateCall(JeandleRuntimeRoutine::install_exceptional_return_for_call_vm_callee(target_module), {});
+  install_exceptional_return_call_inst->addFnAttr(llvm::Attribute::NoUnwind);
+  install_exceptional_return_call_inst->addFnAttr(llvm::Attribute::get(install_exceptional_return_call_inst->getContext(), "gc-leaf-function"));
+  install_exceptional_return_call_inst->setCallingConv(llvm::CallingConv::C);
 
-    // Return
-    llvm::Type* ret_type = func_type->getReturnType();
-    if (ret_type->isVoidTy()) {
-      ir_builder.CreateRetVoid();;
-    } else if (ret_type->isIntegerTy()) {
-      ir_builder.CreateRet(llvm::ConstantInt::get(ret_type, 0));
-    } else if (ret_type->isFloatTy() || ret_type->isDoubleTy()) {
-      ir_builder.CreateRet(llvm::ConstantFP::get(ret_type, 0.0));
-    } else if (ret_type->isPointerTy()) {
-      ir_builder.CreateRet(llvm::ConstantPointerNull::get(llvm::cast<llvm::PointerType>(ret_type)));
-    } else {
-      ShouldNotReachHere();
-    }
+  // Return
+  llvm::Type* ret_type = func_type->getReturnType();
+  if (ret_type->isVoidTy()) {
+    ir_builder.CreateRetVoid();;
+  } else if (ret_type->isIntegerTy()) {
+    ir_builder.CreateRet(llvm::ConstantInt::get(ret_type, 0));
+  } else if (ret_type->isFloatTy() || ret_type->isDoubleTy()) {
+    ir_builder.CreateRet(llvm::ConstantFP::get(ret_type, 0.0));
+  } else if (ret_type->isPointerTy()) {
+    ir_builder.CreateRet(llvm::ConstantPointerNull::get(llvm::cast<llvm::PointerType>(ret_type)));
+  } else {
+    ShouldNotReachHere();
   }
 
   ir_builder.SetInsertPoint(no_exception_block);

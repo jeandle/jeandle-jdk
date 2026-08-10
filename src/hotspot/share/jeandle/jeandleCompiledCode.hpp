@@ -82,16 +82,13 @@ class CallSiteInfo : public JeandleCompilationResourceObj {
                address target,
                bool is_method_handle_invoke = false,
                uint64_t statepoint_id = llvm::StatepointDirectives::DefaultStatepointID,
-               bool is_poll_return = false) :
-               _type(type),
-               _target(target),
-               _is_method_handle_invoke(is_method_handle_invoke),
-               _is_poll_return(is_poll_return),
-               Method *attached_method = nullptr) :
+               Method *attached_method = nullptr,
+               bool is_return_poll = false) :
                _type(type),
                _target(target),
                _is_method_handle_invoke(is_method_handle_invoke),
                _attached_method(attached_method),
+               _is_return_poll(is_return_poll),
                _statepoint_id(statepoint_id) {
 #ifdef ASSERT
     // We don't need to assign a unique statepoint id for each routine call site, only call type and target is used.
@@ -109,8 +106,8 @@ class CallSiteInfo : public JeandleCompilationResourceObj {
   address target() const { return _target; }
   void set_target(address target) { _target = target; }
   bool is_method_handle_invoke() const { return _is_method_handle_invoke; }
-  bool is_poll_return() const { return _is_poll_return; }
-  void set_is_poll_return(bool is_poll_return) { _is_poll_return = is_poll_return; }
+  bool is_poll_return() const { return _is_return_poll; }
+  void set_is_poll_return(bool is_return_poll) { _is_return_poll = is_return_poll; }
   void set_is_method_handle_invoke(bool is_method_handle_invoke) {
     _is_method_handle_invoke = is_method_handle_invoke;
   }
@@ -121,8 +118,8 @@ class CallSiteInfo : public JeandleCompilationResourceObj {
   JeandleCompiledCall::Type _type;
   address _target;
   bool _is_method_handle_invoke;
-  bool _is_poll_return;
   Method* _attached_method;
+  bool _is_return_poll;
 
   // Used to distinguish each call site in stackmaps.
   uint64_t _statepoint_id;
