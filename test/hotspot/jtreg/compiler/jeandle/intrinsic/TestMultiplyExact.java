@@ -30,6 +30,7 @@ package compiler.jeandle.intrinsic;
 
 import compiler.jeandle.fileCheck.FileCheck;
 import jdk.test.lib.Asserts;
+import jdk.test.lib.Utils;
 import jdk.test.lib.process.OutputAnalyzer;
 import jdk.test.lib.process.ProcessTools;
 
@@ -128,6 +129,55 @@ public class TestMultiplyExact {
                 Asserts.fail("expected ArithmeticException for long MIN_VALUE * -1 overflow");
             } catch (ArithmeticException e) {
                 // expected
+            }
+
+            // ---- Random fuzzing, checked against the interpreter-run
+            //      Math.multiplyExact (main and the fuzz helpers are not in
+            //      the compileonly list, so the expected values come from the
+            //      plain Java implementation). Full-range operands overflow
+            //      nearly always, so also fuzz small windows whose products
+            //      cannot overflow, keeping the ok path as exercised as the
+            //      trap path. ----
+            var random = Utils.getRandomInstance();
+            for (int i = 0; i < 5000; i++) {
+                fuzz_int(random.nextInt(), random.nextInt());
+                fuzz_int(random.nextInt(1 << 16) - (1 << 15), random.nextInt(1 << 16) - (1 << 15));
+                fuzz_long(random.nextLong(), random.nextLong());
+                fuzz_long(random.nextInt(), random.nextInt());
+            }
+        }
+
+        static void fuzz_int(int a, int b) {
+            int expected = 0;
+            boolean overflow = false;
+            try {
+                expected = Math.multiplyExact(a, b);
+            } catch (ArithmeticException e) {
+                overflow = true;
+            }
+            try {
+                int actual = multiply_int(a, b);
+                Asserts.assertFalse(overflow, "missing int overflow for " + a + " * " + b);
+                Asserts.assertEquals(expected, actual, "multiplyExact(int) mismatch for " + a + " * " + b);
+            } catch (ArithmeticException e) {
+                Asserts.assertTrue(overflow, "unexpected int overflow for " + a + " * " + b);
+            }
+        }
+
+        static void fuzz_long(long a, long b) {
+            long expected = 0L;
+            boolean overflow = false;
+            try {
+                expected = Math.multiplyExact(a, b);
+            } catch (ArithmeticException e) {
+                overflow = true;
+            }
+            try {
+                long actual = multiply_long(a, b);
+                Asserts.assertFalse(overflow, "missing long overflow for " + a + " * " + b);
+                Asserts.assertEquals(expected, actual, "multiplyExact(long) mismatch for " + a + " * " + b);
+            } catch (ArithmeticException e) {
+                Asserts.assertTrue(overflow, "unexpected long overflow for " + a + " * " + b);
             }
         }
 

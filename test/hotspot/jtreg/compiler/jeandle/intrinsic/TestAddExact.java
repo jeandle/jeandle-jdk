@@ -30,6 +30,7 @@ package compiler.jeandle.intrinsic;
 
 import compiler.jeandle.fileCheck.FileCheck;
 import jdk.test.lib.Asserts;
+import jdk.test.lib.Utils;
 import jdk.test.lib.process.OutputAnalyzer;
 import jdk.test.lib.process.ProcessTools;
 
@@ -130,6 +131,50 @@ public class TestAddExact {
                 Asserts.fail("expected ArithmeticException for long negative overflow");
             } catch (ArithmeticException e) {
                 // expected
+            }
+
+            // ---- Random fuzzing across the full int/long range, checked
+            //      against the interpreter-run Math.addExact (main and the
+            //      fuzz helpers are not in the compileonly list, so the
+            //      expected values come from the plain Java implementation). ----
+            var random = Utils.getRandomInstance();
+            for (int i = 0; i < 5000; i++) {
+                fuzz_int(random.nextInt(), random.nextInt());
+                fuzz_long(random.nextLong(), random.nextLong());
+            }
+        }
+
+        static void fuzz_int(int a, int b) {
+            int expected = 0;
+            boolean overflow = false;
+            try {
+                expected = Math.addExact(a, b);
+            } catch (ArithmeticException e) {
+                overflow = true;
+            }
+            try {
+                int actual = add_int(a, b);
+                Asserts.assertFalse(overflow, "missing int overflow for " + a + " + " + b);
+                Asserts.assertEquals(expected, actual, "addExact(int) mismatch for " + a + " + " + b);
+            } catch (ArithmeticException e) {
+                Asserts.assertTrue(overflow, "unexpected int overflow for " + a + " + " + b);
+            }
+        }
+
+        static void fuzz_long(long a, long b) {
+            long expected = 0L;
+            boolean overflow = false;
+            try {
+                expected = Math.addExact(a, b);
+            } catch (ArithmeticException e) {
+                overflow = true;
+            }
+            try {
+                long actual = add_long(a, b);
+                Asserts.assertFalse(overflow, "missing long overflow for " + a + " + " + b);
+                Asserts.assertEquals(expected, actual, "addExact(long) mismatch for " + a + " + " + b);
+            } catch (ArithmeticException e) {
+                Asserts.assertTrue(overflow, "unexpected long overflow for " + a + " + " + b);
             }
         }
 
