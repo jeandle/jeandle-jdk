@@ -152,6 +152,9 @@ bool JeandleIntrinsicLowering::is_supported(vmIntrinsics::ID id) {
     // getClass
     case vmIntrinsics::_getClass:
 
+    // currentThread
+    case vmIntrinsics::_currentThread:
+
     // Reference*
     case vmIntrinsics::_Reference_get:
     case vmIntrinsics::_Reference_refersTo0:
@@ -365,16 +368,21 @@ bool JeandleIntrinsicLowering::lower(vmIntrinsics::ID id, const ciMethod* target
     // TODO 2: Optimize the comparison between class pointers.
     case vmIntrinsics::_getClass:
       return lower_java_op("jeandle.get_class",
-                           {CTRL_NONE, MEM_READ | MEM_NEEDS_GC_STATE});
+                           {CTRL_NONE, MEM_READ});
+
+    // Thread.currentThread()
+    case vmIntrinsics::_currentThread:
+      return lower_java_op("jeandle.current_thread_obj",
+                           {CTRL_NONE, MEM_READ});
 
     // Reference*
     case vmIntrinsics::_Reference_get:
       return lower_java_op("jeandle.reference_get",
-                           {CTRL_NONE, MEM_READ | MEM_NEEDS_GC_STATE});
+                           {CTRL_NONE, MEM_READ});
     case vmIntrinsics::_Reference_refersTo0:
     case vmIntrinsics::_PhantomReference_refersTo0:
       return lower_java_op("jeandle.reference_refers_to",
-                           {CTRL_NONE, MEM_READ | MEM_NEEDS_GC_STATE});
+                           {CTRL_NONE, MEM_READ});
 
     case vmIntrinsics::_vectorizedMismatch:
       return lower_vectorized_mismatch();
@@ -1061,6 +1069,10 @@ llvm::Value* JeandleIntrinsicLowering::emit_vectorized_mismatch_small(
 
 llvm::Value* JeandleIntrinsicLowering::emit_vectorized_mismatch_medium(
     llvm::Value* a_addr, llvm::Value* b_addr, llvm::Value* byte_length, llvm::Value* scale) {
+
+  // We are generating a loop that does not have any safepoint.
+  _interp->_module.getOrInsertNamedMetadata(llvm::jeandle::Metadata::SkipSafepointCoverageVerifier);
+
   llvm::LLVMContext& ctx = *_interp->_context;
   llvm::IRBuilder<>& b = _interp->_ir_builder;
   llvm::Type* i8 = b.getInt8Ty();

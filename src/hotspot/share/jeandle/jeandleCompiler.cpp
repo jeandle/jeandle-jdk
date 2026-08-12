@@ -37,6 +37,7 @@
 
 #include "jeandle/__hotspotHeadersBegin__.hpp"
 #include "runtime/arguments.hpp"
+#include "runtime/globals_extension.hpp"
 
 namespace {
 
@@ -187,7 +188,10 @@ bool JeandleCompiler::initialize_commandline_options() {
     std::vector<std::string> argv_string = {
       "placeholder",
       "-enable-implicit-null-checks",
-      "-imp-null-check-page-size=" + std::to_string(os::vm_page_size())
+      "-imp-null-check-page-size=" + std::to_string(os::vm_page_size()),
+      // Drive both short-loop poll elimination and strip mining from the
+      // Jeandle-specific iteration budget.
+      "-jeandle-loop-strip-mining-iter=" + std::to_string(JeandleLoopStripMiningIter)
     };
 
     if (JeandleLLVMOptions != nullptr) {

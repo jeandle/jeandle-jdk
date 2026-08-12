@@ -311,7 +311,7 @@ llvm::SmallVector<llvm::Value*> JeandleVMState::deopt_args(llvm::IRBuilder<>& bu
     // slots (one per word) so the two-slot layout of later locals stays aligned.
     bool dead = !_locals[i].is_null() && liveness.is_valid() && !liveness.at(i);
     if (!_locals[i].is_null() && !dead) {
-      uint64_t encode = DeoptValueEncoding(i, DeoptValueEncoding::LocalType, 
+      uint64_t encode = DeoptValueEncoding(i, DeoptValueEncoding::LocalType,
           static_cast<HotspotBasicType>(_locals[i].computational_type())).encode();
 #ifdef ASSERT
       if (log_is_enabled(Trace, jeandle)) {
@@ -328,7 +328,7 @@ llvm::SmallVector<llvm::Value*> JeandleVMState::deopt_args(llvm::IRBuilder<>& bu
       // A dead double-word local takes two illegal slots, indexed i and i+1.
       int slots = (!_locals[i].is_null() && is_double_word) ? 2 : 1;
       for (int s = 0; s < slots; s++) {
-        uint64_t encode = DeoptValueEncoding(i + s, DeoptValueEncoding::LocalType, 
+        uint64_t encode = DeoptValueEncoding(i + s, DeoptValueEncoding::LocalType,
             llvm::jeandle::T_ILLEGAL).encode();
 #ifdef ASSERT
         if (log_is_enabled(Trace, jeandle)) {
