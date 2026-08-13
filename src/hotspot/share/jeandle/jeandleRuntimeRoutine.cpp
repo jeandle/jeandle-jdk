@@ -109,6 +109,14 @@ JRT_ENTRY(void, JeandleRuntimeRoutine::safepoint_handler(JavaThread* current, bo
     state->set_at_poll_safepoint(true);
     SafepointMechanism::process_if_requested_with_exit_check(current, false /* check asyncs */);
     state->set_at_poll_safepoint(false);
+
+    // We never deliver an async exception at a polling point as the
+    // compiler may not have an exception handler for it (polling at
+    // a return point is ok though).
+    if (current->has_async_exception_condition()) {
+      Deoptimization::deoptimize_frame(current, trap_frame.id());
+      log_info(exceptions)("deferred async exception at compiled safepoint");
+    }
   }
 JRT_END
 
