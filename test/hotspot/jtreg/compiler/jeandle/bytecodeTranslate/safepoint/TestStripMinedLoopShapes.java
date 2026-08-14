@@ -314,6 +314,12 @@ public class TestStripMinedLoopShapes {
         cmd.add("-Dtest.classes=" + System.getProperty("test.classes", "."));
         cmd.addAll(List.of("-Xcomp", "-Xbatch", "-XX:-TieredCompilation",
                            "-XX:+UnlockDiagnosticVMOptions", "-XX:+UseJeandleCompiler",
+                           // These tests unit-test safepoint-pass decisions on
+                           // frontend-shaped IR. The pre-PEA loop canonicalization
+                           // legitimately changes those decisions, so pin the
+                           // pipeline to PEA-off (same treatment as the LLVM-side
+                           // SafepointElimination/pipeline-position.ll test).
+                           "-XX:-JeandleDoPEA",
                            "-XX:JeandleLoopStripMiningIter=" + BUDGET));
         for (String scenario : SCENARIOS) {
             cmd.add("-XX:CompileCommand=compileonly," + CLASS + "::" + scenario);
