@@ -22,6 +22,7 @@
  * @test
  * @key randomness
  * @requires os.arch=="amd64" | os.arch=="x86_64" | os.arch=="aarch64"
+ * @requires (vm.cpu.features ~= ".*avx512vl.*" | vm.cpu.features ~= ".*f16c.*") | os.arch=="aarch64"
  * @summary Test the intrinsic implementation of Float.floatToFloat16 and Float.float16ToFloat
  * @library /test/lib /
  * @run main/othervm compiler.jeandle.intrinsic.TestFloat16
