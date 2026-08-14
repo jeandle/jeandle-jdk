@@ -459,7 +459,7 @@ compiler/interpreter/Test6539464.java                                           
 # GC not support(tier3)
 ###
 gc/shenandoah/TestStringDedupStress.java#iu                                                    linux-aarch64,linux-x64
-gc/shenandoah/TestStringDedupStress.java#passive                                               linux-aarch64,linux-x64                     
+gc/shenandoah/TestStringDedupStress.java#passive                                               linux-aarch64,linux-x64
 gc/shenandoah/TestStringDedupStress.java#default                                               linux-aarch64,linux-x64
 
 ###
@@ -535,3 +535,33 @@ runtime/signal/TestSigiot.java                                                  
 # CTW - Compile The World module compilation failure
 ###
 applications/ctw/modules/java_desktop.java                                                     linux-aarch64,linux-x64
+
+###
+# CompressedOops/CompressedClassPointers for PEA
+###
+gc/arguments/TestMaxRAMFlags.java                                                              linux-aarch64,linux-x64
+gc/arguments/TestUseCompressedOopsErgo.java#id0                                                linux-aarch64,linux-x64
+gc/arguments/TestUseCompressedOopsFlagsWithUlimit.java                                         linux-aarch64,linux-x64
+gc/g1/TestFromCardCacheIndex.java                                                              linux-aarch64,linux-x64
+gc/g1/TestMixedGCLiveThreshold.java#25percent                                                  linux-aarch64,linux-x64
+gc/g1/TestSkipRebuildRemsetPhase.java                                                          linux-aarch64,linux-x64
+gc/metaspace/TestMetaspacePerfCounters.java#G1-64                                              linux-aarch64,linux-x64
+gc/metaspace/TestMetaspacePerfCounters.java#Serial-64                                          linux-aarch64,linux-x64
+gc/metaspace/TestPerfCountersAndMemoryPools.java#id0                                           linux-aarch64,linux-x64
+gc/metaspace/TestSizeTransitions.java#id0                                                      linux-aarch64,linux-x64
+gc/metaspace/TestSizeTransitions.java#id2                                                      linux-aarch64,linux-x64
+runtime/Metaspace/PrintMetaspaceDcmd.java#test-64bit-ccs                                       linux-aarch64,linux-x64
+runtime/Metaspace/PrintMetaspaceDcmd.java#test-64bit-ccs-guarded                               linux-aarch64,linux-x64
+runtime/logging/CompressedOopsTest.java                                                        linux-aarch64,linux-x64
+gc/arguments/TestUseCompressedOopsErgo.java#id0                                                linux-aarch64,linux-x64
+gc/arguments/TestUseCompressedOopsErgo.java#id1                                                linux-aarch64,linux-x64
+gc/arguments/TestUseCompressedOopsErgo.java#id2                                                linux-aarch64,linux-x64
+gc/arguments/TestUseCompressedOopsErgo.java#id3                                                linux-aarch64,linux-x64
+gc/metaspace/TestMetaspacePerfCounters.java#Epsilon-64                                         linux-aarch64,linux-x64
+gc/metaspace/TestMetaspacePerfCounters.java#G1-64                                              linux-aarch64,linux-x64
+gc/metaspace/TestMetaspacePerfCounters.java#Parallel-64                                        linux-aarch64,linux-x64
+gc/metaspace/TestMetaspacePerfCounters.java#Serial-64                                          linux-aarch64,linux-x64
+gc/metaspace/TestMetaspacePerfCounters.java#Shenandoah-64                                      linux-aarch64,linux-x64
+runtime/CompressedOops/UseCompressedOops.java                                                  linux-aarch64,linux-x64
+runtime/cds/appcds/TestCombinedCompressedFlags.java                                            linux-aarch64,linux-x64
+runtime/cds/appcds/TestSerialGCWithCDS.java#id1                                                linux-aarch64,linux-x64

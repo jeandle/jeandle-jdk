@@ -644,7 +644,31 @@ void CompilerConfig::ergo_initialize() {
 #endif // COMPILER2
 
 #ifdef JEANDLE
+
   if (UseJeandleCompiler) {
+#ifdef COMPILER2
+    if (!DoEscapeAnalysis && JeandleDoPEA) {
+      FLAG_SET_ERGO(JeandleDoPEA, false);
+    }
+    if (!EliminateLocks && JeandleEliminateLocks) {
+      FLAG_SET_ERGO(JeandleEliminateLocks, false);
+    }
+#endif // COMPILER2
+
+    // TODO: Support compressed oops in PEA.
+    if (JeandleDoPEA) {
+      if (FLAG_IS_CMDLINE(UseCompressedOops) && UseCompressedOops) {
+        warning("UseCompressedOops is disabled until jeandle supports compressed oops.");
+      }
+      UseCompressedOops = false;
+
+      // TODO: Support compressed class pointers.
+      if (FLAG_IS_CMDLINE(UseCompressedClassPointers) && UseCompressedClassPointers) {
+        warning("UseCompressedClassPointers is disabled until jeandle supports compressed class pointers.");
+      }
+      UseCompressedClassPointers = false;
+    }
+
 #ifndef PRODUCT
     if (FLAG_IS_CMDLINE(StackPrintLimit) && StackPrintLimit >= 200) {
       warning("StackPrintLimit is set to 200 due to avoid allocating too much stack memory during LLVM's assertion failure handling.");

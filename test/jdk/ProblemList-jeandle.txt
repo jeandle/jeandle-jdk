@@ -26,6 +26,11 @@
 #############################################################################
 
 ###
+# TODO: Support CompressedOops/CompressedClassPointers for PEA
+###
+java/math/BigInteger/largeMemory/SymmetricRangeTests.java
+
+###
 # GC not support
 ###
 jdk/jfr/event/gc/collection/TestGarbageCollectionEventWithZMajor.java                       linux-aarch64, linux-x64

@@ -187,7 +187,13 @@ public class TestStripMiningDisabled {
         List<String> cmd = new ArrayList<>();
         cmd.add("-Dtest.classes=" + System.getProperty("test.classes", "."));
         cmd.addAll(List.of("-Xcomp", "-Xbatch", "-XX:-TieredCompilation",
-                           "-XX:+UnlockDiagnosticVMOptions", "-XX:+UseJeandleCompiler"));
+                           "-XX:+UnlockDiagnosticVMOptions", "-XX:+UseJeandleCompiler",
+                           // These tests unit-test safepoint-pass decisions on
+                           // frontend-shaped IR. The pre-PEA loop canonicalization
+                           // legitimately changes those decisions, so pin the
+                           // pipeline to PEA-off (same treatment as the LLVM-side
+                           // SafepointElimination/pipeline-position.ll test).
+                           "-XX:-JeandleDoPEA"));
         cmd.addAll(Arrays.asList(extraVmFlags));
         for (String m : SCENARIOS) {
             cmd.add("-XX:CompileCommand=compileonly," + CLASS + "::" + m);
