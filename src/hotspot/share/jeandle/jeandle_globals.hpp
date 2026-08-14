@@ -72,7 +72,18 @@
   product(bool, JeandlePrintInlineTree, false,                              \
           "Print Jeandle inline tree before installing compiled code")      \
                                                                             \
-
+  product(bool, JeandleDoPEA, true,                                         \
+          "Run Partial Escape Analysis (PEA) in the Jeandle optimization "  \
+          "pipeline")                                                       \
+                                                                            \
+  product(bool, JeandleEliminateLocks, true,                                \
+          "Enable lock elimination in Jeandle PEA")                         \
+                                                                            \
+  product(uintx, JeandleLoopStripMiningIter, 0,                             \
+          "Number of iterations between safepoint polls in strip-mined "    \
+          "counted loops (0 disables strip mining).")                       \
+          range(0, max_juint)                                               \
+                                                                            \
 // end of JEANDLE_FLAGS
 
 DECLARE_FLAGS(JEANDLE_FLAGS)

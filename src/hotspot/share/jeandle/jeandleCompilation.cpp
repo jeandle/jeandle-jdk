@@ -100,24 +100,6 @@ static elapsedTimer jeandle_timers[max_phase_timers];
 // Counts how many methods have been compiled by Jeandle (optional)
 static int jeandle_compilation_count = 0;
 
-static llvm::jeandle::PipelineOptions jeandle_java_pipeline_options() {
-  llvm::jeandle::PipelineOptions options;
-  if (Inline) {
-    options.Inlining = llvm::jeandle::InlineMode::Default;
-  } else if (InlineAccessors) {
-    options.Inlining = llvm::jeandle::InlineMode::AccessorOnly;
-  } else {
-    options.Inlining = llvm::jeandle::InlineMode::Disabled;
-  }
-  return options;
-}
-
-static llvm::jeandle::PipelineOptions jeandle_runtime_stub_pipeline_options() {
-  llvm::jeandle::PipelineOptions options;
-  options.Inlining = llvm::jeandle::InlineMode::Disabled;
-  return options;
-}
-
 static void print_inline_tree_method(outputStream* out, ciMethod* method) {
   method->holder()->print_name_on(out);
   out->print("::");
@@ -348,7 +330,7 @@ JeandleCompilation::JeandleCompilation(llvm::TargetMachine* target_machine,
 
   // Optimize.
   llvm::jeandle::optimize(*_llvm_module, llvm::OptimizationLevel::O3,
-                          jeandle_runtime_stub_pipeline_options());
+                          llvm::jeandle::PipelineMode::StubCompilation);
 
   // Verify module in debug builds after optimization.
   DEBUG_ONLY({
@@ -431,7 +413,7 @@ bool JeandleCompilation::over_inlining_cutoff() const {
     return true;
   }
 
-  std::string root_name = JeandleFuncSig::method_name_with_signature(
+  std::string root_name = JeandleFuncSig::root_method_name(
       _method, is_osr_compilation());
   llvm::Function* root = _llvm_module->getFunction(root_name);
   assert(root != nullptr, "root Java method function must exist");
@@ -1242,7 +1224,7 @@ void JeandleCompilation::dump_inline_callee_replay_module() {
   assert(_llvm_module != nullptr, "llvm module must exist");
   std::unique_ptr<llvm::Module> replay_module = llvm::CloneModule(*_llvm_module);
   assert(replay_module != nullptr, "failed to clone inline callee replay module");
-  std::string root_name = JeandleFuncSig::method_name_with_signature(_method, is_osr_compilation());
+  std::string root_name = JeandleFuncSig::root_method_name(_method, is_osr_compilation());
 
   // Keep only non-root Java method bodies for replay. Calls inside those methods
   // may still reference helper/runtime declarations, so non-replay functions are
@@ -1395,7 +1377,7 @@ void JeandleCompilation::compile_java_method() {
   {
     JeandleTraceTime tt_optimize("Jeandle LLVM Optimize", llvm_optimizer_timer);
     llvm::jeandle::optimize(*_llvm_module, llvm::OptimizationLevel::O3,
-                            jeandle_java_pipeline_options());
+                            llvm::jeandle::PipelineMode::MethodCompilation);
   }
 
   // Verify module in debug builds after optimization.

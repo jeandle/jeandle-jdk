@@ -36,11 +36,17 @@
 #include "jeandle/__hotspotHeadersBegin__.hpp"
 #include "asm/macroAssembler.hpp"
 #include "ci/ciEnv.hpp"
+#include "ci/ciInstanceKlass.hpp"
+#include "ci/ciUtilities.inline.hpp"
 #include "code/vmreg.inline.hpp"
 #include "gc/shared/barrierSet.hpp"
 #include "gc/shared/barrierSetAssembler.hpp"
 #include "interpreter/interpreter.hpp"
 #include "logging/log.hpp"
+#include "oops/klass.inline.hpp"
+#include "oops/fieldStreams.inline.hpp"
+#include "runtime/signature.hpp"
+#include "runtime/jniHandles.hpp"
 #include "runtime/os.hpp"
 
 // Provide swap overload for JeandleReloc* to resolve ambiguity
@@ -395,10 +401,21 @@ void JeandleCompiledCode::resolve_reloc_info(JeandleAssembler& assembler) {
         // it stops at that marker, returns the caller scope, and passes the marked
         // method back as next_inlinee so the next iteration can parse the inlinee
         // frame with the right ciMethod for BCI and scope-value decoding.
+        // Record-level (whole-deopt-point) VO id -> ObjectValue map, shared by
+        // every scope parsed from this stackmap record. PEA emits ALL VO
+        // descriptors into the ROOT scope's VO section (the deopt-point-level
+        // object pool — C2 dump_object_pool-before-scope-values analog), so a
+        // VORef slot / eliminated-monitor owner in ANY scope resolves against
+        // an ObjectValue created while parsing the root scope (scopes are
+        // parsed outermost-first). Per-scope maps would reject exactly those
+        // outer-scope references — this record-level sharing is that fix.
+        llvm::DenseMap<int, ObjectValue*> vo_map;
+        GrowableArray<JeandleDeferredVORefField> deferred_voref_fields;
         do {
           ciMethod* next_inlinee = nullptr;
           reloc->add_stack_map(parse_stackmap(stackmaps, record, location, num_deopts,
-                                              parse_context, next_inlinee));
+                                              parse_context, next_inlinee,
+                                              vo_map, deferred_voref_fields));
           if (next_inlinee != nullptr) {
             parse_context = JeandleParseContext::inlinee(next_inlinee);
           }
@@ -605,6 +622,37 @@ static bool bytecode_should_reexecute(Bytecodes::Code code) {
   }
 }
 
+// PEA VO deopt: one non-static, non-injected instance field of the layout that
+// Deoptimization::reassign_fields_by_klass walks. Used to build an ObjectValue's
+// field_values in exactly the order/count reassign consumes (1 slot for int-like
+// and reference fields, 2 for long/double), padding untouched fields with type
+// defaults so field_at(svIndex) never reads out of bounds at deopt.
+struct JeandleReassignedField {
+  int offset;
+  BasicType type;
+};
+
+static int jeandle_compare_reassigned_field(JeandleReassignedField* a,
+                                            JeandleReassignedField* b) {
+  return a->offset - b->offset;
+}
+
+// One emitted VO descriptor field, classified as either a plain scalar value
+// (resolved immediately via fill_one_scope_value) or a VORef to another VO in
+// the same deopt point (resolved by vo-id through vo_map, possibly deferred for
+// forward references / cycles — see JeandleDeferredVORefField). A scalar
+// long/double field occupies TWO field_values slots: sv1 is the hi placeholder
+// (ConstantIntValue(0)) and sv2 is the lo full value
+// (ConstantLongValue/ConstantDoubleValue); sv2 is null for single-slot fields.
+struct JeandleEmitField {
+  int offset;
+  bool is_voref;
+  ScopeValue* sv1 = nullptr;  // first scope value; valid when !is_voref
+  ScopeValue* sv2 = nullptr;  // second scope value (long/double only); null
+                              // for single-slot (int/float/ref) fields
+  int voref_id = -1;          // valid when is_voref (vo-id of the referenced VO)
+};
+
 int JeandleCompiledCode::parse_stackmap_prologue(StackMapParser::record_iterator& record,
                                                  StackMapParser::RecordAccessor::location_iterator& location) {
   assert(_frame_size > 0, "frame size must be greater than zero");
@@ -634,7 +682,9 @@ JeandleStackMap* JeandleCompiledCode::parse_stackmap(StackMapParser& stackmaps,
                                                      StackMapParser::RecordAccessor::location_iterator& location,
                                                      int& num_deopts,
                                                      const JeandleParseContext& parse_context,
-                                                     ciMethod*& next_inlinee) {
+                                                     ciMethod*& next_inlinee,
+                                                     llvm::DenseMap<int, ObjectValue*>& vo_map,
+                                                     GrowableArray<JeandleDeferredVORefField>& deferred_voref_fields) {
   bool reexecute = false;
   int bci = -1;
   ciMethod* current_method = parse_context.method();
@@ -674,6 +724,34 @@ JeandleStackMap* JeandleCompiledCode::parse_stackmap(StackMapParser& stackmaps,
   GrowableArray<ScopeValue*>* stack  = num_deopts > 0 ? new GrowableArray<ScopeValue*>(current_method->max_stack()) : nullptr;
   GrowableArray<MonitorValue*>* monitors = num_deopts > 0 ? new GrowableArray<MonitorValue*>() : nullptr;
   llvm::DenseSet<int> narrow_oop_locations;
+  // Record-level VO id -> ObjectValue map for PEA virtual-object (VO)
+  // descriptors, shared by the caller (resolve_reloc_info) across every scope
+  // parsed from this stackmap record. PEA emits ALL VO descriptors into the
+  // ROOT scope's VO section — the deopt-point-level object pool. Each
+  // ScalarValueType registers its ObjectValue before parsing its fields, so
+  // self and backward VORef fields resolve immediately. Only references to a
+  // descriptor not registered yet (forward references, including cycles) are
+  // recorded in deferred_voref_fields and resolved after their targets have
+  // been parsed.
+  // Resolve every deferred VORef field now that all target descriptors for
+  // this scope have been registered.
+  // Called before each scope return (end-of-scope and the MethodType marker).
+  auto flush_deferred_voref_fields = [&]() {
+    for (int i = 0; i < deferred_voref_fields.length(); i++) {
+      const JeandleDeferredVORefField& D = deferred_voref_fields.at(i);
+      ObjectValue* target = vo_map.lookup(D.voref_id);
+      assert(target != nullptr,
+             "dangling VORef field: vo_id %d not described by a ScalarValueType",
+             D.voref_id);
+      D.owning_ov->field_values()->at(D.field_values_index) = target;
+    }
+    // The list is record-level (survives across scopes of this record); clear
+    // it after each flush so entries are not flushed again at a later scope.
+    deferred_voref_fields.clear();
+  };
+  // The objects array accumulates every ObjectValue built this scope and is
+  // handed to DebugInformationRecorder::dump_object_pool for realloc_objects.
+  GrowableArray<ScopeValue*>* objects = nullptr;
   while (num_deopts > 0) {
     // local and stack deopt arguments are passed as a pair: <encode, value>
     // monitor deopt arguments are passed as a tuple: <encode, object, lock>
@@ -709,7 +787,36 @@ JeandleStackMap* JeandleCompiledCode::parse_stackmap(StackMapParser& stackmaps,
         assert(location != record->location_end(), "must be in range");
         auto lock_location = *(location++);
 
-        fill_one_monitor_value(stackmaps, enc, obj_location, lock_location, monitors);
+        if (enc.index() == 1) {
+          // A PEA-ELIMINATED lock on a VIRTUAL object. The owner slot carries
+          // the owner VO's vo-id as an i32 CONSTANT (NOT a live oop); resolve
+          // it through vo_map to the owner's ObjectValue*, which was already
+          // parsed from the ScalarValueType descriptor section earlier in this
+          // deopt point (descriptors live in the root scope's VO section;
+          // vo_map is record-level). Build a MonitorValue with eliminated=true
+          // so HotSpot relock_objects re-acquires the monitor on the realloc'd
+          // owner at deopt (C2/Graal MonitorValue{owner=ObjectValue,
+          // eliminated=true} analog; docs/c2-ea-deopt-survey.md §4.6). The
+          // basic_lock slot is preserved verbatim; ObjectSynchronizer::enter
+          // initializes it.
+          int vo_id = (int)StackMapUtil::getConstantUint(stackmaps, obj_location);
+          ObjectValue* owner_ov = vo_map.lookup(vo_id);
+          assert(owner_ov != nullptr,
+                 "PEA eliminated-lock owner vo_id %d not described by a VO "
+                 "descriptor in this deopt point",
+                 vo_id);
+          Location basic_lock = Location::new_stk_loc(Location::normal,
+                                 StackMapUtil::stack_offset(lock_location));
+          monitors->append(new MonitorValue(owner_ov, basic_lock,
+                                            true /* eliminated */));
+        } else {
+          // index=0: REAL (non-eliminated) lock — owner is a live oop (a
+          // stack/register location, or null). eliminated=false (the lock is
+          // genuinely held, e.g. a re-emitted monitorenter on a materialized
+          // VO's OrigAlloc), so relock_objects leaves it alone.
+          fill_one_monitor_value(stackmaps, enc, obj_location, lock_location,
+                                 monitors);
+        }
         num_deopts -= 3;
         break;
       }
@@ -729,8 +836,11 @@ JeandleStackMap* JeandleCompiledCode::parse_stackmap(StackMapParser& stackmaps,
         num_deopts -= 2;
         // The marker belongs to the next inlinee scope. Return the caller scope
         // now and let the outer loop continue parsing from the same stackmap
-        // record; only the youngest scope consumes the oopmap tail.
-        return new JeandleStackMap(bci, current_method, nullptr, locals, stack, monitors, reexecute);
+        // record; only the youngest scope consumes the oopmap tail. Flush any
+        // deferred VORef fields for this scope first (forward refs / cycles
+        // whose targets are now all parsed).
+        flush_deferred_voref_fields();
+        return new JeandleStackMap(bci, current_method, nullptr, locals, stack, monitors, reexecute, objects);
       }
       case DeoptValueEncoding::NarrowOopMarkerType: {
         assert(UseCompressedOops, "narrowoop only valid with CompressedOops");
@@ -742,6 +852,217 @@ JeandleStackMap* JeandleCompiledCode::parse_stackmap(StackMapParser& stackmaps,
           VMReg narrow_oop_reg = resolve_vmreg(narrow_oop_location, narrow_oop_kind);
           narrow_oop_locations.insert(narrow_oop_reg->value());
         }
+        num_deopts -= 2;
+        break;
+      }
+      case DeoptValueEncoding::ScalarValueType: {
+        // PEA virtual-object descriptor. The header (this encoding) location was
+        // already consumed by the loop; the wire layout that remains is:
+        //   [klass]       i64 constant = raw Klass* identity
+        //   [field_count] i32 constant
+        //   field_count x ([field_enc][field_value])
+        // See DeoptValueEncoding::ScalarValueType (Jeandle/Deoptimization.h) and
+        // appendVirtualObjectDescriptor (JeandleTransformUtils.cpp). The parser
+        // consumes (3 + 2*field_count) locations for one descriptor.
+        int vo_id = enc.index();
+
+        assert(location != record->location_end(), "must be in range");
+        uint64_t klass_raw = StackMapUtil::getConstantUlong(stackmaps, *(location++));
+
+        assert(location != record->location_end(), "must be in range");
+        int field_count = (int)StackMapUtil::getConstantUint(stackmaps, *(location++));
+
+        // Resolve klass -> java mirror via the ci interface (matches
+        // jeandle_get_java_mirror and C2 FillLocArray). parse_stackmap runs at
+        // code-installation time on the compiler thread, which is
+        // _thread_in_native; a raw klass->java_mirror() + JNIHandles::make_local
+        // would oop-access in that state and trip
+        // AccessInternal::check_access_thread_state. ciKlass::java_mirror
+        // ->constant_encoding() reads only cached ci state and is safe from
+        // compiler threads. Wrap as ConstantOopWriteValue so
+        // Deoptimization::realloc_objects can recover the Klass and allocate the
+        // right type (instance via allocate_instance, array via the array klass
+        // allocate, with length derived from field_values.size()).
+        Klass* klass = (Klass*)klass_raw;
+        const bool is_array =
+            klass->is_typeArray_klass() || klass->is_objArray_klass();
+
+        VM_ENTRY_MARK;
+        ciKlass* ci_k = ciEnv::current()->get_klass(klass);
+        assert(ci_k != nullptr && ci_k->is_loaded(),
+               "PEA VO klass must be loaded");
+        ConstantOopWriteValue* klass_sv = new ConstantOopWriteValue(
+            ci_k->java_mirror()->constant_encoding());
+        ObjectValue* ov = new ObjectValue(vo_id, klass_sv);
+
+        if (objects == nullptr) {
+          objects = new GrowableArray<ScopeValue*>();
+        }
+        objects->append(ov);
+        vo_map[vo_id] = ov;
+
+        // Read the emitted (touched) fields into an offset-keyed list. The
+        // offset rides in the field encoding's Index field (see
+        // appendVirtualObjectDescriptor). A field whose encoding ValueTy is
+        // VORefLocalType is a VORef FIELD: its value slot is an i32 vo-id
+        // referencing another VO in this deopt point, and its ScopeValue is that VO's
+        // ObjectValue (resolved via vo_map, possibly deferred for forward refs
+        // / cycles). A scalar field is resolved here via fill_one_scope_value.
+        // We do NOT append to field_values yet: reassign_fields_by_klass walks
+        // ALL non-static, non-injected fields of the InstanceKlass hierarchy
+        // offset-sorted and consumes field_values in that order (1 slot for
+        // int-like/ref, 2 for long/double), so we enumerate the same layout
+        // and emit each field (emitted value if touched, else a type default)
+        // in that exact order.
+        GrowableArray<JeandleEmitField> emit_fields;
+        for (int i = 0; i < field_count; i++) {
+          assert(location != record->location_end(), "must be in range");
+          auto field_enc_location = *(location++);
+          DeoptValueEncoding field_enc = DeoptValueEncoding::decode(
+              StackMapUtil::getConstantUlong(stackmaps, field_enc_location));
+          assert(location != record->location_end(), "must be in range");
+          auto field_value_location = *(location++);
+          JeandleEmitField ef;
+          ef.offset = field_enc.index();
+          ef.is_voref = false;
+          ef.voref_id = -1;
+          if (field_enc.valueType() == DeoptValueEncoding::VORefLocalType) {
+            // VORef field: value slot is an i32 vo-id. Do NOT route through
+            // fill_one_scope_value — its T_OBJECT constant branch would trip
+            // ShouldNotReachHere on the non-oop vo-id constant.
+            ef.is_voref = true;
+            ef.voref_id =
+                (int)StackMapUtil::getConstantUint(stackmaps, field_value_location);
+          } else {
+            GrowableArray<ScopeValue*> one;
+            fill_one_scope_value(stackmaps, field_enc, field_value_location, &one);
+            // fill_one_scope_value emits one ScopeValue for single-slot fields,
+            // two (ConstantIntValue(0) hi + ConstantLong/DoubleValue lo) for
+            // long/double, per the JeandleEmitField sv1/sv2 contract. The wire
+            // still carries ONE (enc, value) entry per touched field.
+            assert(one.length() == 1 || one.length() == 2,
+                   "emitted field must be single-slot or long/double two-slot");
+            ef.sv1 = one.at(0);
+            if (one.length() == 2)
+              ef.sv2 = one.at(1);
+          }
+          emit_fields.append(ef);
+        }
+
+        if (is_array) {
+          // Array: the LLVM emit provides ALL elements (field_count ==
+          // ArrayLength, touched + default) in offset / element-index order, so
+          // emit them directly. Arrays have no InstanceKlass field stream, so
+          // there is no layout walk; reassign_type_array_elements /
+          // reassign_object_array_elements consume field_values in index order
+          // and HotSpot's realloc_objects derives the length from
+          // field_values.size() (typeArray len = field_size()/type2size;
+          // objArray len = field_size()).
+          for (int j = 0; j < emit_fields.length(); j++) {
+            const JeandleEmitField& ef = emit_fields.at(j);
+            if (ef.is_voref) {
+              // objArray element referencing another VO: resolve via vo_map now
+              // if already parsed, else defer (forward ref / cycle).
+              ObjectValue* target = vo_map.lookup(ef.voref_id);
+              if (target != nullptr) {
+                ov->field_values()->append(target);
+              } else {
+                int idx = ov->field_values()->length();
+                ov->field_values()->append(nullptr); // placeholder
+                deferred_voref_fields.append({ov, idx, ef.voref_id});
+              }
+            } else {
+              // Scalar element (primitive, or a live materialized oop); append
+              // sv1 (and sv2 if long/double, per JeandleEmitField).
+              ov->field_values()->append(ef.sv1);
+              if (ef.sv2 != nullptr)
+                ov->field_values()->append(ef.sv2);
+            }
+          }
+        } else {
+          // Instance: enumerate the InstanceKlass layout EXACTLY as
+          // reassign_fields_by_klass does for a Jeandle-compiled (non-JVMCI)
+          // method: skip_internal == true (deoptimization.cpp:371), so injected
+          // fields are excluded. Sort by offset with the same comparator so the
+          // consume order matches.
+          assert(klass->is_instance_klass(),
+                 "PEA instance VO must be an instance klass");
+          InstanceKlass* ik = InstanceKlass::cast(klass);
+          GrowableArray<JeandleReassignedField> layout;
+          for (InstanceKlass* k = ik; k != nullptr; k = k->superklass()) {
+            for (AllFieldStream fs(k); !fs.done(); fs.next()) {
+              if (fs.access_flags().is_static()) continue;
+              if (fs.field_flags().is_injected()) continue; // skip_internal=true
+              layout.append({fs.offset(), Signature::basic_type(fs.signature())});
+            }
+          }
+          layout.sort(jeandle_compare_reassigned_field);
+          for (int i = 0; i < layout.length(); i++) {
+            int off = layout.at(i).offset;
+            BasicType bt = layout.at(i).type;
+            // Find the emitted field matching this layout offset (if touched).
+            const JeandleEmitField* ef = nullptr;
+            for (int j = 0; j < emit_fields.length(); j++) {
+              if (emit_fields.at(j).offset == off) {
+                ef = &emit_fields.at(j);
+                break;
+              }
+            }
+            if (ef != nullptr && ef->is_voref) {
+              // VORef field. Resolve via vo_map now if the target is already
+              // parsed (backward ref / self-cycle); otherwise defer (forward
+              // ref / mutual cycle) — the placeholder is overwritten once the
+              // whole VO section has been parsed.
+              ObjectValue* target = vo_map.lookup(ef->voref_id);
+              if (target != nullptr) {
+                ov->field_values()->append(target);
+              } else {
+                int idx = ov->field_values()->length();
+                ov->field_values()->append(nullptr); // placeholder
+                deferred_voref_fields.append({ov, idx, ef->voref_id});
+              }
+            } else if (ef != nullptr) {
+              // Touched scalar field; append sv1 (and sv2 if long/double, per
+              // JeandleEmitField) to match the layout slot count
+              // reassign_fields_by_klass consumes for this field.
+              ov->field_values()->append(ef->sv1);
+              if (ef->sv2 != nullptr)
+                ov->field_values()->append(ef->sv2);
+            } else if (bt == T_LONG) {
+              // Untouched wide fields use the same typed two-slot form as
+              // touched fields. On LP64 the second slot supplies all 64 bits.
+              ov->field_values()->append(new ConstantIntValue(0));
+              ov->field_values()->append(new ConstantLongValue((jlong)0));
+            } else if (bt == T_DOUBLE) {
+              ov->field_values()->append(new ConstantIntValue(0));
+              ov->field_values()->append(new ConstantDoubleValue(0.0));
+            } else if (is_reference_type(bt)) {
+              ov->field_values()->append(new ConstantOopWriteValue(nullptr));
+            } else {
+              ov->field_values()->append(new ConstantIntValue(0));
+            }
+          }
+        }
+        num_deopts -= 3 + 2 * field_count;
+        break;
+      }
+      case DeoptValueEncoding::VORefLocalType: // fall through
+      case DeoptValueEncoding::VORefStackType: {
+        // A locals / stack slot that references a VO described by a
+        // ScalarValueType descriptor earlier in this deopt point (all
+        // descriptors live in the root scope's VO section; vo_map is
+        // record-level). The trailing location
+        // is the i32 vo_id; the slot's ScopeValue is the ObjectValue for that id.
+        // Two distinct types (not one VORefType) so the parser routes the slot to
+        // the correct interpreter array (locals vs expression stack).
+        assert(location != record->location_end(), "must be in range");
+        int vo_id = (int)StackMapUtil::getConstantUint(stackmaps, *(location++));
+
+        ObjectValue* ov = vo_map.lookup(vo_id);
+        assert(ov != nullptr, "dangling VORef: vo_id %d not described by a ScalarValueType", vo_id);
+
+        bool is_local = type == DeoptValueEncoding::VORefLocalType;
+        (is_local ? locals : stack)->append(ov);
         num_deopts -= 2;
         break;
       }
@@ -801,7 +1122,10 @@ JeandleStackMap* JeandleCompiledCode::parse_stackmap(StackMapParser& stackmaps,
       oop_map->set_narrowoop(reg_derived);
     }
   }
-  return new JeandleStackMap(bci, current_method, oop_map, locals, stack, monitors, reexecute);
+  // Flush any deferred VORef fields for this scope (forward refs / cycles
+  // whose target VOs are now all parsed and registered in vo_map).
+  flush_deferred_voref_fields();
+  return new JeandleStackMap(bci, current_method, oop_map, locals, stack, monitors, reexecute, objects);
 }
 
 void JeandleCompiledCode::build_exception_handler_table() {

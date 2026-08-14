@@ -18,6 +18,24 @@ java -XX:+JeandleDumpIR -XX:+JeandleDumpObjects \
 
 Inspecting the dumped IR and object files helps identify bugs in the compilation pipeline.
 
+`-XX:+JeandleDumpIR` captures the IR once at the start and once at the end of the
+whole optimization pipeline. To inspect what an individual LLVM pass does to the
+IR, forward LLVM's `print-before` / `print-after` options through
+`-XX:JeandleLLVMOptions`:
+
+```
+java -XX:JeandleLLVMOptions='--print-before=recover-type-info --print-after=recover-type-info' \
+     -Xcomp -XX:-TieredCompilation \
+     -XX:CompileCommand=compileonly,ClassName::methodName \
+     ClassName
+```
+
+- `-XX:JeandleLLVMOptions='--print-before=<pass> --print-after=<pass>'` prints the IR to stderr immediately before and after each run of `<pass>`. Use the pass's command-line name as `<pass>` (for example `recover-type-info`); it is matched exactly. The `*** IR Dump ... ***` banner prints the pass's display name (for example `RecoverTypeInfo`), not the value you supplied.
+- `-XX:JeandleLLVMOptions='--print-before-all --print-after-all'` prints the IR around every pass.
+- `-XX:JeandleLLVMOptions='--print-before=<pass1>,<pass2>'` lists several pass names within a single option.
+
+The `JeandleLLVMOptions` value is tokenized by spaces and handed to LLVM's command-line parser, so every option must begin with `-` or `--`, distinct options are separated by spaces (commas only separate pass names within one `--print-before=` / `--print-after=`), the whole value must be quoted at the shell because it contains spaces, and no LLVM option may be given more than once.
+
 ## Running and Debugging Jeandle-LLVM Separately
 
 You can run the Jeandle-LLVM optimization pipeline and backend independently from the JVM. This is useful for isolating issues in LLVM passes or code generation.

@@ -32,6 +32,7 @@
 #include "llvm/Object/StackMapParser.h"
 #include "llvm/Support/DynamicLibrary.h"
 #include "llvm/Support/MemoryBuffer.h"
+#include "llvm/IR/Jeandle/Deoptimization.h"
 
 #include "jeandle/jeandleExceptionHandlerTable.hpp"
 #include "jeandle/jeandleCompiledCall.hpp"
@@ -80,10 +81,12 @@ class CallSiteInfo : public JeandleCompilationResourceObj {
   CallSiteInfo(JeandleCompiledCall::Type type,
                address target,
                bool is_method_handle_invoke = false,
-               uint64_t statepoint_id = llvm::StatepointDirectives::DefaultStatepointID) :
+               uint64_t statepoint_id = llvm::StatepointDirectives::DefaultStatepointID,
+               Method *attached_method = nullptr) :
                _type(type),
                _target(target),
                _is_method_handle_invoke(is_method_handle_invoke),
+               _attached_method(attached_method),
                _statepoint_id(statepoint_id) {
 #ifdef ASSERT
     // We don't need to assign a unique statepoint id for each routine call site, only call type and target is used.
@@ -101,11 +104,17 @@ class CallSiteInfo : public JeandleCompilationResourceObj {
   address target() const { return _target; }
   void set_target(address target) { _target = target; }
   bool is_method_handle_invoke() const { return _is_method_handle_invoke; }
+  void set_is_method_handle_invoke(bool is_method_handle_invoke) {
+    _is_method_handle_invoke = is_method_handle_invoke;
+  }
+  Method* attached_method() const { return _attached_method; }
+  void set_attached_method(Method* method) { _attached_method = method; }
 
  private:
   JeandleCompiledCall::Type _type;
   address _target;
   bool _is_method_handle_invoke;
+  Method* _attached_method;
 
   // Used to distinguish each call site in stackmaps.
   uint64_t _statepoint_id;
@@ -113,8 +122,8 @@ class CallSiteInfo : public JeandleCompilationResourceObj {
 
 class JeandleStackMap : public JeandleCompilationResourceObj {
 public:
-  JeandleStackMap(int bci, ciMethod* method, OopMap* oop_map, GrowableArray<ScopeValue*>* locals, GrowableArray<ScopeValue*>* stack, GrowableArray<MonitorValue*>* monitors, bool reexecute) :
-      _bci(bci), _method(method), _oop_map(oop_map), _locals(locals), _stack(stack), _monitors(monitors), _reexecute(reexecute) {
+  JeandleStackMap(int bci, ciMethod* method, OopMap* oop_map, GrowableArray<ScopeValue*>* locals, GrowableArray<ScopeValue*>* stack, GrowableArray<MonitorValue*>* monitors, bool reexecute, GrowableArray<ScopeValue*>* objects = nullptr) :
+      _bci(bci), _method(method), _oop_map(oop_map), _locals(locals), _stack(stack), _monitors(monitors), _reexecute(reexecute), _objects(objects) {
   }
 
   int bci() const { return _bci; }
@@ -124,6 +133,11 @@ public:
   GrowableArray<ScopeValue*>* stack() const { return _stack; }
   GrowableArray<MonitorValue*>* monitors() const { return _monitors; }
   bool reexecute() const { return _reexecute; }
+  // PEA scalar-replaced (virtual) objects described by ScalarValueType
+  // descriptors in this scope's "deopt" operand bundle. nullptr when the scope
+  // carries no VO descriptor. Fed to DebugInformationRecorder::dump_object_pool
+  // so Deoptimization::realloc_objects can reallocate each object at deopt.
+  GrowableArray<ScopeValue*>* objects() const { return _objects; }
 
 private:
   int _bci;
@@ -133,6 +147,7 @@ private:
   GrowableArray<ScopeValue*>* _stack;
   GrowableArray<MonitorValue*>* _monitors;
   bool _reexecute;
+  GrowableArray<ScopeValue*>* _objects;
 };
 
 using ObjectBuffer   = llvm::MemoryBuffer;
@@ -151,6 +166,19 @@ struct OopHandleInfo {
 
 class JeandleEntryBarrierStub;
 class JeandleAssembler;
+
+// A VORef descriptor field whose target VO has not yet been parsed (forward
+// reference, or a mutual cycle a.f=b, b.g=a). Resolved after the whole VO
+// section has been parsed: every descriptor's ObjectValue is created and
+// registered in vo_map first (C2 debugInfo.cpp:68-94 model), then deferred
+// fields are filled. Captures the owning ObjectValue + the index in its
+// field_values() of the placeholder slot to overwrite.
+struct JeandleDeferredVORefField {
+  ObjectValue* owning_ov;
+  int field_values_index;
+  int voref_id;
+};
+
 class JeandleCompiledCode : public StackObj {
  public:
   // For compiled Java methods.
@@ -174,7 +202,7 @@ class JeandleCompiledCode : public StackObj {
                       _env(env),
                       _method(method),
                       _routine_entry(nullptr),
-                      _func_name(JeandleFuncSig::method_name_with_signature(_method, is_osr_entry)),
+                      _func_name(JeandleFuncSig::root_method_name(_method, is_osr_entry)),
                       _orig_pc_slot(nullptr),
                       _orig_pc_offset_in_bytes(-1),
                       _interpreter_frame_size_in_bytes(0),
@@ -222,7 +250,8 @@ class JeandleCompiledCode : public StackObj {
     push_non_routine_call_site(new CallSiteInfo(old_call_site->type(),
                                                 old_call_site->target(),
                                                 old_call_site->is_method_handle_invoke(),
-                                                new_statepoint_id));
+                                                new_statepoint_id,
+                                                old_call_site->attached_method()));
     return static_cast<int64_t>(new_statepoint_id);
   }
   llvm::SmallVector<CallSiteInfo*>& non_routine_call_sites() { return _non_routine_call_sites; }
@@ -323,7 +352,9 @@ class JeandleCompiledCode : public StackObj {
                                   StackMapParser::RecordAccessor::location_iterator& location,
                                   int& num_deopts,
                                   const JeandleParseContext& parse_context,
-                                  ciMethod*& next_inlinee);
+                                  ciMethod*& next_inlinee,
+                                  llvm::DenseMap<int, ObjectValue*>& vo_map,
+                                  GrowableArray<JeandleDeferredVORefField>& deferred_voref_fields);
   LocationValue* new_location_value(const StackMapParser::LocationAccessor& location, Location::Type type);
   void fill_one_scope_value(const StackMapParser& stackmaps, const DeoptValueEncoding& encode,
                             const StackMapParser::LocationAccessor& location, GrowableArray<ScopeValue*>* array);
