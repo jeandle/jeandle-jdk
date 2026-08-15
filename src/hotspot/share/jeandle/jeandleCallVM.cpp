@@ -97,8 +97,17 @@ void JeandleCallVM::generate_call_VM(const char* name, address routine_address, 
   ir_builder.SetInsertPoint(forward_exception_block);
 
   if (std::strcmp(name, "safepoint_handler") == 0) {
-    // pending exception from safepoint_handler are handled at JeandleRuntimeRoutine::safepoint_handler or poll return
-    // so no pending exception needs to be installed here.
+    // When a return poll installs a pending exception, patch the Java frame's
+    // caller return address to exceptional_return blob.
+    llvm::BasicBlock* return_poll_exception_block = llvm::BasicBlock::Create(context, "return_poll_exception", llvm_func);
+
+    ir_builder.CreateCondBr(args[1], return_poll_exception_block, no_exception_block);
+
+    ir_builder.SetInsertPoint(return_poll_exception_block);
+    llvm::CallInst* install_exceptional_return_call_inst = ir_builder.CreateCall(JeandleRuntimeRoutine::install_exceptional_return_for_return_poll_callee(target_module), {});
+    install_exceptional_return_call_inst->addFnAttr(llvm::Attribute::NoUnwind);
+    install_exceptional_return_call_inst->addFnAttr(llvm::Attribute::get(install_exceptional_return_call_inst->getContext(), "gc-leaf-function"));
+    install_exceptional_return_call_inst->setCallingConv(llvm::CallingConv::C);
     ir_builder.CreateBr(no_exception_block);
   } else {
     llvm::CallInst* install_exceptional_return_call_inst = ir_builder.CreateCall(JeandleRuntimeRoutine::install_exceptional_return_for_call_vm_callee(target_module), {});

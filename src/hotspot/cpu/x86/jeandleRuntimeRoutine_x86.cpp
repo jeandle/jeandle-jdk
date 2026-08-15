@@ -73,6 +73,35 @@ JRT_LEAF(void, JeandleRuntimeRoutine::install_exceptional_return_for_call_vm())
   *return_address = _routine_entry[_exceptional_return];
 JRT_END
 
+// When a return poll installs a pending exception, patch the Java frame's
+// caller return address to exceptional_return blob.
+JRT_LEAF(void, JeandleRuntimeRoutine::install_exceptional_return_for_return_poll())
+  JavaThread* current = JavaThread::current();
+  assert(oopDesc::is_oop(current->pending_exception()), "must be a valid oop");
+  frame routine_frame = current->last_frame();
+  CodeBlob* routine_code = routine_frame.cb();
+  guarantee(routine_code != nullptr, "routine_code must not be null");
+
+  RegisterMap r_map(current,
+                    RegisterMap::UpdateMap::skip,
+                    RegisterMap::ProcessFrames::include,
+                    RegisterMap::WalkContinuation::skip);
+  frame return_poll_frame = routine_frame.sender(&r_map);
+  CodeBlob* return_poll_code = return_poll_frame.cb();
+  guarantee(return_poll_code != nullptr && return_poll_code->is_compiled_by_jeandle(),
+            "return poll must be called from jeandle compiled method");
+
+  intptr_t* sender_sp = return_poll_frame.unextended_sp() + return_poll_code->frame_size();
+  address* return_address = (address*)(sender_sp - 1);
+
+  current->set_exception_pc(*return_address);
+  current->set_exception_oop(current->pending_exception());
+  current->clear_pending_exception();
+
+  // Change the Java frame's return address to exceptional return blob.
+  *return_address = _routine_entry[_exceptional_return];
+JRT_END
+
 // When a Jeandle compiled method throwing an exception, its return address
 // will be patched to this blob. Here we find the right exception handler,
 // then jump to.

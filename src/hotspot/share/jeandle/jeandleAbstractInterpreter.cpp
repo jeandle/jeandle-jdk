@@ -2842,33 +2842,7 @@ void JeandleAbstractInterpreter::store_to_address(llvm::Value* addr, llvm::Value
 }
 
 void JeandleAbstractInterpreter::add_safepoint_poll(bool at_poll_return) {
-  if (at_poll_return) {
-    call_java_op("jeandle.safepoint_poll", {_ir_builder.getTrue()}, {create_current_deopt_bundle(true)});
-
-    // Process pending async exception at the return poll.
-    llvm::Value* pending_exception_addr = _ir_builder.CreateIntToPtr(_ir_builder.getInt64((uint64_t)Thread::pending_exception_offset()),
-                                                                     llvm::PointerType::get(*_context, llvm::jeandle::AddrSpace::TLSAddrSpace));
-    llvm::Value* pending_exception = _ir_builder.CreateLoad(JeandleType::java2llvm(T_OBJECT, *_context), pending_exception_addr);
-    llvm::Value* null_oop = llvm::ConstantPointerNull::get(llvm::cast<llvm::PointerType>(JeandleType::java2llvm(T_OBJECT, *_context)));
-    llvm::Value* if_not_null = _ir_builder.CreateICmp(llvm::CmpInst::ICMP_NE, pending_exception, null_oop);
-
-    llvm::BasicBlock* forward_exception_block = llvm::BasicBlock::Create(*_context, "forward_exception", _llvm_func);
-    llvm::BasicBlock* no_exception_block = llvm::BasicBlock::Create(*_context, "no_exception", _llvm_func);
-
-    _ir_builder.CreateCondBr(if_not_null, forward_exception_block, no_exception_block);
-
-    _ir_builder.SetInsertPoint(forward_exception_block);
-    _ir_builder.CreateStore(null_oop, pending_exception_addr);
-    llvm::CallInst* current_thread = call_java_op("jeandle.current_thread", {});
-    llvm::CallInst* call_inst = create_call(JeandleRuntimeRoutine::install_exceptional_return_callee(_module),
-                                            {pending_exception, current_thread}, llvm::CallingConv::Hotspot_JIT);
-    _ir_builder.CreateBr(no_exception_block);
-
-    _ir_builder.SetInsertPoint(no_exception_block);
-    _block->set_tail_llvm_block(no_exception_block);
-  } else {
-    call_java_op("jeandle.safepoint_poll", {_ir_builder.getFalse()}, {create_current_deopt_bundle(true)});
-  }
+  call_java_op("jeandle.safepoint_poll", {at_poll_return ? _ir_builder.getTrue() : _ir_builder.getFalse()}, {create_current_deopt_bundle(true)});
 }
 
 void JeandleAbstractInterpreter::add_return_safepoint_poll() {
