@@ -21,10 +21,16 @@
 #ifndef SHARE_JEANDLE_VM_CALLBACK_HPP
 #define SHARE_JEANDLE_VM_CALLBACK_HPP
 
-#include "memory/allocation.hpp"
+#include "jeandle/__llvmHeadersBegin__.hpp"
+#include "llvm/IR/Jeandle/VMCallback.h"
+
 #include <string>
 
+#include "jeandle/__hotspotHeadersBegin__.hpp"
+#include "memory/allocation.hpp"
+
 class ciInstanceKlass;
+class ciKlass;
 class Klass;
 
 // JeandleVMCallback collects the VM callbacks that the LLVM-side optimization
@@ -47,13 +53,25 @@ class JeandleVMCallback : public AllStatic {
   static bool      is_unverified_interface(uintptr_t klass_ptr);
   static bool      is_effectively_final(uintptr_t klass_ptr);
 
+  // Partial escape analysis (PEA) support. Queried by the LLVM-side PEA pass.
+  static int       requires_strict_lock_order();
+  static int       element_basictype_of_array_klass(uintptr_t klass_ptr);
+  static uintptr_t array_element_klass(uintptr_t klass_ptr);
+  static bool      is_value_based(uintptr_t klass_ptr);
+  static int       is_boxed(uintptr_t klass_ptr);
+  static bool      has_finalizer(uintptr_t klass_ptr);
+  static bool      can_virtualize(uintptr_t klass_ptr);
+
   // Constant field folding.
-  static int64_t   get_constant_field_value(int oop_id, int offset);
-  static int       get_constant_field_info(int oop_id, int offset);
+  static llvm::jeandle::ConstantFieldResult get_constant_field(int oop_id, int offset);
 
   // Oop handles.
   static std::string get_oop_handle_name(int oop_id);
   static uintptr_t   get_oop_klass(int oop_id);
+
+  // Returns the oop id of the java.lang.Class mirror for a VM Klass pointer,
+  // or -1 if unavailable. Used by PEA's foldGetClass.
+  static int get_java_mirror(uintptr_t klass_ptr);
 
   // Inlining.
   static bool      get_inline_callee_ir(uintptr_t callee_method);
@@ -63,9 +81,9 @@ class JeandleVMCallback : public AllStatic {
   static bool      record_inlining_complete();
 
   // CHA devirtualization.
-  static std::string get_cha_opt_info(uintptr_t caller_ptr, uintptr_t callee_ptr,
-                                      uintptr_t holder_ptr, uintptr_t receiver_klass_ptr,
-                                      bool is_exact, int bytecode, int oop_id);
+  static llvm::jeandle::CHAOptResult get_cha_opt_info(uintptr_t caller_ptr, uintptr_t callee_ptr,
+                                                       uintptr_t holder_ptr, uintptr_t receiver_klass_ptr,
+                                                       bool is_exact, int bytecode, int oop_id);
   static bool update_call_site(int64_t id, int dest, bool need_attached, uintptr_t method);
   static uintptr_t get_signature_accessing_klass(uintptr_t method);
   static int64_t get_signature_arg_type(uintptr_t method, int index);

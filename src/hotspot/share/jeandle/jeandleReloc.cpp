@@ -110,11 +110,48 @@ void JeandleCallReloc::process_stack_map() {
     JeandleCompilation::current()->compiled_code()->set_has_method_handle_invoke(true);
   }
 
+  // Collect the per-scope PEA virtual-object pools into one safepoint-wide
+  // pool. PEA emits all ScalarValueType descriptors into the ROOT scope's VO
+  // section (the deopt-point-level object pool), so they all land in the root
+  // scope's JeandleStackMap — but merge across all (post-LLVM-inlining)
+  // scopes here anyway, keeping this side placement-agnostic. realloc_objects
+  // reads a single pool via the PcDesc obj_decode_offset.
+  GrowableArray<ScopeValue*>* object_pool = nullptr;
+  for (JeandleStackMap* stack_map : _stack_maps) {
+    if (stack_map->objects() != nullptr && stack_map->objects()->length() > 0) {
+      if (object_pool == nullptr) {
+        object_pool = new GrowableArray<ScopeValue*>();
+      }
+      for (int i = 0; i < stack_map->objects()->length(); i++) {
+        object_pool->append(stack_map->objects()->at(i));
+      }
+    }
+  }
+
+  // Dump the object pool BEFORE serializing the scope values. The decode side
+  // (ScopeDesc ctor) reads the object pool first (PcDesc obj_decode_offset) to
+  // populate _objects, then scope values reference those objects by id
+  // (OBJECT_ID_CODE). For that to resolve, each ObjectValue's FULL encoding
+  // (OBJECT_CODE) must land in the pool before any scope value marks it visited
+  // (a visit turns later writes into an OBJECT_ID_CODE back-ref, leaving the
+  // pool with only a ref the pool-first decode cannot resolve). Matches C2
+  // (PhaseOutput: dump_object_pool before create_scope_values).
+  if (object_pool != nullptr) {
+    recorder->dump_object_pool(object_pool);
+  }
+
   for (JeandleStackMap* stack_map : _stack_maps) {
     DebugToken *locvals = recorder->create_scope_values(stack_map->locals());
     DebugToken *expvals = recorder->create_scope_values(stack_map->stack());
     DebugToken *monvals = recorder->create_monitor_values(stack_map->monitors());
 
+    // has_ea_local_in_scope gates the escape-barrier object-deopt path; set it
+    // for any scope that carries a scalar-replaced object. arg_escape stays
+    // false (ArgEscape objects are out of scope). PEA-eliminated monitor
+    // reconstruction IS handled: a MonitorValue with eliminated=true is
+    // serialized here and relocked by relock_objects at deopt; that is
+    // independent of the arg_escape / escape-barrier path.
+    bool has_ea_local = (stack_map->objects() != nullptr && stack_map->objects()->length() > 0);
     recorder->describe_scope(inst_end_offset(),
                              methodHandle(),
                              stack_map->method(),
@@ -123,7 +160,7 @@ void JeandleCallReloc::process_stack_map() {
                              false,
                              _call->is_method_handle_invoke(),
                              false,
-                             false,
+                             has_ea_local,
                              false,
                              locvals,
                              expvals,

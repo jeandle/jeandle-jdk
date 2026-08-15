@@ -19,8 +19,8 @@
  */
 
 #include "jeandle/__llvmHeadersBegin__.hpp"
-
 #include "llvm/IR/Instructions.h"
+#include "llvm/IR/Jeandle/Deoptimization.h"
 #include "llvm/IR/Jeandle/VMCallback.h"
 #include "llvm/IR/Jeandle/VMCallbackLog.h"
 #include "llvm/IR/Jeandle/InvokeType.h"
@@ -54,6 +54,9 @@
 #include "oops/instanceMirrorKlass.hpp"
 #include "oops/instanceKlass.hpp"
 #include "oops/klass.inline.hpp"
+#include "oops/objArrayKlass.hpp"
+#include "oops/typeArrayKlass.hpp"
+#include "runtime/globals.hpp"
 #include "runtime/javaThread.hpp"
 #include "runtime/sharedRuntime.hpp"
 #include "utilities/globalDefinitions.hpp"
@@ -64,6 +67,25 @@
 namespace {
 
 // File-local helpers shared by the JeandleVMCallback callbacks below.
+
+// Map HotSpot BasicType to the JBasicType enum used on the LLVM side
+// (Boolean=0..Object=8, Count=9). Returns Count as the "no element type"
+// sentinel for primitives we don't model or unknown inputs.
+static int basictype_to_jbasictype(BasicType bt) {
+  switch (bt) {
+    case T_BOOLEAN: return 0;
+    case T_BYTE:    return 1;
+    case T_CHAR:    return 2;
+    case T_SHORT:   return 3;
+    case T_INT:     return 4;
+    case T_LONG:    return 5;
+    case T_FLOAT:   return 6;
+    case T_DOUBLE:  return 7;
+    case T_OBJECT:
+    case T_ARRAY:   return 8;
+    default:        return 9; // JBasicType::Count
+  }
+}
 
 ciObject* oop_by_id(int oop_id) {
   JeandleCompilation* compilation = JeandleCompilation::current();
@@ -238,19 +260,103 @@ bool JeandleVMCallback::is_unverified_interface(uintptr_t klass_ptr) {
 }
 
 // ---------------------------------------------------------------------------
+// Partial escape analysis (PEA) support
+// ---------------------------------------------------------------------------
+
+// Returns 1 iff the target runtime requires strict monitor-stack nesting
+// (HotSpot's lightweight locking mode). PEA uses this to decide whether to
+// cascade-materialize still-locked virtual objects at a materialization point.
+// Mirrors Graal's PlatformConfigurationProvider.requiresStrictLockOrder.
+int JeandleVMCallback::requires_strict_lock_order() {
+  return LockingMode == LM_LIGHTWEIGHT ? 1 : 0;
+}
+
+// Element basic type of an array klass, encoded as the LLVM-side JBasicType
+// integer. Returns 9 (Count) for non-array klasses or null/unknown inputs.
+int JeandleVMCallback::element_basictype_of_array_klass(uintptr_t klass_ptr) {
+  if (klass_ptr == 0) return 9;
+  Klass* k = (Klass*)klass_ptr;
+  if (k->is_typeArray_klass()) {
+    return basictype_to_jbasictype(TypeArrayKlass::cast(k)->element_type());
+  }
+  if (k->is_objArray_klass()) {
+    return 8; // JBasicType::Object
+  }
+  return 9; // JBasicType::Count
+}
+
+// Element klass of an object-array klass; 0 for primitive arrays / null / else.
+uintptr_t JeandleVMCallback::array_element_klass(uintptr_t klass_ptr) {
+  if (klass_ptr == 0) return 0;
+  Klass* k = (Klass*)klass_ptr;
+  if (k->is_objArray_klass()) {
+    return (uintptr_t)ObjArrayKlass::cast(k)->element_klass();
+  }
+  return 0;
+}
+
+// True iff the klass carries the jdk.internal.ValueBased annotation
+// (access_flags().is_value_based_class()). PEA force-materializes such a
+// virtual so the runtime value-based warning fires on a real oop.
+bool JeandleVMCallback::is_value_based(uintptr_t klass_ptr) {
+  if (klass_ptr == 0) return false;
+  return ((Klass*)klass_ptr)->access_flags().is_value_based_class();
+}
+
+// JBasicType integer of the boxed primitive if klass is one of the eight
+// autobox wrappers (Boolean..Double); 9 (Count) otherwise. Boxing klasses are
+// preloaded, so the VM-klass pointer compare below is sufficient.
+int JeandleVMCallback::is_boxed(uintptr_t klass_ptr) {
+  if (klass_ptr == 0) return 9; // JBasicType::Count sentinel
+  Klass* k = (Klass*)klass_ptr;
+  // Order matches JBasicType (Boolean=0..Double=7).
+  if (k == vmClasses::Boolean_klass())   return 0;
+  if (k == vmClasses::Byte_klass())      return 1;
+  if (k == vmClasses::Character_klass()) return 2;
+  if (k == vmClasses::Short_klass())     return 3;
+  if (k == vmClasses::Integer_klass())   return 4;
+  if (k == vmClasses::Long_klass())      return 5;
+  if (k == vmClasses::Float_klass())     return 6;
+  if (k == vmClasses::Double_klass())    return 7;
+  return 9; // JBasicType::Count
+}
+
+// True iff the klass declares/inherits a non-trivial finalize(). PEA refuses
+// to virtualize such allocations: HotSpot registers the finalizer at the
+// original allocation site, and eliding the alloc would skip registration.
+bool JeandleVMCallback::has_finalizer(uintptr_t klass_ptr) {
+  if (klass_ptr == 0) return false;
+  Klass* k = (Klass*)klass_ptr;
+  if (!k->is_instance_klass()) return false;
+  return InstanceKlass::cast(k)->has_finalizer();
+}
+
+// True iff the klass is safe to virtualize. Identity-sensitive subtypes
+// (java.lang.ref.Reference and Thread hierarchies) cannot be elided: the
+// runtime keys reference-queue enqueue and thread-list registration off
+// actual object identity. Mirrors Graal's canVirtualize.
+bool JeandleVMCallback::can_virtualize(uintptr_t klass_ptr) {
+  if (klass_ptr == 0) return false;
+  Klass* k = (Klass*)klass_ptr;
+  Klass* ref_klass = vmClasses::Reference_klass();
+  if (ref_klass != nullptr && k->is_subtype_of(ref_klass)) return false;
+  Klass* thread_klass = vmClasses::Thread_klass();
+  if (thread_klass != nullptr && k->is_subtype_of(thread_klass)) return false;
+  return true;
+}
+
+// ---------------------------------------------------------------------------
 // Constant field folding
 // ---------------------------------------------------------------------------
 
-int64_t JeandleVMCallback::get_constant_field_value(int oop_id, int offset) {
+llvm::jeandle::ConstantFieldResult
+JeandleVMCallback::get_constant_field(int oop_id, int offset) {
   ciField* field = nullptr;
   ciConstant con;
-  // Callers must confirm foldability via get_constant_field_info first
-  // (it returns the HotSpot BasicType >= 0, or -1 when not foldable). This
-  // function is only reached on that path; constancy is decided solely by
-  // get_constant_field_info, never by the value returned here.
-  bool foldable = constant_field(oop_id, offset, &field, &con);
-  assert(foldable, "get_constant_field_value called on a non-foldable "
-                   "field; caller must verify via get_constant_field_info");
+  if (!constant_field(oop_id, offset, &field, &con))
+    return {-1, 0};
+
+  int basic_type = field->layout_type();
 
   if (field->is_call_site_target()) {
     ciObject* base_oop = oop_by_id(oop_id);
@@ -262,40 +368,33 @@ int64_t JeandleVMCallback::get_constant_field_value(int oop_id, int offset) {
     }
   }
 
-  switch (field->layout_type()) {
+  switch (basic_type) {
   case T_BOOLEAN:
   case T_BYTE:
   case T_CHAR:
   case T_SHORT:
   case T_INT:
-    return static_cast<int64_t>(con.as_int());
+    return {basic_type, static_cast<int64_t>(con.as_int())};
   case T_LONG:
-    return con.as_long();
+    return {basic_type, con.as_long()};
   case T_FLOAT:
-    return static_cast<int64_t>(static_cast<uint32_t>(jint_cast(con.as_float())));
+    return {basic_type,
+            static_cast<int64_t>(static_cast<uint32_t>(jint_cast(con.as_float())))};
   case T_DOUBLE:
-    return jlong_cast(con.as_double());
+    return {basic_type, jlong_cast(con.as_double())};
   case T_OBJECT:
   case T_ARRAY: {
     ciObject* object = con.as_object();
     if (object->is_null_object()) {
-      return static_cast<int64_t>(-1);
+      return {basic_type, -1};
     }
     JeandleCompiledCode* compiled_code = JeandleCompilation::current()->compiled_code();
     int result_id = compiled_code->find_or_insert_oop(object);
-    return static_cast<int64_t>(result_id);
+    return {basic_type, static_cast<int64_t>(result_id)};
   }
   default:
     ShouldNotReachHere();
   }
-}
-
-int JeandleVMCallback::get_constant_field_info(int oop_id, int offset) {
-  ciField* field = nullptr;
-  ciConstant con;
-  if (!constant_field(oop_id, offset, &field, &con))
-    return -1;
-  return field->layout_type();
 }
 
 // ---------------------------------------------------------------------------
@@ -328,6 +427,28 @@ uintptr_t JeandleVMCallback::get_oop_klass(int oop_id) {
   // klass is the value's exact dynamic type. Mirrors the encoding used by the
   // frontend when attaching !java-klass metadata (jeandleAbstractInterpreter.cpp).
   return (uintptr_t)(Klass*)(klass->constant_encoding());
+}
+
+int JeandleVMCallback::get_java_mirror(uintptr_t klass_ptr) {
+  // Given a VM Klass pointer, return the oop id of its java.lang.Class mirror
+  // via the CI layer so PEA's foldGetClass can replace jeandle.get_class on a
+  // virtual receiver with a GC-safe constant mirror load. Returns -1 (=> PEA
+  // bails and materializes, sound) when the klass/mirror is unavailable.
+  if (klass_ptr == 0) {
+    return -1;
+  }
+  VM_ENTRY_MARK;
+  ciKlass* ci_k = ciEnv::current()->get_klass((Klass*)klass_ptr);
+  if (ci_k == nullptr || !ci_k->is_loaded()) {
+    return -1;
+  }
+  ciInstance* mirror = ci_k->java_mirror();
+  if (mirror == nullptr) {
+    return -1;
+  }
+  JeandleCompilation* compilation = JeandleCompilation::current();
+  assert(compilation != nullptr, "no active compilation");
+  return compilation->compiled_code()->find_or_insert_oop(mirror);
 }
 
 // ---------------------------------------------------------------------------
@@ -482,7 +603,7 @@ llvm::jeandle::CHAOptInfo optimize_method_handle_intrinsic(
       return {reinterpret_cast<uintptr_t>(target->holder()) | 1,
           reinterpret_cast<uintptr_t>(target),
           llvm::jeandle::CHAOptInfo::packTargetInfo(
-              target->is_static(), target->is_accessor(), 
+              target->is_static(), target->is_accessor(),
               target->can_be_statically_bound(), target->signature()->count()),
           JeandleFuncSig::method_name_with_signature(target)};
     }
@@ -498,7 +619,7 @@ llvm::jeandle::CHAOptInfo optimize_method_handle_intrinsic(
 }
 
 llvm::jeandle::CHAOptInfo optimize_invokeinterface(ciMethod* caller,
-                              ciMethod* callee, ciInstanceKlass* holder) {
+                                    ciMethod* callee, ciInstanceKlass* holder) {
   ciInstanceKlass* singleton = holder->unique_implementor();
   if (singleton == nullptr) {
     return {};
@@ -517,7 +638,7 @@ llvm::jeandle::CHAOptInfo optimize_invokeinterface(ciMethod* caller,
     return {reinterpret_cast<uintptr_t>(constraint->constant_encoding()),
       reinterpret_cast<uintptr_t>(cha_monomorphic_target),
       llvm::jeandle::CHAOptInfo::packDeoptreasonInfo(
-        0, cha_monomorphic_target->is_accessor(), 
+        0, cha_monomorphic_target->is_accessor(),
         llvm::jeandle::Deoptimization::Reason_class_check),
       JeandleFuncSig::method_name_with_signature(cha_monomorphic_target)};
   }
@@ -525,8 +646,8 @@ llvm::jeandle::CHAOptInfo optimize_invokeinterface(ciMethod* caller,
 }
 
 llvm::jeandle::CHAOptInfo optimize_virtual_call(ciMethod* caller,
-                            ciMethod* callee, ciInstanceKlass* holder,
-                            Klass* receiver_klass, bool is_exact) {
+                                 ciMethod* callee, ciInstanceKlass* holder,
+                                 Klass* receiver_klass, bool is_exact) {
   ciEnv* env = ciEnv::current();
 
   if (receiver_klass == nullptr)
@@ -610,11 +731,11 @@ ciInstanceKlass* JeandleVMCallback::get_receiver_instance_klass(Klass* receiver_
   return ciEnv::current()->get_instance_klass(receiver_klass);
 }
 
-std::string JeandleVMCallback::get_cha_opt_info(uintptr_t caller_ptr, uintptr_t callee_ptr,
-                                     uintptr_t holder_ptr, uintptr_t receiver_klass_ptr,
-                                     bool is_exact, int bytecode, int oop_id) {
+llvm::jeandle::CHAOptResult JeandleVMCallback::get_cha_opt_info(uintptr_t caller_ptr, uintptr_t callee_ptr,
+                                                                uintptr_t holder_ptr, uintptr_t receiver_klass_ptr,
+                                                                bool is_exact, int bytecode, int oop_id) {
   if (caller_ptr == 0 || callee_ptr == 0 || holder_ptr == 0) {
-    return "";
+    return {};
   }
 
   ciMethod* caller = reinterpret_cast<ciMethod*>(caller_ptr);
@@ -628,9 +749,10 @@ std::string JeandleVMCallback::get_cha_opt_info(uintptr_t caller_ptr, uintptr_t 
     log_debug(jeandle)("jeandle_get_cha_constraint::method handle intrinsic");
     opt_info = optimize_method_handle_intrinsic(callee, oop_id, receiver_klass, is_exact);
     if (opt_info.Method == 0) {
-      return "";
+      return {};
     }
-    return opt_info.encode();
+    return {opt_info.ConstraintOrHolder, opt_info.Method,
+            opt_info.DeoptReasonOrTargetInfo, std::move(opt_info.MethodName)};
   }
 
   if (bytecode == llvm::jeandle::InvokeInterface || bytecode == llvm::jeandle::InvokeVirtual) {
@@ -645,9 +767,10 @@ std::string JeandleVMCallback::get_cha_opt_info(uintptr_t caller_ptr, uintptr_t 
 
   if (opt_info.constraint()) {
     log_debug(jeandle)("jeandle_get_cha_constraint::constraint, " PTR_FORMAT, (long unsigned int)(opt_info.constraint()));
-    return opt_info.encode();
+    return {opt_info.ConstraintOrHolder, opt_info.Method,
+            opt_info.DeoptReasonOrTargetInfo, std::move(opt_info.MethodName)};
   }
-  return "";
+  return {};
 }
 
 // Returns true if the call site was updated
@@ -726,10 +849,17 @@ void JeandleVMCallback::register_callbacks() {
   callbacks.IsObjectKlass = &JeandleVMCallback::is_object_klass;
   callbacks.IsUnverifiedInterface = &JeandleVMCallback::is_unverified_interface;
   callbacks.IsEffectivelyFinal = &JeandleVMCallback::is_effectively_final;
-  callbacks.GetConstantFieldValue = &JeandleVMCallback::get_constant_field_value;
-  callbacks.GetConstantFieldInfo = &JeandleVMCallback::get_constant_field_info;
+  callbacks.RequiresStrictLockOrder = &JeandleVMCallback::requires_strict_lock_order;
+  callbacks.ElementBasicTypeOfArrayKlass = &JeandleVMCallback::element_basictype_of_array_klass;
+  callbacks.ArrayElementKlass = &JeandleVMCallback::array_element_klass;
+  callbacks.IsValueBased = &JeandleVMCallback::is_value_based;
+  callbacks.IsBoxed = &JeandleVMCallback::is_boxed;
+  callbacks.HasFinalizer = &JeandleVMCallback::has_finalizer;
+  callbacks.CanVirtualize = &JeandleVMCallback::can_virtualize;
+  callbacks.GetConstantField = &JeandleVMCallback::get_constant_field;
   callbacks.GetOopHandleName = &JeandleVMCallback::get_oop_handle_name;
   callbacks.GetOopKlass = &JeandleVMCallback::get_oop_klass;
+  callbacks.GetJavaMirror = &JeandleVMCallback::get_java_mirror;
   callbacks.GetInlineCalleeIR = &JeandleVMCallback::get_inline_callee_ir;
   callbacks.GetNewStatepointID = &JeandleVMCallback::get_new_statepoint_id;
   callbacks.IsOkToInline = &JeandleVMCallback::is_ok_to_inline;

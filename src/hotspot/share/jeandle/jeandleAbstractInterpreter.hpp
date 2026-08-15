@@ -310,7 +310,7 @@ class JeandleAbstractInterpreter : public StackObj {
 
   JeandleParseContext _parse_context;
   ciMethod* _method;
-  JeandleProfile _profile; // Read-only view of the method's MDO. 
+  JeandleProfile _profile; // Read-only view of the method's MDO.
   llvm::Function* _llvm_func;
   int _entry_bci;
   llvm::LLVMContext* _context;
@@ -494,6 +494,11 @@ class JeandleAbstractInterpreter : public StackObj {
   void shared_unlock(LockValue lock);
   void monitorenter();
   void monitorexit();
+
+  // Emit the single complete monitorenter JavaOp (fast+slow path folded into
+  // the JavaOp body). Shared by the common path and the
+  // DiagnoseSyncOnValueBasedClasses path in shared_lock.
+  void emit_monitorenter_java_op(LockValue lock);
 
   // Assert that an object is non-null: continue on the non-null path and
   // route the null path to the null-check failure handler.

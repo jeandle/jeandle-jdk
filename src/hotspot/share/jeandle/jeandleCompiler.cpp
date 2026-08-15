@@ -37,6 +37,7 @@
 
 #include "jeandle/__hotspotHeadersBegin__.hpp"
 #include "runtime/arguments.hpp"
+#include "runtime/globals_extension.hpp"
 
 namespace {
 
@@ -187,8 +188,26 @@ bool JeandleCompiler::initialize_commandline_options() {
     std::vector<std::string> argv_string = {
       "placeholder",
       "-enable-implicit-null-checks",
-      "-imp-null-check-page-size=" + std::to_string(os::vm_page_size())
+      "-imp-null-check-page-size=" + std::to_string(os::vm_page_size()),
+      // Drive both short-loop poll elimination and strip mining from the
+      // Jeandle-specific iteration budget.
+      "-jeandle-loop-strip-mining-iter=" + std::to_string(JeandleLoopStripMiningIter)
     };
+
+    // Forward the relevant JVM flags to Jeandle-LLVM cl::opts. Their values
+    // are fixed for the lifetime of the VM, so they are passed once here
+    // rather than per compilation. An option repeated in JeandleLLVMOptions
+    // overrides the forwarded value (llvm::cl takes the last occurrence).
+    argv_string.push_back(JeandleDoPEA ? "-jeandle-pea=true" : "-jeandle-pea=false");
+    argv_string.push_back(JeandleEliminateLocks ? "-jeandle-pea-eliminate-locks=true"
+                                                : "-jeandle-pea-eliminate-locks=false");
+    if (Inline) {
+      argv_string.push_back("-jeandle-inline=default");
+    } else if (InlineAccessors) {
+      argv_string.push_back("-jeandle-inline=accessors-only");
+    } else {
+      argv_string.push_back("-jeandle-inline=off");
+    }
 
     if (JeandleLLVMOptions != nullptr) {
       // Tokenize the user-provided LLVM options string.

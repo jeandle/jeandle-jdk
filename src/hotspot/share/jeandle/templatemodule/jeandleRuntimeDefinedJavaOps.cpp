@@ -45,6 +45,7 @@
 #include "runtime/javaThread.hpp"
 #include "runtime/objectMonitor.hpp"
 #include "runtime/safepointMechanism.hpp"
+#include "runtime/sharedRuntime.hpp"
 
 // All JavaOps are nounwind and gc-leaf-function by default. These attributes
 // are a paired Jeandle leaf contract: add them together, or remove them
@@ -261,6 +262,39 @@ DEF_JAVA_OP(get_class, 1, llvm::PointerType::get(context, llvm::jeandle::AddrSpa
   ir_builder.CreateRet(mirror);
 JAVA_OP_END
 
+// Thread.currentThread(): load the java.lang.Thread oop for the current thread.
+// Two-level load via the OopHandle stored in JavaThread::_vthread, identical in
+// structure to jeandle.get_class for Klass::_java_mirror:
+//   1. Materialize the current JavaThread* (r15 / x28 / x23) via jeandle.current_thread.
+//   2. Load the OopHandle pointer at JavaThread + vthread_offset  -> oop* in C heap.
+//   3. Dereference the OopHandle to get the Thread oop in the Java heap.
+// _vthread is the value returned by Thread.currentThread(): the mounted virtual
+// thread, otherwise the carrier thread's _threadObj. Matches C2's
+// inline_native_currentThread() -> generate_virtual_thread().
+DEF_JAVA_OP(current_thread_obj, 1,
+            llvm::PointerType::get(context, llvm::jeandle::AddrSpace::JavaHeapAddrSpace))
+  // Step 1: materialize the current JavaThread* via the existing JavaOp.
+  llvm::Function* current_thread_func = template_module.getFunction("jeandle.current_thread");
+  if (!current_thread_func) {
+    RuntimeDefinedJavaOps::set_failed("jeandle.current_thread is not found in template module");
+    return;
+  }
+  llvm::CallInst* jt = ir_builder.CreateCall(current_thread_func);
+  jt->setCallingConv(llvm::CallingConv::Hotspot_JIT);
+
+  // Step 2: load the OopHandle (oop*) stored at JavaThread + vthread_offset.
+  llvm::Value* vthread_handle_addr = ir_builder.CreateInBoundsGEP(
+      ir_builder.getInt8Ty(), jt,
+      ir_builder.getInt32(in_bytes(JavaThread::vthread_offset())));
+  llvm::Type* c_heap_ptr_ty = llvm::PointerType::get(context, llvm::jeandle::AddrSpace::CHeapAddrSpace);
+  llvm::Value* oop_handle = ir_builder.CreateLoad(c_heap_ptr_ty, vthread_handle_addr);
+
+  // Step 3: dereference the OopHandle to get the java.lang.Thread oop in the Java heap.
+  llvm::Type* thread_oop_ty = llvm::PointerType::get(context, llvm::jeandle::AddrSpace::JavaHeapAddrSpace);
+  llvm::Value* thread_oop = ir_builder.CreateLoad(thread_oop_ty, oop_handle);
+  ir_builder.CreateRet(thread_oop);
+JAVA_OP_END
+
 // Reference.refersTo0 / PhantomReference.refersTo0:
 // Load the referent field and compare with the given object, returning a boolean.
 // No GC barrier is applied (AS_NO_KEEPALIVE semantics): refersTo0 should not keep
@@ -472,6 +506,7 @@ bool RuntimeDefinedJavaOps::define_all(llvm::Module& template_module) {
   define_pre_barrier(template_module);
   define_post_barrier(template_module);
   define_get_class(template_module);
+  define_current_thread_obj(template_module);
   define_reference_refers_to(template_module);
   define_reference_get(template_module);
   define_encode_heap_oop(template_module);
@@ -545,7 +580,29 @@ void RuntimeDefinedJavaOps::define_global_variables(llvm::Module& template_modul
   define_global("KlassArray.base_offset_in_bytes",                  int32_type, static_cast<uint64_t>(Array<Klass*>::base_offset_in_bytes()));
   define_global("KlassArray.length_offset_in_bytes",                int32_type, static_cast<uint64_t>(Array<Klass*>::length_offset_in_bytes()));
   define_global("arrayOopDesc.length_offset_in_bytes",              int32_type, static_cast<uint64_t>(arrayOopDesc::length_offset_in_bytes()));
+  // Per-element-type array base offsets. Consumed by the LLVM-side
+  // partial escape analyzer via VMConstants::fromModule (see
+  // jeandle-llvm/llvm/include/llvm/IR/Jeandle/VMConstants.h). The naming
+  // convention must match jBasicTypeName() on the LLVM side.
+  define_global("arrayOopDesc.base_offset_in_bytes.boolean",        int32_type, static_cast<uint64_t>(arrayOopDesc::base_offset_in_bytes(T_BOOLEAN)));
+  define_global("arrayOopDesc.base_offset_in_bytes.byte",           int32_type, static_cast<uint64_t>(arrayOopDesc::base_offset_in_bytes(T_BYTE)));
+  define_global("arrayOopDesc.base_offset_in_bytes.char",           int32_type, static_cast<uint64_t>(arrayOopDesc::base_offset_in_bytes(T_CHAR)));
+  define_global("arrayOopDesc.base_offset_in_bytes.short",          int32_type, static_cast<uint64_t>(arrayOopDesc::base_offset_in_bytes(T_SHORT)));
   define_global("arrayOopDesc.base_offset_in_bytes.int",            int32_type, static_cast<uint64_t>(arrayOopDesc::base_offset_in_bytes(T_INT)));
+  define_global("arrayOopDesc.base_offset_in_bytes.long",           int32_type, static_cast<uint64_t>(arrayOopDesc::base_offset_in_bytes(T_LONG)));
+  define_global("arrayOopDesc.base_offset_in_bytes.float",          int32_type, static_cast<uint64_t>(arrayOopDesc::base_offset_in_bytes(T_FLOAT)));
+  define_global("arrayOopDesc.base_offset_in_bytes.double",         int32_type, static_cast<uint64_t>(arrayOopDesc::base_offset_in_bytes(T_DOUBLE)));
+  define_global("arrayOopDesc.base_offset_in_bytes.object",         int32_type, static_cast<uint64_t>(arrayOopDesc::base_offset_in_bytes(T_OBJECT)));
+  // Per-element-type array element size in bytes. Same delivery model.
+  define_global("arrayOopDesc.element_size.boolean",                int32_type, static_cast<uint64_t>(type2aelembytes(T_BOOLEAN)));
+  define_global("arrayOopDesc.element_size.byte",                   int32_type, static_cast<uint64_t>(type2aelembytes(T_BYTE)));
+  define_global("arrayOopDesc.element_size.char",                   int32_type, static_cast<uint64_t>(type2aelembytes(T_CHAR)));
+  define_global("arrayOopDesc.element_size.short",                  int32_type, static_cast<uint64_t>(type2aelembytes(T_SHORT)));
+  define_global("arrayOopDesc.element_size.int",                    int32_type, static_cast<uint64_t>(type2aelembytes(T_INT)));
+  define_global("arrayOopDesc.element_size.long",                   int32_type, static_cast<uint64_t>(type2aelembytes(T_LONG)));
+  define_global("arrayOopDesc.element_size.float",                  int32_type, static_cast<uint64_t>(type2aelembytes(T_FLOAT)));
+  define_global("arrayOopDesc.element_size.double",                 int32_type, static_cast<uint64_t>(type2aelembytes(T_DOUBLE)));
+  define_global("arrayOopDesc.element_size.object",                 int32_type, static_cast<uint64_t>(type2aelembytes(T_OBJECT)));
   define_global("Klass.access_flags_offset",                        int32_type, static_cast<uint64_t>(Klass::access_flags_offset()));
   define_global("Klass.java_mirror_offset",                         int32_type, static_cast<uint64_t>(in_bytes(Klass::java_mirror_offset())));
   define_global("Klass.secondary_super_cache_offset",               int32_type, static_cast<uint64_t>(Klass::secondary_super_cache_offset()));
@@ -578,6 +635,7 @@ void RuntimeDefinedJavaOps::define_global_variables(llvm::Module& template_modul
   define_global("markWord.prototype_value",                         int64_type, static_cast<uint64_t>(markWord::prototype().value()));
 
   define_global("JVM_ACC_IS_VALUE_BASED_CLASS",                     int32_type, static_cast<uint64_t>(JVM_ACC_IS_VALUE_BASED_CLASS));
+  define_global("JVM_ACC_HAS_FINALIZER",                            int32_type, static_cast<uint64_t>(JVM_ACC_HAS_FINALIZER));
   define_global("oopSize",                                          int32_type, static_cast<uint64_t>(oopSize));
 
   define_global("check_recursive_mask_value",                       int64_type, static_cast<uint64_t>(7 - (int)os::vm_page_size()));
@@ -595,10 +653,10 @@ void RuntimeDefinedJavaOps::define_global_variables(llvm::Module& template_modul
   define_global("ci_card_table_address",                            int64_type, static_cast<uint64_t>(p2i(ci_card_table_address())));
   define_global("G1BarrierSetRuntime.write_ref_field_pre_entry",    int64_type, static_cast<uint64_t>(p2i(CAST_FROM_FN_PTR(address, G1BarrierSetRuntime::write_ref_field_pre_entry))));
   define_global("G1BarrierSetRuntime.write_ref_field_post_entry",   int64_type, static_cast<uint64_t>(p2i(CAST_FROM_FN_PTR(address, G1BarrierSetRuntime::write_ref_field_post_entry))));
+  define_global("SharedRuntime.complete_monitor_unlocking_C",       int64_type, static_cast<uint64_t>(p2i(CAST_FROM_FN_PTR(address, SharedRuntime::complete_monitor_unlocking_C))));
 
   define_global("VMOptions.UseTLAB",                                int1_type, static_cast<uint64_t>(UseTLAB));
   define_global("VMOptions.ZeroTLAB",                               int1_type, static_cast<uint64_t>(ZeroTLAB));
-
-  define_global("UseCompressedClassPointers",                       int1_type,  static_cast<uint64_t>(UseCompressedClassPointers));
-  define_global("UseCompressedOops",                                int1_type,  static_cast<uint64_t>(UseCompressedOops));
+  define_global("VMOptions.UseCompressedClassPointers",             int1_type, static_cast<uint64_t>(UseCompressedClassPointers));
+  define_global("VMOptions.UseCompressedOops",                      int1_type, static_cast<uint64_t>(UseCompressedOops));
 }
