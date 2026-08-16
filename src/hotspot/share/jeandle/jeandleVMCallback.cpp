@@ -774,7 +774,7 @@ llvm::jeandle::CHAOptResult JeandleVMCallback::get_cha_opt_info(uintptr_t caller
 }
 
 // Returns true if the call site was updated
-bool JeandleVMCallback::update_call_site(int64_t id, int dest, bool need_attched, uintptr_t method) {
+bool JeandleVMCallback::update_call_site(int64_t id, int dest, bool need_attached, uintptr_t method) {
   JeandleCompilation* compilation = JeandleCompilation::current();
   assert(compilation != nullptr, "no active compilation");
   JeandleCompiledCode* cc = compilation->compiled_code();
@@ -803,7 +803,7 @@ bool JeandleVMCallback::update_call_site(int64_t id, int dest, bool need_attched
                                          ci_method->is_compiled_lambda_form());
   // False means this update does not provide a new attached method.
   // Preserve an existing one from an earlier MethodHandle intrinsic rewrite.
-  if (need_attched) {
+  if (need_attached) {
     Method* method = reinterpret_cast<Method*>(ci_method->constant_encoding());
     call_site->set_attached_method(method);
   }
