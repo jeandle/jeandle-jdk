@@ -29,12 +29,14 @@ package compiler.intrinsics;
  * @modules java.base/jdk.internal.misc
  *          java.base/jdk.internal.util
  *
- *  @run main/othervm -XX:CompileCommand=quiet -XX:CompileCommand=compileonly,*::test*
+ *  @run main/othervm -XX:+IgnoreUnrecognizedVMOptions
+ *                    -XX:CompileCommand=quiet -XX:CompileCommand=compileonly,*::test*
  *                    -Xbatch -XX:-TieredCompilation
  *                    -XX:UseAVX=3
  *                     compiler.intrinsics.VectorizedMismatchTest
  *
- *  @run main/othervm -XX:CompileCommand=quiet -XX:CompileCommand=compileonly,*::test*
+ *  @run main/othervm -XX:+IgnoreUnrecognizedVMOptions
+ *                    -XX:CompileCommand=quiet -XX:CompileCommand=compileonly,*::test*
  *                    -Xbatch -XX:-TieredCompilation
  *                    -XX:+UnlockDiagnosticVMOptions -XX:UseAVX=3 -XX:AVX3Threshold=0
  *                     compiler.intrinsics.VectorizedMismatchTest

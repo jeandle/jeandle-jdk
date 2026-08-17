@@ -84,8 +84,10 @@ public class TestDeoptUnload {
         ));
 
         runTestHelper(commandPrefix, "testInvoke");
-        runTestHelper(commandPrefix, "testCheckCast");
-        runTestHelper(commandPrefix, "testInstanceof");
+        runTestHelper(commandPrefix, "testCheckCast", "testCheckCast",
+                "null_assert_or_unreached\\d+ make_not_entrant");
+        runTestHelper(commandPrefix, "testInstanceof", "testInstanceof",
+                "null_assert_or_unreached\\d+ make_not_entrant");
         runTestHelper(commandPrefix, "testLoadField");
         runTestHelper(commandPrefix, "testStoreField");
         runTestHelper(commandPrefix, "testNewInstance");
@@ -94,17 +96,23 @@ public class TestDeoptUnload {
 
         ArrayList<String> commandForConstantUnload = new ArrayList<>();
         commandForConstantUnload.addAll(commandPrefix.subList(0, commandPrefix.size() - 1));
-        // Compiling `getJavaLangModuleAccess` method will trigger the deoptimization of unloaded constant. 
+        // Compiling `getJavaLangModuleAccess` method will trigger the deoptimization of unloaded constant.
+        commandForConstantUnload.add("-Xshare:off");
         commandForConstantUnload.add("-XX:CompileCommand=compileonly,jdk.internal.access.SharedSecrets::getJavaLangModuleAccess");
         commandForConstantUnload.add(commandPrefix.get(commandPrefix.size() - 1));
         runTestHelper(commandForConstantUnload, "testConstantUnload", "getJavaLangModuleAccess");
     }
 
     public static void runTestHelper(ArrayList<String> commandPrefix, String testMethod) throws Exception {
-        runTestHelper(commandPrefix, testMethod, testMethod);
+        runTestHelper(commandPrefix, testMethod, testMethod, "unloaded reinterpret");
     }
 
     public static void runTestHelper(ArrayList<String> commandPrefix, String testMethod, String deoptMethod) throws Exception {
+        runTestHelper(commandPrefix, testMethod, deoptMethod, "unloaded reinterpret");
+    }
+
+    public static void runTestHelper(ArrayList<String> commandPrefix, String testMethod,
+                                     String deoptMethod, String deoptReasonAndAction) throws Exception {
         ArrayList<String> commandArgs = new ArrayList<>(commandPrefix);
         commandArgs.add(testMethod);
 
@@ -112,7 +120,7 @@ public class TestDeoptUnload {
         OutputAnalyzer output = ProcessTools.executeCommand(pb);
 
         output.shouldHaveExitValue(0);
-        output.shouldMatch("\\[debug\\]\\[deoptimization\\].*" + deoptMethod + ".*unloaded reinterpret");
+        output.shouldMatch("\\[debug\\]\\[deoptimization\\].*" + deoptMethod + ".*" + deoptReasonAndAction);
     }
 
     private static void testInvoke() {

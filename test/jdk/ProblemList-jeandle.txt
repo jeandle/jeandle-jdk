@@ -26,9 +26,9 @@
 #############################################################################
 
 ###
-# Random failed in CI
+# TODO: Support CompressedOops/CompressedClassPointers for PEA
 ###
-java/math/BigInteger/largeMemory/SymmetricRangeTests.java                  linux-aarch64,linux-x64
+java/math/BigInteger/largeMemory/SymmetricRangeTests.java
 
 ###
 # GC not support
@@ -203,7 +203,6 @@ jdk/jfr/event/io/TestSocketChannelEvents.java                             linux-
 # JDI not support
 ###
 com/sun/jdi/EATests.java#id0                                              linux-aarch64, linux-x64
-com/sun/jdi/JdbOptions.java                                               linux-x64
 com/sun/jdi/JdwpAllowTest.java                                            linux-aarch64
 com/sun/jdi/JdwpAttachTest.java                                           linux-aarch64
 com/sun/jdi/JdwpListenTest.java                                           linux-aarch64

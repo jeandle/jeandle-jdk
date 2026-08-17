@@ -53,6 +53,11 @@ bool JeandleIntrinsicLowering::cpu_supports_spin_wait() {
   return UseZihintpause;
 }
 
+bool JeandleIntrinsicLowering::supports_vectorized_mismatch_medium_path() {
+  // The RVV vector extension is optional and not yet wired up here.
+  return false;
+}
+
 // =============================================================================
 // Arch-specific intrinsic lowering (RISC-V)
 // =============================================================================
