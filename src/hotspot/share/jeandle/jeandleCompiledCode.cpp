@@ -1129,13 +1129,13 @@ JeandleStackMap* JeandleCompiledCode::parse_stackmap(StackMapParser& stackmaps,
 }
 
 void JeandleCompiledCode::build_exception_handler_table() {
-  SectionInfo excpet_table_section(".gcc_except_table");
-  if (ReadELF::findSection(*_elf, excpet_table_section)) {
+  SectionInfo except_table_section(".gcc_except_table");
+  if (ReadELF::findSection(*_elf, except_table_section)) {
     // Start of the exception handler table.
-    const char* except_table_pointer = object_start() + excpet_table_section._offset;
+    const char* except_table_pointer = object_start() + except_table_section._offset;
 
     // Utilize DataExtractor to decode exception handler table.
-    llvm::DataExtractor data_extractor(llvm::StringRef(except_table_pointer, excpet_table_section._size),
+    llvm::DataExtractor data_extractor(llvm::StringRef(except_table_pointer, except_table_section._size),
                                        ELFT::Endianness == llvm::endianness::little, /* IsLittleEndian */
                                        BytesPerWord/* AddressSize */);
     llvm::DataExtractor::Cursor data_cursor(0 /* Offset */);
