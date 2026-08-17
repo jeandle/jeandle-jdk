@@ -81,7 +81,7 @@ public class TestSafepointPoll {
             fileCheck.checkNext("br i1 %0, label %do_return_safepoint, label %do_normal_safepoint");
 
             fileCheck.checkNext("do_return_safepoint:");
-	    fileCheck.checkNext("call hotspotcc void @safepoint_handler(ptr %4, i1 %0)");
+	    fileCheck.checkNext("call hotspotcc void @poll_return_handler(ptr %4, i1 %0)");
 	    fileCheck.checkNext("br label %return");
 
             fileCheck.checkNext("do_normal_safepoint:");

@@ -311,6 +311,8 @@ void JeandleCompiledCode::resolve_reloc_info(JeandleAssembler& assembler) {
           int inst_end_offset = JeandleAssembler::fixup_call_inst_offset(static_cast<int>(block->getAddress().getValue() + edge.getOffset()));
 
           CallSiteInfo* call_info = new CallSiteInfo(JeandleCompiledCall::ROUTINE_CALL, target_addr);
+          if (target_name == "poll_return_handler")
+            call_info->set_is_poll_return(true);
           if (JeandleRuntimeRoutine::is_gc_leaf(target_addr)) {
             relocs.push_back(new JeandleCallReloc(inst_end_offset, _env, _method, call_info));
           } else {
@@ -390,9 +392,6 @@ void JeandleCompiledCode::resolve_reloc_info(JeandleAssembler& assembler) {
         call_info = _routine_call_sites[inst_end_offset];
       }
       if (call_info) {
-        if (record->getID() == JeandleRuntimeRoutine::poll_return_statepoint_id()) {
-          call_info->set_is_poll_return(true);
-        }
         auto location = record->location_begin();
         int num_deopts = parse_stackmap_prologue(record, location);
         JeandleCallReloc* reloc = new JeandleCallReloc(inst_end_offset, _env, _method, call_info);

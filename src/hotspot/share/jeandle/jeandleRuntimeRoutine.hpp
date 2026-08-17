@@ -50,6 +50,12 @@
       llvm::PointerType::get(context, llvm::jeandle::AddrSpace::CHeapAddrSpace),    \
       llvm::Type::getInt1Ty(context))                                               \
                                                                                     \
+  def(poll_return_handler,                                                          \
+      JeandleRuntimeRoutine::safepoint_handler,                                     \
+      llvm::Type::getVoidTy(context),                                               \
+      llvm::PointerType::get(context, llvm::jeandle::AddrSpace::CHeapAddrSpace),    \
+      llvm::Type::getInt1Ty(context))                                               \
+                                                                                    \
   def(install_exceptional_return,                                                   \
       JeandleRuntimeRoutine::install_exceptional_return,                            \
       llvm::Type::getVoidTy(context),                                               \
@@ -338,12 +344,6 @@ class JeandleRuntimeRoutine : public AllStatic {
 
   static bool is_gc_leaf(address addr) {
     return _gc_leaf_routines.contains(addr);
-  }
-
-  static constexpr uint64_t PollReturnStatepointID = llvm::StatepointDirectives::DefaultStatepointID + 1;
-
-  static constexpr uint64_t poll_return_statepoint_id() {
-    return PollReturnStatepointID;
   }
 
 #ifdef ASSERT

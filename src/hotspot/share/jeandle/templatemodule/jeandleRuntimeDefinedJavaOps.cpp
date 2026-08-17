@@ -150,14 +150,9 @@ DEF_JAVA_OP(safepoint_poll, 1, llvm::Type::getVoidTy(context), llvm::Type::getIn
 
   // ***** Do Return Safepoint Block *****
   ir_builder.SetInsertPoint(do_return_safepoint_block);
-  llvm::CallInst* return_safepoint_handler_call = ir_builder.CreateCall(JeandleRuntimeRoutine::safepoint_handler_callee(template_module), {current_thread, at_poll_return},
+  llvm::CallInst* return_safepoint_handler_call = ir_builder.CreateCall(JeandleRuntimeRoutine::poll_return_handler_callee(template_module), {current_thread, at_poll_return},
                                                     {create_empty_deopt_bundle()});
   return_safepoint_handler_call->setCallingConv(llvm::CallingConv::Hotspot_JIT);
-  // Add StatepointID to generate the corresponding relocInfo::poll_return_type.
-  llvm::Attribute id_attr = llvm::Attribute::get(context,
-                                                 llvm::jeandle::Attribute::StatepointID,
-                                                 std::to_string(JeandleRuntimeRoutine::poll_return_statepoint_id()));
-  return_safepoint_handler_call->addFnAttr(id_attr);
   ir_builder.CreateBr(return_block);
 
   // ******** Return Block ********
