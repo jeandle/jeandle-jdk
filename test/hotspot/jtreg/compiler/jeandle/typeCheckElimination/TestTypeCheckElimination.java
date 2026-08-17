@@ -44,13 +44,48 @@ public class TestTypeCheckElimination {
         void bark();
     }
 
+    interface Moveable {
+        void move();
+    }
+
     static class Dog extends Animal implements Barkable {
         public void bark() { }
+        public void move() { }
     }
 
     static class Cat extends Animal { }
 
     static class Poodle extends Dog { }
+
+    interface TrainableBarkable extends Barkable {
+        void barkOnCommand();
+        void stopBarking();
+    }
+
+    interface TrainableMoveable extends Moveable {
+        void moveOnCommand();
+        void stopMoving();
+    }
+
+    static class GuideDog extends Dog implements TrainableMoveable, TrainableBarkable {
+        public void barkOnCommand() {}
+        public void stopBarking() {}
+        public void moveOnCommand() {}
+        public void stopMoving() {}
+    }
+
+    interface RandomBarkable extends Barkable {
+        void barkOnRandom();
+    }
+
+    interface RandomMoveable extends Moveable {
+        void moveOnRandom();
+    }
+
+    static class CrazyDog extends Dog implements RandomBarkable, RandomMoveable {
+        public void barkOnRandom() {}
+        public void moveOnRandom() {}
+    }
 
     // =========================================================================
     // Group 1: Basic type knowledge
@@ -354,6 +389,28 @@ public class TestTypeCheckElimination {
     static boolean testWideningCheck(Object obj) {
         if (obj instanceof Dog) {
             return obj instanceof Animal; // Should be eliminated (Dog is subtype of Animal)
+        }
+        return false;
+    }
+
+    // 12c. Redundant duplicate check with multi-interfaces: second identical instanceof
+    static int testRedundantDuplicateCheckWithMultiInterfaces(Object obj) {
+        if (obj instanceof TrainableMoveable && obj instanceof TrainableBarkable) {
+            if (obj instanceof TrainableMoveable) { // Redundant — should be eliminated
+                return 2;
+            }
+            return 1;
+        }
+        return 0;
+    }
+
+    // 12d. Widening check with multi-interfaces: instanceof TrainableMoveable and 
+    // TrainableBarkable then instanceof Barkable and Moveable
+    static boolean testWideningCheckWithMultiInterfaces(Object obj) {
+        if (obj instanceof TrainableMoveable && obj instanceof TrainableBarkable) {
+            // Should be eliminated (TrainableMoveable is subtype of Moveable 
+            // and TrainableBarkable is subtype of Barkable)
+            return obj instanceof Barkable && obj instanceof Moveable; 
         }
         return false;
     }
@@ -1156,6 +1213,13 @@ public class TestTypeCheckElimination {
         Class.forName("TestTypeCheckElimination$Barkable");
         Class.forName("TestTypeCheckElimination$AnimalHolder");
         Class.forName("TestTypeCheckElimination$StringHolder");
+        Class.forName("TestTypeCheckElimination$Moveable");
+        Class.forName("TestTypeCheckElimination$TrainableMoveable");
+        Class.forName("TestTypeCheckElimination$TrainableBarkable");
+        Class.forName("TestTypeCheckElimination$GuideDog");
+        Class.forName("TestTypeCheckElimination$RandomBarkable");
+        Class.forName("TestTypeCheckElimination$RandomMoveable");
+        Class.forName("TestTypeCheckElimination$CrazyDog");
 
         if (args.length == 0) {
             runAllTests();
@@ -1168,6 +1232,8 @@ public class TestTypeCheckElimination {
         Dog dog = new Dog();
         Cat cat = new Cat();
         Poodle poodle = new Poodle();
+        GuideDog guideDog = new GuideDog();
+        CrazyDog crazyDog = new CrazyDog();
 
         switch (testName) {
             case "testKnownSubclass":
@@ -1283,6 +1349,14 @@ public class TestTypeCheckElimination {
             case "testWideningCheck":
                 Asserts.assertTrue(testWideningCheck(dog));
                 Asserts.assertFalse(testWideningCheck("hello"));
+                break;
+            case "testWideningCheckWithMultiInterfaces":
+                Asserts.assertTrue(testWideningCheckWithMultiInterfaces(guideDog));
+                Asserts.assertFalse(testWideningCheckWithMultiInterfaces("hello"));
+                break;
+            case "testRedundantDuplicateCheckWithMultiInterfaces":
+                Asserts.assertEquals(testRedundantDuplicateCheckWithMultiInterfaces(guideDog), 2);
+                Asserts.assertEquals(testRedundantDuplicateCheckWithMultiInterfaces(crazyDog), 0);
                 break;
             case "testFieldType":
                 Asserts.assertTrue(testFieldType(new AnimalHolder(dog)));
@@ -2009,6 +2083,36 @@ public class TestTypeCheckElimination {
                 "12b: should have >= 2 check_instanceof before, got " + beforeCount);
             Asserts.assertLT(afterCount, beforeCount,
                 "12b: widening check (Dog->Animal) should be eliminated; before=" + beforeCount + " after=" + afterCount);
+        }
+
+        // === 12c. Redundant duplicate check with mutli-interfaces===
+        {
+            OutputAnalyzer output = runTestProcess("testRedundantDuplicateCheckWithMultiInterfaces", "testRedundantDuplicateCheckWithMultiInterfaces");
+            output.shouldHaveExitValue(0);
+            String fullOutput = output.getOutput();
+            String beforeIR = extractBeforeIR(fullOutput, "testRedundantDuplicateCheckWithMultiInterfaces");
+            String afterIR = extractAfterIR(fullOutput, "testRedundantDuplicateCheckWithMultiInterfaces");
+            int beforeCount = countOccurrences(beforeIR, "jeandle.check_instanceof");
+            int afterCount = countOccurrences(afterIR, "jeandle.check_instanceof");
+            Asserts.assertGTE(beforeCount, 3,
+                "12c: should have >= 3 check_instanceof before, got " + beforeCount);
+            Asserts.assertLT(afterCount, beforeCount,
+                "12c: redundant duplicate check should be eliminated; before=" + beforeCount + " after=" + afterCount);
+        }
+        
+        // === 12d. Widening check after narrowing with mutli-interfaces===
+        {
+            OutputAnalyzer output = runTestProcess("testWideningCheckWithMultiInterfaces", "testWideningCheckWithMultiInterfaces");
+            output.shouldHaveExitValue(0);
+            String fullOutput = output.getOutput();
+            String beforeIR = extractBeforeIR(fullOutput, "testWideningCheckWithMultiInterfaces");
+            String afterIR = extractAfterIR(fullOutput, "testWideningCheckWithMultiInterfaces");
+            int beforeCount = countOccurrences(beforeIR, "jeandle.check_instanceof");
+            int afterCount = countOccurrences(afterIR, "jeandle.check_instanceof");
+            Asserts.assertGTE(beforeCount, 4,
+                "12d: should have >= 4 check_instanceof before, got " + beforeCount);
+            Asserts.assertLT(afterCount, beforeCount,
+                "12d: widening check (Dog->Animal) should be eliminated; before=" + beforeCount + " after=" + afterCount);
         }
 
         // === 13a. Field type metadata ===

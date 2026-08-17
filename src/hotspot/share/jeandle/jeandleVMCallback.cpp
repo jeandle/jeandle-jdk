@@ -66,6 +66,7 @@
 
 #include <cstdint>
 #include <utility>
+#include <vector>
 
 namespace {
 
@@ -249,6 +250,16 @@ uintptr_t JeandleVMCallback::get_field_type(uintptr_t klass_ptr, int offset) {
     return 0;
   }
   return (uintptr_t)(Klass*)(field_klass->constant_encoding());
+}
+
+std::vector<uintptr_t> JeandleVMCallback::get_secondary_supers(uintptr_t klass_ptr) {
+    std::vector<uintptr_t> sec_supers;
+    Klass* holder = (Klass*)klass_ptr;
+    int cnt = holder->secondary_supers()->length();
+    for (int i = 0; i < cnt; i++) {
+      sec_supers.push_back((uintptr_t)holder->secondary_supers()->at(i)) ;
+    }
+    return sec_supers;
 }
 
 bool JeandleVMCallback::is_interface(uintptr_t klass_ptr) {
@@ -995,6 +1006,7 @@ void JeandleVMCallback::register_callbacks() {
   callbacks.IsSubtype = &JeandleVMCallback::is_subtype;
   callbacks.GetCommonSuperKlass = &JeandleVMCallback::get_common_super_klass;
   callbacks.GetFieldType = &JeandleVMCallback::get_field_type;
+  callbacks.GetSecondarySupers = &JeandleVMCallback::get_secondary_supers;
   callbacks.IsInterface = &JeandleVMCallback::is_interface;
   callbacks.IsObjectKlass = &JeandleVMCallback::is_object_klass;
   callbacks.IsUnverifiedInterface = &JeandleVMCallback::is_unverified_interface;
