@@ -1205,7 +1205,6 @@ llvm::Value* JeandleIntrinsicLowering::emit_vectorized_mismatch_medium(
 
 // ---- lower_exact_arith ----
 // Math.addExact/subtractExact/multiplyExact/incrementExact/decrementExact/negateExact
-// (int and long): same overflow-trap shape as the previous split helper --
 // llvm.s{sub,mul}.with.overflow, branch on the overflow bit to an
 // uncommon_trap (Reason_intrinsic/Action_none) so the interpreter
 // re-executes. Args are peeked (not popped) before the branch for the same
