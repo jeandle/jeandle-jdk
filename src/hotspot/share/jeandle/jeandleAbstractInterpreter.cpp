@@ -2113,18 +2113,48 @@ void JeandleAbstractInterpreter::invoke() {
     assert(method_signature == target->signature(), "method signature unmatched");
   }
 
-  // Construct arguments.
+  // Pop arguments from the JVM stack in reverse order, then the receiver.
   const int arg_size = method_signature->count() + receiver;
   llvm::SmallVector<llvm::Value*> args(arg_size);
-  llvm::SmallVector<llvm::Type*> args_type(arg_size);
   for (int i = method_signature->count() - 1; i >= 0; --i) {
     BasicType type = method_signature->type_at(i)->basic_type();
     args[i + receiver] = _jvm->pop(type);
-    args_type[i + receiver] = JeandleType::java2llvm(type, *_context);
   }
   if (receiver) {
     args[0] = _jvm->pop(BasicType::T_OBJECT);
+  }
+
+  llvm::InvokeInst* invoke = emit_java_call(target, holder, method_signature,
+                                             args, receiver != 0,
+                                             is_method_handle_invoke, bc);
+  RETURN_VOID_ON_JEANDLE_ERROR();
+
+  BasicType return_type = method_signature->return_type()->basic_type();
+  if (return_type != BasicType::T_VOID) {
+    _jvm->push(return_type, invoke);
+  }
+}
+
+llvm::InvokeInst* JeandleAbstractInterpreter::emit_java_call(ciMethod* target,
+                                                              ciKlass* declared_holder,
+                                                              const ciSignature* method_signature,
+                                                              llvm::ArrayRef<llvm::Value*> args,
+                                                              bool has_receiver,
+                                                              bool is_method_handle_invoke,
+                                                              Bytecodes::Code bc) {
+  assert(declared_holder != nullptr, "declared holder must be available");
+  const int arg_count = method_signature->count() + (has_receiver ? 1 : 0);
+  assert(static_cast<int>(args.size()) == arg_count,
+         "argument count mismatch: expected %d, got %zu", arg_count, args.size());
+
+  // Build argument types: [receiver?] then signature params in declaration order.
+  llvm::SmallVector<llvm::Type*> args_type(arg_count);
+  if (has_receiver) {
     args_type[0] = JeandleType::java2llvm(BasicType::T_OBJECT, *_context);
+  }
+  for (int i = 0; i < method_signature->count(); ++i) {
+    BasicType type = method_signature->type_at(i)->basic_type();
+    args_type[i + (has_receiver ? 1 : 0)] = JeandleType::java2llvm(type, *_context);
   }
 
   // Declare callee function type.
@@ -2133,6 +2163,10 @@ void JeandleAbstractInterpreter::invoke() {
   std::string callee_name = JeandleFuncSig::method_name_with_signature(target);
   if ((bc == Bytecodes::_invokevirtual || bc == Bytecodes::_invokeinterface) &&
       !target->can_be_statically_bound()) {
+    // Keep dynamic calls distinct from Java function definitions. In
+    // particular, the hashCode slow path may target the method currently
+    // being compiled; reusing its symbol would turn virtual fallback into
+    // direct recursion during LLVM call resolution.
     callee_name = std::string("__jeandle_dynamic_call.") + callee_name;
   }
   llvm::FunctionCallee callee = _module.getOrInsertFunction(callee_name, func_type);
@@ -2197,7 +2231,7 @@ void JeandleAbstractInterpreter::invoke() {
 
   // Every invoke instruction may throw exceptions, handle them here.
   DispatchedDest dispatched = dispatch_exception_for_invoke();
-  RETURN_VOID_ON_JEANDLE_ERROR();
+  RETURN_ON_JEANDLE_ERROR(nullptr);
 
   // Create the invoke instruction with deopt operands.
   llvm::InvokeInst* invoke = _ir_builder.CreateInvoke(callee, dispatched._normal_dest, dispatched._unwind_dest, args,
@@ -2222,13 +2256,13 @@ void JeandleAbstractInterpreter::invoke() {
                                                  Bytecodes::name(bc));
   llvm::Attribute declared_holder_attr = llvm::Attribute::get(*_context,
                                                  llvm::jeandle::Attribute::DeclaredHolder,
-                                                 std::to_string(reinterpret_cast<uintptr_t>(ciEnv::get_instance_klass_for_declared_method_holder(holder))));
+                                                 std::to_string(reinterpret_cast<uintptr_t>(ciEnv::get_instance_klass_for_declared_method_holder(declared_holder))));
   invoke->addFnAttr(id_attr);
   invoke->addFnAttr(patch_bytes_attr);
   invoke->addFnAttr(bc_attr);
   invoke->addFnAttr(declared_holder_attr);
   if (dest == SharedRuntime::get_resolve_opt_virtual_call_stub()) {
-    assert(receiver, "opt virtual call must have a receiver");
+    assert(has_receiver, "opt virtual call must have a receiver");
     invoke->addParamAttr(0, llvm::Attribute::NoUndef);
   }
   if (call_type != JeandleCompiledCall::DYNAMIC_CALL) {
@@ -2244,9 +2278,7 @@ void JeandleAbstractInterpreter::invoke() {
   // Attach java-klass return type attribute to the call site.
   attach_java_klass_ret_attr(invoke, method_signature->return_type(), *_context);
 
-  if (return_type != BasicType::T_VOID) {
-    _jvm->push(return_type, invoke);
-  }
+  return invoke;
 }
 
 bool JeandleAbstractInterpreter::try_lower_intrinsic(const ciMethod* target) {

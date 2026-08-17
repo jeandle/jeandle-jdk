@@ -31,13 +31,19 @@
 #include "jeandle/jeandleUtils.hpp"
 
 #include "jeandle/__hotspotHeadersBegin__.hpp"
+#include "ci/ciEnv.hpp"
 #include "ci/ciMethod.hpp"
 #include "ci/ciSignature.hpp"
+#include "ci/ciSymbols.hpp"
 #include "classfile/vmIntrinsics.hpp"
+#include "interpreter/bytecodes.hpp"
 #include "jeandle/jeandle_globals.hpp"
 #include "logging/log.hpp"
 #include "oops/arrayOop.hpp"
 #include "oops/klass.hpp"
+#include "oops/klass.inline.hpp"
+#include "oops/klassVtable.hpp"
+#include "oops/method.hpp"
 #include "runtime/deoptimization.hpp"
 #include "runtime/globals.hpp"
 #include "utilities/globalDefinitions.hpp"
@@ -182,6 +188,10 @@ bool JeandleIntrinsicLowering::is_supported(vmIntrinsics::ID id) {
     case vmIntrinsics::_compareUnsigned_i:
     case vmIntrinsics::_compareUnsigned_l:
 
+    // hash code
+    case vmIntrinsics::_hashCode:
+    case vmIntrinsics::_identityHashCode:
+
     // count leading/trailing zeros
     // No CPU gating: LLVM lowers ctlz/cttz to native sequences on both x86-64
     // (bsr/bsf fallback when LZCNT/TZCNT are absent) and aarch64 (CLZ, RBIT+CLZ),
@@ -223,6 +233,8 @@ JeandleTrapReasonMask JeandleIntrinsicLowering::trap_throttle_mask(vmIntrinsics:
     case vmIntrinsics::_addExactI:
     case vmIntrinsics::_addExactL:
       return trap_reason_mask_val(Deoptimization::Reason_intrinsic);
+    case vmIntrinsics::_hashCode:
+      return trap_reason_mask_val(Deoptimization::Reason_class_check);
     default:
       return 0;
   }
@@ -417,6 +429,11 @@ bool JeandleIntrinsicLowering::lower(vmIntrinsics::ID id, const ciMethod* target
     case vmIntrinsics::_compareUnsigned_i:
     case vmIntrinsics::_compareUnsigned_l:
       return lower_compare_unsigned(id);
+
+    // HashCode
+    case vmIntrinsics::_identityHashCode:
+    case vmIntrinsics::_hashCode:
+      return lower_hash_code(id);
 
     // addExact
     case vmIntrinsics::_addExactI:
@@ -876,6 +893,231 @@ bool JeandleIntrinsicLowering::lower_new_array() {
   result->addIncoming(slow_call, slow_normal_bb);
 
   _interp->_jvm->apush(result);
+  return true;
+}
+
+// ---- lower_hash_code ----
+//
+// Handles both Object.hashCode() and System.identityHashCode(Object).
+//
+// Mirrors C2's inline_native_hashcode:
+//
+//   identityHashCode:
+//     null      → 0                                          (JVM spec)
+//     fast path → jeandle.hashcode_fast(obj) JavaOp (unlocked + hash assigned)
+//     slow path → Java call to System.identityHashCode       (locked or hash not yet installed)
+//
+//   hashCode (virtual):
+//     vtable guard → fast path (inline mark word hash) → slow path (Java call)
+//
+//   hashCode (interface):
+//     subtype guard → vtable guard → fast path → slow path (Java call)
+//     invalid receiver → deopt and reexecute invokeinterface for ICCE
+//
+//   hashCode (invokespecial):
+//     fast path → slow path (no vtable guard needed; target is definitive)
+//
+bool JeandleIntrinsicLowering::lower_hash_code(vmIntrinsics::ID id) {
+  const bool is_identity = (id == vmIntrinsics::_identityHashCode);
+  assert(is_identity || id == vmIntrinsics::_hashCode, "unexpected intrinsic");
+  assert(is_identity == _target->is_static(), "unexpected hashCode binding");
+  assert(_target->signature()->count() == (is_identity ? 1 : 0),
+         "unexpected hashCode signature");
+
+  const Bytecodes::Code bc = _interp->_bytecodes.cur_bc_raw();
+  if (is_identity) {
+    if (bc != Bytecodes::_invokestatic) {
+      return false;
+    }
+  } else if (bc != Bytecodes::_invokevirtual &&
+             bc != Bytecodes::_invokeinterface &&
+             bc != Bytecodes::_invokespecial) {
+    return false;
+  }
+
+  ciMethod* target = const_cast<ciMethod*>(_target);
+  ciKlass* declared_holder = _interp->_bytecodes.get_declared_method_holder();
+  if (declared_holder == nullptr) {
+    return false;
+  }
+
+  const bool is_interface = bc == Bytecodes::_invokeinterface;
+  ciMethod* guard_target = target;
+  if (is_interface) {
+    if (!declared_holder->is_interface()) {
+      return false;
+    }
+    guard_target = ciEnv::current()->Object_klass()->find_method(
+        ciSymbols::hashCode_name(), ciSymbols::void_int_signature());
+    if (guard_target == nullptr) {
+      return false;
+    }
+  }
+
+  // invokespecial and statically bound invokevirtual sites already have an
+  // exact target. invokeinterface needs both an Object.hashCode vtable guard
+  // and a declared-interface subtype guard before it may use the fast path.
+  const bool needs_guard = !is_identity &&
+                           (is_interface ||
+                            (bc == Bytecodes::_invokevirtual &&
+                             !target->can_be_statically_bound()));
+  int vtable_idx = Method::invalid_vtable_index;
+  if (needs_guard) {
+    vtable_idx = guard_target->vtable_index();
+    if (vtable_idx == Method::nonvirtual_vtable_index) {
+      // The call-site metadata and Method disagree about whether dispatch is
+      // virtual. Preserve normal invoke handling rather than indexing before
+      // the vtable start.
+      return false;
+    }
+    if (vtable_idx < 0) {
+      return false;
+    }
+  }
+
+  llvm::LLVMContext& ctx = *_interp->_context;
+  llvm::IRBuilder<>& builder = _interp->_ir_builder;
+  llvm::Module& module = _interp->_module;
+
+  // The single category-1 operand is at raw depth 0. Keep it on the JVM stack
+  // through every guard and GC-state call; emit_java_call expects the normal
+  // post-invoke stack and is emitted only after the pop below.
+  llvm::Value* obj = _interp->_jvm->raw_peek(0).value();
+  if (obj == nullptr) {
+    return false;
+  }
+
+  // Create all basic blocks upfront so branch targets are always available.
+  llvm::BasicBlock* entry_bb  = builder.GetInsertBlock();
+  llvm::BasicBlock* not_null_bb =
+      is_identity ? llvm::BasicBlock::Create(ctx, "identityHashCode_not_null", _interp->_llvm_func)
+                  : nullptr;
+  llvm::BasicBlock* hash_fast_bb =
+      llvm::BasicBlock::Create(ctx, "hashCode_fast", _interp->_llvm_func);
+  llvm::BasicBlock* slow_call_bb =
+      llvm::BasicBlock::Create(ctx, "hashCode_slow_call", _interp->_llvm_func);
+  llvm::BasicBlock* merge_bb =
+      llvm::BasicBlock::Create(ctx, "hashCode_merge", _interp->_llvm_func);
+
+  // --- null check (identityHashCode only) ---
+  // System.identityHashCode(null) returns 0 per JVM spec.
+  if (is_identity) {
+    llvm::PointerType* java_heap_ptr_ty =
+        llvm::PointerType::get(ctx, llvm::jeandle::AddrSpace::JavaHeapAddrSpace);
+    llvm::Value* obj_is_null = builder.CreateICmpEQ(
+        obj, llvm::ConstantPointerNull::get(java_heap_ptr_ty),
+        "identityHashCode.obj_is_null");
+    builder.CreateCondBr(obj_is_null, merge_bb, not_null_bb);
+    builder.SetInsertPoint(not_null_bb);
+  }
+
+  // --- vtable guard (genuinely virtual Object.hashCode only) ---
+  if (needs_guard) {
+    llvm::Function* load_klass_fn = module.getFunction("jeandle.load_klass");
+    assert(load_klass_fn != nullptr, "jeandle.load_klass JavaOp not defined");
+    static constexpr CallSiteAttributeMetadata load_klass_attrs =
+        {CTRL_NONE, MEM_READ | MEM_NEEDS_GC_STATE};
+    llvm::CallBase* klass = emit_callsite(
+        load_klass_fn, llvm::CallingConv::Hotspot_JIT, {obj},
+        load_klass_attrs);
+
+    if (is_interface) {
+      // Delay expansion of the secondary-super scan until after safepoint
+      // coverage verification; the direct subtype JavaOp exposes its loop too
+      // early in this pipeline.
+      llvm::Function* check_instanceof_fn =
+          module.getFunction("jeandle.check_instanceof");
+      assert(check_instanceof_fn != nullptr,
+             "jeandle.check_instanceof JavaOp not defined");
+      llvm::PointerType* c_heap_ptr_ty =
+          llvm::PointerType::get(ctx, llvm::jeandle::AddrSpace::CHeapAddrSpace);
+      Klass* interface_klass =
+          reinterpret_cast<Klass*>(declared_holder->constant_encoding());
+      llvm::Value* interface_klass_value = builder.CreateIntToPtr(
+          builder.getInt64(reinterpret_cast<intptr_t>(interface_klass)),
+          c_heap_ptr_ty, "hashCode.interface_klass");
+      static constexpr CallSiteAttributeMetadata check_instanceof_attrs =
+          {CTRL_NONE, MEM_READ | MEM_WRITE};
+      llvm::CallBase* receiver_is_subtype = emit_callsite(
+          check_instanceof_fn, llvm::CallingConv::Hotspot_JIT,
+          {interface_klass_value, obj}, check_instanceof_attrs);
+
+      llvm::BasicBlock* interface_pass_bb = llvm::BasicBlock::Create(
+          ctx, "hashCode.interface_check_pass", _interp->_llvm_func);
+      llvm::BasicBlock* interface_fail_bb = llvm::BasicBlock::Create(
+          ctx, "hashCode.interface_check_fail", _interp->_llvm_func);
+      builder.CreateCondBr(receiver_is_subtype,
+                           interface_pass_bb, interface_fail_bb);
+      _interp->uncommon_trap(Deoptimization::Reason_class_check,
+                             Deoptimization::Action_none,
+                             interface_fail_bb);
+      builder.SetInsertPoint(interface_pass_bb);
+    }
+
+    const int entry_offset = in_bytes(Klass::vtable_start_offset()) +
+                             vtable_idx * vtableEntry::size_in_bytes() +
+                             in_bytes(vtableEntry::method_offset());
+
+    llvm::PointerType* c_heap_ptr_ty =
+        llvm::PointerType::get(ctx, llvm::jeandle::AddrSpace::CHeapAddrSpace);
+    llvm::Value* entry_addr = builder.CreateGEP(
+        builder.getInt8Ty(), klass, builder.getInt32(entry_offset),
+        "hashCode.vtable_entry");
+    llvm::LoadInst* vtable_method = builder.CreateLoad(
+        c_heap_ptr_ty, entry_addr, "hashCode.vtable_method");
+    vtable_method->setAlignment(llvm::Align(sizeof(void*)));
+    vtable_method->setAtomic(llvm::AtomicOrdering::Unordered);
+
+    Method* expected_method = guard_target->get_Method();
+    llvm::Value* expected = builder.CreateIntToPtr(
+        builder.getInt64((intptr_t)expected_method), c_heap_ptr_ty,
+        "hashCode.expected_method");
+
+    llvm::Value* methods_match = builder.CreateICmpEQ(
+        vtable_method, expected, "hashCode.methods_match");
+    builder.CreateCondBr(methods_match, hash_fast_bb, slow_call_bb);
+  } else {
+    // No vtable guard needed: branch directly to fast path.
+    builder.CreateBr(hash_fast_bb);
+  }
+
+  // --- fast path: inline mark-word hash extraction ---
+  builder.SetInsertPoint(hash_fast_bb);
+  llvm::Function* fast_fn = module.getFunction("jeandle.hashcode_fast");
+  assert(fast_fn != nullptr, "jeandle.hashcode_fast JavaOp not defined");
+  static constexpr CallSiteAttributeMetadata fast_attrs = {CTRL_NONE, MEM_READ};
+  llvm::CallBase* fast_call = emit_callsite(
+      fast_fn, llvm::CallingConv::Hotspot_JIT, {obj}, fast_attrs);
+  llvm::Value* fast_ok =
+      builder.CreateICmpNE(fast_call, builder.getInt32(0), "hashCode.fast_ok");
+  builder.CreateCondBr(fast_ok, merge_bb, slow_call_bb);
+
+  // --- slow path: Java call to the actual hashCode / identityHashCode method ---
+  _interp->_jvm->apop();
+  builder.SetInsertPoint(slow_call_bb);
+  llvm::InvokeInst* slow_call = _interp->emit_java_call(
+      target, declared_holder, _target->signature(), {obj},
+      /*has_receiver=*/!is_identity,
+      /*is_method_handle_invoke=*/false, bc);
+  RETURN_ON_JEANDLE_ERROR(true);
+  llvm::Value* slow_result = slow_call;
+  builder.CreateBr(merge_bb);
+  llvm::BasicBlock* slow_tail_bb = builder.GetInsertBlock();
+
+  // --- merge ---
+  builder.SetInsertPoint(merge_bb);
+  _interp->_block->set_tail_llvm_block(merge_bb);
+  const unsigned num_incoming = is_identity ? 3 : 2;
+  llvm::PHINode* result =
+      builder.CreatePHI(builder.getInt32Ty(), num_incoming, "hashCode.result");
+  if (is_identity) {
+    // null → 0
+    result->addIncoming(builder.getInt32(0), entry_bb);
+  }
+  result->addIncoming(fast_call, hash_fast_bb);
+  result->addIncoming(slow_result, slow_tail_bb);
+
+  _interp->_jvm->ipush(result);
   return true;
 }
 
