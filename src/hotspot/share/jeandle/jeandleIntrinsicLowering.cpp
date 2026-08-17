@@ -200,7 +200,7 @@ bool JeandleIntrinsicLowering::is_supported(vmIntrinsics::ID id) {
 
     // Math.{add,subtract,multiply,increment,decrement,negate}Exact:
     // UseMathExactIntrinsics and InlineMathNatives are enforced by
-    // vmIntrinsics::disabled_by_jvm_flags(), which the caller
+    // vmIntrinsics::is_disabled_by_flags(), which the caller
     // (try_lower_intrinsic()) already invokes unconditionally after
     // is_supported() returns true, so no extra check is needed here.
     case vmIntrinsics::_addExactI:
