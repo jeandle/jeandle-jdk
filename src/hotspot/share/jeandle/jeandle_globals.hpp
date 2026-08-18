@@ -84,6 +84,62 @@
           "counted loops (0 disables strip mining).")                       \
           range(0, max_juint)                                               \
                                                                             \
+  NOT_COMPILER2(product(intx, ArrayOperationPartialInlineSize, 0,           \
+          DIAGNOSTIC,                                                       \
+          "Partial inline size used for small array operations"             \
+          "(e.g. copy,cmp) acceleration.")                                  \
+          range(0, 256))                                                    \
+                                                                            \
+  NOT_COMPILER2(product(bool, EliminateAutoBox, true,                       \
+          "Control optimizations for autobox elimination"))                \
+                                                                            \
+  NOT_COMPILER2(product(bool, DoEscapeAnalysis, true,                       \
+          "Perform escape analysis"))                                      \
+                                                                            \
+  NOT_COMPILER2(product(bool, EliminateAllocations, true,                   \
+          "Use escape analysis to eliminate allocations"))                 \
+                                                                            \
+  NOT_COMPILER2(develop(bool, InlineAccessors, true,                        \
+          "inline accessor methods (get/set)"))                            \
+                                                                            \
+  NOT_COMPILER2(product(intx, MaxInlineLevel, 15,                           \
+          "maximum number of nested calls that are inlined by high tier "   \
+          "compiler"                                                       \
+          range(0, max_jint)))                                              \
+                                                                            \
+  NOT_COMPILER2(product(intx, MaxRecursiveInlineLevel, 1,                   \
+          "maximum number of nested recursive calls that are inlined by "   \
+          "high tier compiler"                                             \
+          range(0, max_jint)))                                              \
+                                                                            \
+  NOT_COMPILER2(product(intx, InlineSmallCode, 1000,                        \
+          "Only inline already compiled methods if their code size is "     \
+          "less than this"                                                 \
+          range(0, max_jint)))                                              \
+                                                                            \
+  NOT_COMPILER2(product(intx, MaxInlineSize, 35,                            \
+          "The maximum bytecode size of a method to be inlined by high "    \
+          "tier compiler"                                                  \
+          range(0, max_jint)))                                              \
+                                                                            \
+  NOT_COMPILER2(product_pd(intx, FreqInlineSize,                            \
+          "The maximum bytecode size of a frequent method to be inlined"    \
+          range(0, max_jint)))                                              \
+                                                                            \
+  NOT_COMPILER2(product(intx, MaxTrivialSize, 6,                            \
+          "The maximum bytecode size of a trivial method to be inlined by " \
+          "high tier compiler"                                             \
+          range(0, max_jint)))                                              \
+                                                                            \
+  NOT_COMPILER2(product(bool, IncrementalInline, true,                      \
+          "do post parse inlining"))                                       \
+                                                                            \
+  NOT_COMPILER2(develop(bool, PoisonOSREntry, true,                         \
+          "Detect abnormal calls to OSR code"))                            \
+                                                                            \
+  NOT_COMPILER2(product(bool, InlineSecondarySupersTest, true, DIAGNOSTIC,  \
+          "Inline the secondary supers hash lookup."))                     \
+                                                                            \
 // end of JEANDLE_FLAGS
 
 DECLARE_FLAGS(JEANDLE_FLAGS)

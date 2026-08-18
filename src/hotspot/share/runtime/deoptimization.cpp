@@ -1892,7 +1892,7 @@ Deoptimization::get_method_data(JavaThread* thread, const methodHandle& m,
   return mdo;
 }
 
-#if COMPILER2_OR_JVMCI
+#if COMPILER2_OR_JVMCI_OR_JEANDLE
 void Deoptimization::load_class_by_index(const constantPoolHandle& constant_pool, int index, TRAPS) {
   // In case of an unresolved klass entry, load the class.
   // This path is exercised from case _ldc in Parse::do_one_bytecode,
@@ -2331,7 +2331,12 @@ JRT_ENTRY(void, Deoptimization::uncommon_trap_inner(JavaThread* current, jint tr
     // aggressive optimization.
     bool inc_recompile_count = false;
     ProfileData* pdata = nullptr;
-    if (ProfileTraps && CompilerConfig::is_c2_or_jvmci_compiler_enabled() && update_trap_state && trap_mdo != nullptr) {
+    const bool high_tier_compiled = nm->is_compiled_by_c2() || nm->is_compiled_by_jeandle()
+#if INCLUDE_JVMCI
+                                    || nm->is_compiled_by_jvmci()
+#endif
+                                    ;
+    if (ProfileTraps && high_tier_compiled && update_trap_state && trap_mdo != nullptr) {
       assert(trap_mdo == get_method_data(current, profiled_method, false), "sanity");
       uint this_trap_count = 0;
       bool maybe_prior_trap = false;
@@ -2884,7 +2889,7 @@ void Deoptimization::print_statistics() {
   }
 }
 
-#else // COMPILER2_OR_JVMCI
+#else // COMPILER2_OR_JVMCI_OR_JEANDLE
 
 
 // Stubs for C1 only system.
@@ -2928,4 +2933,4 @@ const char* Deoptimization::format_trap_state(char* buf, size_t buflen,
   return buf;
 }
 
-#endif // COMPILER2_OR_JVMCI
+#endif // COMPILER2_OR_JVMCI_OR_JEANDLE
