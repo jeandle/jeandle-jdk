@@ -422,10 +422,10 @@ class JeandleRuntimeRoutine : public AllStatic {
 
   // Assembly routine implementations:
 
-#define DEF_GENERETE_ASSEMBLY_ROUTINE(name) \
+#define DEF_GENERATE_ASSEMBLY_ROUTINE(name) \
   static void generate_##name();
 
-  ALL_JEANDLE_ASSEMBLY_ROUTINES(DEF_GENERETE_ASSEMBLY_ROUTINE);
+  ALL_JEANDLE_ASSEMBLY_ROUTINES(DEF_GENERATE_ASSEMBLY_ROUTINE);
 };
 
 #endif // SHARE_JEANDLE_RUNTIME_ROUTINE_HPP

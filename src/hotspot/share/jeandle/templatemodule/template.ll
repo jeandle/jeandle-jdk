@@ -116,7 +116,7 @@
 @ObjectMonitor.succ_offset_no_monitor_value = external global i32
 @ObjectMonitor.ANONYMOUS_OWNER = external global i64
 
-; Staic constants in markWord
+; Static constants in markWord
 @markWord.clear_lock_mask = external global i64
 @markWord.monitor_value = external global i64
 @markWord.unlocked_value = external global i64

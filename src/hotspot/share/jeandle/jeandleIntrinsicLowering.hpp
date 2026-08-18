@@ -182,7 +182,8 @@ class JeandleIntrinsicLowering : public StackObj {
   bool lower_preconditions_check_index(vmIntrinsics::ID id);
   bool lower_spin_wait_hint();       // arch-specific
   bool lower_compare_unsigned(vmIntrinsics::ID id);
-  bool lower_add_exact(vmIntrinsics::ID id);
+  bool lower_exact_arith(vmIntrinsics::ID id, llvm::Intrinsic::ID overflow_id);
+  bool lower_multiply_high(vmIntrinsics::ID id);
   bool lower_new_array();
   bool lower_vectorized_mismatch();
   llvm::Value* emit_vectorized_mismatch_small(llvm::Value* a_addr,

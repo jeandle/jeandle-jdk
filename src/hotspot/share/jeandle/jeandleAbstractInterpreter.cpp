@@ -602,8 +602,8 @@ void BasicBlockBuilder::setup_exception_handlers() {
     int bci = codes.cur_bci();
     JeandleBasicBlock* block = _bci2block[bci];
     if (block->is_exception_handler()) {
-      int covered_bci = block->exeption_range_start_bci();
-      while (covered_bci < block->exeption_range_limit_bci()) {
+      int covered_bci = block->exception_range_start_bci();
+      while (covered_bci < block->exception_range_limit_bci()) {
         JeandleBasicBlock* covered_block = _bci2block[covered_bci];
 
         // Connect each exception handler block only once.
