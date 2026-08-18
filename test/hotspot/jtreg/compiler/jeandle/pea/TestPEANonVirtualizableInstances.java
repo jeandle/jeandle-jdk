@@ -101,7 +101,8 @@ public class TestPEANonVirtualizableInstances {
                 threadRunner, weakFactory, identityHash, finalizableCtor, threadCtor,
                 throwingCtor)
                 .lockingMode(2)
-                .extraFlags("-XX:DiagnoseSyncOnValueBasedClasses=1",
+                .extraFlags("-XX:ControlIntrinsic=-_identityHashCode",
+                        "-XX:DiagnoseSyncOnValueBasedClasses=1",
                         "-D" + SHAPE_RUN_PROPERTY + "=true");
     }
 
