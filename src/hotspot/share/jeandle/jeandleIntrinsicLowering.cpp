@@ -100,6 +100,18 @@ bool JeandleIntrinsicLowering::is_supported(vmIntrinsics::ID id) {
     case vmIntrinsics::_vectorizedMismatch:
       return UseVectorizedMismatchIntrinsic;
 
+    // floatToFloat16/float16ToFloat: gated on the same
+    // VM_Version::supports_float16() predicate that turns on the template
+    // interpreter's hardware entries (and gates C1/C2's intrinsic versions
+    // upstream). Keeping the compiled-code gate identical to the
+    // interpreter's keeps NaN semantics consistent across tiers: with
+    // hardware support every tier quiets signaling NaNs the same way (see
+    // lower_float16_convert); without it every tier runs the pure-Java
+    // implementations.
+    case vmIntrinsics::_floatToFloat16:
+    case vmIntrinsics::_float16ToFloat:
+      return VM_Version::supports_float16();
+
     default: break;
   }
 
@@ -211,17 +223,6 @@ bool JeandleIntrinsicLowering::is_supported(vmIntrinsics::ID id) {
     case vmIntrinsics::_addExactL:
       return true;
 
-    // floatToFloat16/float16ToFloat: gated on the same
-    // VM_Version::supports_float16() predicate that turns on the template
-    // interpreter's hardware entries (and gates C1/C2's intrinsic versions
-    // upstream). Keeping the compiled-code gate identical to the
-    // interpreter's keeps NaN semantics consistent across tiers: with
-    // hardware support every tier quiets signaling NaNs the same way (see
-    // lower_float16_convert); without it every tier runs the pure-Java
-    // implementations.
-    case vmIntrinsics::_floatToFloat16:
-    case vmIntrinsics::_float16ToFloat:
-      return VM_Version::supports_float16();
     default:
       return false;
   }
