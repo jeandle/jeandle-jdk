@@ -234,8 +234,9 @@ JAVA_OP_END
 //   3. Dereference the OopHandle to get the actual mirror oop in the Java heap.
 // The mirror is always reachable (a GC root inside the Klass), so no null check is needed.
 //
-// TODO: When the receiver's Klass is known at compile time (via `java-klass` attribute),
-// Step 1 (jeandle.load_klass) can be skipped.
+// Exact receiver types are folded by LLVM ConstantFieldFolding before this
+// JavaOp is expanded. This body remains the dynamic fallback for receivers
+// whose exact Klass is unavailable.
 DEF_JAVA_OP(get_class, 1, llvm::PointerType::get(context, llvm::jeandle::AddrSpace::JavaHeapAddrSpace),
             llvm::PointerType::get(context, llvm::jeandle::AddrSpace::JavaHeapAddrSpace))  // obj (receiver)
   llvm::Value* obj = func->getArg(0);

@@ -421,12 +421,12 @@ bool JeandleIntrinsicLowering::lower(vmIntrinsics::ID id, const ciMethod* target
 
     // getClass
     //
-    // TODO 1: When the receiver's Java type is known at compile time (e.g., the
-    // result of a `new` bytecode which carries a `java-klass` return attribute),
-    // we can skip the `jeandle.load_klass` call that reads the object header and
-    // use the known Klass pointer directly.
+    // Exact receiver types are folded later by LLVM's ConstantFieldFolding
+    // pass using the GetJavaMirror VM callback. This lowering keeps the
+    // dynamic JavaOp so CFF can also see type information propagated by the
+    // inline/PEA pipeline.
     //
-    // TODO 2: Optimize the comparison between class pointers.
+    // TODO: Optimize the comparison between class pointers.
     case vmIntrinsics::_getClass:
       return lower_java_op("jeandle.get_class",
                            {CTRL_NONE, MEM_READ});
