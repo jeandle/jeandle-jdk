@@ -39,6 +39,7 @@
 #include "oops/klass.hpp"
 #include "runtime/deoptimization.hpp"
 #include "runtime/globals.hpp"
+#include "utilities/globalDefinitions.hpp"
 
 // =============================================================================
 // Call-site IR annotation helpers (migrated from JeandleIntrinsicIRSemantics)
@@ -147,6 +148,9 @@ bool JeandleIntrinsicLowering::is_supported(vmIntrinsics::ID id) {
     // getClass
     case vmIntrinsics::_getClass:
 
+    // Instrumentation.getObjectSize
+    case vmIntrinsics::_getObjectSize:
+
     // Reference*
     case vmIntrinsics::_Reference_get:
     case vmIntrinsics::_Reference_refersTo0:
@@ -208,6 +212,8 @@ static constexpr JeandleTrapReasonMask trap_reason_mask_val(Deoptimization::Deop
 
 JeandleTrapReasonMask JeandleIntrinsicLowering::trap_throttle_mask(vmIntrinsics::ID id) {
   switch (id) {
+    case vmIntrinsics::_getObjectSize:
+      return trap_reason_mask_val(Deoptimization::Reason_null_check);
     case vmIntrinsics::_Preconditions_checkIndex:
     case vmIntrinsics::_Preconditions_checkLongIndex:
       return trap_reason_mask_val(Deoptimization::Reason_intrinsic) |
@@ -361,6 +367,9 @@ bool JeandleIntrinsicLowering::lower(vmIntrinsics::ID id, const ciMethod* target
     case vmIntrinsics::_getClass:
       return lower_java_op("jeandle.get_class",
                            {CTRL_NONE, MEM_READ | MEM_NEEDS_GC_STATE});
+
+    case vmIntrinsics::_getObjectSize:
+      return lower_get_object_size();
 
     // Reference*
     case vmIntrinsics::_Reference_get:
@@ -553,6 +562,92 @@ bool JeandleIntrinsicLowering::lower_java_op(const char* java_op_name,
 // =============================================================================
 // Per-intrinsic handlers
 // =============================================================================
+
+// ---- lower_get_object_size ----
+bool JeandleIntrinsicLowering::lower_get_object_size() {
+  assert(!_target->is_static(), "getObjectSize0 is an instance native method");
+  assert(_target->signature()->count() == 2, "unexpected getObjectSize0 signature");
+
+  llvm::IRBuilder<>& builder = _interp->_ir_builder;
+
+  // Logical stack, top first: objectToSize, nativeAgent (long), receiver.
+  // Physical raw slots: objectToSize, long placeholder, long value, receiver.
+  // Keep the complete pre-invoke state through the null-check trap.
+  llvm::Value* object = _interp->_jvm->peek_value(0).value();
+  _interp->null_check(object);
+
+  // load_klass is a compiler pseudo-operation rather than a runtime call.
+  llvm::CallInst* klass = _interp->call_java_op("jeandle.load_klass", {object});
+  klass->setName("get_object_size.klass");
+  llvm::Value* layout_addr = builder.CreateInBoundsGEP(
+      builder.getInt8Ty(), klass,
+      builder.getInt32(in_bytes(Klass::layout_helper_offset())));
+  llvm::LoadInst* layout = builder.CreateLoad(builder.getInt32Ty(), layout_addr);
+  layout->setName("get_object_size.layout");
+
+  // Nothing below can safepoint, throw, or deopt. nativeAgent is unused,
+  // matching C1 and C2's getObjectSize intrinsic.
+  _interp->_jvm->apop();
+  _interp->_jvm->lpop();
+  _interp->_jvm->apop();
+
+  llvm::Function* function = builder.GetInsertBlock()->getParent();
+  llvm::BasicBlock* instance = llvm::BasicBlock::Create(
+      *_interp->_context, "get_object_size.instance", function);
+  llvm::BasicBlock* array = llvm::BasicBlock::Create(
+      *_interp->_context, "get_object_size.array", function);
+  llvm::BasicBlock* done = llvm::BasicBlock::Create(
+      *_interp->_context, "get_object_size.done", function);
+  builder.CreateCondBr(
+      builder.CreateICmpSLT(layout, builder.getInt32(Klass::_lh_neutral_value)),
+      array, instance);
+
+  // C1 and C2 intentionally return the layout-helper approximation for all
+  // instances, including layouts carrying the allocation slow-path bit.
+  builder.SetInsertPoint(instance);
+  llvm::Value* instance_size32 = builder.CreateAnd(
+      layout, builder.getInt32(~(jint)right_n_bits(LogBytesPerLong)),
+      "get_object_size.instance.bytes");
+  llvm::Value* instance_size = builder.CreateZExt(
+      instance_size32, builder.getInt64Ty(), "get_object_size.instance.result");
+  builder.CreateBr(done);
+  llvm::BasicBlock* instance_end = builder.GetInsertBlock();
+
+  // Array size is align(header + (length << element_shift)).
+  builder.SetInsertPoint(array);
+  llvm::CallInst* length32 = _interp->call_java_op("jeandle.arraylength", {object});
+  length32->setName("get_object_size.length");
+  llvm::Value* length = builder.CreateZExt(
+      length32, builder.getInt64Ty(), "get_object_size.length64");
+  llvm::Value* header32 = builder.CreateAnd(
+      builder.CreateLShr(layout, builder.getInt32(Klass::_lh_header_size_shift)),
+      builder.getInt32(Klass::_lh_header_size_mask), "get_object_size.header");
+  llvm::Value* header = builder.CreateZExt(header32, builder.getInt64Ty());
+  assert(Klass::_lh_log2_element_size_shift == 0, "use shift in place");
+  llvm::Value* element_shift32 = builder.CreateAnd(
+      layout, builder.getInt32(Klass::_lh_log2_element_size_mask),
+      "get_object_size.element.shift");
+  llvm::Value* element_shift = builder.CreateZExt(
+      element_shift32, builder.getInt64Ty());
+  llvm::Value* body = builder.CreateShl(
+      length, element_shift, "get_object_size.body");
+  const jlong alignment_mask = static_cast<jlong>(MinObjAlignmentInBytesMask);
+  llvm::Value* array_size = builder.CreateAnd(
+      builder.CreateAdd(builder.CreateAdd(body, header),
+                        builder.getInt64(alignment_mask)),
+      builder.getInt64(~alignment_mask), "get_object_size.array.result");
+  builder.CreateBr(done);
+  llvm::BasicBlock* array_end = builder.GetInsertBlock();
+
+  builder.SetInsertPoint(done);
+  _interp->_block->set_tail_llvm_block(done);
+  llvm::PHINode* result = builder.CreatePHI(
+      builder.getInt64Ty(), 2, "get_object_size.result");
+  result->addIncoming(instance_size, instance_end);
+  result->addIncoming(array_size, array_end);
+  _interp->_jvm->lpush(result);
+  return true;
+}
 
 // ---- lower_llvm_bitcast ----
 bool JeandleIntrinsicLowering::lower_llvm_bitcast() {

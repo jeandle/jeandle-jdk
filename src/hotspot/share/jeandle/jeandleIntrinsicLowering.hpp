@@ -180,6 +180,7 @@ class JeandleIntrinsicLowering : public StackObj {
   bool lower_spin_wait_hint();       // arch-specific
   bool lower_compare_unsigned(vmIntrinsics::ID id);
   bool lower_add_exact(vmIntrinsics::ID id);
+  bool lower_get_object_size();
   bool lower_new_array();
 
   };
