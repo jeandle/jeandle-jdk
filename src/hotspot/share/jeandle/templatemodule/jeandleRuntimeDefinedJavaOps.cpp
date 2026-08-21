@@ -387,7 +387,9 @@ JAVA_OP_END
 // from the object's mark word inline. Returns the hash on success, 0 on failure
 // (object locked/inflated, or hash not yet installed). Caller must guarantee
 // obj != null and must fall back to a runtime call when this returns 0.
-DEF_JAVA_OP(hashcode_fast, 0, llvm::Type::getInt32Ty(context),
+// Keep the identity observation opaque until PEA has materialized a virtual
+// receiver and replayed its state; phase 1 expands the mark-word access later.
+DEF_JAVA_OP(hashcode_fast, 1, llvm::Type::getInt32Ty(context),
             llvm::PointerType::get(context, llvm::jeandle::AddrSpace::JavaHeapAddrSpace))
   llvm::Value* obj = func->getArg(0);
 

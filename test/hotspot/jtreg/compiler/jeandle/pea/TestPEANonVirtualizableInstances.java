@@ -54,6 +54,7 @@ public class TestPEANonVirtualizableInstances {
         Method weakCaller = TestWrapper.class.getMethod("testWeakReference", Object.class);
         Method weakFactory = TestWrapper.class.getMethod("makeWeakReference", Object.class);
         Method identity = TestWrapper.class.getMethod("testIdentitySensitive", int.class);
+        Method identityLocked = TestWrapper.class.getMethod("testIdentitySensitiveLocked", int.class);
         Method unknown = TestWrapper.class.getMethod("testUnknownCall", int.class);
         Method valueBased = TestWrapper.class.getMethod("testValueBasedMonitor",
                 int.class, Object.class);
@@ -70,7 +71,7 @@ public class TestPEANonVirtualizableInstances {
         Constructor<TestWrapper.ThrowingBox> throwingCtor =
                 TestWrapper.ThrowingBox.class.getDeclaredConstructor(int.class);
         Method[] targets = {volatileOnly, finalizable, threadConstruction, threadLifecycle,
-                weakCaller, weakFactory, identity, unknown, valueBased, throwing};
+                weakCaller, weakFactory, identity, identityLocked, unknown, valueBased, throwing};
 
         behaviorBuilder(targets, unknownConsumer, threadRunner, weakFactory, identityHash,
                 finalizableCtor, threadCtor, throwingCtor)
@@ -84,7 +85,8 @@ public class TestPEANonVirtualizableInstances {
             assertTinyThreadRetained(run, threadLifecycle);
             assertWeakReferenceRetainedByDeoptimization(run, weakFactory);
             assertWeakReferenceCallerFlow(run, weakCaller, weakFactory);
-            assertIdentityMaterialized(run, identity, identityHash);
+            assertIdentityMaterialized(run, identity);
+            assertIdentityMaterializedLocked(run, identityLocked);
             assertUnknownCallMaterialized(run, unknown, unknownConsumer);
             assertValueBasedRefused(run, valueBased);
             assertThrowingConstructorRetained(run, throwing);
@@ -101,8 +103,7 @@ public class TestPEANonVirtualizableInstances {
                 threadRunner, weakFactory, identityHash, finalizableCtor, threadCtor,
                 throwingCtor)
                 .lockingMode(2)
-                .extraFlags("-XX:ControlIntrinsic=-_identityHashCode",
-                        "-XX:DiagnoseSyncOnValueBasedClasses=1",
+                .extraFlags("-XX:DiagnoseSyncOnValueBasedClasses=1",
                         "-D" + SHAPE_RUN_PROPERTY + "=true");
     }
 
@@ -336,19 +337,56 @@ public class TestPEANonVirtualizableInstances {
         lowered.assertBefore(getLoad, 1, refersTo, 1);
     }
 
-    private static void assertIdentityMaterialized(PEATestUtils.RunResult run, Method target,
-                                                    Method identityHash) throws Exception {
+    private static void assertIdentityMaterialized(PEATestUtils.RunResult run, Method target)
+            throws Exception {
         PEATestUtils.PEARound first = run.report(target).round(0);
         assertOneOriginalAllocationRetained(run, target);
         Asserts.assertEquals(first.effectCount("Materialize"), 1L,
                 target + ": identity use materializes exactly once");
         Asserts.assertEquals(first.effectCount("EliminateStore", "store atomic i32"), 1L,
                 target + ": the original field store is replayed at identity use");
-        String callee = PEATestUtils.MethodId.of(identityHash).llvmFunctionName();
-        PEATestUtils.IRBlock useBlock = run.report(target).finalAfter()
-                .blockContaining(callee, 0);
+        String fastHash = "@jeandle.hashcode_fast(";
+        PEATestUtils.IRBody after = run.report(target).finalAfter();
+        after.assertOccurrenceCount(fastHash, 2);
+        PEATestUtils.IRBlock useBlock = after.blockContaining(fastHash, 0);
         useBlock.assertOccurrenceCount("store atomic i32", 1);
-        useBlock.assertBefore("store atomic i32", 0, callee, 0);
+        useBlock.assertBefore("store atomic i32", 0, fastHash, 0);
+    }
+
+    private static void assertIdentityMaterializedLocked(PEATestUtils.RunResult run, Method target)
+            throws Exception {
+        PEATestUtils.PEAReport report = run.report(target);
+        PEATestUtils.PEARound first = report.round(0);
+        assertOneOriginalAllocationRetained(run, target);
+        Asserts.assertEquals(first.effectCount("Materialize"), 1L,
+                target + ": locked identity use materializes exactly once");
+        Asserts.assertEquals(first.effectCount("EliminateStore", "store atomic i32"), 1L,
+                target + ": locked identity use replays the field exactly once");
+        String fastHash = "@jeandle.hashcode_fast(";
+        PEATestUtils.IRBody after = report.finalAfter();
+        after.assertOccurrenceCount(fastHash, 2);
+        PEATestUtils.IRBlock useBlock = after.blockContaining(fastHash, 0);
+        useBlock.assertOccurrenceCount("store atomic i32", 1);
+        useBlock.assertBefore("store atomic i32", 0, fastHash, 0);
+        String monitorEnter = "jeandle.monitorenter_with_lightweight_lock";
+        String monitorExit = "jeandle.monitorexit_with_lightweight_lock";
+        Asserts.assertEquals(first.effectCount("ReplaceCall", monitorEnter), 0L,
+                target + ": source monitor enter remains until materialization");
+        Asserts.assertEquals(first.effectCount("ReplaceCall", monitorExit), 0L,
+                target + ": source monitor exit remains after materialization");
+        List<PEATestUtils.PEALockReplay> allReplays = report.rounds().stream()
+                .flatMap(round -> round.lockReplays().stream()).toList();
+        Asserts.assertEquals(allReplays.size(), 1,
+                target + ": exactly one lock replay across all PEA rounds");
+        Asserts.assertEquals(allReplays,
+                List.of(new PEATestUtils.PEALockReplay(0, 0, 0, 0, 0, 0)),
+                target + ": one physical lock is replayed for the materialized receiver");
+        useBlock.assertBefore("store atomic i32", 0, monitorEnter, 0);
+        useBlock.assertBefore(monitorEnter, 0, fastHash, 0);
+        PEATestUtils.IRBlock normalExitBlock = after.blockContaining(monitorExit, 1);
+        normalExitBlock.assertPresent("hashCode.result7");
+        normalExitBlock.assertBefore("load atomic i32", 0, monitorExit, 0);
+        after.assertBefore(fastHash, 1, monitorExit, 1);
     }
 
     private static void assertUnknownCallMaterialized(PEATestUtils.RunResult run, Method target,
@@ -549,6 +587,11 @@ public class TestPEANonVirtualizableInstances {
                         "identity hash remains stable for the same object");
                 digest = mix(digest, identityResult);
 
+                int lockedIdentityResult = testIdentitySensitiveLocked(value);
+                Asserts.assertEquals(lockedIdentityResult, value + 1,
+                        "locked identity hash remains stable before monitor exit");
+                digest = mix(digest, lockedIdentityResult);
+
                 observed = null;
                 int unknownResult = testUnknownCall(value);
                 Asserts.assertEquals(unknownResult, value + 9,
@@ -641,6 +684,17 @@ public class TestPEANonVirtualizableInstances {
             int first = System.identityHashCode(box);
             int second = System.identityHashCode(box);
             return box.value + (first == second ? 1 : -1);
+        }
+
+        @SuppressWarnings("synchronization")
+        public static int testIdentitySensitiveLocked(int value) {
+            PlainBox box = new PlainBox();
+            box.value = value;
+            synchronized (box) {
+                int first = System.identityHashCode(box);
+                int second = System.identityHashCode(box);
+                return box.value + (first == second ? 1 : -1);
+            }
         }
 
         public static int testUnknownCall(int value) {
