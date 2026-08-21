@@ -78,7 +78,8 @@ inline bool CompilerConfig::is_c1_simple_only() {
 }
 
 inline bool CompilerConfig::is_c2_enabled() {
-  return has_c2() && !is_interpreter_only() && !is_c1_only() && !is_jvmci_compiler();
+  return has_c2() && !is_interpreter_only() && !is_c1_only() &&
+         !is_jvmci_compiler() && !is_jeandle_compiler();
 }
 
 inline bool CompilerConfig::is_jvmci_compiler_enabled() {
