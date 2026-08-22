@@ -42,6 +42,7 @@
 #include "jeandle/jeandleUtils.hpp"
 
 #include "jeandle/__hotspotHeadersBegin__.hpp"
+#include "ci/ciInstance.hpp"
 #include "ci/ciMethodBlocks.hpp"
 #include "ci/ciMethodData.hpp"
 #include "ci/ciObjArrayKlass.hpp"
@@ -2663,6 +2664,19 @@ void JeandleAbstractInterpreter::do_field_access(bool is_get, bool is_static) {
 }
 
 void JeandleAbstractInterpreter::do_get_xxx(ciField* field, bool is_static) {
+  // Expose static final Class mirrors to Class intrinsic lowering. Keep other
+  // static constants as loads so the normal constant-field passes handle them.
+  if (field->is_static_constant() && field->layout_type() == T_OBJECT &&
+      field->type()->is_loaded()) {
+    ciConstant constant = field->constant_value();
+    ciObject* object = constant.is_valid() ? constant.as_object() : nullptr;
+    if (object != nullptr && object->is_instance() &&
+        object->as_instance()->java_mirror_type() != nullptr) {
+      _jvm->push(field->type()->basic_type(), constant_to_value(constant).value());
+      return;
+    }
+  }
+
   int offset = field->offset_in_bytes();
   llvm::Value* addr = nullptr;
 
