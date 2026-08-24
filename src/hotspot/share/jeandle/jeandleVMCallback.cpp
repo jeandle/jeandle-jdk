@@ -446,6 +446,19 @@ uintptr_t JeandleVMCallback::get_oop_klass(int oop_id) {
   return record_klass_metadata(klass);
 }
 
+uintptr_t JeandleVMCallback::get_klass_constant(uintptr_t klass_ptr) {
+  if (klass_ptr == 0) {
+    return 0;
+  }
+  VM_ENTRY_MARK;
+  Klass* klass = reinterpret_cast<Klass*>(klass_ptr);
+  ciKlass* ci_klass = ciEnv::current()->get_klass(klass);
+  if (ci_klass == nullptr || !ci_klass->is_loaded()) {
+    return 0;
+  }
+  return record_klass_metadata(ci_klass);
+}
+
 uintptr_t JeandleVMCallback::get_mirror_klass(int oop_id) {
   ciObject* oop = oop_by_id(oop_id);
   if (oop == nullptr || oop->is_null_object() || !oop->is_instance()) {
@@ -920,6 +933,7 @@ void JeandleVMCallback::register_callbacks() {
   callbacks.GetConstantField = &JeandleVMCallback::get_constant_field;
   callbacks.GetOopHandleName = &JeandleVMCallback::get_oop_handle_name;
   callbacks.GetOopKlass = &JeandleVMCallback::get_oop_klass;
+  callbacks.GetKlassConstant = &JeandleVMCallback::get_klass_constant;
   callbacks.GetMirrorKlass = &JeandleVMCallback::get_mirror_klass;
   callbacks.GetKlassLayoutHelper = &JeandleVMCallback::get_klass_layout_helper;
   callbacks.IsKlassInitialized = &JeandleVMCallback::is_klass_initialized;
