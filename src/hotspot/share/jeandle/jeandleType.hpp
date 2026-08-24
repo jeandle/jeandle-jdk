@@ -22,6 +22,7 @@
 #define SHARE_JEANDLE_TYPE_HPP
 
 #include "jeandle/__llvmHeadersBegin__.hpp"
+#include "llvm/IR/Jeandle/JeandleUtils.h"
 #include "llvm/IR/IRBuilder.h"
 #include "llvm/IR/LLVMContext.h"
 #include "llvm/IR/Type.h"
@@ -34,7 +35,9 @@ class JeandleType : public AllStatic {
  public:
 
   // Convert a Java type to its LLVM type.
-  static llvm::Type* java2llvm(BasicType jvm_type, llvm::LLVMContext& context);
+  static llvm::Type* java2llvm(BasicType jvm_type, llvm::LLVMContext& context) {
+    return llvm::jeandle::java2llvm(static_cast<llvm::jeandle::HotspotBasicType>(jvm_type), context);
+  }
 
   static bool is_double_word_type(llvm::Type* t) {
     return t->isIntegerTy(64) || t->isDoubleTy();
@@ -59,33 +62,9 @@ class JeandleType : public AllStatic {
     return (llvm::ConstantFP*)llvm::ConstantFP::get(builder.getDoubleTy(), value);
   }
 
-  // Convert a Java type to computational type
-  // Reference: https://docs.oracle.com/javase/specs/jvms/se21/html/jvms-2.html#jvms-2.11.1-320
   static BasicType actual2computational(BasicType bt) {
-    switch (bt) {
-      case T_BYTE   :
-      case T_CHAR   :
-      case T_SHORT  :
-      case T_BOOLEAN:
-      case T_INT    :
-        return T_INT;
-      case T_VOID   :
-      case T_LONG   :
-      case T_FLOAT  :
-      case T_DOUBLE :
-        return bt;
-      case T_ARRAY  :
-      case T_OBJECT :
-        return T_OBJECT;
-      case T_ADDRESS:
-        return T_ADDRESS;
-      case T_NARROWOOP :
-        return T_NARROWOOP;
-      case T_NARROWKLASS :
-        return T_NARROWKLASS;
-      default       :
-        ShouldNotReachHere();
-    }
+    return static_cast<BasicType>(llvm::jeandle::actual2computational(
+        static_cast<llvm::jeandle::HotspotBasicType>(bt)));
   }
 };
 

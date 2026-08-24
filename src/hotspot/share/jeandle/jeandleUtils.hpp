@@ -40,9 +40,14 @@ class SubtargetFeatures;
 class JeandleFuncSig : public AllStatic {
  public:
   // Create a llvm function according to the Java method.
-  static llvm::Function* create_llvm_func(ciMethod* method, llvm::Module& target_module, bool is_osr_entry);
+  static llvm::Function* create_llvm_func(ciMethod* method, llvm::Module& target_module, bool is_root, bool is_osr_entry);
   static std::string method_name(ciMethod* method);
-  static std::string method_name_with_signature(ciMethod* method, bool is_osr_entry = false);
+  static std::string method_name_with_signature(ciMethod* method);
+  // The root function name in the compiled module. Distinct from
+  // method_name_with_signature so that a recursive CHA-devirt target
+  // (which uses method_name_with_signature) is a different LLVM Function
+  // from the root, preventing DAE from seeing a recursive call.
+  static std::string root_method_name(ciMethod* method, bool is_osr_entry = false);
   static void setup_description(llvm::Function* func, ciMethod* method, bool is_stub = false);
 };
 

@@ -209,7 +209,7 @@ JRT_BLOCK_ENTRY(void, JeandleRuntimeRoutine::new_array_from_mirror(oopDesc* mirr
 JRT_END
 
 // It's a copy of OptoRuntime::new_instance_C
-JRT_BLOCK_ENTRY(void, JeandleRuntimeRoutine::new_instance(InstanceKlass* klass, JavaThread* current))
+JRT_BLOCK_ENTRY(void, JeandleRuntimeRoutine::new_instance(Klass* klass, JavaThread* current))
   JRT_BLOCK;
 #ifndef PRODUCT
     SharedRuntime::_new_instance_ctr++;         // new instance requires GC
@@ -223,7 +223,11 @@ JRT_BLOCK_ENTRY(void, JeandleRuntimeRoutine::new_instance(InstanceKlass* klass, 
 
     // These checks are cheap to make and support reflective allocation.
     int lh = klass->layout_helper();
-    if (Klass::layout_helper_needs_slow_path(lh) || !InstanceKlass::cast(klass)->is_initialized()) {
+    // This entry can receive an ArrayKlass, so do not assume that the Klass is
+    // an InstanceKlass before querying instance-only fields or casting it.
+    if (!Klass::layout_helper_is_instance(lh) ||
+        Klass::layout_helper_needs_slow_path(lh) ||
+        !InstanceKlass::cast(klass)->is_initialized()) {
       Handle holder(current, klass->klass_holder()); // keep the klass alive
       klass->check_valid_for_instantiation(false, THREAD);
       if (!HAS_PENDING_EXCEPTION) {

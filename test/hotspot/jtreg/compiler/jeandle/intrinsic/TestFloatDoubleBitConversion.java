@@ -22,7 +22,8 @@
  * @test
  * @key randomness
  * @summary Test the intrinsic implementation of Float.floatToRawIntBits, Float.intBitsToFloat,
- *          Double.doubleToRawLongBits, and Double.longBitsToDouble
+ *          Double.doubleToRawLongBits, Double.longBitsToDouble, Float.floatToIntBits, and
+ *          Double.doubleToLongBits
  * @library /test/lib /
  * @build jdk.test.lib.Asserts
  * @run main/othervm compiler.jeandle.intrinsic.TestFloatDoubleBitConversion
@@ -52,6 +53,8 @@ public class TestFloatDoubleBitConversion {
                 "-XX:CompileCommand=compileonly," + TestWrapper.class.getName() + "::intBitsToFloat",
                 "-XX:CompileCommand=compileonly," + TestWrapper.class.getName() + "::doubleToRawLongBits",
                 "-XX:CompileCommand=compileonly," + TestWrapper.class.getName() + "::longBitsToDouble",
+                "-XX:CompileCommand=compileonly," + TestWrapper.class.getName() + "::floatToIntBits",
+                "-XX:CompileCommand=compileonly," + TestWrapper.class.getName() + "::doubleToLongBits",
                 "-XX:CompileCommand=compileonly," + TestWrapper.class.getName() + "::main",
                 TestWrapper.class.getName()));
 
@@ -77,6 +80,20 @@ public class TestFloatDoubleBitConversion {
         FileCheck longToDoubleChecker = new FileCheck(dumpPath,
                 TestWrapper.class.getMethod("longBitsToDouble", long.class), false);
         longToDoubleChecker.checkPattern("bitcast");
+
+        // floatToIntBits/doubleToLongBits canonicalize NaN, so unlike the raw variants above
+        // they must lower to an isnan compare feeding a select, not a bare bitcast.
+        FileCheck floatToIntBitsChecker = new FileCheck(dumpPath,
+                TestWrapper.class.getMethod("floatToIntBits", float.class), false);
+        floatToIntBitsChecker.checkPattern("fcmp une");
+        floatToIntBitsChecker.checkPattern("bitcast");
+        floatToIntBitsChecker.checkPattern("select");
+
+        FileCheck doubleToLongBitsChecker = new FileCheck(dumpPath,
+                TestWrapper.class.getMethod("doubleToLongBits", double.class), false);
+        doubleToLongBitsChecker.checkPattern("fcmp une");
+        doubleToLongBitsChecker.checkPattern("bitcast");
+        doubleToLongBitsChecker.checkPattern("select");
     }
 
     static class TestWrapper {
@@ -137,6 +154,37 @@ public class TestFloatDoubleBitConversion {
                         "Float round-trip identity failed");
             }
 
+            // ===== Float.floatToIntBits =====
+            // Unlike floatToRawIntBits, every NaN input -- however it was constructed -- must
+            // canonicalize to the single bit pattern 0x7fc00000.
+            Asserts.assertEquals(0x7fc00000, floatToIntBits(Float.NaN), "floatToIntBits(NaN)");
+            Asserts.assertEquals(0x7fc00000, floatToIntBits(intBitsToFloat(0x7f800001)),
+                    "floatToIntBits(signaling NaN) must canonicalize");
+            Asserts.assertEquals(0x7fc00000, floatToIntBits(intBitsToFloat(0xffc00001)),
+                    "floatToIntBits(negative NaN payload) must canonicalize");
+            Asserts.assertEquals(0x7fc00000, floatToIntBits(intBitsToFloat(0x7fffffff)),
+                    "floatToIntBits(all-ones NaN payload) must canonicalize");
+
+            // Non-NaN values are bit-identical to floatToRawIntBits: zero, infinities, and an
+            // interpreter-computed reference for boundary/subnormal values.
+            Asserts.assertEquals(0x00000000, floatToIntBits(0.0f), "floatToIntBits(+0.0)");
+            Asserts.assertEquals(0x80000000, floatToIntBits(-0.0f), "floatToIntBits(-0.0)");
+            Asserts.assertEquals(0x7f800000, floatToIntBits(Float.POSITIVE_INFINITY),
+                    "floatToIntBits(+Inf)");
+            Asserts.assertEquals(0xff800000, floatToIntBits(Float.NEGATIVE_INFINITY),
+                    "floatToIntBits(-Inf)");
+            Asserts.assertEquals(Float.floatToIntBits(Float.MIN_VALUE), floatToIntBits(Float.MIN_VALUE),
+                    "floatToIntBits(MIN_VALUE)");
+            Asserts.assertEquals(Float.floatToIntBits(Float.MAX_VALUE), floatToIntBits(Float.MAX_VALUE),
+                    "floatToIntBits(MAX_VALUE)");
+
+            // Random non-NaN floats: compare against the interpreter-run Float.floatToIntBits.
+            for (int i = 0; i < 1000; i++) {
+                float f = (random.nextFloat() - 0.5f) * 2000.0f;
+                Asserts.assertEquals(Float.floatToIntBits(f), floatToIntBits(f),
+                        "floatToIntBits random mismatch for " + f);
+            }
+
             // ===== Double.doubleToRawLongBits =====
             Asserts.assertEquals(0x0000000000000000L, doubleToRawLongBits(0.0d),
                     "doubleToRawLongBits(+0.0)");
@@ -189,6 +237,37 @@ public class TestFloatDoubleBitConversion {
                         "Double round-trip identity failed");
             }
 
+            // ===== Double.doubleToLongBits =====
+            // Unlike doubleToRawLongBits, every NaN input must canonicalize to
+            // 0x7ff8000000000000L.
+            Asserts.assertEquals(0x7ff8000000000000L, doubleToLongBits(Double.NaN),
+                    "doubleToLongBits(NaN)");
+            Asserts.assertEquals(0x7ff8000000000000L, doubleToLongBits(longBitsToDouble(0x7ff0000000000001L)),
+                    "doubleToLongBits(signaling NaN) must canonicalize");
+            Asserts.assertEquals(0x7ff8000000000000L, doubleToLongBits(longBitsToDouble(0xfff8000000000001L)),
+                    "doubleToLongBits(negative NaN payload) must canonicalize");
+            Asserts.assertEquals(0x7ff8000000000000L, doubleToLongBits(longBitsToDouble(0x7fffffffffffffffL)),
+                    "doubleToLongBits(all-ones NaN payload) must canonicalize");
+
+            // Non-NaN values are bit-identical to doubleToRawLongBits.
+            Asserts.assertEquals(0x0000000000000000L, doubleToLongBits(0.0d), "doubleToLongBits(+0.0)");
+            Asserts.assertEquals(0x8000000000000000L, doubleToLongBits(-0.0d), "doubleToLongBits(-0.0)");
+            Asserts.assertEquals(0x7ff0000000000000L, doubleToLongBits(Double.POSITIVE_INFINITY),
+                    "doubleToLongBits(+Inf)");
+            Asserts.assertEquals(0xfff0000000000000L, doubleToLongBits(Double.NEGATIVE_INFINITY),
+                    "doubleToLongBits(-Inf)");
+            Asserts.assertEquals(Double.doubleToLongBits(Double.MIN_VALUE), doubleToLongBits(Double.MIN_VALUE),
+                    "doubleToLongBits(MIN_VALUE)");
+            Asserts.assertEquals(Double.doubleToLongBits(Double.MAX_VALUE), doubleToLongBits(Double.MAX_VALUE),
+                    "doubleToLongBits(MAX_VALUE)");
+
+            // Random non-NaN doubles: compare against the interpreter-run Double.doubleToLongBits.
+            for (int i = 0; i < 1000; i++) {
+                double d = (random.nextDouble() - 0.5d) * 2000.0d;
+                Asserts.assertEquals(Double.doubleToLongBits(d), doubleToLongBits(d),
+                        "doubleToLongBits random mismatch for " + d);
+            }
+
             System.out.println("TestFloatDoubleBitConversion PASSED");
         }
 
@@ -206,6 +285,14 @@ public class TestFloatDoubleBitConversion {
 
         public static double longBitsToDouble(long bits) {
             return Double.longBitsToDouble(bits);
+        }
+
+        public static int floatToIntBits(float f) {
+            return Float.floatToIntBits(f);
+        }
+
+        public static long doubleToLongBits(double d) {
+            return Double.doubleToLongBits(d);
         }
     }
 }

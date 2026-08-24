@@ -22,6 +22,7 @@
 #include "jeandle/__llvmHeadersBegin__.hpp"
 #include "llvm/Analysis/ConstantFolding.h"
 #include "llvm/IR/Constants.h"
+#include "llvm/IR/DerivedTypes.h"
 #include "llvm/IR/MDBuilder.h"
 
 #include "jeandle/jeandleAbstractInterpreter.hpp"
@@ -32,6 +33,7 @@
 #include "jeandle/__hotspotHeadersBegin__.hpp"
 #include "ci/ciMethod.hpp"
 #include "ci/ciSignature.hpp"
+#include "classfile/javaClasses.hpp"
 #include "classfile/vmIntrinsics.hpp"
 #include "jeandle/jeandle_globals.hpp"
 #include "logging/log.hpp"
@@ -39,6 +41,7 @@
 #include "oops/klass.hpp"
 #include "runtime/deoptimization.hpp"
 #include "runtime/globals.hpp"
+#include "runtime/vm_version.hpp"
 #include "utilities/globalDefinitions.hpp"
 
 // =============================================================================
@@ -95,6 +98,21 @@ bool JeandleIntrinsicLowering::is_supported(vmIntrinsics::ID id) {
     case vmIntrinsics::_onSpinWait:
       return cpu_supports_spin_wait();
 
+    case vmIntrinsics::_vectorizedMismatch:
+      return UseVectorizedMismatchIntrinsic;
+
+    // floatToFloat16/float16ToFloat: gated on the same
+    // VM_Version::supports_float16() predicate that turns on the template
+    // interpreter's hardware entries (and gates C1/C2's intrinsic versions
+    // upstream). Keeping the compiled-code gate identical to the
+    // interpreter's keeps NaN semantics consistent across tiers: with
+    // hardware support every tier quiets signaling NaNs the same way (see
+    // lower_float16_convert); without it every tier runs the pure-Java
+    // implementations.
+    case vmIntrinsics::_floatToFloat16:
+    case vmIntrinsics::_float16ToFloat:
+      return VM_Version::supports_float16();
+
     default: break;
   }
 
@@ -150,6 +168,8 @@ bool JeandleIntrinsicLowering::is_supported(vmIntrinsics::ID id) {
 
     // Instrumentation.getObjectSize
     case vmIntrinsics::_getObjectSize:
+    // currentThread
+    case vmIntrinsics::_currentThread:
 
     // Reference*
     case vmIntrinsics::_Reference_get:
@@ -159,11 +179,22 @@ bool JeandleIntrinsicLowering::is_supported(vmIntrinsics::ID id) {
     // newArray
     case vmIntrinsics::_newArray:
 
+    // Unsafe.allocateInstance
+    case vmIntrinsics::_allocateInstance:
+    
     // bitcast
     case vmIntrinsics::_floatToRawIntBits:
     case vmIntrinsics::_intBitsToFloat:
     case vmIntrinsics::_doubleToRawLongBits:
     case vmIntrinsics::_longBitsToDouble:
+
+    // floatToIntBits/doubleToLongBits: no CPU gating needed, same bucket as
+    // the other InlineMathNatives-only intrinsics above (min/max/fma) --
+    // disabled_by_jvm_flags() only checks InlineMathNatives for these two IDs,
+    // no hardware feature check. The NaN-canonicalizing compare+select this
+    // lowers to (see lower_fp_to_bits_canonical) is always legal IR.
+    case vmIntrinsics::_floatToIntBits:
+    case vmIntrinsics::_doubleToLongBits:
 
     // fence
     case vmIntrinsics::_loadFence:
@@ -193,10 +224,34 @@ bool JeandleIntrinsicLowering::is_supported(vmIntrinsics::ID id) {
     case vmIntrinsics::_reverseBytes_l:
     case vmIntrinsics::_reverseBytes_s:
     case vmIntrinsics::_reverseBytes_c:
-    // addExact
+
+    // Math.{add,subtract,multiply,increment,decrement,negate}Exact:
+    // UseMathExactIntrinsics and InlineMathNatives are enforced by
+    // vmIntrinsics::is_disabled_by_flags(), which the caller
+    // (try_lower_intrinsic()) already invokes unconditionally after
+    // is_supported() returns true, so no extra check is needed here.
     case vmIntrinsics::_addExactI:
     case vmIntrinsics::_addExactL:
+    case vmIntrinsics::_subtractExactI:
+    case vmIntrinsics::_subtractExactL:
+    case vmIntrinsics::_multiplyExactI:
+    case vmIntrinsics::_multiplyExactL:
+    case vmIntrinsics::_incrementExactI:
+    case vmIntrinsics::_incrementExactL:
+    case vmIntrinsics::_decrementExactI:
+    case vmIntrinsics::_decrementExactL:
+    case vmIntrinsics::_negateExactI:
+    case vmIntrinsics::_negateExactL:
+
+    // Math.multiplyHigh/unsignedMultiplyHigh: no CPU gating and no dedicated
+    // VM flag either (unlike e.g. CRC32/AES/FMA) -- disabled_by_jvm_flags()
+    // doesn't gate these IDs at all. The widen-to-i128/multiply/shift IR
+    // always lowers validly: plain integer multiply and shift on i128 are
+    // legal on every target Jeandle supports.
+    case vmIntrinsics::_multiplyHigh:
+    case vmIntrinsics::_unsignedMultiplyHigh:
       return true;
+
     default:
       return false;
   }
@@ -213,6 +268,7 @@ static constexpr JeandleTrapReasonMask trap_reason_mask_val(Deoptimization::Deop
 JeandleTrapReasonMask JeandleIntrinsicLowering::trap_throttle_mask(vmIntrinsics::ID id) {
   switch (id) {
     case vmIntrinsics::_getObjectSize:
+    case vmIntrinsics::_allocateInstance:
       return trap_reason_mask_val(Deoptimization::Reason_null_check);
     case vmIntrinsics::_Preconditions_checkIndex:
     case vmIntrinsics::_Preconditions_checkLongIndex:
@@ -220,6 +276,16 @@ JeandleTrapReasonMask JeandleIntrinsicLowering::trap_throttle_mask(vmIntrinsics:
              trap_reason_mask_val(Deoptimization::Reason_range_check);
     case vmIntrinsics::_addExactI:
     case vmIntrinsics::_addExactL:
+    case vmIntrinsics::_subtractExactI:
+    case vmIntrinsics::_subtractExactL:
+    case vmIntrinsics::_multiplyExactI:
+    case vmIntrinsics::_multiplyExactL:
+    case vmIntrinsics::_incrementExactI:
+    case vmIntrinsics::_incrementExactL:
+    case vmIntrinsics::_decrementExactI:
+    case vmIntrinsics::_decrementExactL:
+    case vmIntrinsics::_negateExactI:
+    case vmIntrinsics::_negateExactL:
       return trap_reason_mask_val(Deoptimization::Reason_intrinsic);
     default:
       return 0;
@@ -366,7 +432,12 @@ bool JeandleIntrinsicLowering::lower(vmIntrinsics::ID id, const ciMethod* target
     // TODO 2: Optimize the comparison between class pointers.
     case vmIntrinsics::_getClass:
       return lower_java_op("jeandle.get_class",
-                           {CTRL_NONE, MEM_READ | MEM_NEEDS_GC_STATE});
+                           {CTRL_NONE, MEM_READ});
+
+    // Thread.currentThread()
+    case vmIntrinsics::_currentThread:
+      return lower_java_op("jeandle.current_thread_obj",
+                           {CTRL_NONE, MEM_READ});
 
     case vmIntrinsics::_getObjectSize:
       return lower_get_object_size();
@@ -374,15 +445,22 @@ bool JeandleIntrinsicLowering::lower(vmIntrinsics::ID id, const ciMethod* target
     // Reference*
     case vmIntrinsics::_Reference_get:
       return lower_java_op("jeandle.reference_get",
-                           {CTRL_NONE, MEM_READ | MEM_NEEDS_GC_STATE});
+                           {CTRL_NONE, MEM_READ});
     case vmIntrinsics::_Reference_refersTo0:
     case vmIntrinsics::_PhantomReference_refersTo0:
       return lower_java_op("jeandle.reference_refers_to",
-                           {CTRL_NONE, MEM_READ | MEM_NEEDS_GC_STATE});
+                           {CTRL_NONE, MEM_READ});
+
+    case vmIntrinsics::_vectorizedMismatch:
+      return lower_vectorized_mismatch();
 
     // newArray
     case vmIntrinsics::_newArray:
       return lower_new_array();
+
+    // Unsafe.allocateInstance
+    case vmIntrinsics::_allocateInstance:
+      return lower_unsafe_allocate_instance();
 
     // bitcast
     case vmIntrinsics::_floatToRawIntBits:
@@ -390,6 +468,16 @@ bool JeandleIntrinsicLowering::lower(vmIntrinsics::ID id, const ciMethod* target
     case vmIntrinsics::_doubleToRawLongBits:
     case vmIntrinsics::_longBitsToDouble:
       return lower_llvm_bitcast();
+
+    // floatToIntBits/doubleToLongBits
+    case vmIntrinsics::_floatToIntBits:
+    case vmIntrinsics::_doubleToLongBits:
+      return lower_fp_to_bits_canonical(id);
+
+    // floatToFloat16/float16ToFloat
+    case vmIntrinsics::_floatToFloat16:
+    case vmIntrinsics::_float16ToFloat:
+      return lower_float16_convert(id);
 
     // fence
     case vmIntrinsics::_loadFence:
@@ -411,10 +499,33 @@ bool JeandleIntrinsicLowering::lower(vmIntrinsics::ID id, const ciMethod* target
     case vmIntrinsics::_compareUnsigned_l:
       return lower_compare_unsigned(id);
 
-    // addExact
+    // addExact and the other exact-arithmetic intrinsics share the same
+    // overflow-trap path implemented by lower_exact_arith.
     case vmIntrinsics::_addExactI:
     case vmIntrinsics::_addExactL:
-      return lower_add_exact(id);
+      return lower_exact_arith(id, llvm::Intrinsic::sadd_with_overflow);
+
+    // subtractExact/decrementExact/negateExact all reduce to
+    // llvm.ssub.with.overflow (see lower_exact_arith).
+    case vmIntrinsics::_subtractExactI:
+    case vmIntrinsics::_subtractExactL:
+    case vmIntrinsics::_decrementExactI:
+    case vmIntrinsics::_decrementExactL:
+    case vmIntrinsics::_negateExactI:
+    case vmIntrinsics::_negateExactL:
+      return lower_exact_arith(id, llvm::Intrinsic::ssub_with_overflow);
+
+    case vmIntrinsics::_multiplyExactI:
+    case vmIntrinsics::_multiplyExactL:
+      return lower_exact_arith(id, llvm::Intrinsic::smul_with_overflow);
+
+    case vmIntrinsics::_incrementExactI:
+    case vmIntrinsics::_incrementExactL:
+      return lower_exact_arith(id, llvm::Intrinsic::sadd_with_overflow);
+
+    case vmIntrinsics::_multiplyHigh:
+    case vmIntrinsics::_unsignedMultiplyHigh:
+      return lower_multiply_high(id);
 
     default:
       return false;
@@ -660,6 +771,111 @@ bool JeandleIntrinsicLowering::lower_llvm_bitcast() {
   llvm::Value* src = _interp->_jvm->pop(src_type);
   llvm::Value* cast = builder.CreateBitCast(src, JeandleType::java2llvm(dst_type, ctx));
   _interp->_jvm->push(dst_type, cast);
+  return true;
+}
+
+// ---- lower_fp_to_bits_canonical ----
+// Float.floatToIntBits(float) / Double.doubleToLongBits(double): like the raw
+// bitcast variants, but NaN inputs are canonicalized to the single NaN bit
+// pattern Java specifies, instead of preserving whatever NaN payload/sign the
+// input happened to carry. Mirrors C2's LibraryCallKit::inline_fp_conversions:
+// arg != arg (unordered compare) is true only for NaN; select between the
+// canonical NaN constant and the plain bitcast result.
+bool JeandleIntrinsicLowering::lower_fp_to_bits_canonical(vmIntrinsics::ID id) {
+  llvm::IRBuilder<>& builder = _interp->_ir_builder;
+  bool is_double = (id == vmIntrinsics::_doubleToLongBits);
+
+  if (is_double) {
+    llvm::Value* arg = _interp->_jvm->dpop();
+    llvm::Value* is_nan = builder.CreateFCmpUNE(arg, arg);
+    llvm::Value* bits = builder.CreateBitCast(arg, builder.getInt64Ty());
+    llvm::Value* canonical_nan = builder.getInt64(0x7ff8000000000000ULL);
+    _interp->_jvm->lpush(builder.CreateSelect(is_nan, canonical_nan, bits));
+  } else {
+    llvm::Value* arg = _interp->_jvm->fpop();
+    llvm::Value* is_nan = builder.CreateFCmpUNE(arg, arg);
+    llvm::Value* bits = builder.CreateBitCast(arg, builder.getInt32Ty());
+    llvm::Value* canonical_nan = builder.getInt32(0x7fc00000);
+    _interp->_jvm->ipush(builder.CreateSelect(is_nan, canonical_nan, bits));
+  }
+  return true;
+}
+
+// ---- lower_float16_convert ----
+// Float.floatToFloat16(float) / Float.float16ToFloat(short): float16 values
+// are carried as the raw bit pattern in a Java short, never as a distinct
+// value type, so the non-NaN path is a real narrowing/widening fp convert
+// (fptrunc/fpext through LLVM's `half` type) plus a bitcast to move between
+// `half` and the integer bits -- not a plain bitcast like the 32/64-bit
+// variants above.
+//
+// NaN results must not come from fptrunc/fpext. On machines where
+// VM_Version::supports_float16() holds (the only ones where these
+// intrinsics fire, mirroring the interpreter/C1/C2 gating), the template
+// interpreter entries execute the hardware conversion (x86 vcvtph2ps/
+// vcvtps2ph), which quiets signaling NaNs while preserving the payload.
+// LLVM, however, treats NaN payloads as unspecified: InstCombine folds
+// `fptrunc(fpext x)` to `x`, so a compiled
+// floatToFloat16(float16ToFloat(x)) round trip returns sNaN bit patterns
+// unchanged where the interpreter quiets them.
+// compiler/intrinsics/float16/Binary16ConversionNaN.java compares exactly
+// that round trip bit-for-bit against interpreter results for every 16-bit
+// NaN pattern, so the compiled NaN behavior has to be pinned down: NaNs
+// take an explicit integer-arithmetic path implementing the same
+// quiet-and-preserve-payload semantics as the hardware conversion:
+//   float16ToFloat: f32 = (sign16 << 16) | 0x7f800000 | ((sig10|0x200)<<13)
+//   floatToFloat16: f16 = sign16 | 0x7e00 | ((f32bits >> 13) & 0x1ff)
+// Encoding this in integer ops (selected on isNaN) makes it bit-exact by
+// construction on every target -- LLVM cannot legally alter it, the fp
+// convert only feeds the non-NaN result, and folding fptrunc(fpext x) is
+// value-exact for non-NaN halves. The common case stays a single hardware
+// conversion instruction plus a compare/select.
+//
+// Java short is a computational-int type on the JVM stack (like the
+// reverseBytes_s/_c narrow variants above), so the i16 bit pattern is
+// sign-extended to i32 on push, and truncated back from the popped i32 on the
+// way in.
+bool JeandleIntrinsicLowering::lower_float16_convert(vmIntrinsics::ID id) {
+  llvm::IRBuilder<>& builder = _interp->_ir_builder;
+  bool to_f16 = (id == vmIntrinsics::_floatToFloat16);
+
+  if (to_f16) {
+    llvm::Value* arg = _interp->_jvm->fpop();
+    // Non-NaN path: IEEE-754 narrowing conversion.
+    llvm::Value* half = builder.CreateFPTrunc(arg, builder.getHalfTy());
+    llvm::Value* conv_bits = builder.CreateBitCast(half, builder.getInt16Ty());
+    // NaN path: quiet and preserve the top payload bits, matching the
+    // hardware conversion the interpreter entry executes.
+    llvm::Value* bits = builder.CreateBitCast(arg, builder.getInt32Ty());
+    llvm::Value* nan16 = builder.CreateLShr(
+        builder.CreateAnd(bits, 0x80000000), 16);
+    nan16 = builder.CreateOr(nan16, 0x7e00);
+    nan16 = builder.CreateOr(nan16,
+        builder.CreateAnd(builder.CreateLShr(bits, 13), 0x1ff));
+    llvm::Value* is_nan = builder.CreateFCmpUNO(arg, arg);
+    llvm::Value* res = builder.CreateSelect(
+        is_nan, builder.CreateTrunc(nan16, builder.getInt16Ty()), conv_bits);
+    _interp->_jvm->ipush(builder.CreateSExt(res, builder.getInt32Ty()));
+  } else {
+    llvm::Value* arg = _interp->_jvm->ipop();
+    llvm::Value* bits = builder.CreateTrunc(arg, builder.getInt16Ty());
+    // Non-NaN path: IEEE-754 widening conversion (value-exact).
+    llvm::Value* half = builder.CreateBitCast(bits, builder.getHalfTy());
+    llvm::Value* conv = builder.CreateFPExt(half, builder.getFloatTy());
+    // NaN path: quiet and preserve the payload, matching the hardware
+    // conversion the interpreter entry executes.
+    llvm::Value* w = builder.CreateZExt(bits, builder.getInt32Ty());
+    llvm::Value* nan32 = builder.CreateShl(builder.CreateAnd(w, 0x8000), 16);
+    nan32 = builder.CreateOr(nan32, 0x7f800000);
+    nan32 = builder.CreateOr(nan32,
+        builder.CreateShl(builder.CreateOr(builder.CreateAnd(w, 0x03ff),
+                                           0x200), 13));
+    llvm::Value* nan_f = builder.CreateBitCast(nan32, builder.getFloatTy());
+    // NaN <=> all-ones exponent and nonzero significand.
+    llvm::Value* is_nan = builder.CreateICmpUGT(
+        builder.CreateAnd(w, 0x7fff), builder.getInt32(0x7c00));
+    _interp->_jvm->fpush(builder.CreateSelect(is_nan, nan_f, conv));
+  }
   return true;
 }
 
@@ -958,31 +1174,419 @@ bool JeandleIntrinsicLowering::lower_new_array() {
   return true;
 }
 
-// ---- lower_add_exact ----
-// Math.addExact(int,int) / Math.addExact(long,long):
-//   Use llvm.sadd.with.overflow; on overflow take an uncommon_trap
-//   (Reason_intrinsic / Action_none) so the interpreter re-executes.
-//   Args are peeked (not popped) before the branch so the statepoint
-//   captures the full pre-call stack for correct deopt re-execution.
-bool JeandleIntrinsicLowering::lower_add_exact(vmIntrinsics::ID id) {
+bool JeandleIntrinsicLowering::lower_unsafe_allocate_instance() {
+  llvm::LLVMContext& ctx = *_interp->_context;
+  llvm::IRBuilder<>& builder = _interp->_ir_builder;
+  llvm::Module& m = _interp->_module;
+
+  // Keep the invoke operands in the JVM state until every throwing or
+  // safepointing call has captured its deopt bundle.
+  llvm::Value* mirror = _interp->_jvm->raw_peek(0).value();
+  llvm::Value* unsafe = _interp->_jvm->raw_peek(1).value();
+
+  // Match normal invokevirtual ordering: validate the receiver before the
+  // explicit Class<?> argument.
+  _interp->null_check(unsafe);
+  _interp->null_check(mirror);
+
+  llvm::PointerType* c_heap_ptr_ty =
+      llvm::PointerType::get(ctx, llvm::jeandle::AddrSpace::CHeapAddrSpace);
+
+  llvm::BasicBlock* allocation_check_bb =
+      llvm::BasicBlock::Create(ctx, "unsafe_allocate_check", _interp->_llvm_func);
+  llvm::BasicBlock* primitive_trap_bb = llvm::BasicBlock::Create(
+      ctx, "unsafe_allocate_primitive_trap", _interp->_llvm_func);
+
+  // TODO: Fold constant mirrors, their Klass, and the dependent layout and
+  // initialization loads together in an LLVM pass.
+  llvm::Value* klass_addr = builder.CreateInBoundsGEP(
+      builder.getInt8Ty(), mirror,
+      builder.getInt32(java_lang_Class::klass_offset()));
+  llvm::Value* klass = builder.CreateLoad(
+      c_heap_ptr_ty, klass_addr, "unsafe_allocate.klass");
+  llvm::Value* klass_is_null = builder.CreateICmpEQ(
+      klass, llvm::ConstantPointerNull::get(c_heap_ptr_ty));
+  builder.CreateCondBr(klass_is_null, primitive_trap_bb, allocation_check_bb);
+  _interp->uncommon_trap(Deoptimization::Reason_null_check,
+                         Deoptimization::Action_make_not_entrant,
+                         primitive_trap_bb,
+                         true /* should_reexecute */);
+
+  builder.SetInsertPoint(allocation_check_bb);
+  llvm::Value* layout_addr = builder.CreateInBoundsGEP(
+      builder.getInt8Ty(), klass,
+      builder.getInt32(in_bytes(Klass::layout_helper_offset())));
+  llvm::Value* layout = builder.CreateLoad(
+      builder.getInt32Ty(), layout_addr, "unsafe_allocate.layout");
+
+  llvm::Value* init_state_addr = builder.CreateInBoundsGEP(
+      builder.getInt8Ty(), klass,
+      builder.getInt32(in_bytes(InstanceKlass::init_state_offset())));
+  llvm::Value* init_state = builder.CreateLoad(
+      builder.getInt8Ty(), init_state_addr, "unsafe_allocate.init_state");
+  llvm::Value* init_delta = builder.CreateSub(
+      builder.CreateZExt(init_state, builder.getInt32Ty()),
+      builder.getInt32(InstanceKlass::fully_initialized),
+      "unsafe_allocate.init_delta");
+
+  // Match GraphKit::new_instance's reflective slow test. This also routes
+  // arrays, interfaces, abstract classes and java.lang.Class to the runtime.
+  llvm::Value* slow_path_bits = builder.CreateAnd(
+      layout, builder.getInt32(Klass::_lh_instance_slow_path_bit),
+      "unsafe_allocate.slow_path_bits");
+  llvm::Value* slow_test = builder.CreateOr(
+      slow_path_bits, init_delta, "unsafe_allocate.slow_test");
+  llvm::Value* needs_slow_path = builder.CreateICmpNE(
+      slow_test, builder.getInt32(0));
+
+  // The layout helper stores the aligned instance size in bytes; its low bits
+  // contain allocation flags and must not be passed to the TLAB allocator.
+  llvm::Value* size_in_bytes = builder.CreateAnd(
+      layout, builder.getInt32(~(jint)right_n_bits(LogBytesPerLong)),
+      "unsafe_allocate.size_in_bytes");
+  llvm::Function* new_instance_op = m.getFunction("jeandle.new_instance");
+  assert(new_instance_op != nullptr, "jeandle.new_instance JavaOp must exist");
+  // All reexecuting checks have completed. The allocation slow path must use
+  // the post-invoke state, so do not keep the Unsafe receiver or Class mirror
+  // live in its deopt bundle.
+  _interp->_jvm->apop(); // mirror
+  _interp->_jvm->apop(); // Unsafe receiver
+
+  static constexpr CallSiteAttributeMetadata allocation_attrs =
+      {CTRL_NEEDS_EXCEPTION_EDGE, MEM_READ | MEM_WRITE};
+  // The JavaOp routes this initial slow test and TLAB exhaustion to one
+  // shared new-instance runtime call.
+  llvm::CallBase* result = emit_callsite(
+      new_instance_op, llvm::CallingConv::Hotspot_JIT,
+      {klass, size_in_bytes, needs_slow_path}, allocation_attrs);
+
+  _interp->_jvm->apush(result);
+  return true;
+}
+
+// ---- lower_vectorized_mismatch ----
+//
+// Use LLVM IR for byte ranges too small to benefit from the platform stub. The
+// larger ranges retain the platform StubRoutines implementation, including its
+// vector tiers where available.
+bool JeandleIntrinsicLowering::lower_vectorized_mismatch() {
+  if (!UseVectorizedMismatchIntrinsic ||
+      JeandleRuntimeRoutine::find_routine_entry("StubRoutines_vectorizedMismatch") == nullptr) {
+    return false;
+  }
+
+  llvm::IRBuilder<>& b = _interp->_ir_builder;
+  llvm::Type* i8 = b.getInt8Ty();
+
+  // Operand stack, top to bottom:
+  //   scale, length, bOffset, b, aOffset, a
+  // All support checks above must complete before these values are consumed.
+  llvm::Value* scale = _interp->_jvm->ipop();
+  llvm::Value* length = _interp->_jvm->ipop();
+  llvm::Value* b_offset = _interp->_jvm->lpop();
+  llvm::Value* b_obj = _interp->_jvm->apop();
+  llvm::Value* a_offset = _interp->_jvm->lpop();
+  llvm::Value* a_obj = _interp->_jvm->apop();
+
+  llvm::Value* a_addr = b.CreateGEP(i8, a_obj, a_offset, "mismatch_a_addr");
+  llvm::Value* b_addr = b.CreateGEP(i8, b_obj, b_offset, "mismatch_b_addr");
+
+  llvm::LLVMContext& ctx = *_interp->_context;
+  llvm::Type* i32 = b.getInt32Ty();
+  llvm::Type* i64 = b.getInt64Ty();
+  llvm::Function* f = _interp->_llvm_func;
+
+  static constexpr unsigned small_path_limit = 16;
+
+  // Compute in i64 so a large i32 length shifted by scale cannot wrap into an
+  // inline tier. The VM guarantees scale is a valid element-size logarithm.
+  llvm::Value* scale64 = b.CreateZExt(scale, i64, "mismatch_scale64");
+  llvm::Value* byte_length = b.CreateShl(b.CreateZExt(length, i64), scale64,
+                                         "mismatch_byte_length");
+  llvm::Value* is_small = b.CreateICmpULT(
+      byte_length, llvm::ConstantInt::get(i64, small_path_limit),
+      "mismatch_inline_small");
+
+  const uint64_t medium_path_limit =
+      static_cast<uint64_t>(ArrayOperationPartialInlineSize);
+  const bool use_medium_path = supports_vectorized_mismatch_medium_path() &&
+                               medium_path_limit >= small_path_limit;
+  llvm::BasicBlock* small_bb = llvm::BasicBlock::Create(ctx, "mismatch_inline_small", f);
+  llvm::BasicBlock* dispatch_bb = llvm::BasicBlock::Create(ctx, "mismatch_dispatch_medium", f);
+  llvm::BasicBlock* medium_bb = use_medium_path
+      ? llvm::BasicBlock::Create(ctx, "mismatch_inline_medium", f) : nullptr;
+  llvm::BasicBlock* stub_bb = llvm::BasicBlock::Create(ctx, "mismatch_stub", f);
+  llvm::BasicBlock* done_bb = llvm::BasicBlock::Create(ctx, "mismatch_done", f);
+  b.CreateCondBr(is_small, small_bb, dispatch_bb);
+
+  // Tier 1: inline scalar IR for ranges shorter than 16 bytes.
+  b.SetInsertPoint(small_bb);
+  llvm::Value* small_result = emit_vectorized_mismatch_small(a_addr, b_addr, byte_length, scale64);
+  llvm::BasicBlock* small_done_bb = b.GetInsertBlock();
+  b.CreateBr(done_bb);
+
+  llvm::Value* medium_result = nullptr;
+  llvm::BasicBlock* medium_done_bb = nullptr;
+
+  // Tier 2 is available only when the target can lower the fixed-width vector
+  // IR efficiently. Unsupported targets skip directly to the platform stub.
+  b.SetInsertPoint(dispatch_bb);
+  if (use_medium_path) {
+    llvm::Value* is_medium = b.CreateICmpULE(
+        byte_length, llvm::ConstantInt::get(i64, medium_path_limit),
+        "mismatch_inline_medium");
+    b.CreateCondBr(is_medium, medium_bb, stub_bb);
+
+    // Tier 2: inline 128-bit vector IR up to ArrayOperationPartialInlineSize.
+    b.SetInsertPoint(medium_bb);
+    medium_result = emit_vectorized_mismatch_medium(a_addr, b_addr, byte_length, scale64);
+    medium_done_bb = b.GetInsertBlock();
+    b.CreateBr(done_bb);
+  } else {
+    b.CreateBr(stub_bb);
+  }
+
+  // Tier 3: use the platform stub for large ranges, or as the fallback when
+  // fixed-width vector IR is not enabled on the target.
+  b.SetInsertPoint(stub_bb);
+  static constexpr CallSiteAttributeMetadata attrs = {CTRL_NONE, MEM_READ};
+  llvm::CallBase* call = emit_callsite(
+      JeandleRuntimeRoutine::StubRoutines_vectorizedMismatch_callee(_interp->_module),
+      llvm::CallingConv::C, {a_addr, b_addr, length, scale}, attrs,
+      /*is_gc_leaf_entry=*/true);
+  llvm::BasicBlock* stub_done_bb = b.GetInsertBlock();
+  b.CreateBr(done_bb);
+
+  // All enabled tiers produce the same element-index result.
+  b.SetInsertPoint(done_bb);
+  llvm::PHINode* result = b.CreatePHI(i32, use_medium_path ? 3 : 2, "mismatch_result");
+  result->addIncoming(small_result, small_done_bb);
+  if (use_medium_path) {
+    result->addIncoming(medium_result, medium_done_bb);
+  }
+  result->addIncoming(call, stub_done_bb);
+  _interp->_block->set_tail_llvm_block(done_bb);
+  _interp->_jvm->ipush(result);
+  return true;
+}
+
+llvm::Value* JeandleIntrinsicLowering::emit_vectorized_mismatch_small(
+    llvm::Value* a_addr, llvm::Value* b_addr, llvm::Value* byte_length, llvm::Value* scale) {
+  llvm::LLVMContext& ctx = *_interp->_context;
+  llvm::IRBuilder<>& b = _interp->_ir_builder;
+  llvm::Type* i32 = b.getInt32Ty();
+  llvm::Type* i64 = b.getInt64Ty();
+  llvm::Function* f = _interp->_llvm_func;
+
+  llvm::BasicBlock* first_check = llvm::BasicBlock::Create(ctx, "mismatch_inline_small_check", f);
+  llvm::BasicBlock* done = llvm::BasicBlock::Create(ctx, "mismatch_inline_small_done", f);
+  llvm::PHINode* result = llvm::PHINode::Create(i32, 5, "mismatch_inline_small_result", done);
+  b.CreateBr(first_check);
+
+  // Compare the largest exact chunk first. All loads use Align(1), since
+  // vectorizedMismatch also accepts direct, non-aligned Unsafe addresses.
+  static constexpr unsigned widths[] = {8, 4, 2, 1};
+  static constexpr const char* suffixes[] = {"i64", "i32", "i16", "i8"};
+  llvm::BasicBlock* check = first_check;
+  llvm::Value* pos = llvm::ConstantInt::get(i64, 0);
+  for (unsigned index = 0; index < sizeof(widths) / sizeof(widths[0]); index++) {
+    const unsigned width = widths[index];
+    const char* suffix = suffixes[index];
+    llvm::Type* chunk_ty = llvm::IntegerType::get(ctx, width * BitsPerByte);
+    llvm::BasicBlock* load = llvm::BasicBlock::Create(ctx, "mismatch_inline_small_load", f);
+    llvm::BasicBlock* hit = llvm::BasicBlock::Create(ctx, "mismatch_inline_small_hit", f);
+    llvm::BasicBlock* equal = llvm::BasicBlock::Create(ctx, "mismatch_inline_small_equal", f);
+    llvm::BasicBlock* next_check = llvm::BasicBlock::Create(ctx, "mismatch_inline_small_check", f);
+
+    // Use this width only when the unprocessed suffix is large enough.
+    b.SetInsertPoint(check);
+    llvm::Value* remaining = b.CreateSub(byte_length, pos, "mismatch_inline_small_remaining");
+    b.CreateCondBr(b.CreateICmpUGE(remaining, llvm::ConstantInt::get(i64, width)), load, next_check);
+
+    // Loads are explicitly unaligned because either base may be a raw Unsafe
+    // address rather than an aligned Java array base.
+    b.SetInsertPoint(load);
+    llvm::Value* a_ptr = b.CreateGEP(b.getInt8Ty(), a_addr, pos, "mismatch_inline_small_a_addr");
+    llvm::Value* b_ptr = b.CreateGEP(b.getInt8Ty(), b_addr, pos, "mismatch_inline_small_b_addr");
+    llvm::Value* a_chunk = b.CreateAlignedLoad(
+        chunk_ty, a_ptr, llvm::Align(1), llvm::Twine("mismatch_inline_small_a_") + suffix);
+    llvm::Value* b_chunk = b.CreateAlignedLoad(
+        chunk_ty, b_ptr, llvm::Align(1), llvm::Twine("mismatch_inline_small_b_") + suffix);
+    llvm::Value* diff = b.CreateXor(a_chunk, b_chunk, "mismatch_inline_small_diff");
+    b.CreateCondBr(b.CreateICmpNE(diff, llvm::ConstantInt::get(chunk_ty, 0)), hit, equal);
+
+    // cttz identifies the first differing bit in the loaded little-endian
+    // chunk. Convert it first to a byte index, then to an element index.
+    b.SetInsertPoint(hit);
+    llvm::Value* first_bit = b.CreateIntrinsic(llvm::Intrinsic::cttz, {chunk_ty},
+        {diff, b.getInt1(true)}, nullptr, "mismatch_inline_small_cttz");
+    llvm::Value* byte_in_chunk = b.CreateLShr(first_bit,
+        llvm::ConstantInt::get(chunk_ty, LogBitsPerByte), "mismatch_inline_small_byte_in_chunk");
+    llvm::Value* byte_index = b.CreateAdd(pos, b.CreateZExtOrTrunc(byte_in_chunk, i64),
+                                           "mismatch_inline_small_byte_index");
+    llvm::Value* element_index = b.CreateTrunc(
+        b.CreateLShr(byte_index, scale), i32, "mismatch_inline_small_element_index");
+    result->addIncoming(element_index, hit);
+    b.CreateBr(done);
+
+    // This chunk matched. Advance by its width and try the next smaller width.
+    b.SetInsertPoint(equal);
+    llvm::Value* next_pos = b.CreateAdd(pos, llvm::ConstantInt::get(i64, width),
+                                        "mismatch_inline_small_next_pos");
+    b.CreateBr(next_check);
+
+    b.SetInsertPoint(next_check);
+    llvm::PHINode* merged_pos = b.CreatePHI(i64, 2, "mismatch_inline_small_pos");
+    merged_pos->addIncoming(pos, check);
+    merged_pos->addIncoming(next_pos, equal);
+    pos = merged_pos;
+    check = next_check;
+  }
+
+  // No width found a difference, so the complete range matched.
+  b.SetInsertPoint(check);
+  result->addIncoming(llvm::ConstantInt::getSigned(i32, -1), check);
+  b.CreateBr(done);
+
+  b.SetInsertPoint(done);
+  return result;
+}
+
+llvm::Value* JeandleIntrinsicLowering::emit_vectorized_mismatch_medium(
+    llvm::Value* a_addr, llvm::Value* b_addr, llvm::Value* byte_length, llvm::Value* scale) {
+
+  // We are generating a loop that does not have any safepoint.
+  _interp->_module.getOrInsertNamedMetadata(llvm::jeandle::Metadata::SkipSafepointCoverageVerifier);
+
+  llvm::LLVMContext& ctx = *_interp->_context;
+  llvm::IRBuilder<>& b = _interp->_ir_builder;
+  llvm::Type* i8 = b.getInt8Ty();
+  llvm::Type* i16 = b.getInt16Ty();
+  llvm::Type* i32 = b.getInt32Ty();
+  llvm::Type* i64 = b.getInt64Ty();
+  static constexpr unsigned vector_bytes = 16;
+  llvm::Type* vec_ty = llvm::FixedVectorType::get(i8, vector_bytes);
+  llvm::Function* f = _interp->_llvm_func;
+
+  llvm::BasicBlock* pred = b.GetInsertBlock();
+  llvm::BasicBlock* head = llvm::BasicBlock::Create(ctx, "mismatch_inline_vector_head", f);
+  llvm::BasicBlock* hit = llvm::BasicBlock::Create(ctx, "mismatch_inline_vector_hit", f);
+  llvm::BasicBlock* matched = llvm::BasicBlock::Create(ctx, "mismatch_inline_vector_matched", f);
+  llvm::BasicBlock* advance = llvm::BasicBlock::Create(ctx, "mismatch_inline_vector_advance", f);
+  llvm::BasicBlock* done = llvm::BasicBlock::Create(ctx, "mismatch_inline_vector_done", f);
+
+  // The final vector load starts at byte_length - 16. When the range is not a
+  // multiple of 16, this overlaps the preceding load and covers the tail
+  // without an out-of-bounds access or a scalar cleanup loop.
+  llvm::Value* last_start = b.CreateSub(
+      byte_length, llvm::ConstantInt::get(i64, vector_bytes),
+      "mismatch_inline_vector_last_start");
+  b.CreateBr(head);
+
+  // Compare one 16-byte window and reduce the per-byte comparison to a mask.
+  b.SetInsertPoint(head);
+  llvm::PHINode* pos = b.CreatePHI(i64, 2, "mismatch_inline_vector_pos");
+  pos->addIncoming(llvm::ConstantInt::get(i64, 0), pred);
+  llvm::Value* a_ptr = b.CreateGEP(i8, a_addr, pos, "mismatch_inline_vector_a_addr");
+  llvm::Value* b_ptr = b.CreateGEP(i8, b_addr, pos, "mismatch_inline_vector_b_addr");
+  llvm::Value* va = b.CreateAlignedLoad(vec_ty, a_ptr, llvm::Align(1),
+                                        "mismatch_inline_vector_a");
+  llvm::Value* vb = b.CreateAlignedLoad(vec_ty, b_ptr, llvm::Align(1),
+                                        "mismatch_inline_vector_b");
+  llvm::Value* byte_diff = b.CreateICmpNE(va, vb, "mismatch_inline_vector_diff");
+  llvm::Value* mask = b.CreateBitCast(byte_diff, i16, "mismatch_inline_vector_mask");
+  b.CreateCondBr(b.CreateICmpNE(mask, llvm::ConstantInt::get(i16, 0)), hit, matched);
+
+  // Each bit in the mask represents one byte. cttz therefore gives the first
+  // differing byte directly.
+  b.SetInsertPoint(hit);
+  llvm::Value* first_byte = b.CreateIntrinsic(llvm::Intrinsic::cttz, {i16},
+      {mask, b.getInt1(true)}, nullptr, "mismatch_inline_vector_cttz");
+  llvm::Value* byte_index = b.CreateAdd(pos, b.CreateZExt(first_byte, i64),
+                                        "mismatch_inline_vector_byte_index");
+  llvm::Value* element_index = b.CreateTrunc(b.CreateLShr(byte_index, scale), i32,
+                                              "mismatch_inline_vector_element_index");
+  b.CreateBr(done);
+
+  // Reaching last_start means the entire byte range has been compared.
+  b.SetInsertPoint(matched);
+  b.CreateCondBr(b.CreateICmpEQ(pos, last_start), done, advance);
+
+  // Advance normally when another full vector fits. Otherwise compare the
+  // overlapping final window at last_start.
+  b.SetInsertPoint(advance);
+  llvm::Value* sequential = b.CreateAdd(
+      pos, llvm::ConstantInt::get(i64, vector_bytes),
+      "mismatch_inline_vector_sequential");
+  llvm::Value* sequential_end = b.CreateAdd(
+      sequential, llvm::ConstantInt::get(i64, vector_bytes));
+  llvm::Value* next_pos = b.CreateSelect(b.CreateICmpULE(sequential_end, byte_length), sequential,
+                                         last_start, "mismatch_inline_vector_next");
+  pos->addIncoming(next_pos, advance);
+  b.CreateBr(head);
+
+  b.SetInsertPoint(done);
+  llvm::PHINode* result = b.CreatePHI(i32, 2, "mismatch_inline_vector_result");
+  result->addIncoming(element_index, hit);
+  result->addIncoming(llvm::ConstantInt::getSigned(i32, -1), matched);
+  return result;
+}
+
+// ---- lower_exact_arith ----
+// Math.addExact/subtractExact/multiplyExact/incrementExact/decrementExact/negateExact
+// llvm.s{sub,mul}.with.overflow, branch on the overflow bit to an
+// uncommon_trap (Reason_intrinsic/Action_none) so the interpreter
+// re-executes. Args are peeked (not popped) before the branch for the same
+// deopt re-execution reason.
+//
+// increment/decrement/negate are unary in Java but all three reduce to the
+// with-overflow intrinsic on a synthesized second operand: a+1, a-1, and 0-a
+// respectively -- negation overflows exactly when a == MIN_VALUE, which is
+// exactly when 0-a overflows the signed range, so ssub.with.overflow(0, a)
+// detects it correctly without a separate check.
+bool JeandleIntrinsicLowering::lower_exact_arith(vmIntrinsics::ID id,
+                                                 llvm::Intrinsic::ID overflow_id) {
   llvm::IRBuilder<>& builder = _interp->_ir_builder;
   llvm::LLVMContext& ctx = *_interp->_context;
   int cur_bci = _interp->_bytecodes.cur_bci();
-  bool is_long = (id == vmIntrinsics::_addExactL);
+
+  bool is_long = (id == vmIntrinsics::_addExactL ||
+                  id == vmIntrinsics::_subtractExactL ||
+                  id == vmIntrinsics::_multiplyExactL ||
+                  id == vmIntrinsics::_incrementExactL ||
+                  id == vmIntrinsics::_decrementExactL ||
+                  id == vmIntrinsics::_negateExactL);
+  bool unary = (id == vmIntrinsics::_incrementExactI || id == vmIntrinsics::_incrementExactL ||
+                id == vmIntrinsics::_decrementExactI || id == vmIntrinsics::_decrementExactL ||
+                id == vmIntrinsics::_negateExactI     || id == vmIntrinsics::_negateExactL);
 
   llvm::Type* ty = JeandleType::java2llvm(
       is_long ? BasicType::T_LONG : BasicType::T_INT, ctx);
 
-  llvm::Value* arg2 = _interp->_jvm->peek_value(0).value();
-  llvm::Value* arg1 = _interp->_jvm->peek_value(1).value();
+  llvm::Value* arg1;
+  llvm::Value* arg2;
+  if (unary) {
+    llvm::Value* a = _interp->_jvm->peek_value(0).value();
+    bool is_negate = (id == vmIntrinsics::_negateExactI || id == vmIntrinsics::_negateExactL);
+    if (is_negate) {
+      arg1 = llvm::ConstantInt::get(ty, 0);
+      arg2 = a;
+    } else {
+      arg1 = a;
+      arg2 = llvm::ConstantInt::get(ty, 1);
+    }
+  } else {
+    arg2 = _interp->_jvm->peek_value(0).value();
+    arg1 = _interp->_jvm->peek_value(1).value();
+  }
 
-  llvm::Value* res = builder.CreateIntrinsic(
-      llvm::Intrinsic::sadd_with_overflow, {ty}, {arg1, arg2});
+  llvm::Value* res = builder.CreateIntrinsic(overflow_id, {ty}, {arg1, arg2});
   llvm::Value* result   = builder.CreateExtractValue(res, 0);
   llvm::Value* overflow = builder.CreateExtractValue(res, 1);
 
-  const std::string pfx = "bci_" + std::to_string(cur_bci) +
-                           (is_long ? "_addExactL" : "_addExactI");
+  // vmIntrinsics::name_at(id) yields e.g. "_subtractExactI", matching the
+  // addExactI/addExactL block-label convention used by this shared helper.
+  const std::string pfx = "bci_" + std::to_string(cur_bci) + vmIntrinsics::name_at(id);
   llvm::BasicBlock* ok_bb = llvm::BasicBlock::Create(ctx, pfx + "_ok",       _interp->_llvm_func);
   llvm::BasicBlock* ov_bb = llvm::BasicBlock::Create(ctx, pfx + "_overflow", _interp->_llvm_func);
 
@@ -996,13 +1600,37 @@ bool JeandleIntrinsicLowering::lower_add_exact(vmIntrinsics::ID id) {
   _interp->_block->set_tail_llvm_block(ok_bb);
 
   if (is_long) {
-    _interp->_jvm->lpop(); // arg2
-    _interp->_jvm->lpop(); // arg1
+    _interp->_jvm->lpop();
+    if (!unary) _interp->_jvm->lpop();
     _interp->_jvm->lpush(result);
   } else {
-    _interp->_jvm->ipop(); // arg2
-    _interp->_jvm->ipop(); // arg1
+    _interp->_jvm->ipop();
+    if (!unary) _interp->_jvm->ipop();
     _interp->_jvm->ipush(result);
   }
+  return true;
+}
+
+// ---- lower_multiply_high ----
+// Math.multiplyHigh(long,long) / Math.unsignedMultiplyHigh(long,long): the
+// most significant 64 bits of the signed (resp. unsigned) 128-bit product of
+// the two 64-bit operands. Sign/zero-extend both operands to i128, multiply,
+// and shift right 64 -- the canonical wide-multiply idiom LLVM's instruction
+// selection recognizes and lowers to a single hardware mul-high instruction
+// (e.g. imulq/mulq on x86-64) rather than a real 128-bit multiply routine.
+bool JeandleIntrinsicLowering::lower_multiply_high(vmIntrinsics::ID id) {
+  llvm::IRBuilder<>& builder = _interp->_ir_builder;
+  bool is_unsigned = (id == vmIntrinsics::_unsignedMultiplyHigh);
+
+  llvm::Value* y = _interp->_jvm->lpop();
+  llvm::Value* x = _interp->_jvm->lpop();
+
+  llvm::Type* wide_ty = builder.getIntNTy(128);
+  llvm::Value* x_wide = is_unsigned ? builder.CreateZExt(x, wide_ty) : builder.CreateSExt(x, wide_ty);
+  llvm::Value* y_wide = is_unsigned ? builder.CreateZExt(y, wide_ty) : builder.CreateSExt(y, wide_ty);
+  llvm::Value* product = builder.CreateMul(x_wide, y_wide);
+  llvm::Value* high = builder.CreateLShr(product, 64);
+
+  _interp->_jvm->lpush(builder.CreateTrunc(high, builder.getInt64Ty()));
   return true;
 }

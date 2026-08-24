@@ -278,6 +278,16 @@
       llvm::PointerType::get(context, llvm::jeandle::AddrSpace::CHeapAddrSpace),    \
       llvm::PointerType::get(context, llvm::jeandle::AddrSpace::CHeapAddrSpace))    \
                                                                                     \
+  def(StubRoutines_vectorizedMismatch,                                              \
+      StubRoutines::vectorizedMismatch(),                                           \
+      true,                                                                         \
+      true,                                                                         \
+      llvm::Type::getInt32Ty(context),                                              \
+      llvm::PointerType::get(context, llvm::jeandle::AddrSpace::JavaHeapAddrSpace), \
+      llvm::PointerType::get(context, llvm::jeandle::AddrSpace::JavaHeapAddrSpace), \
+      llvm::Type::getInt32Ty(context),                                              \
+      llvm::Type::getInt32Ty(context))                                              \
+                                                                                    \
   def(SharedRuntime_OSR_migration_end,                                              \
       SharedRuntime::OSR_migration_end,                                             \
       false,                                                                        \
@@ -393,8 +403,8 @@ class JeandleRuntimeRoutine : public AllStatic {
 
   static address search_landingpad(JavaThread* current);
 
-  // Array allocation routine
-  static void new_instance(InstanceKlass* klass, JavaThread* current);
+  // Allocation routine
+  static void new_instance(Klass* klass, JavaThread* current);
   static void new_array(Klass* array_type, int length, JavaThread* current);
   // Slow-path array allocation: resolves the array klass from the component-type mirror
   // (java.lang.Class) and allocates via Reflection::reflect_new_array.  Used when the
@@ -412,10 +422,10 @@ class JeandleRuntimeRoutine : public AllStatic {
 
   // Assembly routine implementations:
 
-#define DEF_GENERETE_ASSEMBLY_ROUTINE(name) \
+#define DEF_GENERATE_ASSEMBLY_ROUTINE(name) \
   static void generate_##name();
 
-  ALL_JEANDLE_ASSEMBLY_ROUTINES(DEF_GENERETE_ASSEMBLY_ROUTINE);
+  ALL_JEANDLE_ASSEMBLY_ROUTINES(DEF_GENERATE_ASSEMBLY_ROUTINE);
 };
 
 #endif // SHARE_JEANDLE_RUNTIME_ROUTINE_HPP
