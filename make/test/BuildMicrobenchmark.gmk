@@ -96,6 +96,7 @@ $(eval $(call SetupJavaCompilation, BUILD_JDK_MICROBENCHMARK, \
     BIN := $(MICROBENCHMARK_CLASSES), \
     JAVAC_FLAGS := --add-exports java.base/sun.security.util=ALL-UNNAMED \
         --add-exports java.base/sun.invoke.util=ALL-UNNAMED \
+        --add-exports java.base/jdk.internal.reflect=ALL-UNNAMED \
         --add-exports java.base/jdk.internal.classfile=ALL-UNNAMED \
         --add-exports java.base/jdk.internal.classfile.attribute=ALL-UNNAMED \
         --add-exports java.base/jdk.internal.classfile.constantpool=ALL-UNNAMED \

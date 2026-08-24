@@ -262,7 +262,7 @@ define hotspotcc ptr addrspace(0) @jeandle.load_array_element_klass(ptr addrspac
 }
 
 ; This is the slow path for subtype checking when the fast path fails.
-define hotspotcc i1 @jeandle.check_klass_subtype_slow_path(ptr addrspace(0) nocapture %sub_klass, ptr addrspace(0) nocapture %super_klass) "lower-phase"="0" #0 {
+define hotspotcc i1 @jeandle.check_klass_subtype_slow_path(ptr addrspace(0) nocapture %sub_klass, ptr addrspace(0) nocapture %super_klass) noinline "lower-phase"="1" #0 {
 entry:
   ; Load secondary_supers array and secondary_super_cache.
   %secondary_supers_offset = load i32, ptr @Klass.secondary_supers_offset
@@ -328,13 +328,17 @@ check_primary_supers:
   %super_check = load atomic ptr addrspace(0), ptr addrspace(0) %super_check_addr unordered, align 8
 
   %is_super_match = icmp eq ptr %super_klass, %super_check
-  br i1 %is_super_match, label %return_true, label %check_secondary_supers
+  ; Match C2's static subtype-check heuristic without adding branch_weights to
+  ; the pre-optimization module, where they would be confused with MDO profile.
+  %is_super_match_likely = call i1 @llvm.expect.with.probability.i1(i1 %is_super_match, i1 true, double 8.300000e-01)
+  br i1 %is_super_match_likely, label %return_true, label %check_secondary_supers
 
 check_secondary_supers:
   ; Check if there are secondary supers.
   %secondary_super_cache_offset = load i32, ptr @Klass.secondary_super_cache_offset
   %has_secondary = icmp eq i32 %super_check_offset, %secondary_super_cache_offset
-  br i1 %has_secondary, label %slow_path, label %return_false
+  %has_secondary_unlikely = call i1 @llvm.expect.with.probability.i1(i1 %has_secondary, i1 false, double 6.300000e-01)
+  br i1 %has_secondary_unlikely, label %slow_path, label %return_false
 
 slow_path:
   %is_subtype_slow = call hotspotcc i1 @jeandle.check_klass_subtype_slow_path(ptr addrspace(0) %sub_klass, ptr addrspace(0) %super_klass)
@@ -1329,5 +1333,7 @@ slow_path:
   call void %callee(ptr addrspace(1) %obj, ptr addrspace(0) %lock, ptr %current_thread) #0
   ret void
 }
+
+declare i1 @llvm.expect.with.probability.i1(i1, i1, double) nounwind readnone
 
 attributes #0 = { nounwind "gc-leaf-function" }
