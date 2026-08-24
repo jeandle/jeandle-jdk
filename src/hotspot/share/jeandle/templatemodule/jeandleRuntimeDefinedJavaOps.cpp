@@ -226,6 +226,33 @@ DEF_JAVA_OP(post_barrier, 9, llvm::Type::getVoidTy(context),
   ir_builder.CreateRetVoid();
 JAVA_OP_END
 
+// Load the java.lang.Class mirror rooted in a non-null Klass::_java_mirror
+// OopHandle.  Class.getSuperclass() uses this after choosing the semantic
+// superclass Klass (including Object for arrays).
+DEF_JAVA_OP(load_mirror_from_klass, 1,
+            llvm::PointerType::get(context, llvm::jeandle::AddrSpace::JavaHeapAddrSpace),
+            llvm::PointerType::get(context, llvm::jeandle::AddrSpace::CHeapAddrSpace))
+  llvm::Value* klass = func->getArg(0);
+  llvm::GlobalVariable* mirror_offset_gv =
+      template_module.getGlobalVariable("Klass.java_mirror_offset", /*AllowInternal=*/true);
+  if (!mirror_offset_gv) {
+    RuntimeDefinedJavaOps::set_failed("Klass.java_mirror_offset global not found in template module");
+    return;
+  }
+
+  llvm::Value* mirror_offset =
+      ir_builder.CreateLoad(ir_builder.getInt32Ty(), mirror_offset_gv);
+  llvm::Value* oop_handle_addr =
+      ir_builder.CreateInBoundsGEP(ir_builder.getInt8Ty(), klass, mirror_offset);
+  llvm::Type* c_heap_ptr_ty =
+      llvm::PointerType::get(context, llvm::jeandle::AddrSpace::CHeapAddrSpace);
+  llvm::Value* oop_handle = ir_builder.CreateLoad(c_heap_ptr_ty, oop_handle_addr);
+  llvm::Type* mirror_ty =
+      llvm::PointerType::get(context, llvm::jeandle::AddrSpace::JavaHeapAddrSpace);
+  llvm::Value* mirror = ir_builder.CreateLoad(mirror_ty, oop_handle);
+  ir_builder.CreateRet(mirror);
+JAVA_OP_END
+
 // Object.getClass(): load the java.lang.Class mirror for an object.
 // Two-level load via the OopHandle stored in Klass::_java_mirror:
 //   1. Load klass from object header (jeandle.load_klass).
@@ -505,6 +532,7 @@ bool RuntimeDefinedJavaOps::define_all(llvm::Module& template_module) {
   define_card_table_barrier(template_module);
   define_pre_barrier(template_module);
   define_post_barrier(template_module);
+  define_load_mirror_from_klass(template_module);
   define_get_class(template_module);
   define_current_thread_obj(template_module);
   define_reference_refers_to(template_module);
@@ -605,6 +633,7 @@ void RuntimeDefinedJavaOps::define_global_variables(llvm::Module& template_modul
   define_global("arrayOopDesc.element_size.object",                 int32_type, static_cast<uint64_t>(type2aelembytes(T_OBJECT)));
   define_global("Klass.access_flags_offset",                        int32_type, static_cast<uint64_t>(Klass::access_flags_offset()));
   define_global("Klass.java_mirror_offset",                         int32_type, static_cast<uint64_t>(in_bytes(Klass::java_mirror_offset())));
+  define_global("Klass.layout_helper_offset",                       int32_type, static_cast<uint64_t>(in_bytes(Klass::layout_helper_offset())));
   define_global("Klass.secondary_super_cache_offset",               int32_type, static_cast<uint64_t>(Klass::secondary_super_cache_offset()));
   define_global("Klass.secondary_supers_offset",                    int32_type, static_cast<uint64_t>(Klass::secondary_supers_offset()));
   define_global("Klass.super_check_offset_offset",                  int32_type, static_cast<uint64_t>(Klass::super_check_offset_offset()));
@@ -612,6 +641,7 @@ void RuntimeDefinedJavaOps::define_global_variables(llvm::Module& template_modul
   define_global("oopDesc.klass_offset_in_bytes",                    int32_type, static_cast<uint64_t>(oopDesc::klass_offset_in_bytes()));
   define_global("oopDesc.mark_offset_in_bytes",                     int32_type, static_cast<uint64_t>(oopDesc::mark_offset_in_bytes()));
   define_global("java_lang_ref_Reference.referent_offset",          int32_type, static_cast<uint64_t>(java_lang_ref_Reference::referent_offset()));
+  define_global("java_lang_Class.klass_offset",                     int32_type, static_cast<uint64_t>(java_lang_Class::klass_offset()));
   define_global("java_lang_Class.array_klass_offset",               int32_type, static_cast<uint64_t>(java_lang_Class::array_klass_offset()));
   define_global("BasicLock.displaced_header_offset_in_bytes",       int32_type, static_cast<uint64_t>(BasicLock::displaced_header_offset_in_bytes()));
   define_global("JavaThread.held_monitor_count_offset",             int32_type, static_cast<uint64_t>(JavaThread::held_monitor_count_offset()));
