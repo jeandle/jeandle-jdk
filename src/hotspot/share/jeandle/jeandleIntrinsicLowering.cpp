@@ -428,12 +428,12 @@ bool JeandleIntrinsicLowering::lower(vmIntrinsics::ID id, const ciMethod* target
 
     // getClass
     //
-    // TODO 1: When the receiver's Java type is known at compile time (e.g., the
-    // result of a `new` bytecode which carries a `java-klass` return attribute),
-    // we can skip the `jeandle.load_klass` call that reads the object header and
-    // use the known Klass pointer directly.
+    // Exact receiver types are folded later by LLVM's ConstantFieldFolding
+    // pass using the GetJavaMirror VM callback. This lowering keeps the
+    // dynamic JavaOp so CFF can also see type information propagated by the
+    // inline/PEA pipeline.
     //
-    // TODO 2: Optimize the comparison between class pointers.
+    // TODO: Optimize the comparison between class pointers.
     case vmIntrinsics::_getClass:
       return lower_java_op("jeandle.get_class",
                            {CTRL_NONE, MEM_READ});
@@ -1046,9 +1046,7 @@ bool JeandleIntrinsicLowering::lower_new_array() {
   //   log2_esize  = lh & 0x1f   (_lh_log2_element_size_shift == 0; masked < 32 for the shift,
   //                              valid l2esz is <= LogBytesPerLong)
   builder.SetInsertPoint(fast_bb);
-  llvm::Value* lh_addr = builder.CreateInBoundsGEP(
-      builder.getInt8Ty(), klass, builder.getInt32(in_bytes(Klass::layout_helper_offset())));
-  llvm::Value* layout_helper = builder.CreateLoad(builder.getInt32Ty(), lh_addr);
+  llvm::Value* layout_helper = _interp->call_java_op("jeandle.layout_helper", {klass});
   llvm::Value* base_offset = builder.CreateAnd(
       builder.CreateLShr(layout_helper, builder.getInt32(Klass::_lh_header_size_shift)),
       builder.getInt32(Klass::_lh_header_size_mask));
@@ -1138,13 +1136,12 @@ bool JeandleIntrinsicLowering::lower_unsafe_allocate_instance() {
   llvm::BasicBlock* primitive_trap_bb = llvm::BasicBlock::Create(
       ctx, "unsafe_allocate_primitive_trap", _interp->_llvm_func);
 
-  // TODO: Fold constant mirrors, their Klass, and the dependent layout and
-  // initialization loads together in an LLVM pass.
-  llvm::Value* klass_addr = builder.CreateInBoundsGEP(
-      builder.getInt8Ty(), mirror,
-      builder.getInt32(java_lang_Class::klass_offset()));
-  llvm::Value* klass = builder.CreateLoad(
-      c_heap_ptr_ty, klass_addr, "unsafe_allocate.klass");
+  // Preserve the mirror-to-Klass query as a phase-1 JavaOp so
+  // ConstantFieldFolding can answer it for a constant Class mirror. Dynamic
+  // mirrors lower back to the same VM field load before code generation.
+  llvm::CallInst* klass =
+      _interp->call_java_op("jeandle.load_mirror_klass", {mirror});
+  klass->setName("unsafe_allocate.klass");
   llvm::Value* klass_is_null = builder.CreateICmpEQ(
       klass, llvm::ConstantPointerNull::get(c_heap_ptr_ty));
   builder.CreateCondBr(klass_is_null, primitive_trap_bb, allocation_check_bb);
@@ -1154,31 +1151,27 @@ bool JeandleIntrinsicLowering::lower_unsafe_allocate_instance() {
                          true /* should_reexecute */);
 
   builder.SetInsertPoint(allocation_check_bb);
-  llvm::Value* layout_addr = builder.CreateInBoundsGEP(
-      builder.getInt8Ty(), klass,
-      builder.getInt32(in_bytes(Klass::layout_helper_offset())));
-  llvm::Value* layout = builder.CreateLoad(
-      builder.getInt32Ty(), layout_addr, "unsafe_allocate.layout");
+  llvm::CallInst* layout =
+      _interp->call_java_op("jeandle.layout_helper", {klass});
+  layout->setName("unsafe_allocate.layout");
 
-  llvm::Value* init_state_addr = builder.CreateInBoundsGEP(
-      builder.getInt8Ty(), klass,
-      builder.getInt32(in_bytes(InstanceKlass::init_state_offset())));
-  llvm::Value* init_state = builder.CreateLoad(
-      builder.getInt8Ty(), init_state_addr, "unsafe_allocate.init_state");
-  llvm::Value* init_delta = builder.CreateSub(
-      builder.CreateZExt(init_state, builder.getInt32Ty()),
-      builder.getInt32(InstanceKlass::fully_initialized),
-      "unsafe_allocate.init_delta");
+  llvm::CallInst* is_initialized =
+      _interp->call_java_op("jeandle.klass_is_initialized", {klass});
+  is_initialized->setName("unsafe_allocate.is_initialized");
+  llvm::Value* needs_initialization = builder.CreateNot(
+      is_initialized, "unsafe_allocate.needs_initialization");
 
   // Match GraphKit::new_instance's reflective slow test. This also routes
   // arrays, interfaces, abstract classes and java.lang.Class to the runtime.
   llvm::Value* slow_path_bits = builder.CreateAnd(
       layout, builder.getInt32(Klass::_lh_instance_slow_path_bit),
       "unsafe_allocate.slow_path_bits");
-  llvm::Value* slow_test = builder.CreateOr(
-      slow_path_bits, init_delta, "unsafe_allocate.slow_test");
-  llvm::Value* needs_slow_path = builder.CreateICmpNE(
-      slow_test, builder.getInt32(0));
+  llvm::Value* has_slow_path_bits = builder.CreateICmpNE(
+      slow_path_bits, builder.getInt32(0),
+      "unsafe_allocate.has_slow_path_bits");
+  llvm::Value* needs_slow_path = builder.CreateOr(
+      has_slow_path_bits, needs_initialization,
+      "unsafe_allocate.needs_slow_path");
 
   // The layout helper stores the aligned instance size in bytes; its low bits
   // contain allocation flags and must not be passed to the TLAB allocator.

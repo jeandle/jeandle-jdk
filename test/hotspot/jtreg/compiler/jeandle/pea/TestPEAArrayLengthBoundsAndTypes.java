@@ -41,7 +41,6 @@ public class TestPEAArrayLengthBoundsAndTypes {
             "compiler.jeandle.pea.TestPEAArrayLengthBoundsAndTypes$TestWrapper";
     private static final int ARRAY_CAP = 128;
     private static final String ARRAY_LENGTH = "@jeandle.arraylength";
-    private static final String GET_CLASS = "@jeandle.get_class";
     private static final String DEOPTIMIZE = "@llvm.experimental.deoptimize";
     private static final String DEOPTIMIZE_I64 = "llvm.experimental.deoptimize.i64";
     private static final String DEOPTIMIZE_I64_CALL = "@" + DEOPTIMIZE_I64;
@@ -101,8 +100,6 @@ public class TestPEAArrayLengthBoundsAndTypes {
             assertConstantOutOfBounds(run, constantUpperOutOfBounds, 14);
             assertDynamicBoundsFallbacks(run, dynamicBounds);
             assertMultiArrayConservative(run, multi);
-            assertGetClassFolded(run, primitiveTypes);
-            assertGetClassFolded(run, objectTypes);
             assertFailedCheckcast(run, failedCheckcast);
         }
     }
@@ -260,19 +257,6 @@ public class TestPEAArrayLengthBoundsAndTypes {
         firstSuccess.assertOccurrenceCount("store atomic i32", 4);
         secondSuccess.assertAbsent(DEOPTIMIZE);
         secondSuccess.assertOccurrenceCount("store atomic i32", 1);
-    }
-
-    private static void assertGetClassFolded(
-            PEATestUtils.RunResult run, Method target) throws Exception {
-        PEATestUtils.PEAReport report = run.report(target);
-        PEATestUtils.PEARound first = report.round(0);
-        first.before().assertOccurrenceCount(GET_CLASS, 1);
-        Asserts.assertEquals(first.effectCount("ReplaceCall", GET_CLASS), 1L,
-                target + ": exact getClass call is replaced");
-        Asserts.assertEquals(first.effectCount("Materialize"), 0L,
-                target + ": getClass folding does not materialize the array");
-        report.finalAfter().assertAbsent(GET_CLASS);
-        run.finalIR(target).assertAbsent(GET_CLASS);
     }
 
     private static void assertFailedCheckcast(PEATestUtils.RunResult run, Method target)

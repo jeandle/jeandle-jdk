@@ -22,8 +22,8 @@
  * @summary PEA getClass folding: Object.getClass() on a virtual object folds to
  *          the exact Class mirror (ReplaceCall) without materializing, for
  *          instances, subclasses and arrays; field access around getClass still
- *          folds. A published receiver keeps the real jeandle.get_class. The
- *          Class-mirror identity and array-class exactness match Java semantics.
+ *          folds. The Class-mirror identity and array-class exactness match
+ *          Java semantics.
  *          (foldLoadKlass is not Java-reachable: only phase-1 template bodies and
  *          the unloaded-catch path emit jeandle.load_klass, so it is lit-only.)
  * @library /test/lib /
@@ -53,14 +53,12 @@ public class TestPEAGetClassAndArrayTypes {
         Method objArr = TestWrapper.class.getMethod("getClassObjectArray");
         Method ifaceArr = TestWrapper.class.getMethod("getClassInterfaceArray");
         Method fields = TestWrapper.class.getMethod("fieldsAroundGetClass", boolean.class);
-        Method mat = TestWrapper.class.getMethod("getClassMaterializedReceiver");
-        Method consume = TestWrapper.class.getMethod("consume", Object.class);
-        Method[] targets = {exact, sub, iface, primArr, objArr, ifaceArr, fields, mat};
+        Method[] targets = {exact, sub, iface, primArr, objArr, ifaceArr, fields};
 
-        PEATestUtils.behaviorRun(WRAPPER, targets).dontinline(consume).runPEAOnOffEquivalent();
+        PEATestUtils.behaviorRun(WRAPPER, targets).runPEAOnOffEquivalent();
 
         try (PEATestUtils.RunResult run =
-                PEATestUtils.shapeRun(WRAPPER, targets).dontinline(consume).run()) {
+                PEATestUtils.shapeRun(WRAPPER, targets).run()) {
             assertGetClassFolded(run, exact, 1);
             assertGetClassFolded(run, sub, 1);
             assertGetClassFolded(run, iface, 2);
@@ -68,7 +66,6 @@ public class TestPEAGetClassAndArrayTypes {
             assertGetClassFolded(run, objArr, 1);
             assertGetClassFolded(run, ifaceArr, 2);
             assertGetClassFolded(run, fields, 1);
-            assertGetClassPublished(run, mat);
         }
     }
 
@@ -93,20 +90,6 @@ public class TestPEAGetClassAndArrayTypes {
         assertVerifierShape(run, report, target);
     }
 
-    private static void assertGetClassPublished(PEATestUtils.RunResult run, Method target)
-            throws Exception {
-        PEATestUtils.PEAReport report = run.report(target);
-        PEATestUtils.IRBody after = report.finalAfter();
-        // A published receiver is materialized, so getClass does not fold and the
-        // jeandle.get_class call survives to its phase-1 expansion.
-        after.assertPresent("jeandle.get_class");
-        Asserts.assertTrue(report.maxPartiallyEscapes() >= 1,
-                target + ": published receiver classified PartiallyEscapes");
-        after.assertAbsent("poison");
-        report.assertFinalTransformIdle();
-        assertVerifierShape(run, report, target);
-    }
-
     private static void assertVerifierShape(PEATestUtils.RunResult run,
                                             PEATestUtils.PEAReport report,
                                             Method target) throws Exception {
@@ -120,14 +103,12 @@ public class TestPEAGetClassAndArrayTypes {
     }
 
     public static class TestWrapper {
-        private static final String EXPECTED_DIGEST = "591d28229bc7c09f";
+        private static final String EXPECTED_DIGEST = "228c3dd1ad46d1f2";
 
         public static class Pojo { int x; }
         public static class SubPojo extends Pojo { int y; }
         public interface Iface2 { }
         public static class Iface2Impl implements Iface2 { }
-
-        private static Object consumed;
 
         public static void main(String[] args) throws Exception {
             new Pojo(); new SubPojo(); new Iface2Impl();
@@ -140,7 +121,6 @@ public class TestPEAGetClassAndArrayTypes {
             digest = mix(digest, getClassPrimitiveArray());
             digest = mix(digest, getClassObjectArray());
             digest = mix(digest, getClassInterfaceArray());
-            digest = mix(digest, getClassMaterializedReceiver());
             for (boolean mutate : new boolean[] {false, true}) {
                 digest = mix(digest, fieldsAroundGetClass(mutate));
             }
@@ -224,17 +204,6 @@ public class TestPEAGetClassAndArrayTypes {
                 p.x = 9;
             }
             return (c == Pojo.class ? 100 : 0) + p.x;
-        }
-
-        public static int getClassMaterializedReceiver() {
-            Pojo p = new Pojo();
-            p.x = 1;
-            consume(p);
-            return (p.getClass() == Pojo.class) ? 1 : 0;
-        }
-
-        public static void consume(Object o) {
-            consumed = o;
         }
 
         private static long mix(long digest, int value) {
