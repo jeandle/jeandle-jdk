@@ -95,6 +95,23 @@ ciObject* oop_by_id(int oop_id) {
   return compilation->compiled_code()->oop_at(oop_id);
 }
 
+uintptr_t record_klass_metadata(ciKlass* klass) {
+  assert(klass != nullptr && klass->is_loaded(), "klass must be loaded");
+  ciEnv* env = ciEnv::current();
+  assert(env != nullptr && env->oop_recorder() != nullptr,
+         "Klass constants require an active compilation");
+
+  Metadata* encoding = klass->constant_encoding();
+  // LLVM embeds this Klass* as an integer-backed pointer constant. Keep it in
+  // the nmethod metadata table so class unloading can discover the dependency
+  // even if the oop load that exposed the Klass is later eliminated.
+  int metadata_index = env->oop_recorder()->find_index(encoding);
+  assert(env->oop_recorder()->metadata_at(metadata_index) == encoding,
+         "recorded Klass metadata must be recoverable");
+  (void)metadata_index;
+  return reinterpret_cast<uintptr_t>(encoding);
+}
+
 bool constant_field(int oop_id, int offset, ciField** field, ciConstant* con) {
   ciObject* base_oop = oop_by_id(oop_id);
   if (base_oop == nullptr || base_oop->is_null_object()) {
@@ -426,7 +443,64 @@ uintptr_t JeandleVMCallback::get_oop_klass(int oop_id) {
   // The constant oop is a single, compile-time-known object instance, so its
   // klass is the value's exact dynamic type. Mirrors the encoding used by the
   // frontend when attaching !java-klass metadata (jeandleAbstractInterpreter.cpp).
-  return (uintptr_t)(Klass*)(klass->constant_encoding());
+  return record_klass_metadata(klass);
+}
+
+uintptr_t JeandleVMCallback::get_klass_constant(uintptr_t klass_ptr) {
+  if (klass_ptr == 0) {
+    return 0;
+  }
+  VM_ENTRY_MARK;
+  Klass* klass = reinterpret_cast<Klass*>(klass_ptr);
+  ciKlass* ci_klass = ciEnv::current()->get_klass(klass);
+  if (ci_klass == nullptr || !ci_klass->is_loaded()) {
+    return 0;
+  }
+  return record_klass_metadata(ci_klass);
+}
+
+uintptr_t JeandleVMCallback::get_mirror_klass(int oop_id) {
+  ciObject* oop = oop_by_id(oop_id);
+  if (oop == nullptr || oop->is_null_object() || !oop->is_instance()) {
+    return llvm::jeandle::MirrorKlassUnavailable;
+  }
+
+  ciType* mirror_type = oop->as_instance()->java_mirror_type();
+  if (mirror_type == nullptr) {
+    return llvm::jeandle::MirrorKlassUnavailable;
+  }
+  if (!mirror_type->is_klass()) {
+    // Primitive Class mirrors have a known-null hidden Klass field.
+    return 0;
+  }
+
+  ciKlass* klass = mirror_type->as_klass();
+  if (!klass->is_loaded()) {
+    return llvm::jeandle::MirrorKlassUnavailable;
+  }
+  return record_klass_metadata(klass);
+}
+
+int JeandleVMCallback::get_klass_layout_helper(uintptr_t klass_ptr) {
+  if (klass_ptr == 0) {
+    return 0;
+  }
+  Klass* klass = reinterpret_cast<Klass*>(klass_ptr);
+  return klass->layout_helper();
+}
+
+bool JeandleVMCallback::is_klass_initialized(uintptr_t klass_ptr) {
+  // Query through CI so the answer is a compilation-stable snapshot, matching
+  // C2's klass_needs_init_guard. Only a true answer is folded by LLVM.
+  VM_ENTRY_MARK;
+  Klass* klass = reinterpret_cast<Klass*>(klass_ptr);
+  if (klass == nullptr || !klass->is_instance_klass()) {
+    return false;
+  }
+  ciMetadata* metadata =
+      ciEnv::current()->get_metadata(reinterpret_cast<Metadata*>(klass));
+  return metadata != nullptr && metadata->is_instance_klass() &&
+         metadata->as_instance_klass()->is_initialized();
 }
 
 int JeandleVMCallback::get_java_mirror(uintptr_t klass_ptr) {
@@ -859,6 +933,10 @@ void JeandleVMCallback::register_callbacks() {
   callbacks.GetConstantField = &JeandleVMCallback::get_constant_field;
   callbacks.GetOopHandleName = &JeandleVMCallback::get_oop_handle_name;
   callbacks.GetOopKlass = &JeandleVMCallback::get_oop_klass;
+  callbacks.GetKlassConstant = &JeandleVMCallback::get_klass_constant;
+  callbacks.GetMirrorKlass = &JeandleVMCallback::get_mirror_klass;
+  callbacks.GetKlassLayoutHelper = &JeandleVMCallback::get_klass_layout_helper;
+  callbacks.IsKlassInitialized = &JeandleVMCallback::is_klass_initialized;
   callbacks.GetJavaMirror = &JeandleVMCallback::get_java_mirror;
   callbacks.GetInlineCalleeIR = &JeandleVMCallback::get_inline_callee_ir;
   callbacks.GetNewStatepointID = &JeandleVMCallback::get_new_statepoint_id;
