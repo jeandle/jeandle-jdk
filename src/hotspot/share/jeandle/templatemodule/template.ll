@@ -68,10 +68,15 @@
 ; Byte offsets for Klass structure fields.
 @Klass.access_flags_offset = external global i32
 @Klass.java_mirror_offset = external global i32
+@Klass.layout_helper_offset = external global i32
 @Klass.secondary_super_cache_offset = external global i32
 @Klass.secondary_supers_offset = external global i32
 @Klass.super_check_offset_offset = external global i32
 @ObjArrayKlass.element_klass_offset = external global i32
+
+; InstanceKlass initialization state used by klass_is_initialized.
+@InstanceKlass.init_state_offset = external global i32
+@InstanceKlass.fully_initialized = external global i8
 
 ; Byte offsets for oopDesc structure fields.
 @oopDesc.klass_offset_in_bytes = external global i32
@@ -95,6 +100,9 @@
 ; Byte offsets for java.lang.ref.Reference instance fields.
 @java_lang_ref_Reference.referent_offset = external global i32
 
+; Byte offset of the represented Klass* in java.lang.Class.
+@java_lang_Class.klass_offset = external global i32
+
 ; Byte offset of the cached array klass in java.lang.Class (injected field).
 ; Stores the array Klass* for this component type once the array type has been loaded.
 ; Zero/null means the array klass has not yet been resolved.
@@ -116,7 +124,7 @@
 @ObjectMonitor.succ_offset_no_monitor_value = external global i32
 @ObjectMonitor.ANONYMOUS_OWNER = external global i64
 
-; Staic constants in markWord
+; Static constants in markWord
 @markWord.clear_lock_mask = external global i64
 @markWord.monitor_value = external global i64
 @markWord.unlocked_value = external global i64
@@ -193,6 +201,43 @@ compressed:
 uncompressed:
   %wide = load atomic ptr addrspace(0), ptr addrspace(1) %klass_addr unordered, align 8
   ret ptr addrspace(0) %wide
+}
+
+; Load the reference Klass represented by a java.lang.Class mirror. Primitive
+; mirrors contain a null Klass*. Keeping this as a phase-1 JavaOp lets
+; ConstantFieldFolding answer the query from a constant mirror before exposing
+; the VM-injected field load.
+define hotspotcc ptr addrspace(0) @jeandle.load_mirror_klass(ptr addrspace(1) nocapture readonly %mirror) noinline "lower-phase"="1" #0 {
+entry:
+  %klass_offset = load i32, ptr @java_lang_Class.klass_offset
+  %klass_addr = getelementptr inbounds i8, ptr addrspace(1) %mirror, i32 %klass_offset
+  %klass = load atomic ptr addrspace(0), ptr addrspace(1) %klass_addr unordered, align 8
+  ret ptr addrspace(0) %klass
+}
+
+; Load Klass::layout_helper from a Klass pointer. Keeping this as a phase-1
+; JavaOp lets ConstantFieldFolding answer the query while the Klass is still a
+; compile-time constant; unresolved queries lower to the ordinary VM load.
+define hotspotcc i32 @jeandle.layout_helper(ptr addrspace(0) nocapture readonly %klass) noinline "lower-phase"="1" #0 {
+entry:
+  %layout_helper_offset = load i32, ptr @Klass.layout_helper_offset
+  %layout_helper_addr = getelementptr inbounds i8, ptr addrspace(0) %klass, i32 %layout_helper_offset
+  %layout_helper = load atomic i32, ptr addrspace(0) %layout_helper_addr unordered, align 4
+  ret i32 %layout_helper
+}
+
+; Query a Klass' current initialization state. Keeping this opaque through
+; phase 0 lets ConstantFieldFolding replace the query with true for a constant
+; Klass already known by the VM to be initialized. Otherwise phase 1 lowers it
+; to the runtime state load, preserving later class initialization.
+define hotspotcc i1 @jeandle.klass_is_initialized(ptr addrspace(0) nocapture readonly %klass) noinline "lower-phase"="1" #0 {
+entry:
+  %init_state_offset = load i32, ptr @InstanceKlass.init_state_offset
+  %init_state_addr = getelementptr inbounds i8, ptr addrspace(0) %klass, i32 %init_state_offset
+  %init_state = load volatile i8, ptr addrspace(0) %init_state_addr, align 1
+  %fully_initialized = load i8, ptr @InstanceKlass.fully_initialized
+  %is_initialized = icmp eq i8 %init_state, %fully_initialized
+  ret i1 %is_initialized
 }
 
 ; This is the slow path for subtype checking when the fast path fails.
@@ -306,8 +351,13 @@ declare hotspotcc ptr addrspace(1) @new_instance(ptr, ptr)
 
 ; Implementation of Java new object
 ; TODO: Support prefetch instructions for next allocations.
-define private hotspotcc ptr addrspace(1) @jeandle.new_instance(ptr %klass, i32 %size_in_bytes) noinline "lower-phase"="1" "jeandle.not-guaranteed-safepoint" {
+define private hotspotcc ptr addrspace(1) @jeandle.new_instance(ptr %klass, i32 %size_in_bytes, i1 %initial_slow_test) noinline "lower-phase"="1" "jeandle.not-guaranteed-safepoint" {
 entry:
+  ; The caller may already know that this allocation requires the runtime.
+  ; Share that path with a TLAB exhaustion instead of creating another call.
+  br i1 %initial_slow_test, label %alloc_slow_path, label %check_tlab
+
+check_tlab:
   %use_tlab = load i1, ptr @VMOptions.UseTLAB
   br i1 %use_tlab, label %test_tlab, label %alloc_slow_path
 

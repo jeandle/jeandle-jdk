@@ -176,12 +176,16 @@ class JeandleIntrinsicLowering : public StackObj {
   bool lower_count_zeros(vmIntrinsics::ID id, llvm::Intrinsic::ID llvm_id);
   bool lower_reverse_bytes_narrow(vmIntrinsics::ID id);
   bool lower_llvm_bitcast();
+  bool lower_fp_to_bits_canonical(vmIntrinsics::ID id);
+  bool lower_float16_convert(vmIntrinsics::ID id);
   bool lower_llvm_fence(vmIntrinsics::ID id);
   bool lower_preconditions_check_index(vmIntrinsics::ID id);
   bool lower_spin_wait_hint();       // arch-specific
   bool lower_compare_unsigned(vmIntrinsics::ID id);
-  bool lower_add_exact(vmIntrinsics::ID id);
+  bool lower_exact_arith(vmIntrinsics::ID id, llvm::Intrinsic::ID overflow_id);
+  bool lower_multiply_high(vmIntrinsics::ID id);
   bool lower_new_array();
+  bool lower_unsafe_allocate_instance();
   bool lower_vectorized_mismatch();
   llvm::Value* emit_vectorized_mismatch_small(llvm::Value* a_addr,
                                               llvm::Value* b_addr,

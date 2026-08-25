@@ -221,8 +221,8 @@ class JeandleBasicBlock : public JeandleCompilationResourceObj {
   void set_tail_llvm_block(llvm::BasicBlock* block) { _tail_llvm_block = block; }
 
   bool is_exception_handler() { return _ci_block->is_handler(); }
-  int exeption_range_start_bci() { return _ci_block->ex_start_bci(); }
-  int exeption_range_limit_bci() { return _ci_block->ex_limit_bci(); }
+  int exception_range_start_bci() { return _ci_block->ex_start_bci(); }
+  int exception_range_limit_bci() { return _ci_block->ex_limit_bci(); }
 
   void set_initial_jvm(JeandleVMState* initial_jvm) { _initial_jvm = initial_jvm; }
 
