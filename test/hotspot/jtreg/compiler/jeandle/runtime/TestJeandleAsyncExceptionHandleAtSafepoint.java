@@ -105,8 +105,6 @@ public class TestJeandleAsyncExceptionHandleAtSafepoint {
             throw new RuntimeException("StopThread failed with JVMTI error: " + err);
         }
 
-
-
         victim.join(100_000);
         if (victim.isAlive()) {
             throw new RuntimeException("Victim thread is still alive");
@@ -123,7 +121,6 @@ public class TestJeandleAsyncExceptionHandleAtSafepoint {
         if (recurse) {
             returnObj = returnPoll(true, returnObj);
         }
-
         return returnObj;
     }
 

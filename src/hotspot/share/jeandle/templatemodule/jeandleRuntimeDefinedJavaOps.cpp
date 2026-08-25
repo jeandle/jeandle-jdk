@@ -21,7 +21,6 @@
 #include "jeandle/__llvmHeadersBegin__.hpp"
 #include "llvm/IR/BasicBlock.h"
 #include "llvm/IR/IRBuilder.h"
-#include "llvm/IR/Jeandle/Attributes.h"
 
 #include "jeandle/templatemodule/jeandleRuntimeDefinedJavaOps.hpp"
 #include "jeandle/jeandleRuntimeRoutine.hpp"

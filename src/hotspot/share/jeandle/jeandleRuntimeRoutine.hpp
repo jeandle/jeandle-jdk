@@ -25,7 +25,6 @@
 #include "llvm/IR/Constants.h"
 #include "llvm/IR/Jeandle/Metadata.h"
 #include "llvm/IR/Module.h"
-#include "llvm/IR/Statepoint.h"
 #include "llvm/Target/TargetMachine.h"
 
 #include "jeandle/__hotspotHeadersBegin__.hpp"
