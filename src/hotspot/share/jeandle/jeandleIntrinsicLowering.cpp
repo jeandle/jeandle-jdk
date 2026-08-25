@@ -1818,6 +1818,13 @@ bool JeandleIntrinsicLowering::lower_arraycopy() {
     return true;
   }
 
+  _interp->_block->set_tail_llvm_block(b.GetInsertBlock());
+  _interp->_jvm->ipop(); // length
+  _interp->_jvm->ipop(); // destPos
+  _interp->_jvm->apop(); // dest
+  _interp->_jvm->ipop(); // srcPos
+  _interp->_jvm->apop(); // src
+
   // The pseudo call is the Jeandle equivalent of C2 ArrayCopyNode::make(). It is
   // created after guard admission, and the validated attribute corresponds
   // to C2 ac->set_arraycopy(validated).
@@ -1845,11 +1852,5 @@ bool JeandleIntrinsicLowering::lower_arraycopy() {
     arraycopy_call->addFnAttr(llvm::Attribute::get(
         ctx, llvm::jeandle::Attribute::ArrayCopyNegativeLengthGuard));
   }
-  _interp->_block->set_tail_llvm_block(b.GetInsertBlock());
-  _interp->_jvm->ipop(); // length
-  _interp->_jvm->ipop(); // destPos
-  _interp->_jvm->apop(); // dest
-  _interp->_jvm->ipop(); // srcPos
-  _interp->_jvm->apop(); // src
   return true;
 }

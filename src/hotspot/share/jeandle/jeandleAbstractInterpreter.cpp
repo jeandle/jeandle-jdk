@@ -2867,14 +2867,7 @@ llvm::Value* JeandleAbstractInterpreter::get_layout_helper(
   }
 
   constant_value = Klass::_lh_neutral_value;
-  llvm::Value* layout_addr = _ir_builder.CreateInBoundsGEP(
-      _ir_builder.getInt8Ty(), klass,
-      _ir_builder.getInt32(in_bytes(Klass::layout_helper_offset())),
-      "layout_helper_addr");
-  llvm::LoadInst* layout = _ir_builder.CreateLoad(
-      _ir_builder.getInt32Ty(), layout_addr, "layout_helper");
-  layout->setAtomic(llvm::AtomicOrdering::Unordered);
-  return layout;
+  return call_java_op("jeandle.layout_helper", {klass});
 }
 
 llvm::Value* JeandleAbstractInterpreter::compute_array_element_address(BasicType basic_type, llvm::Type* type) {
