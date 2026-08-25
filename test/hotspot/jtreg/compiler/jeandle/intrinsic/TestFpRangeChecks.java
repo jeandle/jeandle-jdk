@@ -63,26 +63,22 @@ public class TestFpRangeChecks {
 
         FileCheck floatFiniteCheck = new FileCheck(dumpPath,
                 TestWrapper.class.getMethod("floatIsFinite", float.class), false);
-        floatFiniteCheck.checkPattern("call i1 @llvm\\.is\\.fpclass\\.f32");
-        floatFiniteCheck.checkPattern("i32 504");
+        floatFiniteCheck.checkPattern("call i1 @llvm\\.is\\.fpclass\\.f32.*i32 504");
         floatFiniteCheck.checkPattern("zext i1 .* to i32");
 
         FileCheck floatInfiniteCheck = new FileCheck(dumpPath,
                 TestWrapper.class.getMethod("floatIsInfinite", float.class), false);
-        floatInfiniteCheck.checkPattern("call i1 @llvm\\.is\\.fpclass\\.f32");
-        floatInfiniteCheck.checkPattern("i32 516");
+        floatInfiniteCheck.checkPattern("call i1 @llvm\\.is\\.fpclass\\.f32.*i32 516");
         floatInfiniteCheck.checkPattern("zext i1 .* to i32");
 
         FileCheck doubleFiniteCheck = new FileCheck(dumpPath,
                 TestWrapper.class.getMethod("doubleIsFinite", double.class), false);
-        doubleFiniteCheck.checkPattern("call i1 @llvm\\.is\\.fpclass\\.f64");
-        doubleFiniteCheck.checkPattern("i32 504");
+        doubleFiniteCheck.checkPattern("call i1 @llvm\\.is\\.fpclass\\.f64.*i32 504");
         doubleFiniteCheck.checkPattern("zext i1 .* to i32");
 
         FileCheck doubleInfiniteCheck = new FileCheck(dumpPath,
                 TestWrapper.class.getMethod("doubleIsInfinite", double.class), false);
-        doubleInfiniteCheck.checkPattern("call i1 @llvm\\.is\\.fpclass\\.f64");
-        doubleInfiniteCheck.checkPattern("i32 516");
+        doubleInfiniteCheck.checkPattern("call i1 @llvm\\.is\\.fpclass\\.f64.*i32 516");
         doubleInfiniteCheck.checkPattern("zext i1 .* to i32");
     }
 
