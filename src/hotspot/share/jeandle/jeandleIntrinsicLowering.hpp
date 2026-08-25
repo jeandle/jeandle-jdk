@@ -31,6 +31,10 @@
 #include "classfile/vmIntrinsics.hpp"
 #include "memory/allocation.hpp"
 
+#define PROB_UNLIKELY_MAG(N)    (1e- ## N ## f)
+#define PROB_MIN                PROB_UNLIKELY_MAG(6)
+#define PROB_FAIR               (0.5f)
+
 class JeandleAbstractInterpreter;
 class ciMethod;
 

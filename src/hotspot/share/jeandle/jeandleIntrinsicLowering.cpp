@@ -41,7 +41,6 @@
 #include "logging/log.hpp"
 #include "oops/arrayOop.hpp"
 #include "oops/klass.hpp"
-#include "opto/cfgnode.hpp"
 #include "runtime/deoptimization.hpp"
 #include "runtime/globals.hpp"
 #include "runtime/vm_version.hpp"
