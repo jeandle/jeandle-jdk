@@ -216,6 +216,11 @@ bool JeandleIntrinsicLowering::is_supported(vmIntrinsics::ID id) {
     case vmIntrinsics::_numberOfTrailingZeros_i:
     case vmIntrinsics::_numberOfTrailingZeros_l:
 
+    // reverse: LLVM bitreverse has exact i32/i64 Java operand widths and
+    // lowers to a target-appropriate instruction sequence.
+    case vmIntrinsics::_reverse_i:
+    case vmIntrinsics::_reverse_l:
+
     // reverseBytes: full-width variants are direct bswap; narrow variants need
     // explicit zero/sign-extension semantics.
     case vmIntrinsics::_reverseBytes_i:
@@ -360,6 +365,10 @@ bool JeandleIntrinsicLowering::lower(vmIntrinsics::ID id, const ciMethod* target
     case vmIntrinsics::_numberOfTrailingZeros_i:
     case vmIntrinsics::_numberOfTrailingZeros_l:
       return lower_count_zeros(id, llvm::Intrinsic::cttz);
+
+    case vmIntrinsics::_reverse_i:
+    case vmIntrinsics::_reverse_l:
+      return emit_llvm_builtin(llvm::Intrinsic::bitreverse);
 
     // Keep full-width variants as direct IR instead of relying on fallback
     // invoke inlining to recover llvm.bswap.
