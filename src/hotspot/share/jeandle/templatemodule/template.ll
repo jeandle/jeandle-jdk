@@ -68,6 +68,7 @@
 ; Byte offsets for Klass structure fields.
 @Klass.access_flags_offset = external global i32
 @Klass.java_mirror_offset = external global i32
+@Klass.layout_helper_offset = external global i32
 @Klass.secondary_super_cache_offset = external global i32
 @Klass.secondary_supers_offset = external global i32
 @Klass.super_check_offset_offset = external global i32
@@ -94,6 +95,10 @@
 
 ; Byte offsets for java.lang.ref.Reference instance fields.
 @java_lang_ref_Reference.referent_offset = external global i32
+
+; Byte offset of the Klass metadata pointer in java.lang.Class (injected field).
+; The field is null for primitive mirrors, including void.class.
+@java_lang_Class.klass_offset = external global i32
 
 ; Byte offset of the cached array klass in java.lang.Class (injected field).
 ; Stores the array Klass* for this component type once the array type has been loaded.
@@ -195,8 +200,27 @@ uncompressed:
   ret ptr addrspace(0) %wide
 }
 
+; Load the reference Klass represented by a java.lang.Class mirror. Primitive
+; mirrors contain a null Klass*.
+define hotspotcc ptr addrspace(0) @jeandle.load_mirror_klass(ptr addrspace(1) nocapture readonly %mirror) noinline "lower-phase"="1" #0 {
+entry:
+  %klass_offset = load i32, ptr @java_lang_Class.klass_offset
+  %klass_addr = getelementptr inbounds i8, ptr addrspace(1) %mirror, i32 %klass_offset
+  %klass = load ptr addrspace(0), ptr addrspace(1) %klass_addr, align 8
+  ret ptr addrspace(0) %klass
+}
+
+; Load Klass::layout_helper while preserving the query as a phase-1 JavaOp.
+define hotspotcc i32 @jeandle.layout_helper(ptr addrspace(0) nocapture readonly %klass) noinline "lower-phase"="1" #0 {
+entry:
+  %layout_helper_offset = load i32, ptr @Klass.layout_helper_offset
+  %layout_helper_addr = getelementptr inbounds i8, ptr addrspace(0) %klass, i32 %layout_helper_offset
+  %layout_helper = load atomic i32, ptr addrspace(0) %layout_helper_addr unordered, align 4, !invariant.load !1
+  ret i32 %layout_helper
+}
+
 ; This is the slow path for subtype checking when the fast path fails.
-define hotspotcc i1 @jeandle.check_klass_subtype_slow_path(ptr addrspace(0) nocapture %sub_klass, ptr addrspace(0) nocapture %super_klass) "lower-phase"="0" #0 {
+define hotspotcc i1 @jeandle.check_klass_subtype_slow_path(ptr addrspace(0) nocapture %sub_klass, ptr addrspace(0) nocapture %super_klass) noinline "lower-phase"="1" #0 {
 entry:
   ; Load secondary_supers array and secondary_super_cache.
   %secondary_supers_offset = load i32, ptr @Klass.secondary_supers_offset
@@ -262,13 +286,17 @@ check_primary_supers:
   %super_check = load atomic ptr addrspace(0), ptr addrspace(0) %super_check_addr unordered, align 8
 
   %is_super_match = icmp eq ptr %super_klass, %super_check
-  br i1 %is_super_match, label %return_true, label %check_secondary_supers
+  ; Match C2's static subtype-check heuristic without adding branch_weights to
+  ; the pre-optimization module, where they would be confused with MDO profile.
+  %is_super_match_likely = call i1 @llvm.expect.with.probability.i1(i1 %is_super_match, i1 true, double 8.300000e-01)
+  br i1 %is_super_match_likely, label %return_true, label %check_secondary_supers
 
 check_secondary_supers:
   ; Check if there are secondary supers.
   %secondary_super_cache_offset = load i32, ptr @Klass.secondary_super_cache_offset
   %has_secondary = icmp eq i32 %super_check_offset, %secondary_super_cache_offset
-  br i1 %has_secondary, label %slow_path, label %return_false
+  %has_secondary_unlikely = call i1 @llvm.expect.with.probability.i1(i1 %has_secondary, i1 false, double 6.300000e-01)
+  br i1 %has_secondary_unlikely, label %slow_path, label %return_false
 
 slow_path:
   %is_subtype_slow = call hotspotcc i1 @jeandle.check_klass_subtype_slow_path(ptr addrspace(0) %sub_klass, ptr addrspace(0) %super_klass)
@@ -1232,4 +1260,8 @@ slow_path:
   ret void
 }
 
+declare i1 @llvm.expect.with.probability.i1(i1, i1, double) nounwind readnone
+
 attributes #0 = { nounwind "gc-leaf-function" }
+
+!1 = !{}

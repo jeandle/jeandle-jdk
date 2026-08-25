@@ -33,7 +33,10 @@
 #include "runtime/deoptimization.hpp"
 
 class JeandleAbstractInterpreter;
+class ciKlass;
 class ciMethod;
+class ciObject;
+class ciType;
 
 // =============================================================================
 // Control-flow facts for a lowered intrinsic call site. Combined into
@@ -182,7 +185,21 @@ class JeandleIntrinsicLowering : public StackObj {
   bool lower_preconditions_check_index(vmIntrinsics::ID id);
   bool lower_spin_wait_hint();       // arch-specific
   bool lower_compare_unsigned(vmIntrinsics::ID id);
-  bool lower_add_exact(vmIntrinsics::ID id);
+  llvm::Value* emit_direct_mirror_from_klass(llvm::Value* klass,
+                                             const char* name_prefix);
+  ciObject* constant_oop(llvm::Value* value) const;
+  ciType* constant_class_type(llvm::Value* mirror) const;
+  llvm::Value* constant_klass_value(ciKlass* klass) const;
+  bool try_fold_constant_class_query(vmIntrinsics::ID id,
+                                     llvm::Value* mirror,
+                                     jint* result) const;
+  bool lower_class_query(vmIntrinsics::ID id);
+  bool lower_class_cast();
+  bool lower_class_is_assignable_from();
+  bool lower_class_boolean_query(vmIntrinsics::ID id);
+  bool lower_class_flags_query(vmIntrinsics::ID id);
+  bool lower_class_is_instance();
+  bool lower_class_get_superclass();
   bool lower_get_object_size();
   bool lower_exact_arith(vmIntrinsics::ID id, llvm::Intrinsic::ID overflow_id);
   bool lower_multiply_high(vmIntrinsics::ID id);

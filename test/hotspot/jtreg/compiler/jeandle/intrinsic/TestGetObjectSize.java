@@ -5,6 +5,16 @@
  * This code is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License version 2 only, as
  * published by the Free Software Foundation.
+ *
+ * This code is distributed in the hope that it will be useful, but WITHOUT
+ * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
+ * FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General Public License
+ * version 2 for more details (a copy is included in the LICENSE file that
+ * accompanied this code).
+ *
+ * You should have received a copy of the GNU General Public License version
+ * 2 along with this work; if not, write to the Free Software Foundation,
+ * Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301 USA.
  */
 
 /*
@@ -147,12 +157,13 @@ public class TestGetObjectSize {
         FileCheck optimized = new FileCheck(dumpDir.toString(), wrapper, true);
         if (intrinsicEnabled) {
             raw.checkPattern("call hotspotcc ptr @jeandle\\.load_klass");
-            raw.checkPattern("get_object_size\\.layout = load i32");
+            raw.checkPattern("call hotspotcc i32 @jeandle\\.layout_helper");
             raw.checkPattern("get_object_size\\.instance\\.bytes");
             raw.checkPattern("call hotspotcc i32 @jeandle\\.arraylength");
             raw.checkPattern("get_object_size\\.array\\.result");
 
-            optimized.checkNotPattern("call .*@jeandle\\.(?:load_klass|arraylength)");
+            optimized.checkNotPattern(
+                    "call .*@jeandle\\.(?:load_klass|layout_helper|arraylength)");
             optimized.checkPattern("shl i64");
             optimized.checkNotPattern("getObjectSize0");
         } else {

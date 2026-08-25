@@ -258,6 +258,7 @@ class JeandleCompiledCode : public StackObj {
 
   int find_or_insert_oop(ciObject* oop);
   ciObject* oop_at(int oop_id);
+  ciObject* oop_for_handle_name(llvm::StringRef name);
   std::string oop_handle_name(int oop_id);
   // StringMap entries are individually heap-allocated and never relocated on
   // insertion, so their keys stay valid for the life of this JeandleCompiledCode
