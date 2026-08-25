@@ -232,6 +232,9 @@ bool JeandleIntrinsicLowering::is_supported(vmIntrinsics::ID id) {
     // getClass
     case vmIntrinsics::_getClass:
 
+    // Instrumentation.getObjectSize
+    case vmIntrinsics::_getObjectSize:
+
     // Class queries (the same family as C2's inline_native_Class_query)
     case vmIntrinsics::_isInstance:
     case vmIntrinsics::_getModifiers:
@@ -350,6 +353,7 @@ JeandleTrapReasonMask JeandleIntrinsicLowering::trap_throttle_mask(vmIntrinsics:
       return trap_reason_mask_val(Deoptimization::Reason_intrinsic);
 
     case vmIntrinsics::_allocateInstance:
+    case vmIntrinsics::_getObjectSize:
       return trap_reason_mask_val(Deoptimization::Reason_null_check);
     case vmIntrinsics::_Preconditions_checkIndex:
     case vmIntrinsics::_Preconditions_checkLongIndex:
@@ -534,6 +538,9 @@ bool JeandleIntrinsicLowering::lower(vmIntrinsics::ID id, const ciMethod* target
       return lower_class_cast();
     case vmIntrinsics::_isAssignableFrom:
       return lower_class_is_assignable_from();
+
+    case vmIntrinsics::_getObjectSize:
+      return lower_get_object_size();
 
     // Reference*
     case vmIntrinsics::_Reference_get:
@@ -1447,6 +1454,90 @@ bool JeandleIntrinsicLowering::lower_class_get_superclass() {
 
   _interp->_jvm->apop();
   _interp->_jvm->apush(result);
+  return true;
+}
+
+bool JeandleIntrinsicLowering::lower_get_object_size() {
+  assert(!_target->is_static(), "getObjectSize0 is an instance native method");
+  assert(_target->signature()->count() == 2, "unexpected getObjectSize0 signature");
+
+  llvm::IRBuilder<>& builder = _interp->_ir_builder;
+
+  // Logical stack, top first: objectToSize, nativeAgent (long), receiver.
+  // Physical raw slots: objectToSize, long placeholder, long value, receiver.
+  // Preserve the complete pre-invoke state through the null-check trap.
+  llvm::Value* object = _interp->_jvm->peek_value(0).value();
+  _interp->null_check(object);
+
+  // These phase-1 JavaOps are compiler pseudo-operations, not runtime calls.
+  // Keeping the canonical operations allows metadata constant folding and
+  // preserves the VM load attributes defined in template.ll.
+  llvm::CallInst* klass = _interp->call_java_op("jeandle.load_klass", {object});
+  klass->setName("get_object_size.klass");
+  llvm::CallInst* layout = _interp->call_java_op("jeandle.layout_helper", {klass});
+  layout->setName("get_object_size.layout");
+
+  // Nothing below can safepoint, throw, or deopt. nativeAgent is unused,
+  // matching C1 and C2's getObjectSize intrinsic.
+  _interp->_jvm->apop();
+  _interp->_jvm->lpop();
+  _interp->_jvm->apop();
+
+  llvm::Function* function = builder.GetInsertBlock()->getParent();
+  llvm::BasicBlock* instance = llvm::BasicBlock::Create(
+      *_interp->_context, "get_object_size.instance", function);
+  llvm::BasicBlock* array = llvm::BasicBlock::Create(
+      *_interp->_context, "get_object_size.array", function);
+  llvm::BasicBlock* done = llvm::BasicBlock::Create(
+      *_interp->_context, "get_object_size.done", function);
+  builder.CreateCondBr(
+      builder.CreateICmpSLT(layout, builder.getInt32(Klass::_lh_neutral_value)),
+      array, instance);
+
+  // C1 and C2 deliberately return the layout-helper approximation for all
+  // instances, including layouts carrying the allocation slow-path bit.
+  builder.SetInsertPoint(instance);
+  llvm::Value* instance_size32 = builder.CreateAnd(
+      layout, builder.getInt32(~(jint)right_n_bits(LogBytesPerLong)),
+      "get_object_size.instance.bytes");
+  llvm::Value* instance_size = builder.CreateZExt(
+      instance_size32, builder.getInt64Ty(), "get_object_size.instance.result");
+  builder.CreateBr(done);
+  llvm::BasicBlock* instance_end = builder.GetInsertBlock();
+
+  // Array size is align(header + (length << log2(element size))).
+  builder.SetInsertPoint(array);
+  llvm::CallInst* length32 = _interp->call_java_op("jeandle.arraylength", {object});
+  length32->setName("get_object_size.length");
+  llvm::Value* length = builder.CreateZExt(
+      length32, builder.getInt64Ty(), "get_object_size.length64");
+  llvm::Value* header32 = builder.CreateAnd(
+      builder.CreateLShr(layout, builder.getInt32(Klass::_lh_header_size_shift)),
+      builder.getInt32(Klass::_lh_header_size_mask), "get_object_size.header");
+  llvm::Value* header = builder.CreateZExt(header32, builder.getInt64Ty());
+  assert(Klass::_lh_log2_element_size_shift == 0, "use shift in place");
+  llvm::Value* element_shift32 = builder.CreateAnd(
+      layout, builder.getInt32(Klass::_lh_log2_element_size_mask),
+      "get_object_size.element.shift");
+  llvm::Value* element_shift = builder.CreateZExt(
+      element_shift32, builder.getInt64Ty());
+  llvm::Value* body = builder.CreateShl(
+      length, element_shift, "get_object_size.body");
+  const jlong alignment_mask = static_cast<jlong>(MinObjAlignmentInBytesMask);
+  llvm::Value* array_size = builder.CreateAnd(
+      builder.CreateAdd(builder.CreateAdd(body, header),
+                        builder.getInt64(alignment_mask)),
+      builder.getInt64(~alignment_mask), "get_object_size.array.result");
+  builder.CreateBr(done);
+  llvm::BasicBlock* array_end = builder.GetInsertBlock();
+
+  builder.SetInsertPoint(done);
+  _interp->_block->set_tail_llvm_block(done);
+  llvm::PHINode* result = builder.CreatePHI(
+      builder.getInt64Ty(), 2, "get_object_size.result");
+  result->addIncoming(instance_size, instance_end);
+  result->addIncoming(array_size, array_end);
+  _interp->_jvm->lpush(result);
   return true;
 }
 

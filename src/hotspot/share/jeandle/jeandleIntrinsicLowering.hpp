@@ -200,6 +200,7 @@ class JeandleIntrinsicLowering : public StackObj {
   bool lower_class_flags_query(vmIntrinsics::ID id);
   bool lower_class_is_instance();
   bool lower_class_get_superclass();
+  bool lower_get_object_size();
   bool lower_exact_arith(vmIntrinsics::ID id, llvm::Intrinsic::ID overflow_id);
   bool lower_multiply_high(vmIntrinsics::ID id);
   bool lower_new_array();
