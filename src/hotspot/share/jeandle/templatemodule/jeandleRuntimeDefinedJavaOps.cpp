@@ -654,6 +654,8 @@ void RuntimeDefinedJavaOps::define_global_variables(llvm::Module& template_modul
   define_global("CardTable.card_shift",                             int64_type, static_cast<uint64_t>(CardTable::card_shift()));
   define_global("HeapRegion.LogOfHRGrainBytes",                     int64_type, static_cast<uint64_t>(HeapRegion::LogOfHRGrainBytes));
   define_global("WordSize",                                         int64_type, static_cast<uint64_t>(sizeof(intptr_t)));
+  define_global("VMOptions.ArrayOperationPartialInlineSize",        int32_type, static_cast<uint64_t>(ArrayOperationPartialInlineSize));
+  define_global("VMOptions.ArrayCopyLoadStoreMaxElem",              int32_type, static_cast<uint64_t>(ArrayCopyLoadStoreMaxElem));
   define_global("G1CardTable.g1_young_card_val",                    int8_type,  static_cast<uint64_t>(G1CardTable::g1_young_card_val()));
   define_global("G1CardTable.dirty_card_val",                       int8_type,  static_cast<uint64_t>(G1CardTable::dirty_card_val()));
   define_global("ci_card_table_address",                            int64_type, static_cast<uint64_t>(p2i(ci_card_table_address())));
