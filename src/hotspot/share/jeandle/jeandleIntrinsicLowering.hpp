@@ -112,6 +112,30 @@ using JeandleTrapReasonMask = uint32_t;
 static_assert(Deoptimization::Reason_LIMIT <= 32,
               "JeandleTrapReasonMask must be widened");
 
+// C2's inline_unsafe_load_store operation and ordering dimensions. The common
+// entry uses these instead of encoding a vmIntrinsic ID-specific implementation.
+// Operations without a lower_unsafe_load_store switch case decline to normal
+// invocation until their return-value and barrier contracts are implemented.
+enum class UnsafeLoadStoreKind {
+  PlainGet,
+  PlainPut,
+  GetAdd,
+  GetSet,
+  CompareAndSet,
+  WeakCompareAndSet,
+  CompareAndExchange
+};
+
+// All values have an LLVM atomic-ordering mapping. Individual operations still
+// require their own lowering and semantic test coverage before being admitted.
+enum class UnsafeAccessKind {
+  Relaxed,
+  Opaque,
+  Volatile,
+  Acquire,
+  Release
+};
+
 class JeandleIntrinsicLowering : public StackObj {
  public:
   explicit JeandleIntrinsicLowering(JeandleAbstractInterpreter* interp);
@@ -204,6 +228,14 @@ class JeandleIntrinsicLowering : public StackObj {
   bool lower_multiply_high(vmIntrinsics::ID id);
   bool lower_new_array();
   bool lower_unsafe_allocate_instance();
+  bool lower_unsafe_load_store(BasicType type, UnsafeLoadStoreKind kind,
+                               UnsafeAccessKind access_kind);
+  bool lower_unsafe_atomic_rmw(
+      BasicType type, llvm::AtomicRMWInst::BinOp operation,
+      UnsafeAccessKind access_kind);
+  bool lower_unsafe_plain_access(BasicType type, bool is_store);
+  bool lower_unsafe_compare_and_set(BasicType type,
+                                    UnsafeAccessKind access_kind);
   bool lower_vectorized_mismatch();
   llvm::Value* emit_vectorized_mismatch_small(llvm::Value* a_addr,
                                               llvm::Value* b_addr,
