@@ -178,6 +178,7 @@ class JeandleIntrinsicLowering : public StackObj {
   bool lower_bit_count(vmIntrinsics::ID id);
   bool lower_count_zeros(vmIntrinsics::ID id, llvm::Intrinsic::ID llvm_id);
   bool lower_reverse_bytes_narrow(vmIntrinsics::ID id);
+  bool lower_unsigned_divmod(vmIntrinsics::ID id);
   bool lower_llvm_bitcast();
   bool lower_fp_to_bits_canonical(vmIntrinsics::ID id);
   bool lower_float16_convert(vmIntrinsics::ID id);

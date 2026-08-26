@@ -301,6 +301,11 @@ bool JeandleIntrinsicLowering::is_supported(vmIntrinsics::ID id) {
     case vmIntrinsics::_reverseBytes_s:
     case vmIntrinsics::_reverseBytes_c:
 
+    case vmIntrinsics::_divideUnsigned_i:
+    case vmIntrinsics::_divideUnsigned_l:
+    case vmIntrinsics::_remainderUnsigned_i:
+    case vmIntrinsics::_remainderUnsigned_l:
+
     // Math.{add,subtract,multiply,increment,decrement,negate}Exact:
     // UseMathExactIntrinsics and InlineMathNatives are enforced by
     // vmIntrinsics::is_disabled_by_flags(), which the caller
@@ -351,6 +356,11 @@ JeandleTrapReasonMask JeandleIntrinsicLowering::trap_throttle_mask(vmIntrinsics:
 
     case vmIntrinsics::_allocateInstance:
       return trap_reason_mask_val(Deoptimization::Reason_null_check);
+    case vmIntrinsics::_divideUnsigned_i:
+    case vmIntrinsics::_divideUnsigned_l:
+    case vmIntrinsics::_remainderUnsigned_i:
+    case vmIntrinsics::_remainderUnsigned_l:
+      return trap_reason_mask_val(Deoptimization::Reason_div0_check);
     case vmIntrinsics::_Preconditions_checkIndex:
     case vmIntrinsics::_Preconditions_checkLongIndex:
       return trap_reason_mask_val(Deoptimization::Reason_intrinsic) |
@@ -454,6 +464,12 @@ bool JeandleIntrinsicLowering::lower(vmIntrinsics::ID id, const ciMethod* target
     case vmIntrinsics::_reverseBytes_c:
     case vmIntrinsics::_reverseBytes_s:
       return lower_reverse_bytes_narrow(id);
+
+    case vmIntrinsics::_divideUnsigned_i:
+    case vmIntrinsics::_divideUnsigned_l:
+    case vmIntrinsics::_remainderUnsigned_i:
+    case vmIntrinsics::_remainderUnsigned_l:
+      return lower_unsigned_divmod(id);
 
     // Dual-path libm (JeandleUseHotspotIntrinsics selects the path)
     // TODO/FIXME: LLVM's `llvm.sin`, `llvm.cos`, etc. do **not** guarantee
@@ -1732,6 +1748,36 @@ bool JeandleIntrinsicLowering::lower_reverse_bytes_narrow(vmIntrinsics::ID id) {
   llvm::Value* result = is_char ? builder.CreateZExt(swapped, builder.getInt32Ty())
                                 : builder.CreateSExt(swapped, builder.getInt32Ty());
   _interp->_jvm->ipush(result);
+  return true;
+}
+
+// Java unsigned div/rem maps directly to LLVM udiv/urem except that division
+// by zero must deopt before operands are consumed to preserve ArithmeticException.
+bool JeandleIntrinsicLowering::lower_unsigned_divmod(vmIntrinsics::ID id) {
+  const bool is_long = id == vmIntrinsics::_divideUnsigned_l ||
+                       id == vmIntrinsics::_remainderUnsigned_l;
+  const bool is_remainder = id == vmIntrinsics::_remainderUnsigned_i ||
+                            id == vmIntrinsics::_remainderUnsigned_l;
+  // Logical peeks skip long category-2 placeholders and preserve the stack for zero_check.
+  llvm::Value* divisor = _interp->_jvm->peek_value(0).value();
+  llvm::Value* dividend = _interp->_jvm->peek_value(1).value();
+  _interp->zero_check(divisor);
+
+  llvm::IRBuilder<>& builder = _interp->_ir_builder;
+  // TODO: For long inputs, use PGO to select the divisor < 0 compare/subtract
+  // fast path only when the sign is strongly biased; a per-operation branch
+  // regresses mixed-sign workloads.
+  llvm::Value* result = is_remainder ? builder.CreateURem(dividend, divisor)
+                                      : builder.CreateUDiv(dividend, divisor);
+  if (is_long) {
+    _interp->_jvm->lpop();
+    _interp->_jvm->lpop();
+    _interp->_jvm->lpush(result);
+  } else {
+    _interp->_jvm->ipop();
+    _interp->_jvm->ipop();
+    _interp->_jvm->ipush(result);
+  }
   return true;
 }
 
