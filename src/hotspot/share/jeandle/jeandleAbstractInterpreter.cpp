@@ -1548,22 +1548,7 @@ void JeandleAbstractInterpreter::interpret_block(JeandleBasicBlock* block) {
   }
 }
 
-void JeandleAbstractInterpreter::uncommon_trap(Deoptimization::DeoptReason reason, Deoptimization::DeoptAction action, llvm::BasicBlock* insert_block, bool should_reexecute) {
-#ifdef ASSERT
-  // Structural guard against trap-throttle drift: any deopt reason an intrinsic emits
-  // must be in its trap-throttle mask, or try_lower_intrinsic's pre-check would not
-  // throttle it.  (Exceptions go through builtin_throw, not here, so null/range/div0
-  // are correctly out of scope.)
-  if (_lowering_intrinsic_id != vmIntrinsics::_none) {
-    const JeandleTrapReasonMask mask =
-        JeandleIntrinsicLowering::trap_throttle_mask(_lowering_intrinsic_id);
-    assert((mask & (JeandleTrapReasonMask(1) << static_cast<uint>(reason))) != 0,
-           "intrinsic %s emits deopt reason %d not in its trap-throttle mask; "
-           "add it to trap_throttle_mask()",
-           vmIntrinsics::name_at(_lowering_intrinsic_id), static_cast<int>(reason));
-  }
-#endif
-
+void JeandleAbstractInterpreter::uncommon_trap(Deoptimization::DeoptReason reason, Deoptimization::DeoptAction action, llvm::BasicBlock* insert_block) {
   auto saved_insert_block = _ir_builder.GetInsertBlock();
   auto saved_insert_point = _ir_builder.GetInsertPoint();
 
@@ -1585,7 +1570,7 @@ void JeandleAbstractInterpreter::uncommon_trap(Deoptimization::DeoptReason reaso
       &_module, llvm::Intrinsic::experimental_deoptimize, {ret_type});
   deopt_decl->setCallingConv(llvm::CallingConv::Hotspot_JIT);
   llvm::CallInst* call = _ir_builder.CreateCall(
-      deopt_decl, {request}, {create_current_deopt_bundle(should_reexecute)});
+      deopt_decl, {request}, {create_current_deopt_bundle(true /* should_reexecute */)});
   call->setCallingConv(llvm::CallingConv::Hotspot_JIT);
 
   // LangRef: the block holding this intrinsic must terminate with a `ret`
@@ -2265,27 +2250,10 @@ bool JeandleAbstractInterpreter::try_lower_intrinsic(const ciMethod* target) {
     }
   }
 
-  // 3) Trap-throttle check
-  const int cur_bci = _bytecodes.cur_bci();
-  JeandleTrapReasonMask mask = JeandleIntrinsicLowering::trap_throttle_mask(id);
-  for (uint reason_idx = 0; mask != 0; ++reason_idx, mask >>= 1) {
-    if ((mask & 1u) != 0 &&
-        too_many_traps(const_cast<ciMethod*>(_method), cur_bci,
-                       static_cast<Deoptimization::DeoptReason>(reason_idx))) {
-      return false;
-    }
-  }
-
-  // 4) Lower
+  // 3) Lower. Trap throttling is intrinsic-specific: a lowering may decline,
+  // choose a less speculative mode, or deliberately keep emitting its trap.
   JeandleIntrinsicLowering lowering(this);
-  // Publish the intrinsic being lowered so uncommon_trap can verify (debug) that every
-  // deopt reason it emits is declared in the trap-throttle mask.  Save/restore rather
-  // than clear, so the invariant still holds if intrinsic lowering ever nests.
-  DEBUG_ONLY(const vmIntrinsics::ID prev_id = _lowering_intrinsic_id);
-  DEBUG_ONLY(_lowering_intrinsic_id = id);
-  bool lowered = lowering.lower(id, target);
-  DEBUG_ONLY(_lowering_intrinsic_id = prev_id);
-  return lowered;
+  return lowering.lower(id, target);
 }
 
 // Generate IR for calling into llvm FunctionCallee, without exception handling.
@@ -2853,12 +2821,53 @@ void JeandleAbstractInterpreter::add_return_safepoint_poll() {
 }
 
 void JeandleAbstractInterpreter::arraylength() {
-    null_check(_jvm->raw_peek().value());
+  null_check(_jvm->raw_peek().value());
 
-    llvm::Value* array_oop = _jvm->apop();
+  llvm::Value* array_oop = _jvm->apop();
 
-    llvm::CallInst* call = call_java_op("jeandle.arraylength", {array_oop});
-    _jvm->ipush(call);
+  llvm::CallInst* call = call_java_op("jeandle.arraylength", {array_oop});
+  _jvm->ipush(call);
+}
+
+// Jeandle counterpart of C2 GraphKit::load_object_klass().
+llvm::Value* JeandleAbstractInterpreter::load_object_klass(llvm::Value* obj) {
+  llvm::CallBase* allocation = llvm::dyn_cast<llvm::CallBase>(obj);
+  llvm::Function* new_array = _module.getFunction("jeandle.new_array");
+  llvm::Function* new_instance = _module.getFunction("jeandle.new_instance");
+  if (allocation != nullptr &&
+      ((new_array != nullptr &&
+        allocation->getCalledFunction() == new_array) ||
+       (new_instance != nullptr &&
+        allocation->getCalledFunction() == new_instance))) {
+    // Keep the allocation invoke and its exceptional edge; only reuse its
+    // Klass input on the successful path.
+    llvm::Value* klass = allocation->getArgOperand(0);
+    assert(klass->getType()->isPointerTy(), "allocation klass must be a pointer");
+    return klass;
+  }
+
+  llvm::CallInst* loaded_klass = call_java_op("jeandle.load_klass", {obj});
+  loaded_klass->setName("arraycopy_klass");
+  return loaded_klass;
+}
+
+// Jeandle counterpart of C2 GraphKit::get_layout_helper(). If Klass is a
+// compile-time constant with a non-neutral layout helper, return the value via
+// constant_value. Otherwise emit the unordered runtime load.
+llvm::Value* JeandleAbstractInterpreter::get_layout_helper(
+    llvm::Value* klass, jint& constant_value) {
+  uintptr_t klass_constant = llvm::jeandle::extractKlassConstant(klass);
+  if (klass_constant != 0) {
+    Klass* constant_klass = reinterpret_cast<Klass*>(klass_constant);
+    jint layout_helper = constant_klass->layout_helper();
+    if (layout_helper != Klass::_lh_neutral_value) {
+      constant_value = layout_helper;
+      return nullptr;
+    }
+  }
+
+  constant_value = Klass::_lh_neutral_value;
+  return call_java_op("jeandle.layout_helper", {klass});
 }
 
 llvm::Value* JeandleAbstractInterpreter::compute_array_element_address(BasicType basic_type, llvm::Type* type) {

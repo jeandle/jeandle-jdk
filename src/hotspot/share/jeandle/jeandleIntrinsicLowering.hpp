@@ -30,7 +30,10 @@
 #include "jeandle/__hotspotHeadersBegin__.hpp"
 #include "classfile/vmIntrinsics.hpp"
 #include "memory/allocation.hpp"
-#include "runtime/deoptimization.hpp"
+
+#define PROB_UNLIKELY_MAG(N)    (1e- ## N ## f)
+#define PROB_MIN                PROB_UNLIKELY_MAG(6)
+#define PROB_FAIR               (0.5f)
 
 class JeandleAbstractInterpreter;
 class ciMethod;
@@ -105,10 +108,6 @@ void annotate_call(llvm::CallBase* call,
 void apply_memory_attr(llvm::CallBase* call,
                        const CallSiteAttributeMetadata& attrs);
 
-using JeandleTrapReasonMask = uint32_t;
-static_assert(Deoptimization::Reason_LIMIT <= 32,
-              "JeandleTrapReasonMask must be widened");
-
 class JeandleIntrinsicLowering : public StackObj {
  public:
   explicit JeandleIntrinsicLowering(JeandleAbstractInterpreter* interp);
@@ -119,11 +118,6 @@ class JeandleIntrinsicLowering : public StackObj {
 
   // Is this intrinsic ID one that Jeandle knows how to lower?
   static bool is_supported(vmIntrinsics::ID id);
-
-  // Trap-throttle mask: deopt reasons that should throttle admission when
-  // too many traps occurred at the invoke site. Returns 0 for intrinsics
-  // that never deopt.
-  static JeandleTrapReasonMask trap_throttle_mask(vmIntrinsics::ID id);
 
  private:
   JeandleAbstractInterpreter* _interp;
@@ -169,6 +163,18 @@ class JeandleIntrinsicLowering : public StackObj {
   bool lower_java_op(const char* java_op_name,
                      const CallSiteAttributeMetadata& attrs);
 
+  // Helper functions to inline natives
+  llvm::BasicBlock* generate_guard(llvm::Value* test, llvm::BasicBlock* slow_bb, float true_prob);
+  llvm::BasicBlock* generate_fair_guard(llvm::Value* test, llvm::BasicBlock* slow_bb);
+  void generate_negative_guard(llvm::Value* index, llvm::BasicBlock* slow_bb);
+  void generate_limit_guard(llvm::Value* offset, llvm::Value* copy_length,
+                            llvm::Value* array_length, llvm::BasicBlock* slow_bb);
+  llvm::BasicBlock* generate_non_array_guard(llvm::Value* klass, llvm::BasicBlock* region_bb) {
+    return generate_array_guard_common(klass, region_bb, false, true);
+  }
+  llvm::BasicBlock* generate_array_guard_common(llvm::Value* klass, llvm::BasicBlock* region_bb,
+                                                bool obj_array, bool not_array);
+
   // ========================================================================
   // Per-intrinsic handlers
   // ========================================================================
@@ -179,7 +185,7 @@ class JeandleIntrinsicLowering : public StackObj {
   bool lower_fp_to_bits_canonical(vmIntrinsics::ID id);
   bool lower_float16_convert(vmIntrinsics::ID id);
   bool lower_llvm_fence(vmIntrinsics::ID id);
-  bool lower_preconditions_check_index(vmIntrinsics::ID id);
+  bool lower_preconditions_check_index(BasicType bt);
   bool lower_spin_wait_hint();       // arch-specific
   bool lower_compare_unsigned(vmIntrinsics::ID id);
   bool lower_exact_arith(vmIntrinsics::ID id, llvm::Intrinsic::ID overflow_id);
@@ -187,6 +193,7 @@ class JeandleIntrinsicLowering : public StackObj {
   bool lower_new_array();
   bool lower_unsafe_allocate_instance();
   bool lower_vectorized_mismatch();
+  bool lower_arraycopy();
   llvm::Value* emit_vectorized_mismatch_small(llvm::Value* a_addr,
                                               llvm::Value* b_addr,
                                               llvm::Value* byte_length,
