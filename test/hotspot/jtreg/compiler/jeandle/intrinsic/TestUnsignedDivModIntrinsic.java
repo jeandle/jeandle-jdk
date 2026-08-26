@@ -108,6 +108,7 @@ public class TestUnsignedDivModIntrinsic {
                 + " \\(\\.\\.\\.\\) @llvm\\.experimental\\.deoptimize\\." + width
                 + "\\(i32 -122\\) \\[ \\\"deopt\\\"\\(.*";
         if (type == long.class) {
+            // Category-2 placeholder slots are serialized as i32 T_ILLEGAL values.
             deopt += "i64 8589934691, i32 0, i64 12884901987, i32 0, "
                     + "i64 65547, i64 %0, i64 8590000139, i64 %1,";
         } else {
