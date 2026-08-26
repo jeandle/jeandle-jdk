@@ -39,9 +39,14 @@ public class TestShaCompress {
                 "-XX:+UseSHA256Intrinsics", "-XX:+UseSHA512Intrinsics",
                 "-Xlog:jeandle=debug", "-XX:+JeandleDumpIR",
                 "-XX:JeandleDumpDirectory=" + dumpPath,
+                "-XX:CompileCommand=compileonly,sun/security/provider/DigestBase.implCompressMultiBlock0",
+                "-XX:CompileCommand=compileonly,sun/security/provider/SHA.implCompress0",
                 "-XX:CompileCommand=compileonly,sun/security/provider/SHA.implCompress",
+                "-XX:CompileCommand=compileonly,sun/security/provider/SHA2.implCompress0",
                 "-XX:CompileCommand=compileonly,sun/security/provider/SHA2.implCompress",
+                "-XX:CompileCommand=compileonly,sun/security/provider/SHA5.implCompress0",
                 "-XX:CompileCommand=compileonly,sun/security/provider/SHA5.implCompress",
+                "-XX:CompileCommand=compileonly,sun/security/provider/SHA3.implCompress0",
                 "-XX:CompileCommand=compileonly,sun/security/provider/SHA3.implCompress",
                 TestWrapper.class.getName()));
         if (System.getProperty("os.arch").equals("aarch64")) {

@@ -39,6 +39,8 @@
 #include "runtime/arguments.hpp"
 #include "runtime/globals_extension.hpp"
 
+void compiler_stubs_init(bool in_compiler_thread);
+
 namespace {
 
 void jeandle_llvm_fatal_error_handler(void* user_data, const char* reason, bool gen_crash_diag) {
@@ -118,6 +120,10 @@ void JeandleCompiler::initialize() {
       set_state(failed);
       return;
     }
+    // Jeandle can be the only compiler in a VM configured with delayed
+    // compiler-stub generation. Generate the platform StubRoutines before
+    // registering direct runtime entries (including SHA compression stubs).
+    compiler_stubs_init(true /* in_compiler_thread */);
     if (!JeandleRuntimeRoutine::generate(target_machine(), data_layout())) {
       set_state(failed);
       return;
