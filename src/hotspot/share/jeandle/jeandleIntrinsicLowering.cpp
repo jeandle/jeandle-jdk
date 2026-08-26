@@ -20,6 +20,7 @@
 #include "jeandle/jeandleIntrinsicLowering.hpp"
 
 #include "jeandle/__llvmHeadersBegin__.hpp"
+#include "llvm/ADT/FloatingPointMode.h"
 #include "llvm/Analysis/ConstantFolding.h"
 #include "llvm/IR/Jeandle/Attributes.h"
 #include "llvm/IR/Jeandle/JavaType.h"
@@ -195,6 +196,12 @@ bool JeandleIntrinsicLowering::is_supported(vmIntrinsics::ID id) {
     // lowers to (see lower_fp_to_bits_canonical) is always legal IR.
     case vmIntrinsics::_floatToIntBits:
     case vmIntrinsics::_doubleToLongBits:
+
+    // floating-point range checks
+    case vmIntrinsics::_floatIsFinite:
+    case vmIntrinsics::_floatIsInfinite:
+    case vmIntrinsics::_doubleIsFinite:
+    case vmIntrinsics::_doubleIsInfinite:
 
     // fence
     case vmIntrinsics::_loadFence:
@@ -451,6 +458,13 @@ bool JeandleIntrinsicLowering::lower(vmIntrinsics::ID id, const ciMethod* target
     case vmIntrinsics::_floatToIntBits:
     case vmIntrinsics::_doubleToLongBits:
       return lower_fp_to_bits_canonical(id);
+
+    // floating-point range checks
+    case vmIntrinsics::_floatIsFinite:
+    case vmIntrinsics::_floatIsInfinite:
+    case vmIntrinsics::_doubleIsFinite:
+    case vmIntrinsics::_doubleIsInfinite:
+      return lower_fp_range_check(id);
 
     // floatToFloat16/float16ToFloat
     case vmIntrinsics::_floatToFloat16:
@@ -951,6 +965,25 @@ bool JeandleIntrinsicLowering::lower_count_zeros(vmIntrinsics::ID id,
   } else {
     _interp->_jvm->ipush(call);
   }
+  return true;
+}
+
+// ---- lower_fp_range_check ----
+// Float/Double.isFinite and isInfinite map directly to llvm.is.fpclass.
+bool JeandleIntrinsicLowering::lower_fp_range_check(vmIntrinsics::ID id) {
+  llvm::IRBuilder<>& builder = _interp->_ir_builder;
+  bool is_double = id == vmIntrinsics::_doubleIsFinite ||
+                   id == vmIntrinsics::_doubleIsInfinite;
+  bool is_finite = id == vmIntrinsics::_floatIsFinite ||
+                   id == vmIntrinsics::_doubleIsFinite;
+
+  llvm::Value* arg = is_double ? _interp->_jvm->dpop() : _interp->_jvm->fpop();
+  llvm::FPClassTest mask = is_finite ? llvm::fcFinite : llvm::fcInf;
+  llvm::Value* result = builder.CreateIntrinsic(
+      llvm::Intrinsic::is_fpclass,
+      {arg->getType()},
+      {arg, builder.getInt32(static_cast<uint32_t>(mask))});
+  _interp->_jvm->ipush(builder.CreateZExt(result, builder.getInt32Ty()));
   return true;
 }
 
