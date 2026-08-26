@@ -900,8 +900,6 @@ bool JeandleIntrinsicLowering::lower_compare_unsigned(vmIntrinsics::ID id) {
 bool JeandleIntrinsicLowering::lower_remainder_unsigned(vmIntrinsics::ID id) {
   bool is_long = (id == vmIntrinsics::_remainderUnsigned_l);
 
-  // Keep the arguments in the JVM state until the exceptional edge has been
-  // emitted so a zero divisor observes the invoke's reexecution state.
   llvm::Value* divisor = _interp->_jvm->peek_value().value();
   _interp->zero_check(divisor);
 
