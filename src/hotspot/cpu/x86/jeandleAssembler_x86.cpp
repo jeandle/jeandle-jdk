@@ -87,14 +87,39 @@ void JeandleAssembler::patch_stub_C_call_site(int inst_offset, CallSiteInfo* cal
 void JeandleAssembler::patch_routine_call_site(int inst_offset, address target) {
   assert(inst_offset >= 0, "invalid operand address");
 
+  // LLVM reserves one x86 near-call instruction at a routine call site.  An
+  // AddressLiteral call may expand to a movabs/call sequence when the runtime
+  // entry is outside the signed 32-bit displacement range, overwriting the
+  // instructions following that five-byte slot.  Keep the call site fixed
+  // size and put the far target in a trampoline, just as external calls do.
+  AddressLiteral entry(target, relocInfo::runtime_call_type);
+  if (__ needs_trampoline(entry)) {
+    int required_space = __ max_trampoline_stub_size();
+    if (__ code()->stubs()->maybe_expand_to_ensure_remaining(required_space)) {
+      if (__ code()->blob() == nullptr) {
+        JEANDLE_REPORT_ERROR_AND_RET_VOID("trampoline stub overflow");
+      }
+    }
+  }
+
   address call_address = __ addr_at(inst_offset);
+#ifdef ASSERT
+  NativeInstruction* ni = nativeInstruction_at(call_address);
+  assert(ni->is_call(), "doesn't look like a call");
+#endif // ASSERT
 
   // Set insts_end to where to patch.
   int insts_end_offset = __ code()->insts_end() - __ code()->insts_begin();
   __ code()->set_insts_end(call_address);
 
   // Patch.
-  __ call(AddressLiteral(target, relocInfo::runtime_call_type));
+  address tpc = __ trampoline_call(entry);
+  if (tpc == nullptr) {
+    JEANDLE_REPORT_ERROR_AND_RET_VOID("trampoline stub overflow");
+  }
+  assert(__ pc() == call_address +
+         JeandleCompiledCall::call_site_size(JeandleCompiledCall::ROUTINE_CALL),
+         "routine call patch must preserve the reserved call-site size");
 
   // Recover insts_end.
   __ code()->set_insts_end(__ code()->insts_begin() + insts_end_offset);

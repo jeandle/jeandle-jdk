@@ -173,7 +173,8 @@ void annotate_call(llvm::CallBase* call,
 }
 
 void apply_memory_attr(llvm::CallBase* call, const CallSiteAttributeMetadata& attrs) {
-  if (attrs.needs_gc_state() || attrs.may_deopt() || attrs.needs_exception_edge()) {
+  if (attrs.needs_gc_state() || attrs.may_deopt() || attrs.needs_exception_edge() ||
+      attrs.observes_external_state()) {
     return;
   }
   const bool reads = attrs.reads_memory();
@@ -341,6 +342,10 @@ bool JeandleIntrinsicLowering::is_supported(vmIntrinsics::ID id) {
 
     // getClass
     case vmIntrinsics::_getClass:
+
+    // System
+    case vmIntrinsics::_currentTimeMillis:
+    case vmIntrinsics::_nanoTime:
 
     // Class queries (the same family as C2's inline_native_Class_query)
     case vmIntrinsics::_isInstance:
@@ -686,6 +691,15 @@ bool JeandleIntrinsicLowering::lower(vmIntrinsics::ID id, const ciMethod* target
       return lower_java_op("jeandle.get_class",
                            {CTRL_NONE, MEM_READ});
 
+    // C2 lowers these intrinsics to leaf os runtime calls. They neither
+    // access Java heap memory nor throw or reach a safepoint.
+    case vmIntrinsics::_currentTimeMillis:
+      return lower_native_time_func(
+          JeandleRuntimeRoutine::os_javaTimeMillis_callee(_interp->_module));
+    case vmIntrinsics::_nanoTime:
+      return lower_native_time_func(
+          JeandleRuntimeRoutine::os_javaTimeNanos_callee(_interp->_module));
+
     // Thread.currentThread()
     case vmIntrinsics::_currentThread:
       return lower_java_op("jeandle.current_thread_obj",
@@ -831,6 +845,17 @@ bool JeandleIntrinsicLowering::lower(vmIntrinsics::ID id, const ciMethod* target
 // =============================================================================
 // Shared emit helpers
 // =============================================================================
+
+bool JeandleIntrinsicLowering::lower_native_time_func(llvm::FunctionCallee callee) {
+  // Time is neither Java-heap memory nor a GC interaction, but it is an
+  // externally changing value and must not be treated as a pure LLVM call.
+  static constexpr CallSiteAttributeMetadata time_attrs = {
+      CTRL_NONE, MEM_OBSERVES_EXTERNAL_STATE};
+  llvm::CallBase* call = emit_callsite(
+      callee, llvm::CallingConv::C, {}, time_attrs, /*is_gc_leaf_entry=*/true);
+  _interp->_jvm->lpush(call);
+  return true;
+}
 
 llvm::CallBase* JeandleIntrinsicLowering::emit_callsite(llvm::FunctionCallee callee,
                                                         llvm::CallingConv::ID cc,

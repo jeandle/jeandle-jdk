@@ -30,6 +30,7 @@
 #include "jeandle/__hotspotHeadersBegin__.hpp"
 #include "memory/allStatic.hpp"
 #include "runtime/javaThread.hpp"
+#include "runtime/os.hpp"
 #include "runtime/sharedRuntime.hpp"
 #include "runtime/stubRoutines.hpp"
 #include "utilities/globalDefinitions.hpp"
@@ -156,6 +157,18 @@
 // exceptional control flow. It is emitted with both gc-leaf-function and
 // nounwind so LLVM can skip statepoint rewriting and EH edges for the call.
 #define ALL_JEANDLE_DIRECT_ROUTINES(def)                                            \
+  def(os_javaTimeMillis,                                                            \
+      os::javaTimeMillis,                                                           \
+      true,                                                                         \
+      true,                                                                         \
+      llvm::Type::getInt64Ty(context))                                              \
+                                                                                    \
+  def(os_javaTimeNanos,                                                             \
+      os::javaTimeNanos,                                                           \
+      true,                                                                         \
+      true,                                                                         \
+      llvm::Type::getInt64Ty(context))                                              \
+                                                                                    \
   def(StubRoutines_dsin,                                                            \
       StubRoutines::dsin(),                                                         \
       true,                                                                         \
