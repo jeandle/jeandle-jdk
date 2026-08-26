@@ -232,6 +232,7 @@ class JeandleIntrinsicLowering : public StackObj {
   bool lower_multiply_high(vmIntrinsics::ID id);
   bool lower_new_array();
   bool lower_native_time_func(llvm::FunctionCallee callee);
+  bool lower_object_notify(vmIntrinsics::ID id);
   bool lower_unsafe_allocate_instance();
   bool lower_unsafe_load_store(BasicType type, UnsafeLoadStoreKind kind,
                                UnsafeAccessKind access_kind);

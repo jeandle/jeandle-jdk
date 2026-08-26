@@ -30,6 +30,7 @@
 #include "runtime/frame.hpp"
 #include "runtime/interfaceSupport.inline.hpp"
 #include "runtime/safepoint.hpp"
+#include "runtime/synchronizer.hpp"
 #include "runtime/vframeArray.hpp"
 
 #define GEN_ROUTINE_STUB(name, ruotine_address, return_type, ...)                                    \
@@ -108,6 +109,34 @@ JRT_ENTRY(void, JeandleRuntimeRoutine::safepoint_handler(JavaThread* current))
   SafepointMechanism::process_if_requested_with_exit_check(current, false /* check asyncs */);
 
   state->set_at_poll_safepoint(false);
+JRT_END
+
+JRT_BLOCK_ENTRY(void, JeandleRuntimeRoutine::monitor_notify(oopDesc* obj,
+                                                             JavaThread* current))
+  assert(check_jeandle_compiled_frame(current), "incorrect caller");
+  if (!SafepointSynchronize::is_synchronizing() &&
+      ObjectSynchronizer::quick_notify(obj, current, false)) {
+    return;
+  }
+
+  JRT_BLOCK;
+  Handle h_obj(current, obj);
+  ObjectSynchronizer::notify(h_obj, CHECK);
+  JRT_BLOCK_END;
+JRT_END
+
+JRT_BLOCK_ENTRY(void, JeandleRuntimeRoutine::monitor_notify_all(oopDesc* obj,
+                                                                 JavaThread* current))
+  assert(check_jeandle_compiled_frame(current), "incorrect caller");
+  if (!SafepointSynchronize::is_synchronizing() &&
+      ObjectSynchronizer::quick_notify(obj, current, true)) {
+    return;
+  }
+
+  JRT_BLOCK;
+  Handle h_obj(current, obj);
+  ObjectSynchronizer::notifyall(h_obj, CHECK);
+  JRT_BLOCK_END;
 JRT_END
 
 JRT_LEAF(address, JeandleRuntimeRoutine::get_exception_handler(JavaThread* current))

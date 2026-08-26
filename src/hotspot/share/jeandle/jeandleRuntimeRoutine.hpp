@@ -49,6 +49,18 @@
       llvm::Type::getVoidTy(context),                                               \
       llvm::PointerType::get(context, llvm::jeandle::AddrSpace::CHeapAddrSpace))    \
                                                                                     \
+  def(monitor_notify,                                                               \
+      JeandleRuntimeRoutine::monitor_notify,                                        \
+      llvm::Type::getVoidTy(context),                                               \
+      llvm::PointerType::get(context, llvm::jeandle::AddrSpace::JavaHeapAddrSpace), \
+      llvm::PointerType::get(context, llvm::jeandle::AddrSpace::CHeapAddrSpace))    \
+                                                                                    \
+  def(monitor_notify_all,                                                           \
+      JeandleRuntimeRoutine::monitor_notify_all,                                    \
+      llvm::Type::getVoidTy(context),                                               \
+      llvm::PointerType::get(context, llvm::jeandle::AddrSpace::JavaHeapAddrSpace), \
+      llvm::PointerType::get(context, llvm::jeandle::AddrSpace::CHeapAddrSpace))    \
+                                                                                    \
   def(install_exceptional_return,                                                   \
       JeandleRuntimeRoutine::install_exceptional_return,                            \
       llvm::Type::getVoidTy(context),                                               \
@@ -405,6 +417,9 @@ class JeandleRuntimeRoutine : public AllStatic {
   // C/C++ routine implementations:
 
   static void safepoint_handler(JavaThread* current);
+
+  static void monitor_notify(oopDesc* obj, JavaThread* current);
+  static void monitor_notify_all(oopDesc* obj, JavaThread* current);
 
   // Install exceptional_return into the current java frame, for throwing exceptions.
   static void install_exceptional_return(oopDesc* exception, JavaThread* current);
