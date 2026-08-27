@@ -183,12 +183,15 @@ class JeandleIntrinsicLowering : public StackObj {
   bool lower_reverse_bytes_narrow(vmIntrinsics::ID id);
   bool lower_llvm_bitcast();
   bool lower_fp_to_bits_canonical(vmIntrinsics::ID id);
+  bool lower_fp_range_check(vmIntrinsics::ID id);
   bool lower_float16_convert(vmIntrinsics::ID id);
   bool lower_llvm_fence(vmIntrinsics::ID id);
   bool lower_preconditions_check_index(BasicType bt);
   bool lower_spin_wait_hint();       // arch-specific
   bool lower_compare_unsigned(vmIntrinsics::ID id);
   bool lower_exact_arith(vmIntrinsics::ID id, llvm::Intrinsic::ID overflow_id);
+  bool lower_divide_unsigned(vmIntrinsics::ID id);
+  bool lower_remainder_unsigned(vmIntrinsics::ID id);
   bool lower_multiply_high(vmIntrinsics::ID id);
   bool lower_new_array();
   bool lower_unsafe_allocate_instance();

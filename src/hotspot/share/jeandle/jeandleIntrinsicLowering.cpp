@@ -20,6 +20,7 @@
 #include "jeandle/jeandleIntrinsicLowering.hpp"
 
 #include "jeandle/__llvmHeadersBegin__.hpp"
+#include "llvm/ADT/FloatingPointMode.h"
 #include "llvm/Analysis/ConstantFolding.h"
 #include "llvm/IR/Jeandle/Attributes.h"
 #include "llvm/IR/Jeandle/JavaType.h"
@@ -196,6 +197,12 @@ bool JeandleIntrinsicLowering::is_supported(vmIntrinsics::ID id) {
     case vmIntrinsics::_floatToIntBits:
     case vmIntrinsics::_doubleToLongBits:
 
+    // floating-point range checks
+    case vmIntrinsics::_floatIsFinite:
+    case vmIntrinsics::_floatIsInfinite:
+    case vmIntrinsics::_doubleIsFinite:
+    case vmIntrinsics::_doubleIsInfinite:
+
     // fence
     case vmIntrinsics::_loadFence:
     case vmIntrinsics::_storeFence:
@@ -209,6 +216,13 @@ bool JeandleIntrinsicLowering::is_supported(vmIntrinsics::ID id) {
     case vmIntrinsics::_compareUnsigned_i:
     case vmIntrinsics::_compareUnsigned_l:
 
+    // divide unsigned
+    case vmIntrinsics::_divideUnsigned_i:
+    case vmIntrinsics::_divideUnsigned_l:
+    // unsigned remainder
+    case vmIntrinsics::_remainderUnsigned_i:
+    case vmIntrinsics::_remainderUnsigned_l:
+
     // count leading/trailing zeros
     // No CPU gating: LLVM lowers ctlz/cttz to native sequences on both x86-64
     // (bsr/bsf fallback when LZCNT/TZCNT are absent) and aarch64 (CLZ, RBIT+CLZ),
@@ -217,6 +231,11 @@ bool JeandleIntrinsicLowering::is_supported(vmIntrinsics::ID id) {
     case vmIntrinsics::_numberOfLeadingZeros_l:
     case vmIntrinsics::_numberOfTrailingZeros_i:
     case vmIntrinsics::_numberOfTrailingZeros_l:
+
+    // reverse: LLVM bitreverse has exact i32/i64 Java operand widths and
+    // lowers to a target-appropriate instruction sequence.
+    case vmIntrinsics::_reverse_i:
+    case vmIntrinsics::_reverse_l:
 
     // reverseBytes: full-width variants are direct bswap; narrow variants need
     // explicit zero/sign-extension semantics.
@@ -332,6 +351,10 @@ bool JeandleIntrinsicLowering::lower(vmIntrinsics::ID id, const ciMethod* target
     case vmIntrinsics::_numberOfTrailingZeros_l:
       return lower_count_zeros(id, llvm::Intrinsic::cttz);
 
+    case vmIntrinsics::_reverse_i:
+    case vmIntrinsics::_reverse_l:
+      return emit_llvm_builtin(llvm::Intrinsic::bitreverse);
+
     // Keep full-width variants as direct IR instead of relying on fallback
     // invoke inlining to recover llvm.bswap.
     case vmIntrinsics::_reverseBytes_i:
@@ -439,6 +462,13 @@ bool JeandleIntrinsicLowering::lower(vmIntrinsics::ID id, const ciMethod* target
     case vmIntrinsics::_doubleToLongBits:
       return lower_fp_to_bits_canonical(id);
 
+    // floating-point range checks
+    case vmIntrinsics::_floatIsFinite:
+    case vmIntrinsics::_floatIsInfinite:
+    case vmIntrinsics::_doubleIsFinite:
+    case vmIntrinsics::_doubleIsInfinite:
+      return lower_fp_range_check(id);
+
     // floatToFloat16/float16ToFloat
     case vmIntrinsics::_floatToFloat16:
     case vmIntrinsics::_float16ToFloat:
@@ -464,6 +494,15 @@ bool JeandleIntrinsicLowering::lower(vmIntrinsics::ID id, const ciMethod* target
     case vmIntrinsics::_compareUnsigned_i:
     case vmIntrinsics::_compareUnsigned_l:
       return lower_compare_unsigned(id);
+
+    // divide unsigned
+    case vmIntrinsics::_divideUnsigned_i:
+    case vmIntrinsics::_divideUnsigned_l:
+      return lower_divide_unsigned(id);
+    // RemainderUnsigned
+    case vmIntrinsics::_remainderUnsigned_i:
+    case vmIntrinsics::_remainderUnsigned_l:
+      return lower_remainder_unsigned(id);
 
     // addExact and the other exact-arithmetic intrinsics share the same
     // overflow-trap path implemented by lower_exact_arith.
@@ -866,6 +905,44 @@ bool JeandleIntrinsicLowering::lower_compare_unsigned(vmIntrinsics::ID id) {
   return true;
 }
 
+// ---- lower_remainder_unsigned ----
+bool JeandleIntrinsicLowering::lower_remainder_unsigned(vmIntrinsics::ID id) {
+  bool is_long = (id == vmIntrinsics::_remainderUnsigned_l);
+
+  llvm::Value* divisor = _interp->_jvm->peek_value().value();
+  _interp->zero_check(divisor);
+
+  divisor = is_long ? _interp->_jvm->lpop() : _interp->_jvm->ipop();
+  llvm::Value* dividend = is_long ? _interp->_jvm->lpop() : _interp->_jvm->ipop();
+  llvm::Value* result = _interp->_ir_builder.CreateURem(dividend, divisor);
+
+  if (is_long) {
+    _interp->_jvm->lpush(result);
+  } else {
+    _interp->_jvm->ipush(result);
+  }
+  return true;
+}
+
+// ---- lower_divide_unsigned ----
+bool JeandleIntrinsicLowering::lower_divide_unsigned(vmIntrinsics::ID id) {
+  bool is_long = (id == vmIntrinsics::_divideUnsigned_l);
+
+  llvm::Value* divisor = _interp->_jvm->peek_value(0).value();
+  _interp->zero_check(divisor);
+
+  divisor = is_long ? _interp->_jvm->lpop() : _interp->_jvm->ipop();
+  llvm::Value* dividend = is_long ? _interp->_jvm->lpop() : _interp->_jvm->ipop();
+  llvm::Value* result = _interp->_ir_builder.CreateUDiv(dividend, divisor);
+
+  if (is_long) {
+    _interp->_jvm->lpush(result);
+  } else {
+    _interp->_jvm->ipush(result);
+  }
+  return true;
+}
+
 // ---- lower_bit_count ----
 // Integer.bitCount(int) -> llvm.ctpop.i32 -> i32        (type matches, no truncate)
 // Long.bitCount(long)   -> llvm.ctpop.i64 -> i64 -> trunc i32  (type mismatch: Java returns int)
@@ -914,6 +991,25 @@ bool JeandleIntrinsicLowering::lower_count_zeros(vmIntrinsics::ID id,
   } else {
     _interp->_jvm->ipush(call);
   }
+  return true;
+}
+
+// ---- lower_fp_range_check ----
+// Float/Double.isFinite and isInfinite map directly to llvm.is.fpclass.
+bool JeandleIntrinsicLowering::lower_fp_range_check(vmIntrinsics::ID id) {
+  llvm::IRBuilder<>& builder = _interp->_ir_builder;
+  bool is_double = id == vmIntrinsics::_doubleIsFinite ||
+                   id == vmIntrinsics::_doubleIsInfinite;
+  bool is_finite = id == vmIntrinsics::_floatIsFinite ||
+                   id == vmIntrinsics::_doubleIsFinite;
+
+  llvm::Value* arg = is_double ? _interp->_jvm->dpop() : _interp->_jvm->fpop();
+  llvm::FPClassTest mask = is_finite ? llvm::fcFinite : llvm::fcInf;
+  llvm::Value* result = builder.CreateIntrinsic(
+      llvm::Intrinsic::is_fpclass,
+      {arg->getType()},
+      {arg, builder.getInt32(static_cast<uint32_t>(mask))});
+  _interp->_jvm->ipush(builder.CreateZExt(result, builder.getInt32Ty()));
   return true;
 }
 
