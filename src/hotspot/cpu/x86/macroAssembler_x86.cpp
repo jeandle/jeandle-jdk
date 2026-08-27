@@ -9882,17 +9882,27 @@ void MacroAssembler::lightweight_unlock(Register obj, Register hdr, Register tmp
 }
 
 #ifdef JEANDLE
+bool MacroAssembler::needs_trampoline(AddressLiteral entry) {
+  return !reachable(entry);
+}
+
 // Emit a call via a trampoline.
 address MacroAssembler::trampoline_call(AddressLiteral entry) {
-  assert(entry.reloc() == relocInfo::none, "wrong reloc type");
+  assert(entry.reloc() == relocInfo::none ||
+         entry.reloc() == relocInfo::runtime_call_type,
+         "wrong reloc type");
+
+  address call_address = pc();
+  if (!needs_trampoline(entry)) {
+    call_literal(entry.target(), entry.rspec());
+    return call_address;
+  }
 
   address stub = emit_trampoline_stub(offset(), entry.target());
   if (stub == nullptr) {
     postcond(pc() == badAddress);
     return nullptr; // CodeCache is full
   }
-
-  address call_address = pc();
 
   call_literal(stub, entry.rspec());
 

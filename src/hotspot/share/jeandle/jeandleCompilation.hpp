@@ -252,6 +252,7 @@ class JeandleCompilation : public StackObj {
   static void print_timers();
 
   void set_has_monitors(bool v) { _has_monitors = v; }
+  void set_has_unsafe_access(bool v) { _has_unsafe_access = v; }
 
   int const_section_alignment() { return _const_section_alignment; }
   void set_const_section_alignment(int align) {
@@ -328,6 +329,7 @@ class JeandleCompilation : public StackObj {
   const char* _error_msg;
 
   bool _has_monitors;
+  bool _has_unsafe_access;
 
   int _const_section_alignment;
 

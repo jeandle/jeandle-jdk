@@ -246,6 +246,7 @@ JeandleCompilation::JeandleCompilation(llvm::TargetMachine* target_machine,
                                        _code(env, method, entry_bci != InvocationEntryBci),
                                        _error_msg(nullptr),
                                        _has_monitors(false),
+                                       _has_unsafe_access(false),
                                        _const_section_alignment(-1) {
 
   const char* reason = check_can_parse(method);
@@ -311,6 +312,7 @@ JeandleCompilation::JeandleCompilation(llvm::TargetMachine* target_machine,
                                        _code(_env, name),
                                        _error_msg(nullptr),
                                        _has_monitors(false),
+                                       _has_unsafe_access(false),
                                        _const_section_alignment(-1) {
   initialize();
 
@@ -1286,7 +1288,7 @@ void JeandleCompilation::install_code() {
                         _code.exception_handler_table(),
                         _code.implicit_exception_table(),
                         CompilerThread::current()->compiler(),
-                        false, // temporary value
+                        _has_unsafe_access,
                         false, // temporary value
                         _has_monitors,
                         0); // temporary value
@@ -1307,6 +1309,7 @@ void JeandleCompilation::initialize() {
   Copy::zero_to_bytes(_trap_hist, sizeof(_trap_hist));
 
   set_has_monitors(false);
+  set_has_unsafe_access(false);
 
   // Get timestamp to mark dump files.
   auto now = std::chrono::system_clock::now();

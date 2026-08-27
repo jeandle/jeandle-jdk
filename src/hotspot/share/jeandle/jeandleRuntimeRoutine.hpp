@@ -30,6 +30,7 @@
 #include "jeandle/__hotspotHeadersBegin__.hpp"
 #include "memory/allStatic.hpp"
 #include "runtime/javaThread.hpp"
+#include "runtime/os.hpp"
 #include "runtime/sharedRuntime.hpp"
 #include "runtime/stubRoutines.hpp"
 #include "utilities/globalDefinitions.hpp"
@@ -46,6 +47,18 @@
   def(safepoint_handler,                                                            \
       JeandleRuntimeRoutine::safepoint_handler,                                     \
       llvm::Type::getVoidTy(context),                                               \
+      llvm::PointerType::get(context, llvm::jeandle::AddrSpace::CHeapAddrSpace))    \
+                                                                                    \
+  def(monitor_notify,                                                               \
+      JeandleRuntimeRoutine::monitor_notify,                                        \
+      llvm::Type::getVoidTy(context),                                               \
+      llvm::PointerType::get(context, llvm::jeandle::AddrSpace::JavaHeapAddrSpace), \
+      llvm::PointerType::get(context, llvm::jeandle::AddrSpace::CHeapAddrSpace))    \
+                                                                                    \
+  def(monitor_notify_all,                                                           \
+      JeandleRuntimeRoutine::monitor_notify_all,                                    \
+      llvm::Type::getVoidTy(context),                                               \
+      llvm::PointerType::get(context, llvm::jeandle::AddrSpace::JavaHeapAddrSpace), \
       llvm::PointerType::get(context, llvm::jeandle::AddrSpace::CHeapAddrSpace))    \
                                                                                     \
   def(install_exceptional_return,                                                   \
@@ -156,6 +169,18 @@
 // exceptional control flow. It is emitted with both gc-leaf-function and
 // nounwind so LLVM can skip statepoint rewriting and EH edges for the call.
 #define ALL_JEANDLE_DIRECT_ROUTINES(def)                                            \
+  def(os_javaTimeMillis,                                                            \
+      os::javaTimeMillis,                                                           \
+      true,                                                                         \
+      true,                                                                         \
+      llvm::Type::getInt64Ty(context))                                              \
+                                                                                    \
+  def(os_javaTimeNanos,                                                             \
+      os::javaTimeNanos,                                                           \
+      true,                                                                         \
+      true,                                                                         \
+      llvm::Type::getInt64Ty(context))                                              \
+                                                                                    \
   def(StubRoutines_dsin,                                                            \
       StubRoutines::dsin(),                                                         \
       true,                                                                         \
@@ -392,6 +417,9 @@ class JeandleRuntimeRoutine : public AllStatic {
   // C/C++ routine implementations:
 
   static void safepoint_handler(JavaThread* current);
+
+  static void monitor_notify(oopDesc* obj, JavaThread* current);
+  static void monitor_notify_all(oopDesc* obj, JavaThread* current);
 
   // Install exceptional_return into the current java frame, for throwing exceptions.
   static void install_exceptional_return(oopDesc* exception, JavaThread* current);

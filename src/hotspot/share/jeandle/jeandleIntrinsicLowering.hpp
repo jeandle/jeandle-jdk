@@ -61,6 +61,9 @@ enum JeandleMemoryFlag : uint16_t {
   MEM_READ              = 1u << 0,
   MEM_WRITE             = 1u << 1,
   MEM_NEEDS_GC_STATE    = 1u << 2,
+  // The call observes external changing state (for example a clock). It
+  // must retain unknown memory effects so LLVM cannot CSE or reorder it.
+  MEM_OBSERVES_EXTERNAL_STATE = 1u << 3,
 };
 
 // =============================================================================
@@ -77,6 +80,7 @@ struct CallSiteAttributeMetadata {
   bool reads_memory()         const { return (memory_flags  & MEM_READ) != 0; }
   bool writes_memory()        const { return (memory_flags  & MEM_WRITE) != 0; }
   bool needs_gc_state()       const { return (memory_flags  & MEM_NEEDS_GC_STATE) != 0; }
+  bool observes_external_state() const { return (memory_flags & MEM_OBSERVES_EXTERNAL_STATE) != 0; }
   bool attach_deopt_bundle()  const {
     return may_deopt() || needs_gc_state() || needs_exception_edge();
   }
@@ -111,6 +115,30 @@ void apply_memory_attr(llvm::CallBase* call,
 using JeandleTrapReasonMask = uint32_t;
 static_assert(Deoptimization::Reason_LIMIT <= 32,
               "JeandleTrapReasonMask must be widened");
+
+// C2's inline_unsafe_load_store operation and ordering dimensions. The common
+// entry uses these instead of encoding a vmIntrinsic ID-specific implementation.
+// Operations without a lower_unsafe_load_store switch case decline to normal
+// invocation until their return-value and barrier contracts are implemented.
+enum class UnsafeLoadStoreKind {
+  PlainGet,
+  PlainPut,
+  GetAdd,
+  GetSet,
+  CompareAndSet,
+  WeakCompareAndSet,
+  CompareAndExchange
+};
+
+// All values have an LLVM atomic-ordering mapping. Individual operations still
+// require their own lowering and semantic test coverage before being admitted.
+enum class UnsafeAccessKind {
+  Relaxed,
+  Opaque,
+  Volatile,
+  Acquire,
+  Release
+};
 
 class JeandleIntrinsicLowering : public StackObj {
  public:
@@ -203,7 +231,17 @@ class JeandleIntrinsicLowering : public StackObj {
   bool lower_exact_arith(vmIntrinsics::ID id, llvm::Intrinsic::ID overflow_id);
   bool lower_multiply_high(vmIntrinsics::ID id);
   bool lower_new_array();
+  bool lower_native_time_func(llvm::FunctionCallee callee);
+  bool lower_object_notify(vmIntrinsics::ID id);
   bool lower_unsafe_allocate_instance();
+  bool lower_unsafe_load_store(BasicType type, UnsafeLoadStoreKind kind,
+                               UnsafeAccessKind access_kind);
+  bool lower_unsafe_atomic_rmw(
+      BasicType type, llvm::AtomicRMWInst::BinOp operation,
+      UnsafeAccessKind access_kind);
+  bool lower_unsafe_plain_access(BasicType type, bool is_store);
+  bool lower_unsafe_compare_and_set(BasicType type,
+                                    UnsafeAccessKind access_kind);
   bool lower_vectorized_mismatch();
   llvm::Value* emit_vectorized_mismatch_small(llvm::Value* a_addr,
                                               llvm::Value* b_addr,
