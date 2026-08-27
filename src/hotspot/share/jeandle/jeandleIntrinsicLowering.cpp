@@ -924,6 +924,25 @@ bool JeandleIntrinsicLowering::lower_remainder_unsigned(vmIntrinsics::ID id) {
   return true;
 }
 
+// ---- lower_divide_unsigned ----
+bool JeandleIntrinsicLowering::lower_divide_unsigned(vmIntrinsics::ID id) {
+  bool is_long = (id == vmIntrinsics::_divideUnsigned_l);
+
+  llvm::Value* divisor = _interp->_jvm->peek_value(0).value();
+  _interp->zero_check(divisor);
+
+  divisor = is_long ? _interp->_jvm->lpop() : _interp->_jvm->ipop();
+  llvm::Value* dividend = is_long ? _interp->_jvm->lpop() : _interp->_jvm->ipop();
+  llvm::Value* result = _interp->_ir_builder.CreateUDiv(dividend, divisor);
+
+  if (is_long) {
+    _interp->_jvm->lpush(result);
+  } else {
+    _interp->_jvm->ipush(result);
+  }
+  return true;
+}
+
 // ---- lower_bit_count ----
 // Integer.bitCount(int) -> llvm.ctpop.i32 -> i32        (type matches, no truncate)
 // Long.bitCount(long)   -> llvm.ctpop.i64 -> i64 -> trunc i32  (type mismatch: Java returns int)
