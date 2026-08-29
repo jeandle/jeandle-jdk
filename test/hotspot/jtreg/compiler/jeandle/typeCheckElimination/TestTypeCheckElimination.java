@@ -1603,8 +1603,8 @@ public class TestTypeCheckElimination {
             String fullOutput = output.getOutput();
             String beforeIR = extractBeforeIR(fullOutput, "testKnownSubclass");
             String afterIR = extractAfterIR(fullOutput, "testKnownSubclass");
-            int beforeCount = countOccurrences(beforeIR, "jeandle.check_instanceof");
-            int afterCount = countOccurrences(afterIR, "jeandle.check_instanceof");
+            int beforeCount = countTypeChecks(beforeIR);
+            int afterCount = countTypeChecks(afterIR);
             Asserts.assertGTE(beforeCount, 1,
                 "1a: should have >= 1 check_instanceof before, got " + beforeCount);
             Asserts.assertEquals(afterCount, 0,
@@ -1618,8 +1618,8 @@ public class TestTypeCheckElimination {
             String fullOutput = output.getOutput();
             String beforeIR = extractBeforeIR(fullOutput, "testKnownInterface");
             String afterIR = extractAfterIR(fullOutput, "testKnownInterface");
-            int beforeCount = countOccurrences(beforeIR, "jeandle.check_instanceof");
-            int afterCount = countOccurrences(afterIR, "jeandle.check_instanceof");
+            int beforeCount = countTypeChecks(beforeIR);
+            int afterCount = countTypeChecks(afterIR);
             Asserts.assertGTE(beforeCount, 1,
                 "1b: should have >= 1 check_instanceof before, got " + beforeCount);
             Asserts.assertEquals(afterCount, 0,
@@ -1633,8 +1633,8 @@ public class TestTypeCheckElimination {
             String fullOutput = output.getOutput();
             String beforeIR = extractBeforeIR(fullOutput, "testUnknownType");
             String afterIR = extractAfterIR(fullOutput, "testUnknownType");
-            int beforeCount = countOccurrences(beforeIR, "jeandle.check_instanceof");
-            int afterCount = countOccurrences(afterIR, "jeandle.check_instanceof");
+            int beforeCount = countTypeChecks(beforeIR);
+            int afterCount = countTypeChecks(afterIR);
             Asserts.assertGTE(beforeCount, 1,
                 "1c: should have >= 1 check_instanceof before, got " + beforeCount);
             Asserts.assertEquals(afterCount, beforeCount,
@@ -1648,8 +1648,8 @@ public class TestTypeCheckElimination {
             String fullOutput = output.getOutput();
             String beforeIR = extractBeforeIR(fullOutput, "testSameTypeCast");
             String afterIR = extractAfterIR(fullOutput, "testSameTypeCast");
-            int beforeCount = countOccurrences(beforeIR, "jeandle.check_instanceof");
-            int afterCount = countOccurrences(afterIR, "jeandle.check_instanceof");
+            int beforeCount = countTypeChecks(beforeIR);
+            int afterCount = countTypeChecks(afterIR);
             Asserts.assertEquals(afterCount, 0,
                 "1d: same-type checkcast should be eliminated, got " + afterCount);
         }
@@ -1661,8 +1661,8 @@ public class TestTypeCheckElimination {
             String fullOutput = output.getOutput();
             String beforeIR = extractBeforeIR(fullOutput, "testInstanceofObject");
             String afterIR = extractAfterIR(fullOutput, "testInstanceofObject");
-            int beforeCount = countOccurrences(beforeIR, "jeandle.check_instanceof");
-            int afterCount = countOccurrences(afterIR, "jeandle.check_instanceof");
+            int beforeCount = countTypeChecks(beforeIR);
+            int afterCount = countTypeChecks(afterIR);
             Asserts.assertGTE(beforeCount, 1,
                 "1e: should have >= 1 check_instanceof before, got " + beforeCount);
             Asserts.assertEquals(afterCount, 0,
@@ -1677,11 +1677,11 @@ public class TestTypeCheckElimination {
             String beforeIR = extractBeforeIR(fullOutput, "testDominatedCast");
             String afterIR = extractAfterIR(fullOutput, "testDominatedCast");
             // Before: should have at least 2 check_instanceof (one for instanceof, one for checkcast)
-            int beforeCount = countOccurrences(beforeIR, "jeandle.check_instanceof");
+            int beforeCount = countTypeChecks(beforeIR);
             Asserts.assertGTE(beforeCount, 2,
                 "2a: should have >= 2 check_instanceof before elimination, got " + beforeCount);
             // After: the dominated checkcast should be eliminated, but the guard instanceof stays
-            int afterCount = countOccurrences(afterIR, "jeandle.check_instanceof");
+            int afterCount = countTypeChecks(afterIR);
             Asserts.assertLT(afterCount, beforeCount,
                 "2a: some check_instanceof should be eliminated; before=" + beforeCount + " after=" + afterCount);
         }
@@ -1693,8 +1693,8 @@ public class TestTypeCheckElimination {
             String fullOutput = output.getOutput();
             String beforeIR = extractBeforeIR(fullOutput, "testNestedDominated");
             String afterIR = extractAfterIR(fullOutput, "testNestedDominated");
-            int beforeCount = countOccurrences(beforeIR, "jeandle.check_instanceof");
-            int afterCount = countOccurrences(afterIR, "jeandle.check_instanceof");
+            int beforeCount = countTypeChecks(beforeIR);
+            int afterCount = countTypeChecks(afterIR);
             // There should be instanceof Animal, instanceof Dog, checkcast Dog, checkcast Animal = 4 checks
             // After: the two checkcasts (dominated by their guards) should be eliminated
             Asserts.assertGTE(beforeCount, 4,
@@ -1710,8 +1710,8 @@ public class TestTypeCheckElimination {
             String fullOutput = output.getOutput();
             String beforeIR = extractBeforeIR(fullOutput, "testDiamondCFG");
             String afterIR = extractAfterIR(fullOutput, "testDiamondCFG");
-            int beforeCount = countOccurrences(beforeIR, "jeandle.check_instanceof");
-            int afterCount = countOccurrences(afterIR, "jeandle.check_instanceof");
+            int beforeCount = countTypeChecks(beforeIR);
+            int afterCount = countTypeChecks(afterIR);
             // The final 'obj instanceof Dog' at the merge point should be preserved
             Asserts.assertGTE(afterCount, 1,
                 "2c: check at diamond merge should be preserved, got " + afterCount);
@@ -1725,8 +1725,8 @@ public class TestTypeCheckElimination {
             String beforeIR = extractBeforeIR(fullOutput, "testSequentialChecks");
             String afterIR = extractAfterIR(fullOutput, "testSequentialChecks");
             // Two independent checks on different objects, neither should be eliminated
-            int beforeCount = countOccurrences(beforeIR, "jeandle.check_instanceof");
-            int afterCount = countOccurrences(afterIR, "jeandle.check_instanceof");
+            int beforeCount = countTypeChecks(beforeIR);
+            int afterCount = countTypeChecks(afterIR);
             Asserts.assertEquals(afterCount, beforeCount,
                 "2d: independent checks should not be eliminated; before=" + beforeCount + " after=" + afterCount);
         }
@@ -1738,8 +1738,8 @@ public class TestTypeCheckElimination {
             String fullOutput = output.getOutput();
             String beforeIR = extractBeforeIR(fullOutput, "testDeepDominatorChain");
             String afterIR = extractAfterIR(fullOutput, "testDeepDominatorChain");
-            int beforeCount = countOccurrences(beforeIR, "jeandle.check_instanceof");
-            int afterCount = countOccurrences(afterIR, "jeandle.check_instanceof");
+            int beforeCount = countTypeChecks(beforeIR);
+            int afterCount = countTypeChecks(afterIR);
             Asserts.assertGTE(beforeCount, 2,
                 "2e: should have >= 2 check_instanceof before, got " + beforeCount);
             Asserts.assertLT(afterCount, beforeCount,
@@ -1753,8 +1753,8 @@ public class TestTypeCheckElimination {
             String fullOutput = output.getOutput();
             String beforeIR = extractBeforeIR(fullOutput, "testLoopDominated");
             String afterIR = extractAfterIR(fullOutput, "testLoopDominated");
-            int beforeCount = countOccurrences(beforeIR, "jeandle.check_instanceof");
-            int afterCount = countOccurrences(afterIR, "jeandle.check_instanceof");
+            int beforeCount = countTypeChecks(beforeIR);
+            int afterCount = countTypeChecks(afterIR);
             Asserts.assertGTE(beforeCount, 2,
                 "2f: should have >= 2 check_instanceof before, got " + beforeCount);
             Asserts.assertLT(afterCount, beforeCount,
@@ -1768,8 +1768,8 @@ public class TestTypeCheckElimination {
             String fullOutput = output.getOutput();
             String beforeIR = extractBeforeIR(fullOutput, "testComplexDominated");
             String afterIR = extractAfterIR(fullOutput, "testComplexDominated");
-            int beforeCount = countOccurrences(beforeIR, "jeandle.check_instanceof");
-            int afterCount = countOccurrences(afterIR, "jeandle.check_instanceof");
+            int beforeCount = countTypeChecks(beforeIR);
+            int afterCount = countTypeChecks(afterIR);
             Asserts.assertGTE(beforeCount, 3,
                 "2g: should have >= 2 check_instanceof before, got " + beforeCount);
             Asserts.assertLTE(afterCount, beforeCount - 1,
@@ -1783,8 +1783,8 @@ public class TestTypeCheckElimination {
             String fullOutput = output.getOutput();
             String beforeIR = extractBeforeIR(fullOutput, "testDiamondPhiSameType");
             String afterIR = extractAfterIR(fullOutput, "testDiamondPhiSameType");
-            int beforeCount = countOccurrences(beforeIR, "jeandle.check_instanceof");
-            int afterCount = countOccurrences(afterIR, "jeandle.check_instanceof");
+            int beforeCount = countTypeChecks(beforeIR);
+            int afterCount = countTypeChecks(afterIR);
             Asserts.assertGTE(beforeCount, 1,
                 "3a: should have >= 1 check_instanceof before, got " + beforeCount);
             Asserts.assertEquals(afterCount, 0,
@@ -1798,8 +1798,8 @@ public class TestTypeCheckElimination {
             String fullOutput = output.getOutput();
             String beforeIR = extractBeforeIR(fullOutput, "testDiamondPhiDifferentSubtypes");
             String afterIR = extractAfterIR(fullOutput, "testDiamondPhiDifferentSubtypes");
-            int beforeCount = countOccurrences(beforeIR, "jeandle.check_instanceof");
-            int afterCount = countOccurrences(afterIR, "jeandle.check_instanceof");
+            int beforeCount = countTypeChecks(beforeIR);
+            int afterCount = countTypeChecks(afterIR);
             Asserts.assertGTE(beforeCount, 1,
                 "3b: should have >= 1 check_instanceof before, got " + beforeCount);
             Asserts.assertEquals(afterCount, 0,
@@ -1817,8 +1817,8 @@ public class TestTypeCheckElimination {
             System.out.println(beforeIR);
             System.out.println("After IR:");
             System.out.println(afterIR);
-            int beforeCount = countOccurrences(beforeIR, "jeandle.check_instanceof");
-            int afterCount = countOccurrences(afterIR, "jeandle.check_instanceof");
+            int beforeCount = countTypeChecks(beforeIR);
+            int afterCount = countTypeChecks(afterIR);
             Asserts.assertGTE(beforeCount, 1,
                 "3c: should have >= 1 check_instanceof before, got " + beforeCount);
             Asserts.assertLT(afterCount, beforeCount,
@@ -1832,8 +1832,8 @@ public class TestTypeCheckElimination {
             String fullOutput = output.getOutput();
             String beforeIR = extractBeforeIR(fullOutput, "testSubclassInterfaceInheritance");
             String afterIR = extractAfterIR(fullOutput, "testSubclassInterfaceInheritance");
-            int beforeCount = countOccurrences(beforeIR, "jeandle.check_instanceof");
-            int afterCount = countOccurrences(afterIR, "jeandle.check_instanceof");
+            int beforeCount = countTypeChecks(beforeIR);
+            int afterCount = countTypeChecks(afterIR);
             Asserts.assertGTE(beforeCount, 1,
                 "4a: should have >= 1 check_instanceof before, got " + beforeCount);
             Asserts.assertEquals(afterCount, 0,
@@ -1853,8 +1853,8 @@ public class TestTypeCheckElimination {
             String fullOutput = output.getOutput();
             String beforeIR = extractBeforeIR(fullOutput, "testCascadedChecks");
             String afterIR = extractAfterIR(fullOutput, "testCascadedChecks");
-            int beforeCount = countOccurrences(beforeIR, "jeandle.check_instanceof");
-            int afterCount = countOccurrences(afterIR, "jeandle.check_instanceof");
+            int beforeCount = countTypeChecks(beforeIR);
+            int afterCount = countTypeChecks(afterIR);
             Asserts.assertGTE(beforeCount, 5,
                 "6a: should have >= 5 check_instanceof before, got " + beforeCount);
             Asserts.assertLTE(afterCount, beforeCount - 2,
@@ -1868,8 +1868,8 @@ public class TestTypeCheckElimination {
             String fullOutput = output.getOutput();
             String beforeIR = extractBeforeIR(fullOutput, "testNewExactType");
             String afterIR = extractAfterIR(fullOutput, "testNewExactType");
-            int beforeCount = countOccurrences(beforeIR, "jeandle.check_instanceof");
-            int afterCount = countOccurrences(afterIR, "jeandle.check_instanceof");
+            int beforeCount = countTypeChecks(beforeIR);
+            int afterCount = countTypeChecks(afterIR);
             Asserts.assertGTE(beforeCount, 1,
                 "7a: should have >= 1 check_instanceof before, got " + beforeCount);
             Asserts.assertEquals(afterCount, 0,
@@ -1883,8 +1883,8 @@ public class TestTypeCheckElimination {
             String fullOutput = output.getOutput();
             String beforeIR = extractBeforeIR(fullOutput, "testNewExactTypeNegative");
             String afterIR = extractAfterIR(fullOutput, "testNewExactTypeNegative");
-            int beforeCount = countOccurrences(beforeIR, "jeandle.check_instanceof");
-            int afterCount = countOccurrences(afterIR, "jeandle.check_instanceof");
+            int beforeCount = countTypeChecks(beforeIR);
+            int afterCount = countTypeChecks(afterIR);
             Asserts.assertGTE(beforeCount, 1,
                 "7b: should have >= 1 check_instanceof before, got " + beforeCount);
             Asserts.assertEquals(afterCount, 0,
@@ -1898,8 +1898,8 @@ public class TestTypeCheckElimination {
             String fullOutput = output.getOutput();
             String beforeIR = extractBeforeIR(fullOutput, "testExactUnrelatedType");
             String afterIR = extractAfterIR(fullOutput, "testExactUnrelatedType");
-            int beforeCount = countOccurrences(beforeIR, "jeandle.check_instanceof");
-            int afterCount = countOccurrences(afterIR, "jeandle.check_instanceof");
+            int beforeCount = countTypeChecks(beforeIR);
+            int afterCount = countTypeChecks(afterIR);
             Asserts.assertGTE(beforeCount, 1,
                 "8a: should have >= 1 check_instanceof before, got " + beforeCount);
             Asserts.assertEquals(afterCount, 0,
@@ -1913,8 +1913,8 @@ public class TestTypeCheckElimination {
             String fullOutput = output.getOutput();
             String beforeIR = extractBeforeIR(fullOutput, "testNegatedGuard");
             String afterIR = extractAfterIR(fullOutput, "testNegatedGuard");
-            int beforeCount = countOccurrences(beforeIR, "jeandle.check_instanceof");
-            int afterCount = countOccurrences(afterIR, "jeandle.check_instanceof");
+            int beforeCount = countTypeChecks(beforeIR);
+            int afterCount = countTypeChecks(afterIR);
             Asserts.assertGTE(beforeCount, 2,
                 "9a: should have >= 2 check_instanceof before, got " + beforeCount);
             Asserts.assertLT(afterCount, beforeCount,
@@ -1928,8 +1928,8 @@ public class TestTypeCheckElimination {
             String fullOutput = output.getOutput();
             String beforeIR = extractBeforeIR(fullOutput, "testNegatedGuardElse");
             String afterIR = extractAfterIR(fullOutput, "testNegatedGuardElse");
-            int beforeCount = countOccurrences(beforeIR, "jeandle.check_instanceof");
-            int afterCount = countOccurrences(afterIR, "jeandle.check_instanceof");
+            int beforeCount = countTypeChecks(beforeIR);
+            int afterCount = countTypeChecks(afterIR);
             Asserts.assertGTE(beforeCount, 2,
                 "9b: should have >= 2 check_instanceof before, got " + beforeCount);
             Asserts.assertLT(afterCount, beforeCount,
@@ -1943,8 +1943,8 @@ public class TestTypeCheckElimination {
             String fullOutput = output.getOutput();
             String beforeIR = extractBeforeIR(fullOutput, "testCheckcastDominatesInstanceof");
             String afterIR = extractAfterIR(fullOutput, "testCheckcastDominatesInstanceof");
-            int beforeCount = countOccurrences(beforeIR, "jeandle.check_instanceof");
-            int afterCount = countOccurrences(afterIR, "jeandle.check_instanceof");
+            int beforeCount = countTypeChecks(beforeIR);
+            int afterCount = countTypeChecks(afterIR);
             Asserts.assertGTE(beforeCount, 2,
                 "10a: should have >= 2 check_instanceof before, got " + beforeCount);
             Asserts.assertLT(afterCount, beforeCount,
@@ -1958,8 +1958,8 @@ public class TestTypeCheckElimination {
             String fullOutput = output.getOutput();
             String beforeIR = extractBeforeIR(fullOutput, "testTransitiveSubtype");
             String afterIR = extractAfterIR(fullOutput, "testTransitiveSubtype");
-            int beforeCount = countOccurrences(beforeIR, "jeandle.check_instanceof");
-            int afterCount = countOccurrences(afterIR, "jeandle.check_instanceof");
+            int beforeCount = countTypeChecks(beforeIR);
+            int afterCount = countTypeChecks(afterIR);
             Asserts.assertGTE(beforeCount, 2,
                 "11a: should have >= 2 check_instanceof before, got " + beforeCount);
             Asserts.assertLTE(afterCount, beforeCount - 1,
@@ -1973,8 +1973,8 @@ public class TestTypeCheckElimination {
             String fullOutput = output.getOutput();
             String beforeIR = extractBeforeIR(fullOutput, "testTransitiveNonSubtype");
             String afterIR = extractAfterIR(fullOutput, "testTransitiveNonSubtype");
-            int beforeCount = countOccurrences(beforeIR, "jeandle.check_instanceof");
-            int afterCount = countOccurrences(afterIR, "jeandle.check_instanceof");
+            int beforeCount = countTypeChecks(beforeIR);
+            int afterCount = countTypeChecks(afterIR);
             Asserts.assertGTE(beforeCount, 2,
                 "11b: should have >= 2 check_instanceof before, got " + beforeCount);
             Asserts.assertLTE(afterCount, beforeCount - 1,
@@ -1988,8 +1988,8 @@ public class TestTypeCheckElimination {
             String fullOutput = output.getOutput();
             String beforeIR = extractBeforeIR(fullOutput, "testRedundantDuplicateCheck");
             String afterIR = extractAfterIR(fullOutput, "testRedundantDuplicateCheck");
-            int beforeCount = countOccurrences(beforeIR, "jeandle.check_instanceof");
-            int afterCount = countOccurrences(afterIR, "jeandle.check_instanceof");
+            int beforeCount = countTypeChecks(beforeIR);
+            int afterCount = countTypeChecks(afterIR);
             Asserts.assertGTE(beforeCount, 2,
                 "12a: should have >= 2 check_instanceof before, got " + beforeCount);
             Asserts.assertLT(afterCount, beforeCount,
@@ -2003,8 +2003,8 @@ public class TestTypeCheckElimination {
             String fullOutput = output.getOutput();
             String beforeIR = extractBeforeIR(fullOutput, "testWideningCheck");
             String afterIR = extractAfterIR(fullOutput, "testWideningCheck");
-            int beforeCount = countOccurrences(beforeIR, "jeandle.check_instanceof");
-            int afterCount = countOccurrences(afterIR, "jeandle.check_instanceof");
+            int beforeCount = countTypeChecks(beforeIR);
+            int afterCount = countTypeChecks(afterIR);
             Asserts.assertGTE(beforeCount, 2,
                 "12b: should have >= 2 check_instanceof before, got " + beforeCount);
             Asserts.assertLT(afterCount, beforeCount,
@@ -2018,8 +2018,8 @@ public class TestTypeCheckElimination {
             String fullOutput = output.getOutput();
             String beforeIR = extractBeforeIR(fullOutput, "testFieldType");
             String afterIR = extractAfterIR(fullOutput, "testFieldType");
-            int beforeCount = countOccurrences(beforeIR, "jeandle.check_instanceof");
-            int afterCount = countOccurrences(afterIR, "jeandle.check_instanceof");
+            int beforeCount = countTypeChecks(beforeIR);
+            int afterCount = countTypeChecks(afterIR);
             Asserts.assertGTE(beforeCount, 1,
                 "13a: should have >= 1 check_instanceof before, got " + beforeCount);
             Asserts.assertEquals(afterCount, 0,
@@ -2033,8 +2033,8 @@ public class TestTypeCheckElimination {
             String fullOutput = output.getOutput();
             String beforeIR = extractBeforeIR(fullOutput, "testStackedNarrowingChecks");
             String afterIR = extractAfterIR(fullOutput, "testStackedNarrowingChecks");
-            int beforeCount = countOccurrences(beforeIR, "jeandle.check_instanceof");
-            int afterCount = countOccurrences(afterIR, "jeandle.check_instanceof");
+            int beforeCount = countTypeChecks(beforeIR);
+            int afterCount = countTypeChecks(afterIR);
             // instanceof Animal, instanceof Dog, checkcast Dog, instanceof Poodle, checkcast Poodle, checkcast Animal = 6
             Asserts.assertGTE(beforeCount, 6,
                 "14a: should have >= 6 check_instanceof before, got " + beforeCount);
@@ -2049,8 +2049,8 @@ public class TestTypeCheckElimination {
             String fullOutput = output.getOutput();
             String beforeIR = extractBeforeIR(fullOutput, "testTernaryBothSubtypes");
             String afterIR = extractAfterIR(fullOutput, "testTernaryBothSubtypes");
-            int beforeCount = countOccurrences(beforeIR, "jeandle.check_instanceof");
-            int afterCount = countOccurrences(afterIR, "jeandle.check_instanceof");
+            int beforeCount = countTypeChecks(beforeIR);
+            int afterCount = countTypeChecks(afterIR);
             Asserts.assertGTE(beforeCount, 1,
                 "15a: should have >= 1 check_instanceof before, got " + beforeCount);
             Asserts.assertEquals(afterCount, 0,
@@ -2064,8 +2064,8 @@ public class TestTypeCheckElimination {
             String fullOutput = output.getOutput();
             String beforeIR = extractBeforeIR(fullOutput, "testTernaryMixedTypes");
             String afterIR = extractAfterIR(fullOutput, "testTernaryMixedTypes");
-            int beforeCount = countOccurrences(beforeIR, "jeandle.check_instanceof");
-            int afterCount = countOccurrences(afterIR, "jeandle.check_instanceof");
+            int beforeCount = countTypeChecks(beforeIR);
+            int afterCount = countTypeChecks(afterIR);
             Asserts.assertEquals(afterCount, beforeCount,
                 "15b: no check_instanceof should be eliminated; before=" + beforeCount + " after=" + afterCount);
         }
@@ -2077,8 +2077,8 @@ public class TestTypeCheckElimination {
             String fullOutput = output.getOutput();
             String beforeIR = extractBeforeIR(fullOutput, "testLoopChangingTypes");
             String afterIR = extractAfterIR(fullOutput, "testLoopChangingTypes");
-            int beforeCount = countOccurrences(beforeIR, "jeandle.check_instanceof");
-            int afterCount = countOccurrences(afterIR, "jeandle.check_instanceof");
+            int beforeCount = countTypeChecks(beforeIR);
+            int afterCount = countTypeChecks(afterIR);
             Asserts.assertEquals(afterCount, beforeCount,
                 "16a: no check_instanceof should be eliminated; before=" + beforeCount + " after=" + afterCount);
         }
@@ -2090,8 +2090,8 @@ public class TestTypeCheckElimination {
             String fullOutput = output.getOutput();
             String beforeIR = extractBeforeIR(fullOutput, "testMixedNewAndUnknown");
             String afterIR = extractAfterIR(fullOutput, "testMixedNewAndUnknown");
-            int beforeCount = countOccurrences(beforeIR, "jeandle.check_instanceof");
-            int afterCount = countOccurrences(afterIR, "jeandle.check_instanceof");
+            int beforeCount = countTypeChecks(beforeIR);
+            int afterCount = countTypeChecks(afterIR);
             Asserts.assertEquals(afterCount, beforeCount,
                 "17a: no check_instanceof should be eliminated; before=" + beforeCount + " after=" + afterCount);
         }
@@ -2103,8 +2103,8 @@ public class TestTypeCheckElimination {
             String fullOutput = output.getOutput();
             String beforeIR = extractBeforeIR(fullOutput, "testVeryDeepDominatorChain");
             String afterIR = extractAfterIR(fullOutput, "testVeryDeepDominatorChain");
-            int beforeCount = countOccurrences(beforeIR, "jeandle.check_instanceof");
-            int afterCount = countOccurrences(afterIR, "jeandle.check_instanceof");
+            int beforeCount = countTypeChecks(beforeIR);
+            int afterCount = countTypeChecks(afterIR);
             Asserts.assertGTE(beforeCount, 2,
                 "18a: should have >= 2 check_instanceof before, got " + beforeCount);
             Asserts.assertLT(afterCount, beforeCount,
@@ -2118,8 +2118,8 @@ public class TestTypeCheckElimination {
             String fullOutput = output.getOutput();
             String beforeIR = extractBeforeIR(fullOutput, "testDeniedByFailedCheck");
             String afterIR = extractAfterIR(fullOutput, "testDeniedByFailedCheck");
-            int beforeCount = countOccurrences(beforeIR, "jeandle.check_instanceof");
-            int afterCount = countOccurrences(afterIR, "jeandle.check_instanceof");
+            int beforeCount = countTypeChecks(beforeIR);
+            int afterCount = countTypeChecks(afterIR);
             Asserts.assertGTE(beforeCount, 2,
                 "20a: should have >= 2 check_instanceof before, got " + beforeCount);
             Asserts.assertLT(afterCount, beforeCount,
@@ -2133,8 +2133,8 @@ public class TestTypeCheckElimination {
             String fullOutput = output.getOutput();
             String beforeIR = extractBeforeIR(fullOutput, "testDeniedTransitive");
             String afterIR = extractAfterIR(fullOutput, "testDeniedTransitive");
-            int beforeCount = countOccurrences(beforeIR, "jeandle.check_instanceof");
-            int afterCount = countOccurrences(afterIR, "jeandle.check_instanceof");
+            int beforeCount = countTypeChecks(beforeIR);
+            int afterCount = countTypeChecks(afterIR);
             Asserts.assertGTE(beforeCount, 2,
                 "20b: should have >= 2 check_instanceof before, got " + beforeCount);
             Asserts.assertLT(afterCount, beforeCount,
@@ -2148,8 +2148,8 @@ public class TestTypeCheckElimination {
             String fullOutput = output.getOutput();
             String beforeIR = extractBeforeIR(fullOutput, "testDeniedNotApplicable");
             String afterIR = extractAfterIR(fullOutput, "testDeniedNotApplicable");
-            int beforeCount = countOccurrences(beforeIR, "jeandle.check_instanceof");
-            int afterCount = countOccurrences(afterIR, "jeandle.check_instanceof");
+            int beforeCount = countTypeChecks(beforeIR);
+            int afterCount = countTypeChecks(afterIR);
             Asserts.assertEquals(afterCount, beforeCount,
                 "20c: no check_instanceof should be eliminated; before=" + beforeCount + " after=" + afterCount);
         }
@@ -2161,8 +2161,8 @@ public class TestTypeCheckElimination {
             String fullOutput = output.getOutput();
             String beforeIR = extractBeforeIR(fullOutput, "testDeniedSameType");
             String afterIR = extractAfterIR(fullOutput, "testDeniedSameType");
-            int beforeCount = countOccurrences(beforeIR, "jeandle.check_instanceof");
-            int afterCount = countOccurrences(afterIR, "jeandle.check_instanceof");
+            int beforeCount = countTypeChecks(beforeIR);
+            int afterCount = countTypeChecks(afterIR);
             Asserts.assertGTE(beforeCount, 2,
                 "20d: should have >= 2 check_instanceof before, got " + beforeCount);
             Asserts.assertLT(afterCount, beforeCount,
@@ -2176,8 +2176,8 @@ public class TestTypeCheckElimination {
             String fullOutput = output.getOutput();
             String beforeIR = extractBeforeIR(fullOutput, "testDeniedInterfaceNotApplicable");
             String afterIR = extractAfterIR(fullOutput, "testDeniedInterfaceNotApplicable");
-            int beforeCount = countOccurrences(beforeIR, "jeandle.check_instanceof");
-            int afterCount = countOccurrences(afterIR, "jeandle.check_instanceof");
+            int beforeCount = countTypeChecks(beforeIR);
+            int afterCount = countTypeChecks(afterIR);
             Asserts.assertGTE(beforeCount, 2,
                 "20e: should have >= 2 check_instanceof before, got " + beforeCount);
             Asserts.assertLT(afterCount, beforeCount,
@@ -2191,8 +2191,8 @@ public class TestTypeCheckElimination {
             String fullOutput = output.getOutput();
             String beforeIR = extractBeforeIR(fullOutput, "testArrayExactFinalElement");
             String afterIR = extractAfterIR(fullOutput, "testArrayExactFinalElement");
-            int beforeCount = countOccurrences(beforeIR, "jeandle.check_instanceof");
-            int afterCount = countOccurrences(afterIR, "jeandle.check_instanceof");
+            int beforeCount = countTypeChecks(beforeIR);
+            int afterCount = countTypeChecks(afterIR);
             Asserts.assertGTE(beforeCount, 1,
                 "21a: should have >= 1 check_instanceof before, got " + beforeCount);
             Asserts.assertEquals(afterCount, 0,
@@ -2206,8 +2206,8 @@ public class TestTypeCheckElimination {
             String fullOutput = output.getOutput();
             String beforeIR = extractBeforeIR(fullOutput, "testArrayParamFinalElement");
             String afterIR = extractAfterIR(fullOutput, "testArrayParamFinalElement");
-            int beforeCount = countOccurrences(beforeIR, "jeandle.check_instanceof");
-            int afterCount = countOccurrences(afterIR, "jeandle.check_instanceof");
+            int beforeCount = countTypeChecks(beforeIR);
+            int afterCount = countTypeChecks(afterIR);
             Asserts.assertGTE(beforeCount, 1,
                 "21b: should have >= 1 check_instanceof before, got " + beforeCount);
             Asserts.assertEquals(afterCount, 0,
@@ -2221,8 +2221,8 @@ public class TestTypeCheckElimination {
             String fullOutput = output.getOutput();
             String beforeIR = extractBeforeIR(fullOutput, "testArrayParamNonFinal");
             String afterIR = extractAfterIR(fullOutput, "testArrayParamNonFinal");
-            int beforeCount = countOccurrences(beforeIR, "jeandle.check_instanceof");
-            int afterCount = countOccurrences(afterIR, "jeandle.check_instanceof");
+            int beforeCount = countTypeChecks(beforeIR);
+            int afterCount = countTypeChecks(afterIR);
             Asserts.assertEquals(afterCount, beforeCount,
                 "21c: no check_instanceof should be eliminated; before=" + beforeCount + " after=" + afterCount);
         }
@@ -2234,8 +2234,8 @@ public class TestTypeCheckElimination {
             String fullOutput = output.getOutput();
             String beforeIR = extractBeforeIR(fullOutput, "testPrimitiveArray");
             String afterIR = extractAfterIR(fullOutput, "testPrimitiveArray");
-            int beforeCount = countOccurrences(beforeIR, "jeandle.check_instanceof");
-            int afterCount = countOccurrences(afterIR, "jeandle.check_instanceof");
+            int beforeCount = countTypeChecks(beforeIR);
+            int afterCount = countTypeChecks(afterIR);
             Asserts.assertGTE(beforeCount, 1,
                 "21d: should have >= 1 check_instanceof before, got " + beforeCount);
             Asserts.assertEquals(afterCount, 0,
@@ -2249,8 +2249,8 @@ public class TestTypeCheckElimination {
             String fullOutput = output.getOutput();
             String beforeIR = extractBeforeIR(fullOutput, "testFinalFieldType");
             String afterIR = extractAfterIR(fullOutput, "testFinalFieldType");
-            int beforeCount = countOccurrences(beforeIR, "jeandle.check_instanceof");
-            int afterCount = countOccurrences(afterIR, "jeandle.check_instanceof");
+            int beforeCount = countTypeChecks(beforeIR);
+            int afterCount = countTypeChecks(afterIR);
             Asserts.assertGTE(beforeCount, 1,
                 "22a: should have >= 1 check_instanceof before, got " + beforeCount);
             Asserts.assertEquals(afterCount, 0,
@@ -2264,8 +2264,8 @@ public class TestTypeCheckElimination {
             String fullOutput = output.getOutput();
             String beforeIR = extractBeforeIR(fullOutput, "testFinalReturnType");
             String afterIR = extractAfterIR(fullOutput, "testFinalReturnType");
-            int beforeCount = countOccurrences(beforeIR, "jeandle.check_instanceof");
-            int afterCount = countOccurrences(afterIR, "jeandle.check_instanceof");
+            int beforeCount = countTypeChecks(beforeIR);
+            int afterCount = countTypeChecks(afterIR);
             Asserts.assertGTE(beforeCount, 1,
                 "23a: should have >= 1 check_instanceof before, got " + beforeCount);
             Asserts.assertEquals(afterCount, 0,
@@ -2279,8 +2279,8 @@ public class TestTypeCheckElimination {
             String fullOutput = output.getOutput();
             String beforeIR = extractBeforeIR(fullOutput, "testPhiIncomingBranchDirect");
             String afterIR = extractAfterIR(fullOutput, "testPhiIncomingBranchDirect");
-            int beforeCount = countOccurrences(beforeIR, "jeandle.check_instanceof");
-            int afterCount = countOccurrences(afterIR, "jeandle.check_instanceof");
+            int beforeCount = countTypeChecks(beforeIR);
+            int afterCount = countTypeChecks(afterIR);
             // Before: instanceof Dog (guard) + instanceof Animal (check) = 2
             // After: instanceof Dog stays (Object param), instanceof Animal eliminated
             Asserts.assertGTE(beforeCount, 2,
@@ -2296,8 +2296,8 @@ public class TestTypeCheckElimination {
             String fullOutput = output.getOutput();
             String beforeIR = extractBeforeIR(fullOutput, "testPhiLoopHeaderSharpening");
             String afterIR = extractAfterIR(fullOutput, "testPhiLoopHeaderSharpening");
-            int beforeCount = countOccurrences(beforeIR, "jeandle.check_instanceof");
-            int afterCount = countOccurrences(afterIR, "jeandle.check_instanceof");
+            int beforeCount = countTypeChecks(beforeIR);
+            int afterCount = countTypeChecks(afterIR);
             Asserts.assertGTE(beforeCount, 2,
                 "24b: should have >= 2 check_instanceof before, got " + beforeCount);
             Asserts.assertLT(afterCount, beforeCount,
@@ -2311,8 +2311,8 @@ public class TestTypeCheckElimination {
             String fullOutput = output.getOutput();
             String beforeIR = extractBeforeIR(fullOutput, "testPhiIncomingBranchDenied");
             String afterIR = extractAfterIR(fullOutput, "testPhiIncomingBranchDenied");
-            int beforeCount = countOccurrences(beforeIR, "jeandle.check_instanceof");
-            int afterCount = countOccurrences(afterIR, "jeandle.check_instanceof");
+            int beforeCount = countTypeChecks(beforeIR);
+            int afterCount = countTypeChecks(afterIR);
             Asserts.assertEquals(afterCount, beforeCount,
                 "24c: no check_instanceof should be eliminated; before=" + beforeCount + " after=" + afterCount);
         }
@@ -2324,8 +2324,8 @@ public class TestTypeCheckElimination {
             String fullOutput = output.getOutput();
             String beforeIR = extractBeforeIR(fullOutput, "testPhiIncomingEdgeSharpened");
             String afterIR = extractAfterIR(fullOutput, "testPhiIncomingEdgeSharpened");
-            int beforeCount = countOccurrences(beforeIR, "jeandle.check_instanceof");
-            int afterCount = countOccurrences(afterIR, "jeandle.check_instanceof");
+            int beforeCount = countTypeChecks(beforeIR);
+            int afterCount = countTypeChecks(afterIR);
             // Before: instanceof Dog (guard) + instanceof Dog (return) = 2.
             // After: the guard stays (unknown Object param), the return check
             // folds because the PHI is meet(Dog-on-edge, Dog) = Dog.
@@ -2342,8 +2342,8 @@ public class TestTypeCheckElimination {
             String fullOutput = output.getOutput();
             String beforeIR = extractBeforeIR(fullOutput, "testNoOverExcludingLCA");
             String afterIR = extractAfterIR(fullOutput, "testNoOverExcludingLCA");
-            int beforeCount = countOccurrences(beforeIR, "jeandle.check_instanceof");
-            int afterCount = countOccurrences(afterIR, "jeandle.check_instanceof");
+            int beforeCount = countTypeChecks(beforeIR);
+            int afterCount = countTypeChecks(afterIR);
             // Dog check + Cat check + Animal check = 3. None should be eliminated.
             // LCA(Dog,Cat)=Animal must NOT be excluded on the false-branch.
             Asserts.assertEquals(afterCount, beforeCount,
@@ -2357,8 +2357,8 @@ public class TestTypeCheckElimination {
             String fullOutput = output.getOutput();
             String beforeIR = extractBeforeIR(fullOutput, "testPhiLCAPositiveSharpening");
             String afterIR = extractAfterIR(fullOutput, "testPhiLCAPositiveSharpening");
-            int beforeCount = countOccurrences(beforeIR, "jeandle.check_instanceof");
-            int afterCount = countOccurrences(afterIR, "jeandle.check_instanceof");
+            int beforeCount = countTypeChecks(beforeIR);
+            int afterCount = countTypeChecks(afterIR);
             // Before: Dog check + Cat check + Animal check = 3
             // After: Dog + Cat stay (guards), Animal check eliminated on true-branch
             Asserts.assertGTE(beforeCount, 3,
@@ -2374,8 +2374,8 @@ public class TestTypeCheckElimination {
             String fullOutput = output.getOutput();
             String beforeIR = extractBeforeIR(fullOutput, "testPhiLCADeeperHierarchy");
             String afterIR = extractAfterIR(fullOutput, "testPhiLCADeeperHierarchy");
-            int beforeCount = countOccurrences(beforeIR, "jeandle.check_instanceof");
-            int afterCount = countOccurrences(afterIR, "jeandle.check_instanceof");
+            int beforeCount = countTypeChecks(beforeIR);
+            int afterCount = countTypeChecks(afterIR);
             Asserts.assertGTE(beforeCount, 3,
                 "26b: should have >= 3 check_instanceof before, got " + beforeCount);
             Asserts.assertLT(afterCount, beforeCount,
@@ -2389,8 +2389,8 @@ public class TestTypeCheckElimination {
             String fullOutput = output.getOutput();
             String beforeIR = extractBeforeIR(fullOutput, "testPhiSameKlassPositiveSharpening");
             String afterIR = extractAfterIR(fullOutput, "testPhiSameKlassPositiveSharpening");
-            int beforeCount = countOccurrences(beforeIR, "jeandle.check_instanceof");
-            int afterCount = countOccurrences(afterIR, "jeandle.check_instanceof");
+            int beforeCount = countTypeChecks(beforeIR);
+            int afterCount = countTypeChecks(afterIR);
             Asserts.assertGTE(beforeCount, 3,
                 "26c: should have >= 3 check_instanceof before, got " + beforeCount);
             Asserts.assertLT(afterCount, beforeCount,
@@ -2404,8 +2404,8 @@ public class TestTypeCheckElimination {
             String fullOutput = output.getOutput();
             String beforeIR = extractBeforeIR(fullOutput, "testAndMixedNegation");
             String afterIR = extractAfterIR(fullOutput, "testAndMixedNegation");
-            int beforeCount = countOccurrences(beforeIR, "jeandle.check_instanceof");
-            int afterCount = countOccurrences(afterIR, "jeandle.check_instanceof");
+            int beforeCount = countTypeChecks(beforeIR);
+            int afterCount = countTypeChecks(afterIR);
             // instanceof Animal + instanceof Dog (guard) + instanceof Dog (inner) = 3
             Asserts.assertGTE(beforeCount, 3,
                 "27a: should have >= 3 check_instanceof before, got " + beforeCount);
@@ -2420,8 +2420,8 @@ public class TestTypeCheckElimination {
             String fullOutput = output.getOutput();
             String beforeIR = extractBeforeIR(fullOutput, "testAndMixedNegationPositive");
             String afterIR = extractAfterIR(fullOutput, "testAndMixedNegationPositive");
-            int beforeCount = countOccurrences(beforeIR, "jeandle.check_instanceof");
-            int afterCount = countOccurrences(afterIR, "jeandle.check_instanceof");
+            int beforeCount = countTypeChecks(beforeIR);
+            int afterCount = countTypeChecks(afterIR);
             // instanceof Animal + instanceof Dog (guard) + checkcast Animal = 3
             Asserts.assertGTE(beforeCount, 3,
                 "27b: should have >= 3 check_instanceof before, got " + beforeCount);
@@ -2436,8 +2436,8 @@ public class TestTypeCheckElimination {
             String fullOutput = output.getOutput();
             String beforeIR = extractBeforeIR(fullOutput, "testAndBothNegated");
             String afterIR = extractAfterIR(fullOutput, "testAndBothNegated");
-            int beforeCount = countOccurrences(beforeIR, "jeandle.check_instanceof");
-            int afterCount = countOccurrences(afterIR, "jeandle.check_instanceof");
+            int beforeCount = countTypeChecks(beforeIR);
+            int afterCount = countTypeChecks(afterIR);
             // instanceof Dog (guard) + instanceof Cat (guard) + instanceof Dog (inner) = 3
             Asserts.assertGTE(beforeCount, 3,
                 "27c: should have >= 3 check_instanceof before, got " + beforeCount);
@@ -2452,8 +2452,8 @@ public class TestTypeCheckElimination {
             String fullOutput = output.getOutput();
             String beforeIR = extractBeforeIR(fullOutput, "testAndBothNegatedCat");
             String afterIR = extractAfterIR(fullOutput, "testAndBothNegatedCat");
-            int beforeCount = countOccurrences(beforeIR, "jeandle.check_instanceof");
-            int afterCount = countOccurrences(afterIR, "jeandle.check_instanceof");
+            int beforeCount = countTypeChecks(beforeIR);
+            int afterCount = countTypeChecks(afterIR);
             Asserts.assertGTE(beforeCount, 3,
                 "27d: should have >= 3 check_instanceof before, got " + beforeCount);
             Asserts.assertLT(afterCount, beforeCount,
@@ -2467,8 +2467,8 @@ public class TestTypeCheckElimination {
             String fullOutput = output.getOutput();
             String beforeIR = extractBeforeIR(fullOutput, "testAndPartialMatchFalseBranch");
             String afterIR = extractAfterIR(fullOutput, "testAndPartialMatchFalseBranch");
-            int beforeCount = countOccurrences(beforeIR, "jeandle.check_instanceof");
-            int afterCount = countOccurrences(afterIR, "jeandle.check_instanceof");
+            int beforeCount = countTypeChecks(beforeIR);
+            int afterCount = countTypeChecks(afterIR);
             // instanceof Dog (guard) + instanceof Dog (after else) = 2
             // The second instanceof Dog must NOT be eliminated on the false-branch
             Asserts.assertGTE(beforeCount, 2,
@@ -2484,8 +2484,8 @@ public class TestTypeCheckElimination {
             String fullOutput = output.getOutput();
             String beforeIR = extractBeforeIR(fullOutput, "testPhiConstantFalseBranch");
             String afterIR = extractAfterIR(fullOutput, "testPhiConstantFalseBranch");
-            int beforeCount = countOccurrences(beforeIR, "jeandle.check_instanceof");
-            int afterCount = countOccurrences(afterIR, "jeandle.check_instanceof");
+            int beforeCount = countTypeChecks(beforeIR);
+            int afterCount = countTypeChecks(afterIR);
             Asserts.assertGTE(beforeCount, 2,
                 "29a: should have >= 2 check_instanceof before, got " + beforeCount);
             Asserts.assertEquals(afterCount, beforeCount,
@@ -2499,8 +2499,8 @@ public class TestTypeCheckElimination {
             String fullOutput = output.getOutput();
             String beforeIR = extractBeforeIR(fullOutput, "testPhiConstantTrueBranch");
             String afterIR = extractAfterIR(fullOutput, "testPhiConstantTrueBranch");
-            int beforeCount = countOccurrences(beforeIR, "jeandle.check_instanceof");
-            int afterCount = countOccurrences(afterIR, "jeandle.check_instanceof");
+            int beforeCount = countTypeChecks(beforeIR);
+            int afterCount = countTypeChecks(afterIR);
             Asserts.assertGTE(beforeCount, 2,
                 "29b: should have >= 2 check_instanceof before, got " + beforeCount);
             Asserts.assertEquals(afterCount, beforeCount,
@@ -2514,8 +2514,8 @@ public class TestTypeCheckElimination {
             String fullOutput = output.getOutput();
             String beforeIR = extractBeforeIR(fullOutput, "testPhiUnionExclusionPreserved");
             String afterIR = extractAfterIR(fullOutput, "testPhiUnionExclusionPreserved");
-            int beforeCount = countOccurrences(beforeIR, "jeandle.check_instanceof");
-            int afterCount = countOccurrences(afterIR, "jeandle.check_instanceof");
+            int beforeCount = countTypeChecks(beforeIR);
+            int afterCount = countTypeChecks(afterIR);
             Asserts.assertGTE(beforeCount, 2,
                 "30a: should have >= 2 check_instanceof before, got " + beforeCount);
             Asserts.assertLT(afterCount, beforeCount,
@@ -2529,8 +2529,8 @@ public class TestTypeCheckElimination {
             String fullOutput = output.getOutput();
             String beforeIR = extractBeforeIR(fullOutput, "testPhiUnionExclusionPreservedInterface");
             String afterIR = extractAfterIR(fullOutput, "testPhiUnionExclusionPreservedInterface");
-            int beforeCount = countOccurrences(beforeIR, "jeandle.check_instanceof");
-            int afterCount = countOccurrences(afterIR, "jeandle.check_instanceof");
+            int beforeCount = countTypeChecks(beforeIR);
+            int afterCount = countTypeChecks(afterIR);
             Asserts.assertGTE(beforeCount, 2,
                 "30b: should have >= 2 check_instanceof before, got " + beforeCount);
             Asserts.assertLT(afterCount, beforeCount,
@@ -2544,8 +2544,8 @@ public class TestTypeCheckElimination {
             String fullOutput = output.getOutput();
             String beforeIR = extractBeforeIR(fullOutput, "testExactClassVsUnimplementedInterface");
             String afterIR = extractAfterIR(fullOutput, "testExactClassVsUnimplementedInterface");
-            int beforeCount = countOccurrences(beforeIR, "jeandle.check_instanceof");
-            int afterCount = countOccurrences(afterIR, "jeandle.check_instanceof");
+            int beforeCount = countTypeChecks(beforeIR);
+            int afterCount = countTypeChecks(afterIR);
             Asserts.assertGTE(beforeCount, 1,
                 "31a: should have >= 1 check_instanceof before, got " + beforeCount);
             Asserts.assertEquals(afterCount, 0,
@@ -2559,8 +2559,8 @@ public class TestTypeCheckElimination {
             String fullOutput = output.getOutput();
             String beforeIR = extractBeforeIR(fullOutput, "testExactClassVsImplementedInterface");
             String afterIR = extractAfterIR(fullOutput, "testExactClassVsImplementedInterface");
-            int beforeCount = countOccurrences(beforeIR, "jeandle.check_instanceof");
-            int afterCount = countOccurrences(afterIR, "jeandle.check_instanceof");
+            int beforeCount = countTypeChecks(beforeIR);
+            int afterCount = countTypeChecks(afterIR);
             Asserts.assertGTE(beforeCount, 1,
                 "31b: should have >= 1 check_instanceof before, got " + beforeCount);
             Asserts.assertEquals(afterCount, 0,
@@ -2574,8 +2574,8 @@ public class TestTypeCheckElimination {
             String fullOutput = output.getOutput();
             String beforeIR = extractBeforeIR(fullOutput, "testMultipleKlassExtractions");
             String afterIR = extractAfterIR(fullOutput, "testMultipleKlassExtractions");
-            int beforeCount = countOccurrences(beforeIR, "jeandle.check_instanceof");
-            int afterCount = countOccurrences(afterIR, "jeandle.check_instanceof");
+            int beforeCount = countTypeChecks(beforeIR);
+            int afterCount = countTypeChecks(afterIR);
             // Animal + Dog + Poodle + Barkable + their checkcasts = many checks
             // Dominated checks (after guards) should be eliminated
             Asserts.assertGTE(beforeCount, 4,
@@ -2591,8 +2591,8 @@ public class TestTypeCheckElimination {
             String fullOutput = output.getOutput();
             String beforeIR = extractBeforeIR(fullOutput, "testKlassExtractionAfterCall");
             String afterIR = extractAfterIR(fullOutput, "testKlassExtractionAfterCall");
-            int beforeCount = countOccurrences(beforeIR, "jeandle.check_instanceof");
-            int afterCount = countOccurrences(afterIR, "jeandle.check_instanceof");
+            int beforeCount = countTypeChecks(beforeIR);
+            int afterCount = countTypeChecks(afterIR);
             Asserts.assertGTE(beforeCount, 1,
                 "32b: should have >= 1 check_instanceof before, got " + beforeCount);
             Asserts.assertEquals(afterCount, 0,
@@ -2606,8 +2606,8 @@ public class TestTypeCheckElimination {
             String fullOutput = output.getOutput();
             String beforeIR = extractBeforeIR(fullOutput, "testKlassExtractionWithArray");
             String afterIR = extractAfterIR(fullOutput, "testKlassExtractionWithArray");
-            int beforeCount = countOccurrences(beforeIR, "jeandle.check_instanceof");
-            int afterCount = countOccurrences(afterIR, "jeandle.check_instanceof");
+            int beforeCount = countTypeChecks(beforeIR);
+            int afterCount = countTypeChecks(afterIR);
             Asserts.assertGTE(beforeCount, 1,
                 "32c: should have >= 1 check_instanceof before, got " + beforeCount);
             Asserts.assertEquals(afterCount, 0,
@@ -2621,8 +2621,8 @@ public class TestTypeCheckElimination {
             String fullOutput = output.getOutput();
             String beforeIR = extractBeforeIR(fullOutput, "testAaloadFinalElement");
             String afterIR = extractAfterIR(fullOutput, "testAaloadFinalElement");
-            int beforeCount = countOccurrences(beforeIR, "jeandle.check_instanceof");
-            int afterCount = countOccurrences(afterIR, "jeandle.check_instanceof");
+            int beforeCount = countTypeChecks(beforeIR);
+            int afterCount = countTypeChecks(afterIR);
             Asserts.assertGTE(beforeCount, 1,
                 "33a: should have >= 1 check_instanceof before, got " + beforeCount);
             Asserts.assertEquals(afterCount, 0,
@@ -2636,8 +2636,8 @@ public class TestTypeCheckElimination {
             String fullOutput = output.getOutput();
             String beforeIR = extractBeforeIR(fullOutput, "testAaloadFinalElementNegative");
             String afterIR = extractAfterIR(fullOutput, "testAaloadFinalElementNegative");
-            int beforeCount = countOccurrences(beforeIR, "jeandle.check_instanceof");
-            int afterCount = countOccurrences(afterIR, "jeandle.check_instanceof");
+            int beforeCount = countTypeChecks(beforeIR);
+            int afterCount = countTypeChecks(afterIR);
             Asserts.assertGTE(beforeCount, 1,
                 "33b: should have >= 1 check_instanceof before, got " + beforeCount);
             Asserts.assertEquals(afterCount, 0,
@@ -2651,8 +2651,8 @@ public class TestTypeCheckElimination {
             String fullOutput = output.getOutput();
             String beforeIR = extractBeforeIR(fullOutput, "testAaloadNonFinalElement");
             String afterIR = extractAfterIR(fullOutput, "testAaloadNonFinalElement");
-            int beforeCount = countOccurrences(beforeIR, "jeandle.check_instanceof");
-            int afterCount = countOccurrences(afterIR, "jeandle.check_instanceof");
+            int beforeCount = countTypeChecks(beforeIR);
+            int afterCount = countTypeChecks(afterIR);
             Asserts.assertEquals(afterCount, beforeCount,
                 "33c: Animal[] element instanceof Dog should be preserved; before=" + beforeCount + " after=" + afterCount);
         }
@@ -2664,8 +2664,8 @@ public class TestTypeCheckElimination {
             String fullOutput = output.getOutput();
             String beforeIR = extractBeforeIR(fullOutput, "testAaloadSubtypeElement");
             String afterIR = extractAfterIR(fullOutput, "testAaloadSubtypeElement");
-            int beforeCount = countOccurrences(beforeIR, "jeandle.check_instanceof");
-            int afterCount = countOccurrences(afterIR, "jeandle.check_instanceof");
+            int beforeCount = countTypeChecks(beforeIR);
+            int afterCount = countTypeChecks(afterIR);
             Asserts.assertGTE(beforeCount, 1,
                 "33d: should have >= 1 check_instanceof before, got " + beforeCount);
             Asserts.assertEquals(afterCount, 0,
@@ -2679,8 +2679,8 @@ public class TestTypeCheckElimination {
             String fullOutput = output.getOutput();
             String beforeIR = extractBeforeIR(fullOutput, "testAaloadInterfaceElement");
             String afterIR = extractAfterIR(fullOutput, "testAaloadInterfaceElement");
-            int beforeCount = countOccurrences(beforeIR, "jeandle.check_instanceof");
-            int afterCount = countOccurrences(afterIR, "jeandle.check_instanceof");
+            int beforeCount = countTypeChecks(beforeIR);
+            int afterCount = countTypeChecks(afterIR);
             Asserts.assertGTE(beforeCount, 1,
                 "33e: should have >= 1 check_instanceof before, got " + beforeCount);
             Asserts.assertEquals(afterCount, 0,
@@ -2694,8 +2694,8 @@ public class TestTypeCheckElimination {
             String fullOutput = output.getOutput();
             String beforeIR = extractBeforeIR(fullOutput, "testAaloadInterfaceArray");
             String afterIR = extractAfterIR(fullOutput, "testAaloadInterfaceArray");
-            int beforeCount = countOccurrences(beforeIR, "jeandle.check_instanceof");
-            int afterCount = countOccurrences(afterIR, "jeandle.check_instanceof");
+            int beforeCount = countTypeChecks(beforeIR);
+            int afterCount = countTypeChecks(afterIR);
             Asserts.assertEquals(afterCount, beforeCount,
                 "33f: Barkable[] element instanceof Dog should be preserved; before=" + beforeCount + " after=" + afterCount);
         }
@@ -2707,8 +2707,8 @@ public class TestTypeCheckElimination {
             String fullOutput = output.getOutput();
             String beforeIR = extractBeforeIR(fullOutput, "testAaloadNestedArray");
             String afterIR = extractAfterIR(fullOutput, "testAaloadNestedArray");
-            int beforeCount = countOccurrences(beforeIR, "jeandle.check_instanceof");
-            int afterCount = countOccurrences(afterIR, "jeandle.check_instanceof");
+            int beforeCount = countTypeChecks(beforeIR);
+            int afterCount = countTypeChecks(afterIR);
             Asserts.assertGTE(beforeCount, 1,
                 "33g: should have >= 1 check_instanceof before, got " + beforeCount);
             Asserts.assertEquals(afterCount, 0,
@@ -2722,8 +2722,8 @@ public class TestTypeCheckElimination {
             String fullOutput = output.getOutput();
             String beforeIR = extractBeforeIR(fullOutput, "testAaloadWithGuard");
             String afterIR = extractAfterIR(fullOutput, "testAaloadWithGuard");
-            int beforeCount = countOccurrences(beforeIR, "jeandle.check_instanceof");
-            int afterCount = countOccurrences(afterIR, "jeandle.check_instanceof");
+            int beforeCount = countTypeChecks(beforeIR);
+            int afterCount = countTypeChecks(afterIR);
             Asserts.assertGTE(beforeCount, 2,
                 "33h: should have >= 2 check_instanceof before, got " + beforeCount);
             Asserts.assertLT(afterCount, beforeCount,
@@ -2737,8 +2737,8 @@ public class TestTypeCheckElimination {
             String fullOutput = output.getOutput();
             String beforeIR = extractBeforeIR(fullOutput, "testAaloadMultipleElements");
             String afterIR = extractAfterIR(fullOutput, "testAaloadMultipleElements");
-            int beforeCount = countOccurrences(beforeIR, "jeandle.check_instanceof");
-            int afterCount = countOccurrences(afterIR, "jeandle.check_instanceof");
+            int beforeCount = countTypeChecks(beforeIR);
+            int afterCount = countTypeChecks(afterIR);
             Asserts.assertGTE(beforeCount, 2,
                 "33i: should have >= 2 check_instanceof before, got " + beforeCount);
             Asserts.assertLT(afterCount, beforeCount,
@@ -2754,8 +2754,8 @@ public class TestTypeCheckElimination {
             String fullOutput = output.getOutput();
             String beforeIR = extractBeforeIR(fullOutput, "testOrBothPositive");
             String afterIR = extractAfterIR(fullOutput, "testOrBothPositive");
-            int beforeCount = countOccurrences(beforeIR, "jeandle.check_instanceof");
-            int afterCount = countOccurrences(afterIR, "jeandle.check_instanceof");
+            int beforeCount = countTypeChecks(beforeIR);
+            int afterCount = countTypeChecks(afterIR);
             // instanceof Dog (guard) + instanceof Cat (guard) + instanceof Dog (inner) = 3
             Asserts.assertGTE(beforeCount, 3,
                 "34a: should have >= 3 check_instanceof before, got " + beforeCount);
@@ -2770,8 +2770,8 @@ public class TestTypeCheckElimination {
             String fullOutput = output.getOutput();
             String beforeIR = extractBeforeIR(fullOutput, "testOrBothPositiveCat");
             String afterIR = extractAfterIR(fullOutput, "testOrBothPositiveCat");
-            int beforeCount = countOccurrences(beforeIR, "jeandle.check_instanceof");
-            int afterCount = countOccurrences(afterIR, "jeandle.check_instanceof");
+            int beforeCount = countTypeChecks(beforeIR);
+            int afterCount = countTypeChecks(afterIR);
             Asserts.assertGTE(beforeCount, 3,
                 "34b: should have >= 3 check_instanceof before, got " + beforeCount);
             Asserts.assertLT(afterCount, beforeCount,
@@ -2785,8 +2785,8 @@ public class TestTypeCheckElimination {
             String fullOutput = output.getOutput();
             String beforeIR = extractBeforeIR(fullOutput, "testOrBothNegated");
             String afterIR = extractAfterIR(fullOutput, "testOrBothNegated");
-            int beforeCount = countOccurrences(beforeIR, "jeandle.check_instanceof");
-            int afterCount = countOccurrences(afterIR, "jeandle.check_instanceof");
+            int beforeCount = countTypeChecks(beforeIR);
+            int afterCount = countTypeChecks(afterIR);
             // instanceof Dog (guard) + instanceof Animal (guard) + checkcast Animal = 3
             Asserts.assertGTE(beforeCount, 3,
                 "34c: should have >= 3 check_instanceof before, got " + beforeCount);
@@ -2801,8 +2801,8 @@ public class TestTypeCheckElimination {
             String fullOutput = output.getOutput();
             String beforeIR = extractBeforeIR(fullOutput, "testOrTrueBranchWeak");
             String afterIR = extractAfterIR(fullOutput, "testOrTrueBranchWeak");
-            int beforeCount = countOccurrences(beforeIR, "jeandle.check_instanceof");
-            int afterCount = countOccurrences(afterIR, "jeandle.check_instanceof");
+            int beforeCount = countTypeChecks(beforeIR);
+            int afterCount = countTypeChecks(afterIR);
             Asserts.assertGTE(beforeCount, 3,
                 "34d: should have >= 3 check_instanceof before, got " + beforeCount);
             Asserts.assertEquals(afterCount, beforeCount,
@@ -2816,8 +2816,8 @@ public class TestTypeCheckElimination {
             String fullOutput = output.getOutput();
             String beforeIR = extractBeforeIR(fullOutput, "testOrPartialMatchTrueBranch");
             String afterIR = extractAfterIR(fullOutput, "testOrPartialMatchTrueBranch");
-            int beforeCount = countOccurrences(beforeIR, "jeandle.check_instanceof");
-            int afterCount = countOccurrences(afterIR, "jeandle.check_instanceof");
+            int beforeCount = countTypeChecks(beforeIR);
+            int afterCount = countTypeChecks(afterIR);
             // instanceof Dog (guard) + instanceof Dog (inner) = 2
             Asserts.assertGTE(beforeCount, 2,
                 "35a: should have >= 2 check_instanceof before, got " + beforeCount);
@@ -2832,8 +2832,8 @@ public class TestTypeCheckElimination {
             String fullOutput = output.getOutput();
             String beforeIR = extractBeforeIR(fullOutput, "testConstantOopStringExact");
             String afterIR = extractAfterIR(fullOutput, "testConstantOopStringExact");
-            int beforeCount = countOccurrences(beforeIR, "jeandle.check_instanceof");
-            int afterCount = countOccurrences(afterIR, "jeandle.check_instanceof");
+            int beforeCount = countTypeChecks(beforeIR);
+            int afterCount = countTypeChecks(afterIR);
             Asserts.assertGTE(beforeCount, 1,
                 "36a: should have >= 1 check_instanceof before, got " + beforeCount);
             Asserts.assertEquals(afterCount, 0,
@@ -2847,8 +2847,8 @@ public class TestTypeCheckElimination {
             String fullOutput = output.getOutput();
             String beforeIR = extractBeforeIR(fullOutput, "testConstantOopStringNegative");
             String afterIR = extractAfterIR(fullOutput, "testConstantOopStringNegative");
-            int beforeCount = countOccurrences(beforeIR, "jeandle.check_instanceof");
-            int afterCount = countOccurrences(afterIR, "jeandle.check_instanceof");
+            int beforeCount = countTypeChecks(beforeIR);
+            int afterCount = countTypeChecks(afterIR);
             Asserts.assertGTE(beforeCount, 1,
                 "36b: should have >= 1 check_instanceof before, got " + beforeCount);
             Asserts.assertEquals(afterCount, 0,
@@ -2862,8 +2862,8 @@ public class TestTypeCheckElimination {
             String fullOutput = output.getOutput();
             String beforeIR = extractBeforeIR(fullOutput, "testConstantOopClassMirror");
             String afterIR = extractAfterIR(fullOutput, "testConstantOopClassMirror");
-            int beforeCount = countOccurrences(beforeIR, "jeandle.check_instanceof");
-            int afterCount = countOccurrences(afterIR, "jeandle.check_instanceof");
+            int beforeCount = countTypeChecks(beforeIR);
+            int afterCount = countTypeChecks(afterIR);
             Asserts.assertGTE(beforeCount, 1,
                 "36c: should have >= 1 check_instanceof before, got " + beforeCount);
             Asserts.assertEquals(afterCount, 0,
@@ -2881,5 +2881,12 @@ public class TestTypeCheckElimination {
             idx += pattern.length();
         }
         return count;
+    }
+    // TypeCheckElimination sees checkcast as a separate JavaOp when it is
+    // retained until JavaOperationLower(1). Older lowering expanded it to
+    // check_instanceof, so count both spellings in structural assertions.
+    static int countTypeChecks(String ir) {
+        return countOccurrences(ir, "@jeandle.check_instanceof(")
+             + countOccurrences(ir, "@jeandle.checkcast(");
     }
 }
