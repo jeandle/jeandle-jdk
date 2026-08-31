@@ -817,6 +817,8 @@ JeandleAbstractInterpreter::JeandleAbstractInterpreter(const JeandleParseContext
                                                        _block(nullptr),
                                                        _jvm(nullptr),
                                                        _pruned_successor(nullptr),
+                                                       _backedge_safepoint_successor(nullptr),
+                                                       _backedge_safepoint_block(nullptr),
                                                        _work_list(),
                                                        _sync_lock(LockValue()),
                                                        _trap_hist(trap_hist) {
@@ -1176,6 +1178,8 @@ void JeandleAbstractInterpreter::interpret_block(JeandleBasicBlock* block) {
   _block = block;
   _jvm = block->VM_state();
   _pruned_successor = nullptr;
+  _backedge_safepoint_successor = nullptr;
+  _backedge_safepoint_block = nullptr;
 
   // Skip blocks that are unreachable.
   if (_jvm == nullptr) {
@@ -1536,8 +1540,15 @@ void JeandleAbstractInterpreter::interpret_block(JeandleBasicBlock* block) {
     if (suc == _pruned_successor) {
       continue;
     }
+    llvm::BasicBlock* incoming_block = block->tail_llvm_block();
+    if (suc == _backedge_safepoint_successor) {
+      assert(_backedge_safepoint_block != nullptr, "missing back-edge safepoint block");
+      incoming_block = _backedge_safepoint_block;
+    }
+
     // Don't update handlers' VM state here. They are updated by exception throwers.
-    if (!suc->is_exception_handler() && !suc->merge_VM_state_from(block->VM_state(), block->tail_llvm_block(), _method, is_osr())) {
+    if (!suc->is_exception_handler() &&
+        !suc->merge_VM_state_from(block->VM_state(), incoming_block, _method, is_osr())) {
       JEANDLE_ERROR_ASSERT_AND_RET_VOID_ON_FAIL(false, "failed to merge VM state into successor block");
     }
 
@@ -1739,6 +1750,30 @@ void JeandleAbstractInterpreter::do_if_branch(llvm::Value* cond, unsigned operan
     return;
   }
 
+  bool taken_is_backedge = _bytecodes.get_dest() <= bci;
+  auto get_taken_branch_target = [&]() -> llvm::BasicBlock* {
+    if (!taken_is_backedge) {
+      return taken_block;
+    }
+
+    assert(_backedge_safepoint_successor == nullptr &&
+           _backedge_safepoint_block == nullptr,
+           "back-edge safepoint block already created");
+    llvm::BasicBlock* branch_block = _ir_builder.GetInsertBlock();
+    llvm::BasicBlock* poll_block =
+        llvm::BasicBlock::Create(*_context,
+                                 "bci_" + std::to_string(bci) + "_backedge_safepoint",
+                                 _llvm_func);
+    _ir_builder.SetInsertPoint(poll_block);
+    add_safepoint_poll();
+    _ir_builder.CreateBr(taken_block);
+    _ir_builder.SetInsertPoint(branch_block);
+
+    _backedge_safepoint_successor = taken_jbb;
+    _backedge_safepoint_block = poll_block;
+    return poll_block;
+  };
+
   // Unstable-if prune: strict-zero one-side prune into uncommon_trap(Reason_unstable_if).
   // Operands are still on the stack here so the trap deopt bundle sees the
   // pre-if state, same effect as C2's repush_if_args() without re-pushing.
@@ -1779,12 +1814,13 @@ void JeandleAbstractInterpreter::do_if_branch(llvm::Value* cond, unsigned operan
       return;
     }
     if (counts.not_taken == 0 && counts.taken > 0) {
-      emit_pruned_branch(taken_jbb, taken_block, /*cond_true_is_hot=*/true,
+      emit_pruned_branch(taken_jbb, get_taken_branch_target(), /*cond_true_is_hot=*/true,
                          bci2block()[_bytecodes.next_bci()]);
       return;
     }
   }
 
+  llvm::BasicBlock* actual_taken_block = get_taken_branch_target();
   consume_operands();
   if (taken_jbb->is_exception_handler()) {
     merge_into_exception_handler(taken_jbb);
@@ -1792,14 +1828,11 @@ void JeandleAbstractInterpreter::do_if_branch(llvm::Value* cond, unsigned operan
   if (fallthrough_jbb->is_exception_handler()) {
     merge_into_exception_handler(fallthrough_jbb);
   }
-  llvm::BranchInst* br = _ir_builder.CreateCondBr(cond, taken_block, fallthrough_block);
+  llvm::BranchInst* br = _ir_builder.CreateCondBr(cond, actual_taken_block, fallthrough_block);
   attach_branch_weights(br, bci);
 }
 
 void JeandleAbstractInterpreter::if_zero(llvm::CmpInst::Predicate p) {
-  if (_bytecodes.get_dest() <= _bytecodes.cur_bci()) {
-    add_safepoint_poll();
-  }
   // Peek (do not pop): a pruned uncommon_trap must see the operand on the stack.
   llvm::Value* v = _jvm->raw_peek(0).value();
   llvm::Value* cond = _ir_builder.CreateICmp(p, v, JeandleType::int_const(_ir_builder, 0));
@@ -1807,9 +1840,6 @@ void JeandleAbstractInterpreter::if_zero(llvm::CmpInst::Predicate p) {
 }
 
 void JeandleAbstractInterpreter::if_icmp(llvm::CmpInst::Predicate p) {
-  if (_bytecodes.get_dest() <= _bytecodes.cur_bci()) {
-    add_safepoint_poll();
-  }
   // Peek (do not pop): a pruned uncommon_trap must see both operands on the stack.
   llvm::Value* r = _jvm->raw_peek(0).value();
   llvm::Value* l = _jvm->raw_peek(1).value();
@@ -1828,9 +1858,6 @@ void JeandleAbstractInterpreter::lcmp() {
 }
 
 void JeandleAbstractInterpreter::if_acmp(llvm::CmpInst::Predicate p) {
-  if (_bytecodes.get_dest() <= _bytecodes.cur_bci()) {
-    add_safepoint_poll();
-  }
   // Peek (do not pop): a pruned uncommon_trap must see both operands on the stack.
   llvm::Value* r = _jvm->raw_peek(0).value();
   llvm::Value* l = _jvm->raw_peek(1).value();
@@ -1839,9 +1866,6 @@ void JeandleAbstractInterpreter::if_acmp(llvm::CmpInst::Predicate p) {
 }
 
 void JeandleAbstractInterpreter::if_null(llvm::CmpInst::Predicate p) {
-  if (_bytecodes.get_dest() <= _bytecodes.cur_bci()) {
-    add_safepoint_poll();
-  }
   // Peek (do not pop): a pruned uncommon_trap must see the operand on the stack.
   llvm::Value* v = _jvm->raw_peek(0).value();
   llvm::Value* cond = _ir_builder.CreateICmp(p, v, llvm::ConstantPointerNull::get(llvm::cast<llvm::PointerType>(v->getType())));
@@ -1880,7 +1904,12 @@ void JeandleAbstractInterpreter::merge_into_exception_handler(JeandleBasicBlock*
   // to merge the current VMState into the handler, bypassing the is_exception_handler()
   // skip in the successor loop of interpret_block().
   JeandleVMState* adjusted_state = _jvm->copy();
-  if (!handler_block->merge_VM_state_from(adjusted_state, _ir_builder.GetInsertBlock(), _method, is_osr())) {
+  llvm::BasicBlock* incoming_block = _ir_builder.GetInsertBlock();
+  if (handler_block == _backedge_safepoint_successor) {
+    assert(_backedge_safepoint_block != nullptr, "missing back-edge safepoint block");
+    incoming_block = _backedge_safepoint_block;
+  }
+  if (!handler_block->merge_VM_state_from(adjusted_state, incoming_block, _method, is_osr())) {
     JEANDLE_ERROR_ASSERT_AND_RET_VOID_ON_FAIL(false, "failed to merge VM state into exception handler block from normal flow");
   }
 }
