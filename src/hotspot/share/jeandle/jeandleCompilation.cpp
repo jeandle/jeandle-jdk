@@ -1305,6 +1305,7 @@ void JeandleCompilation::initialize() {
   _env->set_dependencies(new Dependencies(_env));
 
   Copy::zero_to_bytes(_trap_hist, sizeof(_trap_hist));
+  _decompile_count = 0;
 
   set_has_monitors(false);
 

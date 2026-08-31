@@ -63,6 +63,10 @@
           "Use interpreter/C1 profile (MDO) for branch/switch weights, "    \
           "unstable-if branch pruning")                                     \
                                                                             \
+  product(bool, JeandleUseProfiledVirtualCallDevirtualization, true,        \
+          "Use receiver type profile to devirtualize "                      \
+          "invokevirtual/invokeinterface calls in Jeandle")                 \
+                                                                            \
   product(intx, JeandleNodeCountInliningCutoff, 18000,                      \
           "If root LLVM IR instruction count exceeds limit stop inlining."  \
           "This value roughly follows C2's cutoff today; tune it later"     \

@@ -3922,4 +3922,5 @@ void JeandleAbstractInterpreter::accumulate_trap_counts_from_mdo(ciMethod* metho
       set_trap_count(reason, total_count);
     }
   }
+  JeandleCompilation::current()->add_decompile_count(md->decompile_count());
 }
