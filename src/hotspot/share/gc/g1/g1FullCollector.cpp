@@ -48,19 +48,19 @@
 #include "utilities/debug.hpp"
 
 static void clear_and_activate_derived_pointers() {
-#if COMPILER2_OR_JVMCI
+#if COMPILER2_OR_JVMCI_OR_JEANDLE
   DerivedPointerTable::clear();
 #endif
 }
 
 static void deactivate_derived_pointers() {
-#if COMPILER2_OR_JVMCI
+#if COMPILER2_OR_JVMCI_OR_JEANDLE
   DerivedPointerTable::set_active(false);
 #endif
 }
 
 static void update_derived_pointers() {
-#if COMPILER2_OR_JVMCI
+#if COMPILER2_OR_JVMCI_OR_JEANDLE
   DerivedPointerTable::update_pointers();
 #endif
 }
@@ -503,7 +503,7 @@ void G1FullCollector::verify_after_marking() {
     return;
   }
 
-#if COMPILER2_OR_JVMCI
+#if COMPILER2_OR_JVMCI_OR_JEANDLE
   DerivedPointerTableDeactivate dpt_deact;
 #endif
   _heap->prepare_for_verify();

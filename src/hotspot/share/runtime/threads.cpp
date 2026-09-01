@@ -692,7 +692,7 @@ jint Threads::create_vm(JavaVMInitArgs* args, bool* canTryAgain) {
   MonitorDeflationThread::initialize();
 
   // initialize compiler(s)
-#if defined(COMPILER1) || COMPILER2_OR_JVMCI
+#if defined(COMPILER1) || COMPILER2_OR_JVMCI_OR_JEANDLE
 #if INCLUDE_JVMCI
   bool force_JVMCI_intialization = false;
   if (EnableJVMCI) {

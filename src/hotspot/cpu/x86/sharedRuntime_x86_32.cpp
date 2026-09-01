@@ -2423,7 +2423,7 @@ void SharedRuntime::generate_deopt_blob() {
 }
 
 
-#ifdef COMPILER2
+#if COMPILER2_OR_JEANDLE
 //------------------------------generate_uncommon_trap_blob--------------------
 void SharedRuntime::generate_uncommon_trap_blob() {
   // allocate space for the code
@@ -2602,7 +2602,7 @@ void SharedRuntime::generate_uncommon_trap_blob() {
 
    _uncommon_trap_blob = UncommonTrapBlob::create(&buffer, oop_maps, framesize);
 }
-#endif // COMPILER2
+#endif // COMPILER2_OR_JEANDLE
 
 //------------------------------generate_handler_blob------
 //

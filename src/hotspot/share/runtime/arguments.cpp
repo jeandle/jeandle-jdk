@@ -3011,7 +3011,7 @@ jint Arguments::finalize_vm_init_args(bool patch_mod_javabase) {
     FLAG_SET_ERGO(InitialTenuringThreshold, MaxTenuringThreshold);
   }
 
-#if !COMPILER2_OR_JVMCI
+#if !COMPILER2_OR_JVMCI_OR_JEANDLE
   // Don't degrade server performance for footprint
   if (FLAG_IS_DEFAULT(UseLargePages) &&
       MaxHeapSize < LargePageHeapSizeThreshold) {

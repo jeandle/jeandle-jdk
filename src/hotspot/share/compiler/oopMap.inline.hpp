@@ -65,14 +65,14 @@ void OopMapDo<OopFnT, DerivedOopFnT, ValueFilterT>::iterate_oops_do(const frame 
       if (omv.type() != OopMapValue::derived_oop_value)
         continue;
 
-  #ifndef COMPILER2
+  #if !COMPILER2_OR_JEANDLE
       COMPILER1_PRESENT(ShouldNotReachHere();)
   #if INCLUDE_JVMCI
       if (UseJVMCICompiler) {
         ShouldNotReachHere();
       }
   #endif
-  #endif // !COMPILER2
+  #endif // !COMPILER2_OR_JEANDLE
 
       address loc = fr->oopmapreg_to_location(omv.reg(), reg_map);
 
@@ -158,4 +158,3 @@ void OopMapDo<OopFnT, DerivedOopFnT, ValueFilterT>::oops_do(const frame *fr, con
 }
 
 #endif // SHARE_VM_COMPILER_OOPMAP_INLINE_HPP
-

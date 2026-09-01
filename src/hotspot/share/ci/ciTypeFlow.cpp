@@ -37,8 +37,10 @@
 #include "memory/allocation.inline.hpp"
 #include "memory/resourceArea.hpp"
 #include "oops/oop.inline.hpp"
+#ifdef COMPILER2
 #include "opto/compile.hpp"
 #include "opto/node.hpp"
+#endif
 #include "runtime/deoptimization.hpp"
 #include "utilities/growableArray.hpp"
 
@@ -141,7 +143,7 @@ bool ciTypeFlow::JsrSet::is_compatible_with(JsrSet* other) {
   }
   // The two JsrSets agree.
   return true;
-#endif
+#endif // 0
 }
 
 // ------------------------------------------------------------------
@@ -2252,8 +2254,8 @@ bool ciTypeFlow::clone_loop_heads(StateVector* temp_vector, JsrSet* temp_set) {
         !head->is_clonable_exit(lp))
       continue;
 
-    // Avoid BoxLock merge.
-    if (EliminateNestedLocks && head->has_monitorenter())
+    // Avoid BoxLock merge when the C2 optimization is enabled.
+    if (COMPILER2_PRESENT(EliminateNestedLocks &&) head->has_monitorenter())
       continue;
 
     // check not already cloned
@@ -2832,7 +2834,7 @@ void ciTypeFlow::df_flow_types(Block* start,
       assert (!blk->has_pre_order(), "");
       blk->set_next_pre_order();
 
-      // TODO: Check bail out in Jeandle
+#ifdef COMPILER2
       if (!UseJeandleCompiler && _next_pre_order >= (int)Compile::current()->max_node_limit() / 2) {
         // Too many basic blocks.  Bail out.
         // This can happen when try/finally constructs are nested to depth N,
@@ -2842,6 +2844,7 @@ void ciTypeFlow::df_flow_types(Block* start,
         record_failure("too many basic blocks");
         return;
       }
+#endif
       if (do_flow) {
         flow_block(blk, temp_vector, temp_set);
         if (failing()) return; // Watch for bailouts.
