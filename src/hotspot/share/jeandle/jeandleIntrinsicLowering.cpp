@@ -677,31 +677,26 @@ bool JeandleIntrinsicLowering::lower_digestBase_implCompress(vmIntrinsics::ID id
   const char* stub_name = nullptr;
   BasicType state_element_type = T_ILLEGAL;
   JeandleRuntimeCalleeFn callee_fn = nullptr;
-  bool enabled = false;
   switch (id) {
     case vmIntrinsics::_sha_implCompress:
-      enabled = UseSHA1Intrinsics;
       state_signature = "[I";
       state_element_type = T_INT;
       stub_name = "StubRoutines_sha1_implCompress";
       callee_fn = &JeandleRuntimeRoutine::StubRoutines_sha1_implCompress_callee;
       break;
     case vmIntrinsics::_sha2_implCompress:
-      enabled = UseSHA256Intrinsics;
       state_signature = "[I";
       state_element_type = T_INT;
       stub_name = "StubRoutines_sha256_implCompress";
       callee_fn = &JeandleRuntimeRoutine::StubRoutines_sha256_implCompress_callee;
       break;
     case vmIntrinsics::_sha5_implCompress:
-      enabled = UseSHA512Intrinsics;
       state_signature = "[J";
       state_element_type = T_LONG;
       stub_name = "StubRoutines_sha512_implCompress";
       callee_fn = &JeandleRuntimeRoutine::StubRoutines_sha512_implCompress_callee;
       break;
     case vmIntrinsics::_sha3_implCompress:
-      enabled = UseSHA3Intrinsics;
       state_signature = "[B";
       state_element_type = T_BYTE;
       stub_name = "StubRoutines_sha3_implCompress";
@@ -712,8 +707,8 @@ bool JeandleIntrinsicLowering::lower_digestBase_implCompress(vmIntrinsics::ID id
   }
 
   // StubRoutines entries are generated only on supported platforms. Never
-  // materialize a direct call when either the flag or the entry is absent.
-  if (!enabled || JeandleRuntimeRoutine::find_routine_entry(stub_name) == nullptr) {
+  // materialize a direct call when the entry is absent.
+  if (JeandleRuntimeRoutine::find_routine_entry(stub_name) == nullptr) {
     return false;
   }
 
@@ -768,10 +763,6 @@ bool JeandleIntrinsicLowering::lower_digestBase_implCompress(vmIntrinsics::ID id
   llvm::Value* state_base = builder.CreateInBoundsPtrAdd(
       state_array, builder.getInt32(arrayOopDesc::base_offset_in_bytes(state_element_type)),
       "sha_state_base");
-  llvm::Type* state_element_llvm_type =
-      JeandleType::java2llvm(state_element_type, context);
-  llvm::Value* state_start = builder.CreateInBoundsGEP(
-      state_element_llvm_type, state_base, builder.getInt32(0), "sha_state_start");
 
   _interp->_jvm->ipop();  // ofs
   _interp->_jvm->apop();  // src
@@ -781,7 +772,7 @@ bool JeandleIntrinsicLowering::lower_digestBase_implCompress(vmIntrinsics::ID id
       CTRL_NONE, MEM_READ | MEM_WRITE};
   if (block_size_field == nullptr) {
     emit_callsite(callee_fn(_interp->_module), llvm::CallingConv::C,
-                  {src_start, state_start}, attrs,
+                  {src_start, state_base}, attrs,
                   /*is_gc_leaf_entry=*/true);
   } else {
     llvm::Value* block_size_addr = _interp->compute_instance_field_address(
@@ -789,7 +780,7 @@ bool JeandleIntrinsicLowering::lower_digestBase_implCompress(vmIntrinsics::ID id
     llvm::Value* block_size = _interp->load_from_address(block_size_addr,
                                                          T_INT, false);
     emit_callsite(callee_fn(_interp->_module), llvm::CallingConv::C,
-                  {src_start, state_start, block_size}, attrs,
+                  {src_start, state_base, block_size}, attrs,
                   /*is_gc_leaf_entry=*/true);
   }
   return true;
