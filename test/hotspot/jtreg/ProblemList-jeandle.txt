@@ -393,21 +393,6 @@ compiler/rtm/method_options/TestNoRTMLockElidingOption.java                     
 compiler/rtm/method_options/TestUseRTMLockElidingOption.java                                   linux-x64
 
 ###
-# Constant Folding - @Stable field values not constant-folded
-###
-compiler/stable/TestStableBoolean.java                                                         linux-aarch64,linux-x64
-compiler/stable/TestStableByte.java                                                            linux-aarch64,linux-x64
-compiler/stable/TestStableChar.java                                                            linux-aarch64,linux-x64
-compiler/stable/TestStableDouble.java                                                          linux-aarch64,linux-x64
-compiler/stable/TestStableFloat.java                                                           linux-aarch64,linux-x64
-compiler/stable/TestStableInt.java                                                             linux-aarch64,linux-x64
-compiler/stable/TestStableLong.java                                                            linux-aarch64,linux-x64
-compiler/stable/TestStableObject.java                                                          linux-aarch64,linux-x64
-compiler/stable/TestStableShort.java                                                           linux-aarch64,linux-x64
-compiler/stable/TestStableUByte.java                                                           linux-aarch64,linux-x64
-compiler/stable/TestStableUShort.java                                                          linux-aarch64,linux-x64
-
-###
 # GC not support (tier2)
 ###
 gc/ergonomics/TestDynamicNumberOfGCThreads.java                                                linux-aarch64,linux-x64
