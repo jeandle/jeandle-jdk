@@ -646,11 +646,13 @@ llvm::jeandle::CHAOptInfo optimize_method_handle_intrinsic(
           target->name()->as_utf8());
         return {};
       }
-      return {reinterpret_cast<uintptr_t>(target->holder()->constant_encoding()),
+      // _invokeBasic must carry the concrete target arity and holder tag: its
+      // erased LambdaForm declaration cannot be used as the target signature.
+      return {reinterpret_cast<uintptr_t>(target->holder()->constant_encoding()) | 1,
               reinterpret_cast<uintptr_t>(target),
-              llvm::jeandle::CHAOptInfo::packDeoptreasonInfo(
+              llvm::jeandle::CHAOptInfo::packTargetInfo(
                 target->is_static(), target->is_accessor(),
-                llvm::jeandle::Deoptimization::Reason_none),
+                target->can_be_statically_bound(), target->signature()->count()),
               JeandleFuncSig::method_name_with_signature(target)};
     }
     break;
