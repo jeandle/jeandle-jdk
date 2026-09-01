@@ -92,7 +92,7 @@ static bool check_jeandle_compiled_frame(JavaThread* thread) {
 }
 #endif // ASSERT
 
-JRT_ENTRY(void, JeandleRuntimeRoutine::safepoint_handler(JavaThread* current))
+JRT_ENTRY(void, JeandleRuntimeRoutine::safepoint_handler(JavaThread* current, bool at_poll_return))
   RegisterMap r_map(current,
                     RegisterMap::UpdateMap::skip,
                     RegisterMap::ProcessFrames::include,
@@ -102,12 +102,22 @@ JRT_ENTRY(void, JeandleRuntimeRoutine::safepoint_handler(JavaThread* current))
   guarantee(trap_cb != nullptr && trap_cb->is_compiled_by_jeandle(), "safepoint handler must be called from jeandle compiled method");
 
   ThreadSafepointState* state = current->safepoint_state();
-  state->set_at_poll_safepoint(true);
+  if (at_poll_return) {
+    StackWatermarkSet::after_unwind(current);
+    SafepointMechanism::process_if_requested_with_exit_check(current, true /* check asyncs */);
+  } else {
+    state->set_at_poll_safepoint(true);
+    SafepointMechanism::process_if_requested_with_exit_check(current, false /* check asyncs */);
+    state->set_at_poll_safepoint(false);
 
-  // TODO: Exception check.
-  SafepointMechanism::process_if_requested_with_exit_check(current, false /* check asyncs */);
-
-  state->set_at_poll_safepoint(false);
+    // We never deliver an async exception at a polling point as the
+    // compiler may not have an exception handler for it (polling at
+    // a return point is ok though).
+    if (current->has_async_exception_condition()) {
+      Deoptimization::deoptimize_frame(current, trap_frame.id());
+      log_info(exceptions)("deferred async exception at compiled safepoint");
+    }
+  }
 JRT_END
 
 JRT_LEAF(address, JeandleRuntimeRoutine::get_exception_handler(JavaThread* current))

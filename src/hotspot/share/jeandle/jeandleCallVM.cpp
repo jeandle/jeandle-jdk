@@ -96,23 +96,33 @@ void JeandleCallVM::generate_call_VM(const char* name, address routine_address, 
   ir_builder.CreateCondBr(if_not_null, forward_exception_block, no_exception_block);
   ir_builder.SetInsertPoint(forward_exception_block);
 
-  llvm::CallInst* install_exceptional_return_call_inst = ir_builder.CreateCall(JeandleRuntimeRoutine::install_exceptional_return_for_call_vm_callee(target_module), {});
-  install_exceptional_return_call_inst->addFnAttr(llvm::Attribute::NoUnwind);
-  install_exceptional_return_call_inst->addFnAttr(llvm::Attribute::get(install_exceptional_return_call_inst->getContext(), "gc-leaf-function"));
-  install_exceptional_return_call_inst->setCallingConv(llvm::CallingConv::C);
-
-  // Return
-  llvm::Type* ret_type = func_type->getReturnType();
-  if (ret_type->isVoidTy()) {
-    ir_builder.CreateRetVoid();;
-  } else if (ret_type->isIntegerTy()) {
-    ir_builder.CreateRet(llvm::ConstantInt::get(ret_type, 0));
-  } else if (ret_type->isFloatTy() || ret_type->isDoubleTy()) {
-    ir_builder.CreateRet(llvm::ConstantFP::get(ret_type, 0.0));
-  } else if (ret_type->isPointerTy()) {
-    ir_builder.CreateRet(llvm::ConstantPointerNull::get(llvm::cast<llvm::PointerType>(ret_type)));
+  if (std::strcmp(name, "poll_return_handler") == 0) {
+    // When a return poll installs a pending exception, patch the Java frame's
+    // caller return address to exceptional_return blob.
+    llvm::CallInst* install_exceptional_return_call_inst = ir_builder.CreateCall(JeandleRuntimeRoutine::install_exceptional_return_for_return_poll_callee(target_module), {});
+    install_exceptional_return_call_inst->addFnAttr(llvm::Attribute::NoUnwind);
+    install_exceptional_return_call_inst->addFnAttr(llvm::Attribute::get(install_exceptional_return_call_inst->getContext(), "gc-leaf-function"));
+    install_exceptional_return_call_inst->setCallingConv(llvm::CallingConv::C);
+    ir_builder.CreateBr(no_exception_block);
   } else {
-    ShouldNotReachHere();
+    llvm::CallInst* install_exceptional_return_call_inst = ir_builder.CreateCall(JeandleRuntimeRoutine::install_exceptional_return_for_call_vm_callee(target_module), {});
+    install_exceptional_return_call_inst->addFnAttr(llvm::Attribute::NoUnwind);
+    install_exceptional_return_call_inst->addFnAttr(llvm::Attribute::get(install_exceptional_return_call_inst->getContext(), "gc-leaf-function"));
+    install_exceptional_return_call_inst->setCallingConv(llvm::CallingConv::C);
+
+    // Return
+    llvm::Type* ret_type = func_type->getReturnType();
+    if (ret_type->isVoidTy()) {
+      ir_builder.CreateRetVoid();;
+    } else if (ret_type->isIntegerTy()) {
+      ir_builder.CreateRet(llvm::ConstantInt::get(ret_type, 0));
+    } else if (ret_type->isFloatTy() || ret_type->isDoubleTy()) {
+      ir_builder.CreateRet(llvm::ConstantFP::get(ret_type, 0.0));
+    } else if (ret_type->isPointerTy()) {
+      ir_builder.CreateRet(llvm::ConstantPointerNull::get(llvm::cast<llvm::PointerType>(ret_type)));
+    } else {
+      ShouldNotReachHere();
+    }
   }
 
   ir_builder.SetInsertPoint(no_exception_block);

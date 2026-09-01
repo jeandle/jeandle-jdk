@@ -43,7 +43,8 @@ import java.util.List;
 public class IRDumpParser {
 
     /** Textual IR of one explicit safepoint poll (matches the call, not the declare). */
-    public static final String POLL_CALL = "call hotspotcc void @jeandle.safepoint_poll()";
+    public static final String RETURN_POLL_CALL = "call hotspotcc void @jeandle.safepoint_poll(i1 true)";
+    public static final String POLL_CALL = "call hotspotcc void @jeandle.safepoint_poll(i1 false)";
 
     /** Number of "IR Dump <phase> <passClass>" banners whose function name
      *  contains methodSuffix. */
@@ -131,7 +132,7 @@ public class IRDumpParser {
 
     /** Number of explicit safepoint poll calls in an IR section. */
     public static int countPolls(String irSection) {
-        return countOccurrences(irSection, POLL_CALL);
+        return countOccurrences(irSection, POLL_CALL) + countOccurrences(irSection, RETURN_POLL_CALL);
     }
 
     public static void assertContains(String text, String needle, String msg) {
