@@ -93,6 +93,15 @@ class JeandleVMCallback : public AllStatic {
   static int64_t get_signature_arg_type(uintptr_t method, int index);
   static uintptr_t get_signature_arg_type_klass(uintptr_t method, int index);
 
+  // Profile-guided devirtualization.
+  static llvm::jeandle::ProfileDevirtualizationResult
+  get_profile_devirtualization_info(uintptr_t caller_ptr, uintptr_t callee_ptr,
+                                    uintptr_t holder_ptr, int bci,
+                                    int invoke_kind);
+
+  // Compiled call-site metadata.
+  static bool update_to_static_opt_virtual_call(int64_t id);
+
   // Replaces the now-removed ciEnv::get_instance_klass_for_klass: maps a raw
   // receiver Klass* to a ciInstanceKlass*, preserving the null-check + assert +
   // VM_ENTRY_MARK the old public wrapper carried. Public because it is called

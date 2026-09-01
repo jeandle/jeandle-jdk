@@ -157,6 +157,92 @@ public final class PEATestUtils {
 
     private PEATestUtils() {}
 
+    // JDK-generated LLVM symbols append the ciMethod identity as a numeric
+    // suffix. Try the stable name first, then accept that runtime suffix.
+    private static boolean matchesRuntimeFunctionName(String actual,
+                                                       String expected) {
+        if (actual == null || expected == null) {
+            return false;
+        }
+        if (actual.equals(expected)) {
+            return true;
+        }
+        return stableRuntimeFunctionName(actual).equals(expected);
+    }
+
+    private static String stableRuntimeFunctionName(String function) {
+        boolean root = function.endsWith(".root");
+        String candidate = root
+                ? function.substring(0, function.length() - ".root".length())
+                : function;
+        int identitySeparator = candidate.lastIndexOf('.');
+        if (identitySeparator < 0 || identitySeparator == candidate.length() - 1) {
+            return function;
+        }
+        String stable = candidate.substring(0, identitySeparator);
+        String identity = candidate.substring(identitySeparator + 1);
+        int closeDescriptor = stable.lastIndexOf(')');
+        if (stable.lastIndexOf('(', closeDescriptor) < 0
+                || closeDescriptor == stable.length() - 1
+                || !identity.chars().allMatch(Character::isDigit)) {
+            return function;
+        }
+        return stable + (root ? ".root" : "");
+    }
+
+    // PEA assertions use stable Java method names. Remove only the numeric
+    // identity after a JVM method descriptor; ordinary LLVM .1/.2 suffixes
+    // and unrelated numeric constants remain visible to the tests.
+    private static String normalizeRuntimeFunctionSymbols(String line) {
+        StringBuilder normalized = null;
+        int copiedThrough = 0;
+        int searchFrom = 0;
+        while (true) {
+            int at = line.indexOf('@', searchFrom);
+            if (at < 0) {
+                break;
+            }
+            ParsedOperand operand;
+            try {
+                operand = parseLLVMNamedOperand(line, at);
+            } catch (IllegalArgumentException malformed) {
+                searchFrom = at + 1;
+                continue;
+            }
+            searchFrom = operand.end;
+            String stable = stableRuntimeFunctionName(operand.value);
+            if (stable.equals(operand.value)) {
+                continue;
+            }
+
+            boolean root = operand.value.endsWith(".root");
+            int stableLengthWithoutRoot = stable.length()
+                    - (root ? ".root".length() : 0);
+            int identityEnd = operand.value.length()
+                    - (root ? ".root".length() : 0);
+            String identitySuffix = operand.value.substring(
+                    stableLengthWithoutRoot, identityEnd);
+            String rawOperand = line.substring(at, operand.end);
+            int suffixAt = rawOperand.lastIndexOf(identitySuffix);
+            if (suffixAt < 0) {
+                throw new IllegalStateException(
+                        "Runtime function identity is not present in LLVM operand: "
+                                + rawOperand);
+            }
+            if (normalized == null) {
+                normalized = new StringBuilder(line.length());
+            }
+            normalized.append(line, copiedThrough, at + suffixAt)
+                    .append(rawOperand, suffixAt + identitySuffix.length(),
+                            rawOperand.length());
+            copiedThrough = operand.end;
+        }
+        if (normalized == null) {
+            return line;
+        }
+        return normalized.append(line, copiedThrough, line.length()).toString();
+    }
+
     /** Exact identity for one Java method in HotSpot commands and Jeandle IR. */
     public static final class MethodId {
         private final Method method;
@@ -1357,7 +1443,7 @@ public final class PEATestUtils {
                     if (!summary.matches()) {
                         throw malformed(method, "malformed PEA summary: " + line);
                     }
-                    if (!summary.group(1).equals(function)) {
+                    if (!matchesRuntimeFunctionName(summary.group(1), function)) {
                         if (current != null && !current.afterSeen) {
                             throw malformed(method,
                                     "interleaved summary before after marker");
@@ -1412,7 +1498,7 @@ public final class PEATestUtils {
                 Matcher marker = MARKER.matcher(line);
                 if (marker.matches()) {
                     String markerFunction = marker.group(3);
-                    boolean matches = markerFunction.equals(function);
+                    boolean matches = matchesRuntimeFunctionName(markerFunction, function);
                     if (!matches) {
                         if (current != null && !current.afterSeen) {
                             throw malformed(method, "interleaved marker before after marker");
@@ -1467,7 +1553,7 @@ public final class PEATestUtils {
                 Matcher stats = STATS.matcher(line);
                 if (stats.matches()) {
                     capture = Capture.NONE;
-                    if (!stats.group(1).equals(function)) {
+                    if (!matchesRuntimeFunctionName(stats.group(1), function)) {
                         continue;
                     }
                     if (current == null || current.afterSeen) {
@@ -1491,7 +1577,7 @@ public final class PEATestUtils {
                         throw malformed(method, "malformed LockReplay line: " + line);
                     }
                     String effectFunction = decodeLLVMOperand(lockReplay.group(1));
-                    if (!effectFunction.equals(function)) {
+                    if (!matchesRuntimeFunctionName(effectFunction, function)) {
                         continue;
                     }
                     if (current == null || current.afterSeen) {
@@ -1509,7 +1595,7 @@ public final class PEATestUtils {
                 if (effect.matches()) {
                     capture = Capture.NONE;
                     String effectFunction = decodeLLVMOperand(effect.group(2));
-                    if (!effectFunction.equals(function)) {
+                    if (!matchesRuntimeFunctionName(effectFunction, function)) {
                         continue;
                     }
                     if (current == null || current.afterSeen) {
@@ -1972,8 +2058,10 @@ public final class PEATestUtils {
 
         private IRBody(MethodId method, List<String> lines) {
             this.method = method;
-            this.lines = List.copyOf(lines);
-            this.text = String.join("\n", lines);
+            this.lines = lines.stream()
+                    .map(PEATestUtils::normalizeRuntimeFunctionSymbols)
+                    .toList();
+            this.text = String.join("\n", this.lines);
         }
 
         private static IRBody fromModuleLines(List<String> rawLines, MethodId method) {
@@ -1983,7 +2071,7 @@ public final class PEATestUtils {
             for (int i = 0; i < folded.size(); i++) {
                 String line = folded.get(i);
                 String defined = definedFunctionName(line);
-                if (!method.llvmFunctionName().equals(defined)) {
+                if (!matchesRuntimeFunctionName(defined, method.llvmFunctionName())) {
                     continue;
                 }
                 ArrayList<String> body = new ArrayList<>();
@@ -2044,6 +2132,9 @@ public final class PEATestUtils {
         }
 
         private static List<String> crossProcessExactLines(List<String> sourceLines) {
+            sourceLines = sourceLines.stream()
+                    .map(PEATestUtils::normalizeRuntimeFunctionSymbols)
+                    .toList();
             LinkedHashMap<String, String> klassReplacements = new LinkedHashMap<>();
             LinkedHashMap<String, String> methodReplacements = new LinkedHashMap<>();
             for (String line : sourceLines) {
@@ -2378,7 +2469,7 @@ public final class PEATestUtils {
             for (CompleteCallInstruction call : callInstructions()) {
                 String instruction = call.text();
                 String callee = calledFunctionName(instruction);
-                if (exactCallee.equals(callee)) {
+                if (matchesRuntimeFunctionName(callee, exactCallee)) {
                     matches.add(instruction);
                 }
             }
@@ -4040,6 +4131,23 @@ public final class PEATestUtils {
     }
 
     private static void assertCrossProcessNormalizerContracts() {
+        List<String> runtimeFunctionsFirst = List.of(
+                "define void @\"pkg_Test_work()V.111111.root\"() {",
+                "call void @\"pkg_Test_helper(I)V.222222\"(i32 1)",
+                "}");
+        List<String> runtimeFunctionsSecond = List.of(
+                "define void @\"pkg_Test_work()V.333333.root\"() {",
+                "call void @\"pkg_Test_helper(I)V.444444\"(i32 1)",
+                "}");
+        Asserts.assertEquals(IRBody.crossProcessExactLines(runtimeFunctionsFirst),
+                IRBody.crossProcessExactLines(runtimeFunctionsSecond),
+                "cross-process normalizer handles runtime Java method identities");
+
+        String ordinarySuffixes = "call void @ordinary.1(i32 123456)";
+        Asserts.assertEquals(normalizeRuntimeFunctionSymbols(ordinarySuffixes),
+                ordinarySuffixes,
+                "runtime symbol normalizer preserves ordinary LLVM suffixes and constants");
+
         List<String> first = List.of(
                 "%object = call \"java-klass\"=\"101010101010\" ptr "
                         + "inttoptr (i64 101010101010 to ptr)",
