@@ -827,7 +827,7 @@ entry:
 }
 
 ; Implementation of Java checkcast operation
-define hotspotcc i1 @jeandle.checkcast(ptr addrspace(0) nocapture %super_klass, ptr addrspace(1) nocapture %oop) noinline "lower-phase"="0" #0 {
+define hotspotcc i1 @jeandle.checkcast(ptr addrspace(0) nocapture %super_klass, ptr addrspace(1) nocapture %oop) noinline "lower-phase"="1" #0 {
 entry:
   %is_null = icmp eq ptr addrspace(1) %oop, null
   br i1 %is_null, label %return_true, label %check_subtype
