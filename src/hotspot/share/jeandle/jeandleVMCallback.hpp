@@ -25,6 +25,7 @@
 #include "llvm/IR/Jeandle/VMCallback.h"
 
 #include <string>
+#include <vector>
 
 #include "jeandle/__hotspotHeadersBegin__.hpp"
 #include "memory/allocation.hpp"
@@ -48,6 +49,7 @@ class JeandleVMCallback : public AllStatic {
   static bool      is_subtype(uintptr_t sub_klass, uintptr_t super_klass);
   static uintptr_t get_common_super_klass(uintptr_t k1, uintptr_t k2);
   static uintptr_t get_field_type(uintptr_t klass_ptr, int offset);
+  static std::vector<uintptr_t> get_secondary_supers(uintptr_t klass_ptr);
   static bool      is_interface(uintptr_t klass_ptr);
   static bool      is_object_klass(uintptr_t klass_ptr);
   static bool      is_unverified_interface(uintptr_t klass_ptr);

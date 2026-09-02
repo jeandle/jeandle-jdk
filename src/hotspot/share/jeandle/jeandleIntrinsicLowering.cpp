@@ -34,8 +34,11 @@
 #include "jeandle/jeandleUtils.hpp"
 
 #include "jeandle/__hotspotHeadersBegin__.hpp"
+#include "ci/ciField.hpp"
+#include "ci/ciInstanceKlass.hpp"
 #include "ci/ciMethod.hpp"
 #include "ci/ciSignature.hpp"
+#include "ci/ciSymbol.hpp"
 #include "classfile/javaClasses.hpp"
 #include "classfile/vmIntrinsics.hpp"
 #include "jeandle/jeandle_globals.hpp"
@@ -46,6 +49,8 @@
 #include "runtime/globals.hpp"
 #include "runtime/vm_version.hpp"
 #include "utilities/globalDefinitions.hpp"
+
+#include <cstring>
 
 // =============================================================================
 // Call-site IR annotation helpers (migrated from JeandleIntrinsicIRSemantics)
@@ -272,6 +277,14 @@ bool JeandleIntrinsicLowering::is_supported(vmIntrinsics::ID id) {
 
     // arraycopy
     case vmIntrinsics::_arraycopy:
+      return true;
+
+    // Single-block SHA compression. Availability is checked again by the
+    // lowering because platform stubs are generated conditionally.
+    case vmIntrinsics::_sha_implCompress:
+    case vmIntrinsics::_sha2_implCompress:
+    case vmIntrinsics::_sha5_implCompress:
+    case vmIntrinsics::_sha3_implCompress:
       return true;
 
     default:
@@ -536,6 +549,12 @@ bool JeandleIntrinsicLowering::lower(vmIntrinsics::ID id, const ciMethod* target
     case vmIntrinsics::_arraycopy:
       return lower_arraycopy();
 
+    case vmIntrinsics::_sha_implCompress:
+    case vmIntrinsics::_sha2_implCompress:
+    case vmIntrinsics::_sha5_implCompress:
+    case vmIntrinsics::_sha3_implCompress:
+      return lower_digestBase_implCompress(id);
+
     default:
       return false;
   }
@@ -639,6 +658,132 @@ bool JeandleIntrinsicLowering::lower_dual_path_libm(llvm::Intrinsic::ID llvm_id,
   } else {
     return emit_llvm_builtin(llvm_id);
   }
+}
+
+// =============================================================================
+// lower_digestBase_implCompress — single-block SHA compression
+// =============================================================================
+
+bool JeandleIntrinsicLowering::lower_digestBase_implCompress(vmIntrinsics::ID id) {
+  ciSignature* sig = _target->signature();
+  if (sig->count() != 2 || sig->type_at(0)->basic_type() != T_ARRAY ||
+      sig->type_at(1)->basic_type() != T_INT ||
+      sig->type_at(0)->name() == nullptr ||
+      strcmp(sig->type_at(0)->name(), "[B") != 0) {
+    return false;
+  }
+
+  const char* state_signature = nullptr;
+  const char* stub_name = nullptr;
+  BasicType state_element_type = T_ILLEGAL;
+  JeandleRuntimeCalleeFn callee_fn = nullptr;
+  switch (id) {
+    case vmIntrinsics::_sha_implCompress:
+      state_signature = "[I";
+      state_element_type = T_INT;
+      stub_name = "StubRoutines_sha1_implCompress";
+      callee_fn = &JeandleRuntimeRoutine::StubRoutines_sha1_implCompress_callee;
+      break;
+    case vmIntrinsics::_sha2_implCompress:
+      state_signature = "[I";
+      state_element_type = T_INT;
+      stub_name = "StubRoutines_sha256_implCompress";
+      callee_fn = &JeandleRuntimeRoutine::StubRoutines_sha256_implCompress_callee;
+      break;
+    case vmIntrinsics::_sha5_implCompress:
+      state_signature = "[J";
+      state_element_type = T_LONG;
+      stub_name = "StubRoutines_sha512_implCompress";
+      callee_fn = &JeandleRuntimeRoutine::StubRoutines_sha512_implCompress_callee;
+      break;
+    case vmIntrinsics::_sha3_implCompress:
+      state_signature = "[B";
+      state_element_type = T_BYTE;
+      stub_name = "StubRoutines_sha3_implCompress";
+      callee_fn = &JeandleRuntimeRoutine::StubRoutines_sha3_implCompress_callee;
+      break;
+    default:
+      return false;
+  }
+
+  // StubRoutines entries are generated only on supported platforms. Never
+  // materialize a direct call when the entry is absent.
+  if (JeandleRuntimeRoutine::find_routine_entry(stub_name) == nullptr) {
+    return false;
+  }
+
+  ciInstanceKlass* holder = _target->holder();
+  ciField* state_field = holder->get_field_by_name(ciSymbol::make("state"),
+                                                   ciSymbol::make(state_signature),
+                                                   false);
+  if (state_field == nullptr) {
+    return false;
+  }
+
+  ciField* block_size_field = nullptr;
+  if (id == vmIntrinsics::_sha3_implCompress) {
+    block_size_field = holder->get_field_by_name(ciSymbol::make("blockSize"),
+                                                 ciSymbol::make("I"), false);
+    if (block_size_field == nullptr) {
+      return false;
+    }
+  }
+
+  // The intrinsic is entered with receiver, byte[] and offset on the JVM
+  // stack. Peek until all optional checks and field lookups have succeeded so
+  // a false return leaves the stack untouched for the normal invoke path.
+  llvm::Value* receiver = _interp->_jvm->raw_peek(2).value();
+  llvm::Value* src = _interp->_jvm->raw_peek(1).value();
+  llvm::Value* ofs = _interp->_jvm->raw_peek(0).value();
+  _interp->null_check(src);
+
+  llvm::IRBuilder<>& builder = _interp->_ir_builder;
+  llvm::LLVMContext& context = *_interp->_context;
+  llvm::Type* java_oop_type = JeandleType::java2llvm(T_OBJECT, context);
+
+  llvm::Value* src_offset = builder.CreateAdd(
+      builder.getInt32(arrayOopDesc::base_offset_in_bytes(T_BYTE)), ofs,
+      "sha_src_offset");
+  llvm::Value* src_start = builder.CreateInBoundsPtrAdd(src, src_offset,
+                                                        "sha_src_start");
+
+  llvm::Value* state_field_addr = _interp->compute_instance_field_address(
+      receiver, state_field->offset_in_bytes());
+  BasicType state_ref_type = state_field->layout_type();
+  if (UseCompressedOops && is_reference_type(state_ref_type)) {
+    state_ref_type = T_NARROWOOP;
+  }
+  llvm::Value* state_array = _interp->load_from_address(state_field_addr,
+                                                        state_ref_type, false);
+  if (state_ref_type == T_NARROWOOP) {
+    state_array = builder.CreateAddrSpaceCast(state_array, java_oop_type,
+                                              "sha_state_array");
+  }
+
+  llvm::Value* state_base = builder.CreateInBoundsPtrAdd(
+      state_array, builder.getInt32(arrayOopDesc::base_offset_in_bytes(state_element_type)),
+      "sha_state_base");
+
+  _interp->_jvm->ipop();  // ofs
+  _interp->_jvm->apop();  // src
+  _interp->_jvm->apop();  // receiver
+
+  static constexpr CallSiteAttributeMetadata attrs = {
+      CTRL_NONE, MEM_READ | MEM_WRITE};
+  if (block_size_field == nullptr) {
+    emit_callsite(callee_fn(_interp->_module), llvm::CallingConv::C,
+                  {src_start, state_base}, attrs,
+                  /*is_gc_leaf_entry=*/true);
+  } else {
+    llvm::Value* block_size_addr = _interp->compute_instance_field_address(
+        receiver, block_size_field->offset_in_bytes());
+    llvm::Value* block_size = _interp->load_from_address(block_size_addr,
+                                                         T_INT, false);
+    emit_callsite(callee_fn(_interp->_module), llvm::CallingConv::C,
+                  {src_start, state_base, block_size}, attrs,
+                  /*is_gc_leaf_entry=*/true);
+  }
+  return true;
 }
 
 // =============================================================================

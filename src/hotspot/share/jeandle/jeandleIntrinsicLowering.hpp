@@ -193,6 +193,7 @@ class JeandleIntrinsicLowering : public StackObj {
   bool lower_divide_unsigned(vmIntrinsics::ID id);
   bool lower_remainder_unsigned(vmIntrinsics::ID id);
   bool lower_multiply_high(vmIntrinsics::ID id);
+  bool lower_digestBase_implCompress(vmIntrinsics::ID id);
   bool lower_new_array();
   bool lower_unsafe_allocate_instance();
   bool lower_vectorized_mismatch();
