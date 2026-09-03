@@ -51,6 +51,7 @@
 #include "utilities/globalDefinitions.hpp"
 
 #include <cstring>
+#include <optional>
 
 // =============================================================================
 // Call-site IR annotation helpers (migrated from JeandleIntrinsicIRSemantics)
@@ -870,80 +871,50 @@ bool JeandleIntrinsicLowering::lower_fp_to_bits_canonical(vmIntrinsics::ID id) {
 }
 
 // ---- lower_float16_convert ----
-// Float.floatToFloat16(float) / Float.float16ToFloat(short): float16 values
-// are carried as the raw bit pattern in a Java short, never as a distinct
-// value type, so the non-NaN path is a real narrowing/widening fp convert
-// (fptrunc/fpext through LLVM's `half` type) plus a bitcast to move between
-// `half` and the integer bits -- not a plain bitcast like the 32/64-bit
-// variants above.
+// Float.floatToFloat16(float) / Float.float16ToFloat(short): the Java short
+// carries the raw binary16 bits. Keep the actual conversion as a constrained
+// LLVM FP operation so it remains a target conversion instruction and cannot
+// be folded across a float16 round trip. This matches the hardware conversion
+// used by the template interpreter on platforms where supports_float16() is
+// true, including its signaling-NaN handling.
 //
-// NaN results must not come from fptrunc/fpext. On machines where
-// VM_Version::supports_float16() holds (the only ones where these
-// intrinsics fire, mirroring the interpreter/C1/C2 gating), the template
-// interpreter entries execute the hardware conversion (x86 vcvtph2ps/
-// vcvtps2ph), which quiets signaling NaNs while preserving the payload.
-// LLVM, however, treats NaN payloads as unspecified: InstCombine folds
-// `fptrunc(fpext x)` to `x`, so a compiled
-// floatToFloat16(float16ToFloat(x)) round trip returns sNaN bit patterns
-// unchanged where the interpreter quiets them.
-// compiler/intrinsics/float16/Binary16ConversionNaN.java compares exactly
-// that round trip bit-for-bit against interpreter results for every 16-bit
-// NaN pattern, so the compiled NaN behavior has to be pinned down: NaNs
-// take an explicit integer-arithmetic path implementing the same
-// quiet-and-preserve-payload semantics as the hardware conversion:
-//   float16ToFloat: f32 = (sign16 << 16) | 0x7f800000 | ((sig10|0x200)<<13)
-//   floatToFloat16: f16 = sign16 | 0x7e00 | ((f32bits >> 13) & 0x1ff)
-// Encoding this in integer ops (selected on isNaN) makes it bit-exact by
-// construction on every target -- LLVM cannot legally alter it, the fp
-// convert only feeds the non-NaN result, and folding fptrunc(fpext x) is
-// value-exact for non-NaN halves. The common case stays a single hardware
-// conversion instruction plus a compare/select.
-//
-// Java short is a computational-int type on the JVM stack (like the
-// reverseBytes_s/_c narrow variants above), so the i16 bit pattern is
-// sign-extended to i32 on push, and truncated back from the popped i32 on the
-// way in.
+// The f32 -> f16 operation explicitly uses Java's round-to-nearest-even mode.
+// The f16 bits are then bitcast to i16 and sign-extended to i32 because short
+// values occupy an int slot on the JVM operand stack and in the return ABI.
+// Conversely, f16 inputs are truncated to i16 before being bitcast to half.
 bool JeandleIntrinsicLowering::lower_float16_convert(vmIntrinsics::ID id) {
   llvm::IRBuilder<>& builder = _interp->_ir_builder;
-  bool to_f16 = (id == vmIntrinsics::_floatToFloat16);
-
-  if (to_f16) {
-    llvm::Value* arg = _interp->_jvm->fpop();
-    // Non-NaN path: IEEE-754 narrowing conversion.
-    llvm::Value* half = builder.CreateFPTrunc(arg, builder.getHalfTy());
-    llvm::Value* conv_bits = builder.CreateBitCast(half, builder.getInt16Ty());
-    // NaN path: quiet and preserve the top payload bits, matching the
-    // hardware conversion the interpreter entry executes.
-    llvm::Value* bits = builder.CreateBitCast(arg, builder.getInt32Ty());
-    llvm::Value* nan16 = builder.CreateLShr(
-        builder.CreateAnd(bits, 0x80000000), 16);
-    nan16 = builder.CreateOr(nan16, 0x7e00);
-    nan16 = builder.CreateOr(nan16,
-        builder.CreateAnd(builder.CreateLShr(bits, 13), 0x1ff));
-    llvm::Value* is_nan = builder.CreateFCmpUNO(arg, arg);
-    llvm::Value* res = builder.CreateSelect(
-        is_nan, builder.CreateTrunc(nan16, builder.getInt16Ty()), conv_bits);
-    _interp->_jvm->ipush(builder.CreateSExt(res, builder.getInt32Ty()));
-  } else {
-    llvm::Value* arg = _interp->_jvm->ipop();
-    llvm::Value* bits = builder.CreateTrunc(arg, builder.getInt16Ty());
-    // Non-NaN path: IEEE-754 widening conversion (value-exact).
-    llvm::Value* half = builder.CreateBitCast(bits, builder.getHalfTy());
-    llvm::Value* conv = builder.CreateFPExt(half, builder.getFloatTy());
-    // NaN path: quiet and preserve the payload, matching the hardware
-    // conversion the interpreter entry executes.
-    llvm::Value* w = builder.CreateZExt(bits, builder.getInt32Ty());
-    llvm::Value* nan32 = builder.CreateShl(builder.CreateAnd(w, 0x8000), 16);
-    nan32 = builder.CreateOr(nan32, 0x7f800000);
-    nan32 = builder.CreateOr(nan32,
-        builder.CreateShl(builder.CreateOr(builder.CreateAnd(w, 0x03ff),
-                                           0x200), 13));
-    llvm::Value* nan_f = builder.CreateBitCast(nan32, builder.getFloatTy());
-    // NaN <=> all-ones exponent and nonzero significand.
-    llvm::Value* is_nan = builder.CreateICmpUGT(
-        builder.CreateAnd(w, 0x7fff), builder.getInt32(0x7c00));
-    _interp->_jvm->fpush(builder.CreateSelect(is_nan, nan_f, conv));
+  llvm::Type* half_type = builder.getHalfTy();
+  if (id == vmIntrinsics::_float16ToFloat) {
+    llvm::Value* raw_int = _interp->_jvm->ipop();
+    llvm::Value* raw_half =
+        builder.CreateTrunc(raw_int, builder.getInt16Ty(), "float16.raw");
+    // Keep the conversion constrained so LLVM preserves the target operation
+    // and its signaling-NaN behavior, as in the interpreter and C2 paths.
+    llvm::Value* half =
+        builder.CreateBitCast(raw_half, half_type, "float16.half");
+    llvm::Value* converted =
+        builder.CreateConstrainedFPCast(
+            llvm::Intrinsic::experimental_constrained_fpext,
+            half, builder.getFloatTy(), {}, "float16.value", nullptr,
+            std::nullopt, llvm::fp::ExceptionBehavior::ebIgnore);
+    _interp->_jvm->fpush(converted);
+    return true;
   }
+
+  assert(id == vmIntrinsics::_floatToFloat16, "unexpected float16 intrinsic");
+  llvm::Value* value = _interp->_jvm->fpop();
+  // Pin Java's round-to-nearest-even mode and preserve the target operation.
+  llvm::Value* half =
+      builder.CreateConstrainedFPCast(
+          llvm::Intrinsic::experimental_constrained_fptrunc,
+          value, half_type, {}, "float16.rounded", nullptr,
+          llvm::RoundingMode::NearestTiesToEven,
+          llvm::fp::ExceptionBehavior::ebIgnore);
+  llvm::Value* converted_bits =
+      builder.CreateBitCast(half, builder.getInt16Ty(), "float16.bits");
+  _interp->_jvm->ipush(
+      builder.CreateSExt(converted_bits, builder.getInt32Ty(), "float16.short"));
   return true;
 }
 
