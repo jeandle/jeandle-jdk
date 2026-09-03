@@ -281,10 +281,12 @@ bool JeandleIntrinsicLowering::is_supported(vmIntrinsics::ID id) {
 
     // Single-block SHA compression. Availability is checked again by the
     // lowering because platform stubs are generated conditionally.
+    case vmIntrinsics::_md5_implCompress:
     case vmIntrinsics::_sha_implCompress:
     case vmIntrinsics::_sha2_implCompress:
     case vmIntrinsics::_sha5_implCompress:
     case vmIntrinsics::_sha3_implCompress:
+    case vmIntrinsics::_digestBase_implCompressMB:
       return true;
 
     default:
@@ -549,11 +551,15 @@ bool JeandleIntrinsicLowering::lower(vmIntrinsics::ID id, const ciMethod* target
     case vmIntrinsics::_arraycopy:
       return lower_arraycopy();
 
+    case vmIntrinsics::_md5_implCompress:
     case vmIntrinsics::_sha_implCompress:
     case vmIntrinsics::_sha2_implCompress:
     case vmIntrinsics::_sha5_implCompress:
     case vmIntrinsics::_sha3_implCompress:
       return lower_digestBase_implCompress(id);
+
+    case vmIntrinsics::_digestBase_implCompressMB:
+      return lower_digestBase_implCompressMB();
 
     default:
       return false;
@@ -661,7 +667,7 @@ bool JeandleIntrinsicLowering::lower_dual_path_libm(llvm::Intrinsic::ID llvm_id,
 }
 
 // =============================================================================
-// lower_digestBase_implCompress — single-block SHA compression
+// lower_digestBase_implCompress — single-block digest compression
 // =============================================================================
 
 bool JeandleIntrinsicLowering::lower_digestBase_implCompress(vmIntrinsics::ID id) {
@@ -678,6 +684,12 @@ bool JeandleIntrinsicLowering::lower_digestBase_implCompress(vmIntrinsics::ID id
   BasicType state_element_type = T_ILLEGAL;
   JeandleRuntimeCalleeFn callee_fn = nullptr;
   switch (id) {
+    case vmIntrinsics::_md5_implCompress:
+      state_signature = "[I";
+      state_element_type = T_INT;
+      stub_name = "StubRoutines_md5_implCompress";
+      callee_fn = &JeandleRuntimeRoutine::StubRoutines_md5_implCompress_callee;
+      break;
     case vmIntrinsics::_sha_implCompress:
       state_signature = "[I";
       state_element_type = T_INT;
@@ -783,6 +795,215 @@ bool JeandleIntrinsicLowering::lower_digestBase_implCompress(vmIntrinsics::ID id
                   {src_start, state_base, block_size}, attrs,
                   /*is_gc_leaf_entry=*/true);
   }
+  return true;
+}
+
+// =============================================================================
+// lower_digestBase_implCompressMB — multi-block digest compression
+// =============================================================================
+
+bool JeandleIntrinsicLowering::lower_digestBase_implCompressMB() {
+  ciSignature* sig = _target->signature();
+  if (sig->count() != 3 || sig->type_at(0)->basic_type() != T_ARRAY ||
+      sig->type_at(1)->basic_type() != T_INT ||
+      sig->type_at(2)->basic_type() != T_INT ||
+      sig->return_type()->basic_type() != T_INT ||
+      sig->type_at(0)->name() == nullptr ||
+      strcmp(sig->type_at(0)->name(), "[B") != 0) {
+    return false;
+  }
+  if (_interp->too_many_traps(const_cast<ciMethod*>(_interp->_method),
+                              _interp->_bytecodes.cur_bci(),
+                              Deoptimization::Reason_intrinsic)) {
+    return false;
+  }
+
+  struct Candidate {
+    const char* klass_name;
+    const char* state_signature;
+    BasicType state_element_type;
+    const char* stub_name;
+    bool is_sha3;
+    JeandleRuntimeCalleeFn callee_fn;
+    ciInstanceKlass* klass;
+    ciField* state_field;
+    ciField* block_size_field;
+  };
+
+  struct CandidateSpec {
+    const char* klass_name;
+    const char* state_signature;
+    BasicType state_element_type;
+    const char* stub_name;
+    bool is_sha3;
+    vmIntrinsics::ID intrinsic_id;
+    JeandleRuntimeCalleeFn callee_fn;
+  };
+
+  const CandidateSpec specs[] = {
+      {"sun/security/provider/MD5",  "[I", T_INT,
+       "StubRoutines_md5_implCompressMB", false, vmIntrinsics::_md5_implCompress,
+       &JeandleRuntimeRoutine::StubRoutines_md5_implCompressMB_callee},
+      {"sun/security/provider/SHA",  "[I", T_INT,
+       "StubRoutines_sha1_implCompressMB", false, vmIntrinsics::_sha_implCompress,
+       &JeandleRuntimeRoutine::StubRoutines_sha1_implCompressMB_callee},
+      {"sun/security/provider/SHA2", "[I", T_INT,
+       "StubRoutines_sha256_implCompressMB", false, vmIntrinsics::_sha2_implCompress,
+       &JeandleRuntimeRoutine::StubRoutines_sha256_implCompressMB_callee},
+      {"sun/security/provider/SHA5", "[J", T_LONG,
+       "StubRoutines_sha512_implCompressMB", false, vmIntrinsics::_sha5_implCompress,
+       &JeandleRuntimeRoutine::StubRoutines_sha512_implCompressMB_callee},
+      {"sun/security/provider/SHA3", "[B", T_BYTE,
+       "StubRoutines_sha3_implCompressMB", true, vmIntrinsics::_sha3_implCompress,
+       &JeandleRuntimeRoutine::StubRoutines_sha3_implCompressMB_callee},
+  };
+
+  ciInstanceKlass* digest_base = _target->holder();
+  llvm::SmallVector<Candidate, 5> candidates;
+  for (const CandidateSpec& spec : specs) {
+    if (!vmIntrinsics::is_intrinsic_available(spec.intrinsic_id) ||
+        JeandleRuntimeRoutine::find_routine_entry(spec.stub_name) == nullptr) {
+      continue;
+    }
+
+    ciKlass* klass = digest_base->find_klass(ciSymbol::make(spec.klass_name));
+    if (klass == nullptr || !klass->is_loaded() || !klass->is_instance_klass()) {
+      continue;
+    }
+
+    ciInstanceKlass* instance_klass = klass->as_instance_klass();
+    ciField* state_field = instance_klass->get_field_by_name(
+        ciSymbol::make("state"), ciSymbol::make(spec.state_signature), false);
+    if (state_field == nullptr) {
+      continue;
+    }
+
+    ciField* block_size_field = nullptr;
+    if (spec.is_sha3) {
+      block_size_field = instance_klass->get_field_by_name(
+          ciSymbol::make("blockSize"), ciSymbol::make("I"), false);
+      if (block_size_field == nullptr) {
+        continue;
+      }
+    }
+
+    candidates.push_back({spec.klass_name, spec.state_signature,
+                          spec.state_element_type, spec.stub_name, spec.is_sha3,
+                          spec.callee_fn, instance_klass, state_field,
+                          block_size_field});
+  }
+
+  // The generic DigestBase method can only use a fast path when at least one
+  // concrete digest class and its platform stub are available.
+  if (candidates.empty()) {
+    return false;
+  }
+
+  // Keep all values on the JVM stack until the unknown-subclass deopt bundle
+  // has captured the original invoke state.
+  llvm::Value* receiver = _interp->_jvm->raw_peek(3).value();
+  llvm::Value* src = _interp->_jvm->raw_peek(2).value();
+  llvm::Value* ofs = _interp->_jvm->raw_peek(1).value();
+  llvm::Value* limit = _interp->_jvm->raw_peek(0).value();
+  _interp->null_check(src);
+
+  llvm::IRBuilder<>& builder = _interp->_ir_builder;
+  llvm::LLVMContext& context = *_interp->_context;
+  llvm::Module& module = _interp->_module;
+  llvm::PointerType* java_heap_ptr_type =
+      llvm::PointerType::get(context, llvm::jeandle::AddrSpace::JavaHeapAddrSpace);
+  llvm::PointerType* c_heap_ptr_type =
+      llvm::PointerType::get(context, llvm::jeandle::AddrSpace::CHeapAddrSpace);
+
+  llvm::Value* src_offset = builder.CreateAdd(
+      builder.getInt32(arrayOopDesc::base_offset_in_bytes(T_BYTE)), ofs,
+      "digest_mb_src_offset");
+  llvm::Value* src_start = builder.CreateInBoundsPtrAdd(
+      src, src_offset, "digest_mb_src_start");
+
+  llvm::BasicBlock* merge_bb =
+      llvm::BasicBlock::Create(context, "digest_mb_merge", _interp->_llvm_func);
+  llvm::SmallVector<std::pair<llvm::CallBase*, llvm::BasicBlock*>, 5> calls;
+  llvm::BasicBlock* dispatch_bb = builder.GetInsertBlock();
+
+  for (size_t i = 0; i < candidates.size(); ++i) {
+    const Candidate& candidate = candidates[i];
+    llvm::BasicBlock* fast_bb = llvm::BasicBlock::Create(
+        context, "digest_mb_" + std::to_string(i) + "_fast", _interp->_llvm_func);
+    llvm::BasicBlock* next_bb = llvm::BasicBlock::Create(
+        context, "digest_mb_" + std::to_string(i) + "_next", _interp->_llvm_func);
+
+    builder.SetInsertPoint(dispatch_bb);
+    Klass* klass = reinterpret_cast<Klass*>(candidate.klass->constant_encoding());
+    llvm::Value* klass_ptr = builder.CreateIntToPtr(
+        builder.getInt64(reinterpret_cast<intptr_t>(klass)), c_heap_ptr_type);
+    llvm::Value* is_instance = _interp->call_java_op(
+        "jeandle.instanceof", {klass_ptr, receiver});
+    llvm::Value* matches = builder.CreateICmpNE(
+        is_instance, builder.getInt32(0), "digest_mb_is_instance");
+    builder.CreateCondBr(matches, fast_bb, next_bb);
+
+    builder.SetInsertPoint(fast_bb);
+    BasicType state_ref_type = candidate.state_field->layout_type();
+    if (UseCompressedOops && is_reference_type(state_ref_type)) {
+      state_ref_type = T_NARROWOOP;
+    }
+    llvm::Value* state_field_addr = _interp->compute_instance_field_address(
+        receiver, candidate.state_field->offset_in_bytes());
+    llvm::Value* state_array = _interp->load_from_address(
+        state_field_addr, state_ref_type, false);
+    if (state_ref_type == T_NARROWOOP) {
+      state_array = builder.CreateAddrSpaceCast(
+          state_array, java_heap_ptr_type, "digest_mb_state_array");
+    }
+    llvm::Value* state_base = builder.CreateInBoundsPtrAdd(
+        state_array,
+        builder.getInt32(arrayOopDesc::base_offset_in_bytes(
+            candidate.state_element_type)),
+        "digest_mb_state_base");
+
+    llvm::SmallVector<llvm::Value*, 5> args = {src_start, state_base};
+    if (candidate.is_sha3) {
+      llvm::Value* block_size_addr = _interp->compute_instance_field_address(
+          receiver, candidate.block_size_field->offset_in_bytes());
+      args.push_back(_interp->load_from_address(block_size_addr, T_INT, false));
+    }
+    args.push_back(ofs);
+    args.push_back(limit);
+
+    static constexpr CallSiteAttributeMetadata attrs = {
+        CTRL_NONE, MEM_READ | MEM_WRITE};
+    llvm::CallBase* call = emit_callsite(
+        candidate.callee_fn(module), llvm::CallingConv::C, args, attrs,
+        /*is_gc_leaf_entry=*/true);
+    builder.CreateBr(merge_bb);
+    calls.push_back({call, builder.GetInsertBlock()});
+    dispatch_bb = next_bb;
+  }
+
+  // Other DigestBase implementations, such as MD2, need the Java path. Deopt
+  // once so the admission check above can decline this intrinsic when the
+  // method is recompiled, without calling a stub with an incompatible state.
+  llvm::BasicBlock* unknown_bb =
+      llvm::BasicBlock::Create(context, "digest_mb_unknown", _interp->_llvm_func);
+  builder.SetInsertPoint(dispatch_bb);
+  builder.CreateBr(unknown_bb);
+  _interp->uncommon_trap(Deoptimization::Reason_intrinsic,
+                         Deoptimization::Action_make_not_entrant, unknown_bb);
+
+  builder.SetInsertPoint(merge_bb);
+  _interp->_block->set_tail_llvm_block(merge_bb);
+  llvm::PHINode* result = builder.CreatePHI(
+      builder.getInt32Ty(), static_cast<unsigned>(calls.size()), "digest_mb_result");
+  for (const auto& entry : calls) {
+    result->addIncoming(entry.first, entry.second);
+  }
+
+  _interp->_jvm->ipop();  // limit
+  _interp->_jvm->ipop();  // ofs
+  _interp->_jvm->apop();  // src
+  _interp->_jvm->apop();  // receiver
+  _interp->_jvm->ipush(result);
   return true;
 }
 
