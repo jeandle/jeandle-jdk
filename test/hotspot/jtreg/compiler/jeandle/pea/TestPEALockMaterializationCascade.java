@@ -45,7 +45,7 @@ public class TestPEALockMaterializationCascade {
     private static final String MONITOR_ENTER = "@jeandle.monitorenter";
     private static final String MONITOR_EXIT = "@jeandle.monitorexit";
     private static final String INT_STORE = "store atomic i32";
-    private static final String REF_STORE = "store atomic ptr addrspace(1)";
+    private static final String REF_STORE = PEATestUtils.referenceStore();
 
     public static void main(String[] args) throws Exception {
         Method realEnter = TestWrapper.class.getMethod(

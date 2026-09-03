@@ -51,8 +51,8 @@ public class TestPEAInliningAndTieredCompilation {
     private static final String XCOMP_BEHAVIOR = "xcomp-behavior";
     private static final String INT_LOAD = "load atomic i32";
     private static final String INT_STORE = "store atomic i32";
-    private static final String REF_LOAD = "load atomic ptr addrspace(1)";
-    private static final String REF_STORE = "store atomic ptr addrspace(1)";
+    private static final String REF_LOAD = PEATestUtils.referenceLoad();
+    private static final String REF_STORE = PEATestUtils.referenceStore();
 
     public static void main(String[] args) throws Exception {
         Method caller = TestWrapper.class.getMethod("caller", int.class, int.class);

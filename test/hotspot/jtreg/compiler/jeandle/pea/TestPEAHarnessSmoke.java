@@ -25,10 +25,8 @@
  * @build jdk.test.lib.Asserts jdk.test.whitebox.WhiteBox compiler.jeandle.pea.PEATestUtils
  * @run driver jdk.test.lib.helpers.ClassFileInstaller jdk.test.whitebox.WhiteBox
  * @run main/othervm -XX:-UseJeandleCompiler
- *      -XX:-UseCompressedOops -XX:-UseCompressedClassPointers
  *      compiler.jeandle.pea.TestPEAHarnessSmoke --parser-only
  * @run main/othervm -XX:-UseJeandleCompiler
- *      -XX:-UseCompressedOops -XX:-UseCompressedClassPointers
  *      compiler.jeandle.pea.TestPEAHarnessSmoke
  */
 
@@ -191,8 +189,7 @@ public class TestPEAHarnessSmoke {
                 .run()) {
             List<String> osrCommand = osrRun.command();
             Asserts.assertTrue(osrCommand.contains("-XX:+UseOnStackReplacement"));
-            Asserts.assertTrue(osrCommand.contains("-XX:-UseCompressedOops"));
-            Asserts.assertTrue(osrCommand.contains("-XX:-UseCompressedClassPointers"));
+            assertCompressionPropagation(osrCommand);
         }
 
         PEATestUtils.IRBody complete = bodyWithInstructions(normal,
@@ -1301,6 +1298,13 @@ public class TestPEAHarnessSmoke {
         }
     }
 
+    private static void assertCompressionPropagation(List<String> command) {
+        Asserts.assertEquals(command.contains("-XX:-UseCompressedOops"),
+                !PEATestUtils.useCompressedOops());
+        Asserts.assertEquals(command.contains("-XX:-UseCompressedClassPointers"),
+                !PEATestUtils.useCompressedClassPointers());
+    }
+
     private static void testManagedOptionRejection(Method target) {
         expectFailure("HotSpot PEA override", () -> PEATestUtils.behaviorRun(WRAPPER, target)
                 .extraFlags("-XX:-JeandleDoPEA"));
@@ -1329,12 +1333,6 @@ public class TestPEAHarnessSmoke {
                 .extraLLVMOptions("-jeandle-pea-iterations=2"));
         expectFailure("trace assignment override", () -> PEATestUtils.shapeRun(WRAPPER, target)
                 .extraLLVMOptions("-jeandle-trace-pea=false"));
-        expectFailure("compressed-oops assignment override",
-                () -> PEATestUtils.behaviorRun(WRAPPER, target)
-                        .extraFlags("-XX:UseCompressedOops=true"));
-        expectFailure("compressed-klass assignment override",
-                () -> PEATestUtils.behaviorRun(WRAPPER, target)
-                        .extraFlags("-XX:UseCompressedClassPointers=true"));
         expectFailure("PEA-off double-dash iteration override",
                 () -> PEATestUtils.behaviorRun(WRAPPER, target).peaOff()
                         .extraLLVMOptions("--jeandle-pea-iterations=2"));
@@ -1464,8 +1462,7 @@ public class TestPEAHarnessSmoke {
                 run.finalIR(method).assertAbsent("@new_instance(");
             }
             Asserts.assertTrue(command.contains("-XX:CICompilerCount=1"));
-            Asserts.assertTrue(command.contains("-XX:-UseCompressedOops"));
-            Asserts.assertTrue(command.contains("-XX:-UseCompressedClassPointers"));
+            assertCompressionPropagation(command);
             Asserts.assertFalse(run.output().getStderr().contains(
                     PEATestUtils.MethodId.of(decoy).llvmFunctionName()));
         }

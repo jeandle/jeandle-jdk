@@ -26,7 +26,6 @@
  * @build jdk.test.lib.Asserts jdk.test.whitebox.WhiteBox compiler.jeandle.pea.PEATestUtils
  * @run driver jdk.test.lib.helpers.ClassFileInstaller jdk.test.whitebox.WhiteBox
  * @run main/othervm -XX:-UseJeandleCompiler
- *      -XX:-UseCompressedOops -XX:-UseCompressedClassPointers
  *      compiler.jeandle.pea.TestPEACyclicObjectGraph
  */
 
@@ -109,7 +108,7 @@ public class TestPEACyclicObjectGraph {
                 "target=  store atomic i32 202,", " unordered,"), 1,
                 target + ": source payload 202 eliminated once");
         Asserts.assertEquals(effectTargetCount(first, "EliminateStore",
-                "target=  store atomic ptr addrspace(1)", " unordered,"), 2,
+                "target=  " + PEATestUtils.referenceStore(), " unordered,"), 2,
                 target + ": both source cycle-edge stores eliminated once");
 
         String sourcePublication = publishedSinkStore(source);
@@ -323,14 +322,14 @@ public class TestPEACyclicObjectGraph {
     private static List<String> instanceUnorderedReferenceStoreLines(
             PEATestUtils.IRBody body) {
         return body.lines().stream()
-                .filter(line -> line.contains("store atomic ptr addrspace(1)"))
+                .filter(line -> line.contains(PEATestUtils.referenceStore()))
                 .filter(line -> line.contains(" unordered,"))
                 .toList();
     }
 
     private static String publishedSinkStore(PEATestUtils.IRBody body) {
         List<String> lines = body.lines().stream()
-                .filter(line -> line.contains("store atomic ptr addrspace(1)"))
+                .filter(line -> line.contains(PEATestUtils.referenceStore()))
                 .filter(line -> line.contains(" seq_cst,"))
                 .toList();
         Asserts.assertEquals(lines.size(), 1,

@@ -64,7 +64,7 @@ public class TestPEACallArgMutationThenThrow {
             assertPassedObjectShape(run, primitive, mutatePrimitive, 1,
                     "store atomic i32", 1);
             assertPassedObjectShape(run, reference, mutateReference, 1,
-                    "store atomic ptr addrspace(1)", 1);
+                    PEATestUtils.referenceStore(), 1);
             assertPassedObjectShape(run, twoArguments, mutateTwo, 2,
                     "store atomic i32", 2, 1);
             assertUnexposedShape(run, unexposed, mutatePrimitive);
