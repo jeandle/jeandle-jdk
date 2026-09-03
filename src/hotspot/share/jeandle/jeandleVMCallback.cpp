@@ -116,15 +116,28 @@ uintptr_t record_klass_metadata(ciKlass* klass) {
   return reinterpret_cast<uintptr_t>(encoding);
 }
 
-bool constant_field(int oop_id, int offset, ciField** field, ciConstant* con) {
+bool constant_field(int oop_id, int offset, ciField** field, ciConstant* con, int* stable_dimension) {
   ciObject* base_oop = oop_by_id(oop_id);
   if (base_oop == nullptr || base_oop->is_null_object()) {
     return false;
   }
 
   if (base_oop->is_array()) {
-    // TODO: Support Stable array element folding in a follow-up pass.
-    return false;
+    JeandleCompilation* compilation = JeandleCompilation::current();
+    JeandleCompiledCode* compiled_code = compilation->compiled_code();
+    int base_stable_dimension = compiled_code->stable_array_dimension(oop_id);
+    if (!FoldStableValues || base_stable_dimension <= 0) {
+      return false;
+    }
+
+    ciConstant value = base_oop->as_array()->element_value_by_offset(offset);
+    if (!value.is_valid() || value.is_null_or_zero()) {
+      return false;
+    }
+
+    *con = value;
+    *stable_dimension = base_stable_dimension - 1;
+    return true;
   }
 
   if (!base_oop->is_instance()) {
@@ -384,18 +397,29 @@ llvm::jeandle::ConstantFieldResult
 JeandleVMCallback::get_constant_field(int oop_id, int offset) {
   ciField* field = nullptr;
   ciConstant con;
-  if (!constant_field(oop_id, offset, &field, &con))
+  int stable_dimension = 0;
+  if (!constant_field(oop_id, offset, &field, &con, &stable_dimension))
     return {-1, 0};
 
-  int basic_type = field->layout_type();
+  int basic_type;
+  if (field == nullptr) {
+    // @Stable array element.
+    basic_type = con.basic_type();
+  } else {
+    // Instance or static field.
+    basic_type = field->layout_type();
+    if (field->is_call_site_target()) {
+      ciObject* base_oop = oop_by_id(oop_id);
+      assert(base_oop != nullptr && base_oop->is_call_site(), "bad CallSite holder");
+      ciCallSite* call_site = base_oop->as_call_site();
+      if (!call_site->is_fully_initialized_constant_call_site()) {
+        ciMethodHandle* target = con.as_object()->as_method_handle();
+        ciEnv::current()->dependencies()->assert_call_site_target_value(call_site, target);
+      }
+    }
 
-  if (field->is_call_site_target()) {
-    ciObject* base_oop = oop_by_id(oop_id);
-    assert(base_oop != nullptr && base_oop->is_call_site(), "bad CallSite holder");
-    ciCallSite* call_site = base_oop->as_call_site();
-    if (!call_site->is_fully_initialized_constant_call_site()) {
-      ciMethodHandle* target = con.as_object()->as_method_handle();
-      ciEnv::current()->dependencies()->assert_call_site_target_value(call_site, target);
+    if (FoldStableValues && field->is_stable() && field->type()->is_array_klass()) {
+      stable_dimension = field->type()->as_array_klass()->dimension();
     }
   }
 
@@ -421,6 +445,9 @@ JeandleVMCallback::get_constant_field(int oop_id, int offset) {
     }
     JeandleCompiledCode* compiled_code = JeandleCompilation::current()->compiled_code();
     int result_id = compiled_code->find_or_insert_oop(object);
+    if (stable_dimension > 0) {
+      compiled_code->record_stable_array(result_id, stable_dimension);
+    }
     return {basic_type, static_cast<int64_t>(result_id)};
   }
   default:

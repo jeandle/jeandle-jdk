@@ -296,6 +296,8 @@ class JeandleCompiledCode : public StackObj {
   bool needs_nmethod_entry_barrier();
   void update_interpreter_frame_size_in_bytes(int frame_size) { _interpreter_frame_size_in_bytes = MAX2(frame_size, _interpreter_frame_size_in_bytes); }
   int interpreter_frame_size_in_bytes() { return _interpreter_frame_size_in_bytes; }
+  void record_stable_array(int oop_id, int dimension);
+  int stable_array_dimension(int oop_id) const;
 
  private:
   std::unique_ptr<ObjectBuffer> _obj; // Compiled instructions.
@@ -332,6 +334,7 @@ class JeandleCompiledCode : public StackObj {
   int _interpreter_frame_size_in_bytes;
   bool _has_method_handle_invoke;
   JeandleEntryBarrierStub* _entry_barrier_stub = nullptr;
+  llvm::DenseMap<int, int> _stable_array_dimensions;
 
   void setup_frame_size();
 
