@@ -48,7 +48,7 @@ public class TestSyncTryCatchEscape {
     private static final String MONITOR_ENTER = "@jeandle.monitorenter";
     private static final String MONITOR_EXIT = "@jeandle.monitorexit";
     private static final String INT_STORE = "store atomic i32";
-    private static final String REF_STORE = "store atomic ptr addrspace(1)";
+    private static final String REF_STORE = PEATestUtils.referenceStore();
     private static final String LOCAL =
             "%((?:\\\"(?:\\\\[0-9A-Fa-f]{2}|[^\\\"\\\\])*\\\")|[-A-Za-z$._0-9]+)";
     private static final String LABEL =

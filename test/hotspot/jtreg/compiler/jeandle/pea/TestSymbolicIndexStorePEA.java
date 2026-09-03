@@ -22,6 +22,7 @@
  * @summary PEA materializes virtual arrays exactly once at symbolic-index
  *          loads and stores while preserving bounds, replay, and nested state
  * @library /test/lib /
+ * @modules java.base/jdk.internal.misc
  * @build jdk.test.lib.Asserts jdk.test.whitebox.WhiteBox compiler.jeandle.pea.PEATestUtils
  * @run driver jdk.test.lib.helpers.ClassFileInstaller jdk.test.whitebox.WhiteBox
  * @run main/othervm -XX:-UseJeandleCompiler
@@ -38,11 +39,15 @@ import java.util.Set;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
+import jdk.internal.misc.Unsafe;
+
 import jdk.test.lib.Asserts;
 
 public class TestSymbolicIndexStorePEA {
     private static final String WRAPPER =
             "compiler.jeandle.pea.TestSymbolicIndexStorePEA$TestWrapper";
+    private static final Unsafe UNSAFE = Unsafe.getUnsafe();
+
     private static final String BOUNDS_COMPARE = "icmp ult i32";
     private static final String DEOPTIMIZE = "@llvm.experimental.deoptimize";
     private static final String DEOPTIMIZE_I64 = "llvm.experimental.deoptimize.i64";
@@ -207,7 +212,7 @@ public class TestSymbolicIndexStorePEA {
         Asserts.assertEquals(childReferences.size(), 1,
                 target + ": one exact array element references the nested child");
         PEATestUtils.VirtualObjectEntry arrayElement = childReferences.get(0);
-        Asserts.assertEquals(arrayElement.offset(), 24,
+        Asserts.assertEquals(arrayElement.offset(), Unsafe.ARRAY_OBJECT_BASE_OFFSET,
                 target + ": nested child is replayed into array[0]");
         fallback.assertVORef(0, arrayElement.offset(), 1);
         Asserts.assertEquals(childDescriptor.fields().size(), 1,
@@ -300,7 +305,8 @@ public class TestSymbolicIndexStorePEA {
         List<String> lines = body.lines();
         ArrayList<Candidate> candidates = new ArrayList<>();
         Pattern indexedGEP = Pattern.compile("^(" + LLVM_LOCAL
-                + ") = getelementptr" + GEP_FLAGS + " ptr addrspace\\(1\\), "
+                + ") = getelementptr" + GEP_FLAGS + " "
+                + Pattern.quote(PEATestUtils.referencePointerType()) + ", "
                 + "ptr addrspace\\(1\\) (" + LLVM_LOCAL + "), "
                 + "i(?:32|64) (" + LLVM_LOCAL + ")(?:, .*)?$");
         for (String line : lines) {
@@ -318,8 +324,8 @@ public class TestSymbolicIndexStorePEA {
             if (findBoundsComparisons(lines, sourceIndex).size() != 1) {
                 continue;
             }
-            Pattern store = Pattern.compile(
-                    "^store atomic ptr addrspace\\(1\\) (" + LLVM_LOCAL
+            String referenceType = Pattern.quote(PEATestUtils.referencePointerType());
+            Pattern store = Pattern.compile("^store atomic " + referenceType + " (" + LLVM_LOCAL
                     + "), ptr addrspace\\(1\\) "
                     + Pattern.quote(indexed.group(1))
                     + " unordered, align \\d+(?:, .*)?$");
@@ -327,9 +333,14 @@ public class TestSymbolicIndexStorePEA {
                 Matcher matcher = store.matcher(storeLine);
                 if (matcher.matches()
                         && (expectedChild == null
-                                || expectedChild.equals(matcher.group(1)))) {
+                                || PEATestUtils.isEquivalentReferenceOperand(
+                                        body, matcher.group(1), expectedChild))) {
                     candidates.add(new Candidate(
-                            sourceIndex, array, matcher.group(1), storeLine));
+                            sourceIndex, array,
+                            expectedChild != null ? expectedChild
+                                    : PEATestUtils.semanticReferenceOperand(
+                                            body, matcher.group(1)),
+                            storeLine));
                 }
             }
         }
@@ -344,7 +355,7 @@ public class TestSymbolicIndexStorePEA {
                 null, "child.value", target);
         String arrayReplay = uniqueReplayStore(
                 body, candidate.array(), arrayOffset,
-                "ptr addrspace(1) " + candidate.child(),
+                PEATestUtils.referencePointerType() + " " + candidate.child(),
                 candidate.symbolicStore(), "array[0]", target);
         if (expectedChildValue != null) {
             Asserts.assertTrue(childReplay.startsWith(
@@ -453,18 +464,40 @@ public class TestSymbolicIndexStorePEA {
             if (!slot.matches()) {
                 continue;
             }
-            Pattern store = exactTypedValue == null
-                    ? Pattern.compile("^store atomic i32 .+, ptr addrspace\\(1\\) "
-                            + Pattern.quote(slot.group(1))
-                            + " unordered, align \\d+(?:, .*)?$")
-                    : Pattern.compile("^store atomic "
-                            + Pattern.quote(exactTypedValue)
-                            + ", ptr addrspace\\(1\\) "
-                            + Pattern.quote(slot.group(1))
-                            + " unordered, align \\d+(?:, .*)?$");
-            body.lines().stream().filter(candidate -> store.matcher(candidate).matches())
-                    .filter(candidate -> !candidate.equals(excludedStore))
-                    .forEach(matches::add);
+            if (exactTypedValue != null
+                    && exactTypedValue.startsWith(
+                            PEATestUtils.referencePointerType() + " ")) {
+                String expectedValue = exactTypedValue.substring(
+                        PEATestUtils.referencePointerType().length() + 1);
+                Pattern store = Pattern.compile("^store atomic "
+                        + Pattern.quote(PEATestUtils.referencePointerType())
+                        + " (" + LLVM_LOCAL + "), ptr addrspace\\(1\\) "
+                        + Pattern.quote(slot.group(1))
+                        + " unordered, align \\d+(?:, .*)?$");
+                body.lines().stream()
+                        .filter(candidate -> {
+                            Matcher matcher = store.matcher(candidate);
+                            return matcher.matches()
+                                    && !candidate.equals(excludedStore)
+                                    && PEATestUtils.isEquivalentReferenceOperand(
+                                            body, matcher.group(1), expectedValue);
+                        })
+                        .forEach(matches::add);
+            } else {
+                Pattern store = exactTypedValue == null
+                        ? Pattern.compile("^store atomic i32 .+, ptr addrspace\\(1\\) "
+                                + Pattern.quote(slot.group(1))
+                                + " unordered, align \\d+(?:, .*)?$")
+                        : Pattern.compile("^store atomic "
+                                + Pattern.quote(exactTypedValue)
+                                + ", ptr addrspace\\(1\\) "
+                                + Pattern.quote(slot.group(1))
+                                + " unordered, align \\d+(?:, .*)?$");
+                body.lines().stream()
+                        .filter(candidate -> store.matcher(candidate).matches())
+                        .filter(candidate -> !candidate.equals(excludedStore))
+                        .forEach(matches::add);
+            }
         }
         Asserts.assertEquals(matches.size(), 1,
                 target + ": one exact replay store for " + detail);

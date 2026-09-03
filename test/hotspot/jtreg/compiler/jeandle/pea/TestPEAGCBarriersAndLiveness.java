@@ -27,7 +27,6 @@
  *        compiler.jeandle.pea.PEATestUtils
  * @run driver jdk.test.lib.helpers.ClassFileInstaller jdk.test.whitebox.WhiteBox
  * @run main/othervm -XX:-UseJeandleCompiler
- *      -XX:-UseCompressedOops -XX:-UseCompressedClassPointers
  *      compiler.jeandle.pea.TestPEAGCBarriersAndLiveness
  */
 
@@ -118,7 +117,7 @@ public class TestPEAGCBarriersAndLiveness {
                 "never-escaping holder and Object[] allocations are eliminated");
         Asserts.assertEquals(run.finalIR(target).loweredAllocCount(), 0,
                 "no lowered allocation survives for the external case");
-        run.finalIR(target).assertAbsent("store atomic ptr addrspace(1)");
+        run.finalIR(target).assertAbsent(PEATestUtils.referenceStore());
         run.finalIR(target).assertAbsent("jeandle.pre_barrier.exit: ; preds =");
         run.finalIR(target).assertAbsent("jeandle.post_barrier.exit: ; preds =");
         Asserts.assertEquals(postBarrierCount(after), 0L,
@@ -153,23 +152,26 @@ public class TestPEAGCBarriersAndLiveness {
             PEATestUtils.IRBody body, String collector) {
         body.assertLineCount("store atomic i8 0", 1);
         long sequentialPublications = body.lines().stream()
-                .filter(line -> line.contains("store atomic ptr addrspace(1)"))
+                .filter(line -> line.contains(PEATestUtils.referenceStore()))
                 .filter(line -> line.contains("seq_cst"))
                 .count();
         Asserts.assertEquals(sequentialPublications, 1L,
                 "one exact real sibling publication");
 
         if (collector.equals("-XX:+UseSerialGC")) {
-            body.assertLineCount("store atomic ptr addrspace(1)", 1);
+            body.assertLineCount(PEATestUtils.referenceStore(), 1);
             body.assertAbsent("jeandle.pre_barrier.exit: ; preds =");
             body.assertAbsent("jeandle.post_barrier.exit: ; preds =");
-            body.assertBefore("store atomic ptr addrspace(1)", 0,
+            body.assertBefore(PEATestUtils.referenceStore(), 0,
                     "store atomic i8 0", 0);
         } else if (collector.equals("-XX:+UseG1GC")) {
-            body.assertLineCount("store atomic ptr addrspace(1)", 2);
+            int publicationIndex = PEATestUtils.useCompressedOops() ? 0 : 1;
+            int referenceStoreCount = PEATestUtils.useCompressedOops() ? 1 : 2;
+            body.assertLineCount(
+                    PEATestUtils.referenceStore(), referenceStoreCount);
             body.assertBetween(
                     "jeandle.pre_barrier.exit: ; preds =", 0,
-                    "store atomic ptr addrspace(1)", 1,
+                    PEATestUtils.referenceStore(), publicationIndex,
                     "jeandle.post_barrier.exit: ; preds =", 0);
             body.assertBetween(
                     "jeandle.pre_barrier.exit: ; preds =", 0,
