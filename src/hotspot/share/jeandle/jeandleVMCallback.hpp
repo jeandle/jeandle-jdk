@@ -82,7 +82,9 @@ class JeandleVMCallback : public AllStatic {
   // Inlining.
   static bool      get_inline_callee_ir(uintptr_t callee_method);
   static int64_t   get_new_statepoint_id(int64_t old_statepoint_id);
-  static bool      is_ok_to_inline(int scope_id, int bci, uintptr_t callee_method);
+  static int       get_inline_decision(int scope_id, int bci,
+                                       uintptr_t callee_method,
+                                       bool is_late_inline);
   static bool      record_inline_result(int scope_id, int bci, uintptr_t callee_method, int result);
   static bool      record_inlining_complete();
 

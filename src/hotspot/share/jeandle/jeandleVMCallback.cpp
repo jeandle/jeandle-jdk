@@ -543,25 +543,41 @@ int JeandleVMCallback::get_java_mirror(uintptr_t klass_ptr) {
 // Inlining
 // ---------------------------------------------------------------------------
 
-bool JeandleVMCallback::is_ok_to_inline(int scope_id, int bci, uintptr_t callee_method) {
+int JeandleVMCallback::get_inline_decision(int scope_id,
+                                           int bci,
+                                           uintptr_t callee_method,
+                                           bool is_late_inline) {
+  using llvm::jeandle::JeandleInlineDecision;
+
   JeandleCompilation* comp = JeandleCompilation::current();
   assert(comp != nullptr, "Must be called in compile thread");
   JeandleInlineTree* caller_tree = comp->inline_tree_for_scope(scope_id);
   assert(caller_tree != nullptr, "caller inline tree must exist");
   ciMethod* callee = callback_method(callee_method);
   if (caller_tree->callee_at(bci, callee) != nullptr) {
-    return true;
+    return static_cast<int>(JeandleInlineDecision::InlineNow);
   }
+
   JeandleInlineReason reason = JeandleInlineReason::InlineHot;
-  if (!caller_tree->ok_to_inline(comp, callee, bci, reason)) {
+  bool should_delay = false;
+  bool hit_node_count_cutoff = false;
+  if (!caller_tree->ok_to_inline(comp, callee, bci, is_late_inline,
+                                 should_delay, hit_node_count_cutoff, reason)) {
     comp->record_inline_failure(scope_id, bci, callee, reason);
-    return false;
+    return static_cast<int>(hit_node_count_cutoff
+                                ? JeandleInlineDecision::HitNodeCountCutoff
+                                : JeandleInlineDecision::Deny);
   }
+  assert(!is_late_inline || !should_delay,
+         "a late inline decision must not be delayed again");
 
   JeandleInlineTree* callee_tree = comp->prepare_inline_tree_for_callee(scope_id, bci, callee);
   assert(callee_tree != nullptr, "callee inline tree must be prepared before LLVM inline");
   callee_tree->set_reason(reason);
-  return true;
+  callee_tree->set_late_inline(is_late_inline || should_delay);
+  return static_cast<int>(should_delay
+                              ? JeandleInlineDecision::InlineLater
+                              : JeandleInlineDecision::InlineNow);
 }
 
 bool JeandleVMCallback::record_inline_result(int scope_id, int bci, uintptr_t callee_method, int result) {
@@ -572,8 +588,9 @@ bool JeandleVMCallback::record_inline_result(int scope_id, int bci, uintptr_t ca
   llvm::jeandle::JeandleInlineReason llvm_reason =
       static_cast<llvm::jeandle::JeandleInlineReason>(result);
   if (llvm_reason == llvm::jeandle::JeandleInlineReason::InlineSuccess) {
-    // IsOkToInline has already prepared this tree, so a successful result only
-    // commits metadata in the same successful-inline order as LLVM's InlineScopes.
+    // GetInlineDecision has already prepared this tree, so a successful result
+    // only commits metadata in the same successful-inline order as LLVM's
+    // InlineScopes.
     comp->commit_inline_tree_for_callee(scope_id, bci, callee);
   } else {
     comp->record_inline_failure(scope_id,
@@ -1028,7 +1045,7 @@ void JeandleVMCallback::register_callbacks() {
   callbacks.GetJavaMirror = &JeandleVMCallback::get_java_mirror;
   callbacks.GetInlineCalleeIR = &JeandleVMCallback::get_inline_callee_ir;
   callbacks.GetNewStatepointID = &JeandleVMCallback::get_new_statepoint_id;
-  callbacks.IsOkToInline = &JeandleVMCallback::is_ok_to_inline;
+  callbacks.GetInlineDecision = &JeandleVMCallback::get_inline_decision;
   callbacks.RecordInlineResult = &JeandleVMCallback::record_inline_result;
   callbacks.RecordInliningComplete = &JeandleVMCallback::record_inlining_complete;
   callbacks.GetCHAOptInfo = &JeandleVMCallback::get_cha_opt_info;
