@@ -51,7 +51,6 @@ public class TestPrePEAArrayLengthUnroll {
                 "-XX:+JeandleDoPEA",
                 "-Xlog:jeandle=debug", "-XX:+JeandleDumpIR",
                 "-XX:JeandleDumpDirectory=" + dump_path,
-                "-XX:-UseCompressedOops", "-XX:-UseCompressedClassPointers",
                 "-XX:CompileCommand=compileonly," + wrapper + "::test",
                 wrapper));
 
@@ -75,7 +74,6 @@ public class TestPrePEAArrayLengthUnroll {
         ArrayList<String> control_args = new ArrayList<String>(List.of(
                 "-Xbatch", "-XX:-TieredCompilation", "-XX:+UseJeandleCompiler", "-Xcomp",
                 "-XX:-JeandleDoPEA",
-                "-XX:-UseCompressedOops", "-XX:-UseCompressedClassPointers",
                 "-XX:CompileCommand=compileonly," + wrapper + "::test",
                 wrapper));
         OutputAnalyzer control = ProcessTools.executeCommand(

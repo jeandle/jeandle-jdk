@@ -20,17 +20,14 @@
 
 /*
  * @test
- * @summary PEA compressed-oops graceful bail: with the
- *          DEFAULT VM configuration (UseCompressedOops +
- *          UseCompressedClassPointers ON), PEA must skip cleanly instead of
- *          crashing in getOrCreateFieldIndex (fastdebug assert / release
- *          miscompile). The module DataLayout narrow-oop gate in
- *          PartialEscapeAnalysis::run makes the whole analysis idle, so the
- *          program runs correctly under -XX:+JeandleDoPEA.
+ * @summary PEA executes with compressed oops and preserves object semantics.
+ *          The default UseCompressedOops and UseCompressedClassPointers
+ *          configuration must remain enabled while JeandleDoPEA runs.
+ *          This guards against the old module-wide compressed-oop bail.
  * @library /test/lib /
  * @build jdk.test.lib.Asserts
  * @run main/othervm -XX:-UseJeandleCompiler
- *      compiler.jeandle.pea.TestCompressedOopsPEABail
+ *      compiler.jeandle.pea.TestCompressedOopsPEAEnabled
  */
 
 package compiler.jeandle.pea;
@@ -42,14 +39,14 @@ import jdk.test.lib.Asserts;
 import jdk.test.lib.process.OutputAnalyzer;
 import jdk.test.lib.process.ProcessTools;
 
-public class TestCompressedOopsPEABail {
+public class TestCompressedOopsPEAEnabled {
     public static void main(String[] args) throws Exception {
-        String wrapper = "compiler.jeandle.pea.TestCompressedOopsPEABail$TestWrapper";
+        String wrapper = "compiler.jeandle.pea.TestCompressedOopsPEAEnabled$TestWrapper";
         ArrayList<String> command_args = new ArrayList<String>(List.of(
                 "-Xbatch", "-XX:-TieredCompilation", "-XX:+UseJeandleCompiler", "-Xcomp",
-                // PEA explicitly ON; compressed oops left at their DEFAULT
-                // (enabled) values — the bug's production configuration.
-                "-XX:+JeandleDoPEA",
+                // PEA and both compressed-reference modes are explicitly enabled;
+                // compressed-reference values are the production configuration.
+                "-XX:+JeandleDoPEA", "-XX:+UseCompressedOops", "-XX:+UseCompressedClassPointers", "-XX:+PrintFlagsFinal",
                 "-XX:CompileCommand=compileonly," + wrapper + "::test",
                 wrapper));
 
@@ -57,7 +54,9 @@ public class TestCompressedOopsPEABail {
         OutputAnalyzer output = ProcessTools.executeCommand(pb);
         // Pre-fix: SIGSEGV / abort in getOrCreateFieldIndex (exit != 0).
         output.shouldHaveExitValue(0);
-        output.shouldContain("TestCompressedOopsPEABail result: 900030000");
+        output.shouldContain("UseCompressedClassPointers               = true");
+        output.shouldContain("UseCompressedOops                        = true");
+        output.shouldContain("TestCompressedOopsPEAEnabled result: 900030000");
     }
 
     public static class TestWrapper {
@@ -80,7 +79,7 @@ public class TestCompressedOopsPEABail {
         public static void main(String[] args) {
             new Point(); // init class
             int r = test(30000); // sum(2i+2, i<30000) = 30000*29999 + 60000
-            System.out.println("TestCompressedOopsPEABail result: " + r);
+            System.out.println("TestCompressedOopsPEAEnabled result: " + r);
             Asserts.assertEquals(r, 900030000);
         }
     }

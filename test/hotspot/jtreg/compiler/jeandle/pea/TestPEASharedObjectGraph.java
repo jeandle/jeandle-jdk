@@ -26,7 +26,6 @@
  * @build jdk.test.lib.Asserts jdk.test.whitebox.WhiteBox compiler.jeandle.pea.PEATestUtils
  * @run driver jdk.test.lib.helpers.ClassFileInstaller jdk.test.whitebox.WhiteBox
  * @run main/othervm -XX:-UseJeandleCompiler
- *      -XX:-UseCompressedOops -XX:-UseCompressedClassPointers
  *      compiler.jeandle.pea.TestPEASharedObjectGraph
  */
 
@@ -148,13 +147,13 @@ public class TestPEASharedObjectGraph {
         assertScalarReplay(after, callBlock, firstParent, parentValueOffset,
                 afterSeed, 2, callee);
         assertReferenceReplay(after, callBlock, firstParent, parentChildOffset,
-                "ptr addrspace(1)", child, callee);
+                PEATestUtils.referencePointerType(), child, callee);
         callBlock.assertOccurrenceCount("getelementptr", 3);
         callBlock.assertOccurrenceCount("store atomic", 3);
         callBlock.assertOccurrenceCount("store atomic i32", 2);
-        callBlock.assertOccurrenceCount("store atomic ptr addrspace(1)", 1);
-        callBlock.assertOccurrenceCount(
-                "store atomic ptr addrspace(1) " + child + ",", 1);
+        callBlock.assertOccurrenceCount(PEATestUtils.referenceStore(), 1);
+        Asserts.assertEquals(PEATestUtils.equivalentReferenceStoreCount(
+                after, callBlock, child), 1L);
     }
 
     private static PEATestUtils.RunBuilder runBuilder(
@@ -269,52 +268,52 @@ public class TestPEASharedObjectGraph {
                 afterSeed, 2, firstCallee);
         assertReferenceReplay(
                 after, firstBlock, firstParent, parentChildOffset,
-                "ptr addrspace(1)", child, firstCallee);
+                PEATestUtils.referencePointerType(), child, firstCallee);
         firstBlock.assertOccurrenceCount("getelementptr", 3);
         firstBlock.assertOccurrenceCount("store atomic", 3);
         firstBlock.assertOccurrenceCount("store atomic i32", 2);
-        firstBlock.assertOccurrenceCount("store atomic ptr addrspace(1)", 1);
-        firstBlock.assertOccurrenceCount(
-                "store atomic ptr addrspace(1) " + child + ",", 1);
+        firstBlock.assertOccurrenceCount(PEATestUtils.referenceStore(), 1);
+        Asserts.assertEquals(PEATestUtils.equivalentReferenceStoreCount(
+                after, firstBlock, child), 1L);
         firstBlock.assertBefore("store atomic", 2, firstCallee, 0);
 
         assertScalarReplay(after, secondBlock, secondParent,
                 parentValueOffset, afterSeed, 3, secondCallee);
         assertReferenceReplay(
                 after, secondBlock, secondParent, parentChildOffset,
-                "ptr addrspace(1)", child, secondCallee);
+                PEATestUtils.referencePointerType(), child, secondCallee);
         assertScalarReplay(after, secondBlock, root,
                 offset(TestWrapper.Root.class, "value"),
                 afterSeed, 4, secondCallee);
         assertReferenceReplay(after, secondBlock, root,
                 offset(TestWrapper.Root.class, "left"),
-                "ptr addrspace(1)", firstParent, secondCallee);
+                PEATestUtils.referencePointerType(), firstParent, secondCallee);
         assertReferenceReplay(after, secondBlock, root,
                 offset(TestWrapper.Root.class, "right"),
-                "ptr addrspace(1)", secondParent, secondCallee);
+                PEATestUtils.referencePointerType(), secondParent, secondCallee);
         assertReferenceReplay(after, secondBlock, root,
                 offset(TestWrapper.Root.class, "child"),
-                "ptr addrspace(1)", child, secondCallee);
+                PEATestUtils.referencePointerType(), child, secondCallee);
         int base = Unsafe.ARRAY_OBJECT_BASE_OFFSET;
         int scale = Unsafe.ARRAY_OBJECT_INDEX_SCALE;
         assertReferenceReplay(after, secondBlock, array, base,
-                "ptr addrspace(1)", child, secondCallee);
+                PEATestUtils.referencePointerType(), child, secondCallee);
         assertReferenceReplay(after, secondBlock, array, base + scale,
-                "ptr addrspace(1)", firstParent, secondCallee);
+                PEATestUtils.referencePointerType(), firstParent, secondCallee);
         assertReferenceReplay(after, secondBlock, array, base + 2 * scale,
-                "ptr addrspace(1)", secondParent, secondCallee);
+                PEATestUtils.referencePointerType(), secondParent, secondCallee);
         assertReferenceReplay(after, secondBlock, array, base + 3 * scale,
-                "ptr addrspace(1)", child, secondCallee);
+                PEATestUtils.referencePointerType(), child, secondCallee);
         secondBlock.assertOccurrenceCount("getelementptr", 10);
         secondBlock.assertOccurrenceCount("store atomic", 10);
         secondBlock.assertOccurrenceCount("store atomic i32", 2);
-        secondBlock.assertOccurrenceCount("store atomic ptr addrspace(1)", 8);
-        secondBlock.assertOccurrenceCount(
-                "store atomic ptr addrspace(1) " + child + ",", 4);
-        secondBlock.assertOccurrenceCount(
-                "store atomic ptr addrspace(1) " + firstParent + ",", 2);
-        secondBlock.assertOccurrenceCount(
-                "store atomic ptr addrspace(1) " + secondParent + ",", 2);
+        secondBlock.assertOccurrenceCount(PEATestUtils.referenceStore(), 8);
+        Asserts.assertEquals(PEATestUtils.equivalentReferenceStoreCount(
+                after, secondBlock, child), 4L);
+        Asserts.assertEquals(PEATestUtils.equivalentReferenceStoreCount(
+                after, secondBlock, firstParent), 2L);
+        Asserts.assertEquals(PEATestUtils.equivalentReferenceStoreCount(
+                after, secondBlock, secondParent), 2L);
         secondBlock.assertBefore("store atomic", 9, secondCallee, 0);
     }
 
@@ -378,12 +377,12 @@ public class TestPEASharedObjectGraph {
                 before, sourceParent, valueOffset, beforeSeed, 2);
         callBlock.assertAbsent("jeandle.new_instance");
         assertReferenceReplay(after, callBlock, parentResult, childOffset,
-                "ptr addrspace(1)", "null", callee);
+                PEATestUtils.referencePointerType(), "null", callee);
         assertScalarReplay(after, callBlock, parentResult, valueOffset,
                 afterSeed, 2, callee);
         callBlock.assertOccurrenceCount("getelementptr", 2);
         callBlock.assertOccurrenceCount("store atomic", 2);
-        callBlock.assertOccurrenceCount("store atomic ptr addrspace(1)", 1);
+        callBlock.assertOccurrenceCount(PEATestUtils.referenceStore(), 1);
         callBlock.assertOccurrenceCount("store atomic i32", 1);
     }
 
@@ -613,7 +612,8 @@ public class TestPEASharedObjectGraph {
             String consumer) {
         ReplayStore replay = exactReplayStore(
                 body, block, owner, offset, type);
-        Asserts.assertEquals(replay.value(), value,
+        Asserts.assertTrue(PEATestUtils.isEquivalentReferenceOperand(body,
+                        replay.value(), value),
                 body.methodId() + ": exact reference replay value for "
                         + owner + " at offset " + offset);
         block.assertBefore(replay.line(), 0, consumer, 0);
