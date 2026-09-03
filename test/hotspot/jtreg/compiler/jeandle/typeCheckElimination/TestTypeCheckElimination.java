@@ -1086,13 +1086,93 @@ public class TestTypeCheckElimination {
         return a.id > 0;
     }
 
-    // 34d. Or(instanceof Dog, instanceof Cat): true-branch has weak info
-    //      (OneOf — don't know which) → instanceof Animal NOT eliminated
+    // 34d. Or(instanceof Dog, instanceof Cat): the true-branch is reached only
+    //      via the true edge of either check, so the edge-facts engine joins
+    //      {Dog} and {Cat} to LCA(Dog, Cat) = Animal and instanceof Animal
+    //      folds (sound: instanceof is false on null). Dominator-based
+    //      sharpening read nothing here and kept the check.
     static boolean testOrTrueBranchWeak(Object obj) {
         if (obj instanceof Dog || obj instanceof Cat) {
-            return obj instanceof Animal; // Must NOT be eliminated
+            return obj instanceof Animal; // Eliminated via edge-facts LCA
         }
         return false;
+    }
+
+    // =========================================================================
+    // Group 37: multi-predecessor merge sharpening. Every merge point below is
+    // reached only through the true/false edges of type checks sitting in
+    // mutually non-dominating branches. No incoming edge dominates the merge,
+    // so the constraints are invisible to dominator-based sharpening; the
+    // edge-semantics engine joins the per-edge facts and recovers them.
+    // =========================================================================
+
+    // 37a. Both diamond arms prove the same check; the query at the merge
+    //      folds to true.
+    static boolean testDiamondSameCheck(Object obj, boolean c) {
+        if (c) {
+            if (!(obj instanceof Dog)) return false;
+        } else {
+            if (!(obj instanceof Dog)) return false;
+        }
+        return obj instanceof Dog; // Eliminated at the merge
+    }
+
+    // 37b. Nested merges: an inner merge feeding an outer merge through
+    //      further checks on both arms.
+    static boolean testMergeOfMerge(Object obj, boolean c0, boolean c1) {
+        if (c0 ? !(obj instanceof Dog) : !(obj instanceof Dog)) return false;
+        if (c1) {
+            if (!(obj instanceof Dog)) return false;
+        } else {
+            if (!(obj instanceof Dog)) return false;
+        }
+        return obj instanceof Dog; // Eliminated at the outer merge
+    }
+
+    // 37c. Asymmetric diamond (one arm unchecked): nothing is provable at the
+    //      merge and the query must be preserved.
+    static boolean testDiamondAsymmetric(Object obj, boolean c) {
+        if (c) {
+            if (!(obj instanceof Dog)) return false;
+        }
+        return obj instanceof Dog; // Must NOT be eliminated
+    }
+
+    // 37d. The arms prove different classes; the join is LCA(Dog, Cat) =
+    //      Animal and the Animal query folds to true.
+    static boolean testMergeLCA(Object obj, boolean c) {
+        if (c) {
+            if (!(obj instanceof Dog)) return false;
+        } else {
+            if (!(obj instanceof Cat)) return false;
+        }
+        return obj instanceof Animal; // Eliminated via LCA(Dog, Cat)
+    }
+
+    // 37e. The arms fall through on failed checks, so the merge excludes Dog
+    //      (from arm A) and Animal (from arm B); excluding Animal implies
+    //      excluding Dog, so the intersection keeps {Dog} and the Poodle
+    //      query folds to false.
+    static boolean testMergeExclusions(Object obj, boolean c) {
+        if (c) {
+            if (obj instanceof Dog) return true;    // fall-through: not Dog
+        } else {
+            if (obj instanceof Animal) return true; // fall-through: not Animal
+        }
+        return !(obj instanceof Poodle); // The Poodle check folds to false
+    }
+
+    // 37f. Three-way merge with a mixed join: two Dog arms and one Cat arm
+    //      still join to Animal.
+    static boolean testThreeWayMerge(Object obj, boolean c, boolean c2) {
+        if (c) {
+            if (!(obj instanceof Dog)) return false;
+        } else if (c2) {
+            if (!(obj instanceof Cat)) return false;
+        } else {
+            if (!(obj instanceof Dog)) return false;
+        }
+        return obj instanceof Animal; // Eliminated via the three-way join
     }
 
     // =========================================================================
@@ -1641,6 +1721,47 @@ public class TestTypeCheckElimination {
                 break;
             case "testConstantOopClassMirror":
                 Asserts.assertTrue(testConstantOopClassMirror());
+                break;
+            case "testDiamondSameCheck":
+                Asserts.assertTrue(testDiamondSameCheck(new Dog(), true));
+                Asserts.assertTrue(testDiamondSameCheck(new Dog(), false));
+                Asserts.assertFalse(testDiamondSameCheck("hello", true));
+                Asserts.assertFalse(testDiamondSameCheck("hello", false));
+                break;
+            case "testMergeOfMerge":
+                Asserts.assertTrue(testMergeOfMerge(new Dog(), true, true));
+                Asserts.assertTrue(testMergeOfMerge(new Dog(), false, false));
+                Asserts.assertFalse(testMergeOfMerge(new Cat(), true, true));
+                break;
+            case "testDiamondAsymmetric":
+                // Dog passes the checked arm and the query itself.
+                Asserts.assertTrue(testDiamondAsymmetric(new Dog(), true));
+                // The unchecked arm falls straight into the query.
+                Asserts.assertTrue(testDiamondAsymmetric(new Dog(), false));
+                Asserts.assertFalse(testDiamondAsymmetric("hello", true));
+                Asserts.assertFalse(testDiamondAsymmetric("hello", false));
+                break;
+            case "testMergeLCA":
+                Asserts.assertTrue(testMergeLCA(new Dog(), true));
+                Asserts.assertTrue(testMergeLCA(new Cat(), false));
+                Asserts.assertFalse(testMergeLCA("hello", true));
+                break;
+            case "testMergeExclusions":
+                // Excluding Dog (arm A) and Animal (arm B) excludes Poodle
+                // under both, so every input takes an early return or folds
+                // the Poodle query to false; the method is constantly true.
+                Asserts.assertTrue(testMergeExclusions(new Dog(), true));
+                Asserts.assertTrue(testMergeExclusions(new Dog(), false));
+                Asserts.assertTrue(testMergeExclusions(new Poodle(), true));
+                Asserts.assertTrue(testMergeExclusions(new Poodle(), false));
+                Asserts.assertTrue(testMergeExclusions("hello", true));
+                Asserts.assertTrue(testMergeExclusions("hello", false));
+                break;
+            case "testThreeWayMerge":
+                Asserts.assertTrue(testThreeWayMerge(new Dog(), true, false));
+                Asserts.assertTrue(testThreeWayMerge(new Cat(), false, true));
+                Asserts.assertTrue(testThreeWayMerge(new Dog(), false, false));
+                Asserts.assertFalse(testThreeWayMerge("hello", true, true));
                 break;
             default:
                 throw new IllegalArgumentException("Unknown test: " + testName);
@@ -2898,7 +3019,7 @@ public class TestTypeCheckElimination {
                 "34c: checkcast Animal after Or guard should be eliminated on false-branch; before=" + beforeCount + " after=" + afterCount);
         }
 
-        // === 34d. Or true-branch weak: instanceof Animal must NOT be eliminated ===
+        // === 34d. Or true-branch: instanceof Animal folds via LCA(Dog, Cat) = Animal ===
         {
             OutputAnalyzer output = runTestProcess("testOrTrueBranchWeak", "testOrTrueBranchWeak");
             output.shouldHaveExitValue(0);
@@ -2909,8 +3030,10 @@ public class TestTypeCheckElimination {
             int afterCount = countOccurrences(afterIR, "jeandle.check_instanceof");
             Asserts.assertGTE(beforeCount, 3,
                 "34d: should have >= 3 check_instanceof before, got " + beforeCount);
-            Asserts.assertEquals(afterCount, beforeCount,
-                "34d: no check_instanceof should be eliminated on true-branch; before=" + beforeCount + " after=" + afterCount);
+            // The edge-facts engine joins the two true-edge facts to
+            // LCA(Dog, Cat) = Animal, so the instanceof Animal query folds.
+            Asserts.assertLT(afterCount, beforeCount,
+                "34d: instanceof Animal should be eliminated via edge-facts LCA; before=" + beforeCount + " after=" + afterCount);
         }
 
         // === 35a. Or partial match: true-branch must NOT fold ===
@@ -2972,6 +3095,98 @@ public class TestTypeCheckElimination {
                 "36c: should have >= 1 check_instanceof before, got " + beforeCount);
             Asserts.assertEquals(afterCount, 0,
                 "36c: constant-oop Class mirror instanceof Class should be eliminated, got " + afterCount);
+        }
+
+        // === Group 37: multi-predecessor merge sharpening ===
+
+        // === 37a. Diamond, same check both arms -> merge query eliminated ===
+        {
+            OutputAnalyzer output = runTestProcess("testDiamondSameCheck", "testDiamondSameCheck");
+            output.shouldHaveExitValue(0);
+            String fullOutput = output.getOutput();
+            String beforeIR = extractBeforeIR(fullOutput, "testDiamondSameCheck");
+            String afterIR = extractAfterIR(fullOutput, "testDiamondSameCheck");
+            int beforeCount = countOccurrences(beforeIR, "jeandle.check_instanceof");
+            int afterCount = countOccurrences(afterIR, "jeandle.check_instanceof");
+            Asserts.assertGTE(beforeCount, 3,
+                "37a: should have >= 3 check_instanceof before, got " + beforeCount);
+            // The two arm guards stay (nothing is known at their own sites);
+            // the merge query folds.
+            Asserts.assertLT(afterCount, beforeCount,
+                "37a: merge query should be eliminated; before=" + beforeCount + " after=" + afterCount);
+        }
+
+        // === 37b. Nested merges -> outer merge query eliminated ===
+        {
+            OutputAnalyzer output = runTestProcess("testMergeOfMerge", "testMergeOfMerge");
+            output.shouldHaveExitValue(0);
+            String fullOutput = output.getOutput();
+            String beforeIR = extractBeforeIR(fullOutput, "testMergeOfMerge");
+            String afterIR = extractAfterIR(fullOutput, "testMergeOfMerge");
+            int beforeCount = countOccurrences(beforeIR, "jeandle.check_instanceof");
+            int afterCount = countOccurrences(afterIR, "jeandle.check_instanceof");
+            Asserts.assertGTE(beforeCount, 3,
+                "37b: should have >= 3 check_instanceof before, got " + beforeCount);
+            Asserts.assertLT(afterCount, beforeCount,
+                "37b: outer merge query should be eliminated; before=" + beforeCount + " after=" + afterCount);
+        }
+
+        // === 37c. Asymmetric diamond -> merge query preserved ===
+        {
+            OutputAnalyzer output = runTestProcess("testDiamondAsymmetric", "testDiamondAsymmetric");
+            output.shouldHaveExitValue(0);
+            String fullOutput = output.getOutput();
+            String beforeIR = extractBeforeIR(fullOutput, "testDiamondAsymmetric");
+            String afterIR = extractAfterIR(fullOutput, "testDiamondAsymmetric");
+            int beforeCount = countOccurrences(beforeIR, "jeandle.check_instanceof");
+            int afterCount = countOccurrences(afterIR, "jeandle.check_instanceof");
+            Asserts.assertEquals(afterCount, beforeCount,
+                "37c: unchecked arm poisons the merge; before=" + beforeCount + " after=" + afterCount);
+        }
+
+        // === 37d. Different checks per arm -> LCA join eliminates Animal ===
+        {
+            OutputAnalyzer output = runTestProcess("testMergeLCA", "testMergeLCA");
+            output.shouldHaveExitValue(0);
+            String fullOutput = output.getOutput();
+            String beforeIR = extractBeforeIR(fullOutput, "testMergeLCA");
+            String afterIR = extractAfterIR(fullOutput, "testMergeLCA");
+            int beforeCount = countOccurrences(beforeIR, "jeandle.check_instanceof");
+            int afterCount = countOccurrences(afterIR, "jeandle.check_instanceof");
+            Asserts.assertGTE(beforeCount, 3,
+                "37d: should have >= 3 check_instanceof before, got " + beforeCount);
+            Asserts.assertLT(afterCount, beforeCount,
+                "37d: Animal query should fold via LCA(Dog, Cat); before=" + beforeCount + " after=" + afterCount);
+        }
+
+        // === 37e. Failed-check fall-through arms -> exclusions merge folds Poodle to false ===
+        {
+            OutputAnalyzer output = runTestProcess("testMergeExclusions", "testMergeExclusions");
+            output.shouldHaveExitValue(0);
+            String fullOutput = output.getOutput();
+            String beforeIR = extractBeforeIR(fullOutput, "testMergeExclusions");
+            String afterIR = extractAfterIR(fullOutput, "testMergeExclusions");
+            int beforeCount = countOccurrences(beforeIR, "jeandle.check_instanceof");
+            int afterCount = countOccurrences(afterIR, "jeandle.check_instanceof");
+            Asserts.assertGTE(beforeCount, 3,
+                "37e: should have >= 3 check_instanceof before, got " + beforeCount);
+            Asserts.assertLT(afterCount, beforeCount,
+                "37e: Poodle query should fold to false via merged exclusions; before=" + beforeCount + " after=" + afterCount);
+        }
+
+        // === 37f. Three-way merge -> mixed join eliminates Animal ===
+        {
+            OutputAnalyzer output = runTestProcess("testThreeWayMerge", "testThreeWayMerge");
+            output.shouldHaveExitValue(0);
+            String fullOutput = output.getOutput();
+            String beforeIR = extractBeforeIR(fullOutput, "testThreeWayMerge");
+            String afterIR = extractAfterIR(fullOutput, "testThreeWayMerge");
+            int beforeCount = countOccurrences(beforeIR, "jeandle.check_instanceof");
+            int afterCount = countOccurrences(afterIR, "jeandle.check_instanceof");
+            Asserts.assertGTE(beforeCount, 4,
+                "37f: should have >= 4 check_instanceof before, got " + beforeCount);
+            Asserts.assertLT(afterCount, beforeCount,
+                "37f: Animal query should fold via three-way join; before=" + beforeCount + " after=" + afterCount);
         }
 
         System.out.println("All TypeCheckElimination tests passed.");
