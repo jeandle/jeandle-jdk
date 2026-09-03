@@ -67,21 +67,21 @@ public class TestFloat16 {
         output.shouldHaveExitValue(0)
               .shouldContain("is parsed as intrinsic");
 
-        // floatToFloat16: fptrunc float->half, then bitcast half->i16, then sign-extend back to
-        // the computational int the JVM stack uses for short.
+        // floatToFloat16: constrained fptrunc float->half (round-to-nearest-even), then bitcast
+        // half->i16, then sign-extend back to the computational int the JVM stack uses for short.
         FileCheck toF16Check = new FileCheck(dumpPath,
                 TestWrapper.class.getMethod("floatToFloat16", float.class), false);
-        toF16Check.checkPattern("fptrunc float .* to half");
+        toF16Check.checkPattern("call half .*llvm\\.experimental\\.constrained\\.fptrunc\\.f16\\.f32");
         toF16Check.checkPattern("bitcast half .* to i16");
         toF16Check.checkPattern("sext i16 .* to i32");
 
         // float16ToFloat: truncate the computational int down to i16, bitcast to half, then
-        // fpext half->float.
+        // constrained fpext half->float.
         FileCheck fromF16Check = new FileCheck(dumpPath,
                 TestWrapper.class.getMethod("float16ToFloat", short.class), false);
         fromF16Check.checkPattern("trunc i32 .* to i16");
         fromF16Check.checkPattern("bitcast i16 .* to half");
-        fromF16Check.checkPattern("fpext half .* to float");
+        fromF16Check.checkPattern("call float .*llvm\\.experimental\\.constrained\\.fpext\\.f32\\.f16");
     }
 
     static class TestWrapper {
