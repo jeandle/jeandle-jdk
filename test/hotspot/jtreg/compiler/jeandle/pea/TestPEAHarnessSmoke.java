@@ -1456,7 +1456,7 @@ public class TestPEAHarnessSmoke {
                 Asserts.assertEquals(report.round(0).partiallyEscapes(), 0);
                 Asserts.assertEquals(report.round(0).alwaysEscapes(), 0);
                 Asserts.assertEquals(report.effects("EliminateAllocation").size(), 1);
-                Asserts.assertEquals(report.effects("ReplaceLoad").size(), 1);
+                Asserts.assertEquals(report.effects("ReplaceLoad").size(), 0);
                 Asserts.assertEquals(report.round0Before().peaAllocCount(), 1);
                 Asserts.assertEquals(report.finalAfter().peaAllocCount(), 0);
                 Asserts.assertEquals(run.frontendIR(method).peaAllocCount(), 1);

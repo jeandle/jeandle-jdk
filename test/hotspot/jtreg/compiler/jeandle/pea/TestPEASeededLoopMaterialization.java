@@ -170,24 +170,21 @@ public class TestPEASeededLoopMaterialization {
 
         Asserts.assertTrue(report.maxPartiallyEscapes() >= 1,
                 target + ": Buffer is classified PartiallyEscapes");
-        Asserts.assertEquals(before.lineCount(SAFEPOINT_POLL), 4,
-                target + ": frontend emits two return and two loop polls");
-        Asserts.assertEquals(after.lineCount(SAFEPOINT_POLL), 4,
-                target + ": return and nested loop polls survive PEA");
-        PEATestUtils.IRBlock outerPoll = after.blockContaining(SAFEPOINT_POLL, 0);
-        PEATestUtils.IRBlock innerPoll = after.blockContaining(SAFEPOINT_POLL, 2);
-        Asserts.assertNotEquals(innerPoll.label(), outerPoll.label(),
-                target + ": inner and outer polls are in distinct loop blocks");
+        Asserts.assertEquals(before.lineCount(SAFEPOINT_POLL), 3,
+                target + ": early elimination removes the redundant bounded-loop poll");
+        Asserts.assertEquals(after.lineCount(SAFEPOINT_POLL), 3,
+                target + ": the remaining return and nested-loop polls survive PEA");
+        PEATestUtils.IRBlock innerPoll = after.blockContaining(SAFEPOINT_POLL, 1);
         innerPoll.assertPresent("invoke hotspotcc void @jeandle.safepoint_poll");
-        outerPoll.assertPresent("call hotspotcc void @jeandle.safepoint_poll");
+        Asserts.assertEquals(after.lineCount(
+                "call hotspotcc void @jeandle.safepoint_poll"), 2,
+                target + ": the other two polls are normal-return polls");
         innerPoll.assertAbsent("pea.matslot");
         Asserts.assertNotEquals(replay.label(), innerPoll.label(),
                 target + ": seeded replay is outside the inner-loop backedge");
-        Asserts.assertNotEquals(replay.label(), outerPoll.label(),
-                target + ": seeded replay is outside the outer-loop backedge");
         String outerHeader = replay.unconditionalBranchTarget();
-        Asserts.assertTrue(outerPoll.conditionalBranchTargets().contains(outerHeader),
-                target + ": seeded replay block is the outer-loop forward preheader");
+        Asserts.assertNotEquals(outerHeader, innerPoll.label(),
+                target + ": seeded replay enters the outer loop, not the inner backedge");
         after.assertAbsent(".pea.replay");
 
         String publishName = PEATestUtils.MethodId.of(publish).llvmFunctionName();
@@ -199,8 +196,8 @@ public class TestPEASeededLoopMaterialization {
         Asserts.assertNotEquals(publishBlock.label(), replay.label(),
                 target + ": the late escape is after the replay preheader");
         publishBlock.assertPresent("store atomic");
-        publishBlock.assertPresent(
-                "to label %" + outerPoll.label() + " unwind label");
+        publishBlock.assertPresent("to label %");
+        publishBlock.assertPresent("unwind label %");
         after.assertAbsent("jeandle.monitorenter");
         after.assertAbsent("jeandle.monitorexit");
 

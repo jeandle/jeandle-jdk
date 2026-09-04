@@ -106,7 +106,7 @@ DEF_JAVA_OP(current_thread, 0, llvm::PointerType::get(context, llvm::jeandle::Ad
   ir_builder.CreateRet(current_thread_ptr);
 JAVA_OP_END
 
-DEF_JAVA_OP(safepoint_poll, 1, llvm::Type::getVoidTy(context))
+DEF_JAVA_OP(safepoint_poll, 2, llvm::Type::getVoidTy(context))
   // safepoint_poll may trigger GC and throw asynchronous exceptions,
   // so it must not be nounwind or gc-leaf-function.
   func->removeFnAttr(llvm::Attribute::NoUnwind);
@@ -237,7 +237,7 @@ JAVA_OP_END
 // Exact receiver types are folded by LLVM ConstantFieldFolding before this
 // JavaOp is expanded. This body remains the dynamic fallback for receivers
 // whose exact Klass is unavailable.
-DEF_JAVA_OP(get_class, 1, llvm::PointerType::get(context, llvm::jeandle::AddrSpace::JavaHeapAddrSpace),
+DEF_JAVA_OP(get_class, 2, llvm::PointerType::get(context, llvm::jeandle::AddrSpace::JavaHeapAddrSpace),
             llvm::PointerType::get(context, llvm::jeandle::AddrSpace::JavaHeapAddrSpace))  // obj (receiver)
   llvm::Value* obj = func->getArg(0);
   // Step 1: load klass pointer from object header
@@ -273,7 +273,7 @@ JAVA_OP_END
 // _vthread is the value returned by Thread.currentThread(): the mounted virtual
 // thread, otherwise the carrier thread's _threadObj. Matches C2's
 // inline_native_currentThread() -> generate_virtual_thread().
-DEF_JAVA_OP(current_thread_obj, 1,
+DEF_JAVA_OP(current_thread_obj, 2,
             llvm::PointerType::get(context, llvm::jeandle::AddrSpace::JavaHeapAddrSpace))
   // Step 1: materialize the current JavaThread* via the existing JavaOp.
   llvm::Function* current_thread_func = template_module.getFunction("jeandle.current_thread");
@@ -302,7 +302,7 @@ JAVA_OP_END
 // No GC barrier is applied (AS_NO_KEEPALIVE semantics): refersTo0 should not keep
 // the referent alive. Equivalent to C2's inline_reference_refersTo0() which uses
 // the AS_NO_KEEPALIVE decorator to suppress the G1 SATB pre-barrier.
-DEF_JAVA_OP(reference_refers_to, 1, llvm::Type::getInt32Ty(context),
+DEF_JAVA_OP(reference_refers_to, 2, llvm::Type::getInt32Ty(context),
             llvm::PointerType::get(context, llvm::jeandle::AddrSpace::JavaHeapAddrSpace),  // reference (this)
             llvm::PointerType::get(context, llvm::jeandle::AddrSpace::JavaHeapAddrSpace))  // obj
   llvm::Value* ref_obj    = func->getArg(0);
@@ -341,7 +341,7 @@ JAVA_OP_END
 // and insert a CPUOrder fence to prevent the optimizer from CSE'ing referent loads
 // across safepoints (GC can change the referent value asynchronously).
 // Equivalent to C2's inline_reference_get(): Unordered load + MemBarCPUOrder.
-DEF_JAVA_OP(reference_get, 1,
+DEF_JAVA_OP(reference_get, 2,
             llvm::PointerType::get(context, llvm::jeandle::AddrSpace::JavaHeapAddrSpace),
             llvm::PointerType::get(context, llvm::jeandle::AddrSpace::JavaHeapAddrSpace))
   llvm::Value* ref_obj = func->getArg(0);
@@ -439,7 +439,7 @@ DEF_JAVA_OP(decode_heap_oop, 9, llvm::PointerType::get(context, llvm::jeandle::A
   ir_builder.CreateRet(obj_addr);
 JAVA_OP_END
 
-DEF_JAVA_OP(encode_klass, 1, llvm::Type::getInt32Ty(context), llvm::PointerType::get(context, llvm::jeandle::AddrSpace::CHeapAddrSpace))
+DEF_JAVA_OP(encode_klass, 2, llvm::Type::getInt32Ty(context), llvm::PointerType::get(context, llvm::jeandle::AddrSpace::CHeapAddrSpace))
   llvm::Value* klass_ptr = func->getArg(0);
   llvm::Value* wide = ir_builder.CreatePtrToInt(klass_ptr, llvm::Type::getInt64Ty(context));
 
@@ -457,7 +457,7 @@ DEF_JAVA_OP(encode_klass, 1, llvm::Type::getInt32Ty(context), llvm::PointerType:
   ir_builder.CreateRet(narrow_klass);
 JAVA_OP_END
 
-DEF_JAVA_OP(decode_klass, 1, llvm::PointerType::get(context, llvm::jeandle::AddrSpace::CHeapAddrSpace), llvm::Type::getInt32Ty(context))
+DEF_JAVA_OP(decode_klass, 2, llvm::PointerType::get(context, llvm::jeandle::AddrSpace::CHeapAddrSpace), llvm::Type::getInt32Ty(context))
   llvm::Value* narrow_klass = func->getArg(0);
   llvm::Value* wide = ir_builder.CreateZExt(narrow_klass, llvm::Type::getInt64Ty(context));
 
