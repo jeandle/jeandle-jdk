@@ -298,6 +298,14 @@
       llvm::Type::getInt32Ty(context),                                              \
       llvm::Type::getInt32Ty(context))                                              \
                                                                                     \
+  def(StubRoutines_md5_implCompress,                                                 \
+      StubRoutines::md5_implCompress(),                                              \
+      true,                                                                          \
+      true,                                                                          \
+      llvm::Type::getVoidTy(context),                                                \
+      llvm::PointerType::get(context, llvm::jeandle::AddrSpace::JavaHeapAddrSpace),  \
+      llvm::PointerType::get(context, llvm::jeandle::AddrSpace::JavaHeapAddrSpace))  \
+                                                                                    \
   def(StubRoutines_sha1_implCompress,                                               \
       StubRoutines::sha1_implCompress(),                                            \
       true,                                                                         \
@@ -330,6 +338,57 @@
       llvm::PointerType::get(context, llvm::jeandle::AddrSpace::JavaHeapAddrSpace), \
       llvm::PointerType::get(context, llvm::jeandle::AddrSpace::JavaHeapAddrSpace), \
       llvm::Type::getInt32Ty(context))                                              \
+                                                                                    \
+  def(StubRoutines_md5_implCompressMB,                                               \
+      StubRoutines::md5_implCompressMB(),                                            \
+      true,                                                                          \
+      true,                                                                          \
+      llvm::Type::getInt32Ty(context),                                                \
+      llvm::PointerType::get(context, llvm::jeandle::AddrSpace::JavaHeapAddrSpace),  \
+      llvm::PointerType::get(context, llvm::jeandle::AddrSpace::JavaHeapAddrSpace),  \
+      llvm::Type::getInt32Ty(context),                                                \
+      llvm::Type::getInt32Ty(context))                                               \
+                                                                                    \
+  def(StubRoutines_sha1_implCompressMB,                                              \
+      StubRoutines::sha1_implCompressMB(),                                           \
+      true,                                                                          \
+      true,                                                                          \
+      llvm::Type::getInt32Ty(context),                                                \
+      llvm::PointerType::get(context, llvm::jeandle::AddrSpace::JavaHeapAddrSpace),  \
+      llvm::PointerType::get(context, llvm::jeandle::AddrSpace::JavaHeapAddrSpace),  \
+      llvm::Type::getInt32Ty(context),                                                \
+      llvm::Type::getInt32Ty(context))                                               \
+                                                                                    \
+  def(StubRoutines_sha256_implCompressMB,                                            \
+      StubRoutines::sha256_implCompressMB(),                                         \
+      true,                                                                          \
+      true,                                                                          \
+      llvm::Type::getInt32Ty(context),                                                \
+      llvm::PointerType::get(context, llvm::jeandle::AddrSpace::JavaHeapAddrSpace),  \
+      llvm::PointerType::get(context, llvm::jeandle::AddrSpace::JavaHeapAddrSpace),  \
+      llvm::Type::getInt32Ty(context),                                                \
+      llvm::Type::getInt32Ty(context))                                               \
+                                                                                    \
+  def(StubRoutines_sha512_implCompressMB,                                            \
+      StubRoutines::sha512_implCompressMB(),                                         \
+      true,                                                                          \
+      true,                                                                          \
+      llvm::Type::getInt32Ty(context),                                                \
+      llvm::PointerType::get(context, llvm::jeandle::AddrSpace::JavaHeapAddrSpace),  \
+      llvm::PointerType::get(context, llvm::jeandle::AddrSpace::JavaHeapAddrSpace),  \
+      llvm::Type::getInt32Ty(context),                                                \
+      llvm::Type::getInt32Ty(context))                                               \
+                                                                                    \
+  def(StubRoutines_sha3_implCompressMB,                                              \
+      StubRoutines::sha3_implCompressMB(),                                           \
+      true,                                                                          \
+      true,                                                                          \
+      llvm::Type::getInt32Ty(context),                                                \
+      llvm::PointerType::get(context, llvm::jeandle::AddrSpace::JavaHeapAddrSpace),  \
+      llvm::PointerType::get(context, llvm::jeandle::AddrSpace::JavaHeapAddrSpace),  \
+      llvm::Type::getInt32Ty(context),                                                \
+      llvm::Type::getInt32Ty(context),                                                \
+      llvm::Type::getInt32Ty(context))                                               \
                                                                                     \
   def(SharedRuntime_OSR_migration_end,                                              \
       SharedRuntime::OSR_migration_end,                                             \
