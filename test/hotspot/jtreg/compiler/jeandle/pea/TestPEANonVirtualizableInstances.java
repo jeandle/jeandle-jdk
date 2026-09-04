@@ -375,12 +375,12 @@ public class TestPEANonVirtualizableInstances {
                 target + ": unknown monitor arm materializes the allocation");
         Asserts.assertEquals(first.alwaysEscapes(), 0,
                 target + ": allocation escapes only along the monitor arm");
-        Asserts.assertEquals(first.effects().size(), 5,
+        Asserts.assertEquals(first.effects().size(), 4,
                 target + ": exact monitor-dependent transformation effects");
         Asserts.assertEquals(first.effectCount("EliminateAllocation"), 1L,
                 target + ": allocation enters virtual state once");
-        Asserts.assertEquals(first.effectCount("ReplaceLoad"), 1L,
-                target + ": exact constructor null check replacement");
+        Asserts.assertEquals(first.effectCount("ReplaceLoad"), 0L,
+                target + ": pre-PEA cleanup folds the constructor null check");
         Asserts.assertEquals(first.effectCount("ReplaceCall"), 1L,
                 target + ": exact finalizer helper replacement");
         Asserts.assertEquals(first.effectCount("EliminateStore", "store atomic i32"), 1L,

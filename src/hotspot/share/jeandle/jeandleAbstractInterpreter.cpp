@@ -1060,6 +1060,11 @@ void JeandleAbstractInterpreter::check_interpreter_type(ciTypeFlow::Block* osr_e
 
 void JeandleAbstractInterpreter::interpret() {
   assert(_method != nullptr, "only for Java method compilations");
+
+  if (!_method->is_static()) {
+    _llvm_func->getArg(0)->addAttr(llvm::Attribute::NonNull);
+  }
+
   JeandleBasicBlock* current;
   if (!is_osr()) {
     current = bci2block()[0];
@@ -2581,6 +2586,7 @@ TypedValue JeandleAbstractInterpreter::constant_to_value(ciConstant con) {
       }
       llvm::Value* oop_handle = JeandleCompilation::current()->find_or_insert_oop(con_obj);
       llvm::Value* value = _ir_builder.CreateLoad(JeandleType::java2llvm(BasicType::T_OBJECT, *_context), oop_handle);
+      llvm::cast<llvm::LoadInst>(value)->setMetadata(llvm::LLVMContext::MD_nonnull, llvm::MDNode::get(*_context, {}));
       return TypedValue(T_OBJECT, value);
     }
     default:
@@ -3624,7 +3630,7 @@ void JeandleAbstractInterpreter::shared_lock(LockValue lock) {
 
   // The monitor op is a single complete JavaOp whose body contains both the
   // fast path and the slow path (a call to SharedRuntime_complete_monitor_locking_C).
-  // It is emitted lower-phase=1 (see templatemodule/template.ll), so
+  // It is emitted lower-phase=2 (see templatemodule/template.ll), so
   // JavaOperationLower(0) — which runs before PEA — leaves this one opaque call
   // intact for PEA, which can then fold it atomically; the slow-path runtime
   // call inside the unexpanded body is invisible to PEA.
@@ -3787,8 +3793,8 @@ void JeandleAbstractInterpreter::boundary_check(llvm::Value* array_oop, llvm::Va
                                                                    "bci_" + std::to_string(cur_bci) + "_boundary_check_fail",
                                                                    _llvm_func);
   llvm::CallInst* call = call_java_op("jeandle.arraylength", {array_oop});
-  llvm::Value* if_out_of_bounds = _ir_builder.CreateICmp(llvm::CmpInst::ICMP_UGE, index, call);
-  _ir_builder.CreateCondBr(if_out_of_bounds, boundary_check_fail, boundary_check_pass);
+  llvm::Value* in_bounds = _ir_builder.CreateICmp(llvm::CmpInst::ICMP_ULT, index, call);
+  _ir_builder.CreateCondBr(in_bounds, boundary_check_pass, boundary_check_fail);
 
   builtin_throw(Deoptimization::Reason_range_check, boundary_check_fail);
 

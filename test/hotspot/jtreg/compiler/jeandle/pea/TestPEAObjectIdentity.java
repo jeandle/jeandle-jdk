@@ -73,7 +73,7 @@ public class TestPEAObjectIdentity {
         assertRound0Stats(report, target, 1, 0, 0);
         Asserts.assertEquals(report.round0Before().peaAllocCount(), 1,
                 target + ": allocation before");
-        report.round0Before().assertLineCount("icmp eq ptr addrspace(1)", 1);
+        report.round0Before().assertLineCount("icmp eq ptr addrspace(1)", 0);
         assertNonNullIdentityCompareCount(report.round0Before(), "icmp eq ptr addrspace(1)", 0,
                 target);
         assertNonNullIdentityCompareCount(report.round0Before(), "icmp ne ptr addrspace(1)", 0,
@@ -84,8 +84,8 @@ public class TestPEAObjectIdentity {
                 target + ": allocation effects");
         Asserts.assertEquals(effectCount(report.round(0), "EliminateStore"), 3,
                 target + ": store effects");
-        Asserts.assertEquals(effectCount(report.round(0), "ReplaceLoad"), 1,
-                target + ": allocation-null guard replacement");
+        Asserts.assertEquals(effectCount(report.round(0), "ReplaceLoad"), 0,
+                target + ": pre-PEA cleanup folds the allocation-null guard");
         Asserts.assertEquals(effectCount(report.round(0), "CreatePHI"), 1,
                 target + ": merged field state");
         Asserts.assertEquals(report.finalAfter().peaAllocCount(), 0,
@@ -107,7 +107,7 @@ public class TestPEAObjectIdentity {
                 target + ": allocation before");
         assertNonNullIdentityCompareCount(report.round0Before(), sourceCompare,
                 sourceCompareCount, target);
-        report.round0Before().assertLineCount("icmp eq ptr addrspace(1)", allocations);
+        report.round0Before().assertLineCount("icmp eq ptr addrspace(1)", 0);
         report.round0Before().assertLineCount("store atomic", stores);
         report.round0Before().assertLineCount("load atomic", loads);
         Asserts.assertEquals(effectCount(report.round(0), "EliminateAllocation"), allocations,
@@ -115,8 +115,9 @@ public class TestPEAObjectIdentity {
         Asserts.assertEquals(effectCount(report.round(0), "EliminateStore"), stores,
                 target + ": store effects");
         Asserts.assertEquals(effectCount(report.round(0), "ReplaceLoad"),
-                loads + allocations + sourceCompareCount,
-                target + ": fields, allocation guards, and identity compare replacements");
+                loads + sourceCompareCount,
+                target + ": field and identity-compare replacements; allocation-null guards "
+                        + "were folded before PEA");
         Asserts.assertEquals(effectCount(report.round(0), "CreatePHI"), fieldPhis,
                 target + ": merged field states");
         Asserts.assertEquals(report.finalAfter().peaAllocCount(), 0,
@@ -135,7 +136,7 @@ public class TestPEAObjectIdentity {
         assertRound0Stats(report, target, 1, 0, 0);
         Asserts.assertEquals(report.round0Before().peaAllocCount(), 1,
                 target + ": allocation before");
-        report.round0Before().assertLineCount("icmp eq ptr addrspace(1)", 1);
+        report.round0Before().assertLineCount("icmp eq ptr addrspace(1)", 0);
         assertNonNullIdentityCompareCount(report.round0Before(), "icmp eq ptr addrspace(1)", 0,
                 target);
         assertNonNullIdentityCompareCount(report.round0Before(), "icmp ne ptr addrspace(1)", 0,
@@ -146,8 +147,8 @@ public class TestPEAObjectIdentity {
                 target + ": allocation effects");
         Asserts.assertEquals(effectCount(report.round(0), "EliminateStore"), 3,
                 target + ": store effects");
-        Asserts.assertEquals(effectCount(report.round(0), "ReplaceLoad"), 1,
-                target + ": indistinguishable allocation/source null comparison");
+        Asserts.assertEquals(effectCount(report.round(0), "ReplaceLoad"), 0,
+                target + ": allocation/null comparison was folded before PEA");
         Asserts.assertEquals(effectCount(report.round(0), "CreatePHI"), 1,
                 target + ": merged field state");
         Asserts.assertEquals(report.finalAfter().peaAllocCount(), 0,
@@ -170,7 +171,7 @@ public class TestPEAObjectIdentity {
         assertRound0Stats(report, target, 1, 1, 0);
         Asserts.assertEquals(report.round0Before().peaAllocCount(), 2,
                 target + ": allocations before");
-        report.round0Before().assertLineCount("icmp eq ptr addrspace(1)", 2);
+        report.round0Before().assertLineCount("icmp eq ptr addrspace(1)", 0);
         assertNonNullIdentityCompareCount(report.round0Before(),
                 "icmp ne ptr addrspace(1)", 1, target);
         report.round0Before().assertLineCount("store atomic", 8);
@@ -179,8 +180,8 @@ public class TestPEAObjectIdentity {
                 target + ": both allocations are analyzed");
         Asserts.assertEquals(effectCount(report.round(0), "EliminateStore"), 5,
                 target + ": virtual and replayed materialized stores");
-        Asserts.assertEquals(effectCount(report.round(0), "ReplaceLoad"), 3,
-                target + ": allocation guards and identity compare replacements");
+        Asserts.assertEquals(effectCount(report.round(0), "ReplaceLoad"), 1,
+                target + ": identity compare replacement; allocation guards were folded pre-PEA");
         Asserts.assertEquals(effectCount(report.round(0), "CreatePHI"), 2,
                 target + ": merged field states");
         Asserts.assertEquals(effectCount(report.round(0), "Materialize"), 1,

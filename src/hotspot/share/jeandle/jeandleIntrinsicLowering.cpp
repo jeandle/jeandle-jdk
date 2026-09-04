@@ -1236,7 +1236,9 @@ bool JeandleIntrinsicLowering::lower_new_array() {
   //   log2_esize  = lh & 0x1f   (_lh_log2_element_size_shift == 0; masked < 32 for the shift,
   //                              valid l2esz is <= LogBytesPerLong)
   builder.SetInsertPoint(fast_bb);
-  llvm::Value* layout_helper = _interp->call_java_op("jeandle.layout_helper", {klass});
+  llvm::CallInst* layout_helper = _interp->call_java_op("jeandle.layout_helper", {klass});
+  layout_helper->setMetadata(llvm::LLVMContext::MD_invariant_load,
+                             llvm::MDNode::get(ctx, {}));
   llvm::Value* base_offset = builder.CreateAnd(
       builder.CreateLShr(layout_helper, builder.getInt32(Klass::_lh_header_size_shift)),
       builder.getInt32(Klass::_lh_header_size_mask));
@@ -1326,7 +1328,7 @@ bool JeandleIntrinsicLowering::lower_unsafe_allocate_instance() {
   llvm::BasicBlock* primitive_trap_bb = llvm::BasicBlock::Create(
       ctx, "unsafe_allocate_primitive_trap", _interp->_llvm_func);
 
-  // Preserve the mirror-to-Klass query as a phase-1 JavaOp so
+  // Preserve the mirror-to-Klass query as a phase-2 JavaOp so
   // ConstantFieldFolding can answer it for a constant Class mirror. Dynamic
   // mirrors lower back to the same VM field load before code generation.
   llvm::CallInst* klass =

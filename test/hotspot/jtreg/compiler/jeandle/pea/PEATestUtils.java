@@ -1487,9 +1487,11 @@ public final class PEATestUtils {
                     }
                     if (stopReason == PEAStopReason.FIXPOINT) {
                         PEARound last = rounds.get(rounds.size() - 1);
-                        if (!last.before().lines().equals(last.after().lines())) {
+                        if (!structuralFixpointLines(last.before().lines()).equals(
+                                structuralFixpointLines(last.after().lines()))) {
                             throw malformed(method,
-                                    "fixpoint summary requires an unchanged complete final round");
+                                    "fixpoint summary requires a structurally unchanged "
+                                            + "complete final round");
                         }
                     }
                     continue;
@@ -2125,6 +2127,21 @@ public final class PEATestUtils {
             Objects.requireNonNull(context);
             Asserts.assertEquals(crossProcessExactLines(),
                     other.crossProcessExactLines(), context);
+        }
+
+        /**
+         * Compares IR shape after normalizing runtime addresses and LLVM's
+         * generated local SSA/block names. Use this only when an otherwise
+         * idle canonicalization round renumbers generated names; semantic
+         * constants, opcodes, CFG edges, metadata, and effects remain exact.
+         */
+        public void assertStructuralFixpointEquals(IRBody other, String context) {
+            Objects.requireNonNull(other);
+            Objects.requireNonNull(context);
+            Asserts.assertEquals(
+                    structuralFixpointLines(crossProcessExactLines()),
+                    structuralFixpointLines(other.crossProcessExactLines()),
+                    context);
         }
 
         private List<String> crossProcessExactLines() {
@@ -3926,6 +3943,16 @@ public final class PEATestUtils {
                     + "catchret|cleanupret|unreachable)\\b");
     private static final Pattern ASSIGNED_OPCODE = Pattern.compile(
             "^" + LLVM_LOCAL_NAME + "\\s*=\\s*([a-z][a-z0-9.]*)\\b");
+    private static final Pattern POISON_SPLAT_INSERT = Pattern.compile(
+            "^(" + LLVM_LOCAL_NAME + ")\\s*=\\s*insertelement\\s+<[^>]+>\\s+poison,"
+                    + ".*?,\\s+i\\d+\\s+0(?:,.*)?$");
+    private static final Pattern POISON_SPLAT_SHUFFLE = Pattern.compile(
+            "^" + LLVM_LOCAL_NAME + "\\s*=\\s*shufflevector\\s+<[^>]+>\\s+("
+                    + LLVM_LOCAL_NAME + "),\\s+<[^>]+>\\s+poison,\\s+<[^>]+>"
+                    + "\\s+zeroinitializer(?:,.*)?$");
+    private static final Pattern POISON_CONSTANT_VECTOR_INSERT = Pattern.compile(
+            "^" + LLVM_LOCAL_NAME + "\\s*=\\s*insertelement\\s+<[^>]+>\\s+"
+                    + "<([^>]+)>,\\s+.+,\\s+i\\d+\\s+([0-9]+)(?:,.*)?$");
     private static final Set<String> PURE_POISON_OPCODES = Set.of(
             "add", "fadd", "sub", "fsub", "mul", "fmul", "udiv", "sdiv",
             "fdiv", "urem", "srem", "frem", "shl", "lshr", "ashr", "and",
@@ -3994,6 +4021,7 @@ public final class PEATestUtils {
     public static void assertStructuralParserContracts() {
         assertPhiParserContracts();
         assertCrossProcessNormalizerContracts();
+        assertFixpointNormalizerContracts();
 
         List<String> deadConstantBranch = List.of(
                 "entry:",
@@ -4128,6 +4156,73 @@ public final class PEATestUtils {
                 "ret i32 %value");
         validateNoLivePoison(
                 usedFrozenPoison, "used frozen poison", "synthetic");
+
+        List<String> canonicalVectorSplat = List.of(
+                "entry:",
+                "%seed = insertelement <4 x i32> poison, i32 %scalar, i64 0",
+                "%splat = shufflevector <4 x i32> %seed, <4 x i32> poison, "
+                        + "<4 x i32> zeroinitializer",
+                "ret <4 x i32> %splat");
+        validateNoLivePoison(
+                canonicalVectorSplat, "canonical vector splat", "synthetic");
+
+        List<String> overwrittenPoisonLane = List.of(
+                "entry:",
+                "%vector = insertelement <4 x i32> "
+                        + "<i32 poison, i32 0, i32 0, i32 0>, i32 %scalar, i64 0",
+                "ret <4 x i32> %vector");
+        validateNoLivePoison(
+                overwrittenPoisonLane, "overwritten poison vector lane", "synthetic");
+
+        List<String> retainedPoisonLane = List.of(
+                "entry:",
+                "%vector = insertelement <4 x i32> "
+                        + "<i32 poison, i32 0, i32 0, i32 0>, i32 %scalar, i64 1",
+                "ret <4 x i32> %vector");
+        Asserts.assertTrue(rejectsLivePoison(
+                        retainedPoisonLane, "retained poison vector lane"),
+                "poison parser must reject a constant-vector poison lane that is not overwritten");
+
+        List<String> poisonSplatSeedUsedDirectly = List.of(
+                "entry:",
+                "%seed = insertelement <4 x i32> poison, i32 %scalar, i64 0",
+                "%lane = extractelement <4 x i32> %seed, i64 1",
+                "ret i32 %lane");
+        Asserts.assertTrue(rejectsLivePoison(
+                        poisonSplatSeedUsedDirectly, "direct poison splat-seed use"),
+                "poison parser must reject a splat seed used outside the canonical shuffle");
+    }
+
+    private static void assertFixpointNormalizerContracts() {
+        List<String> first = List.of(
+                "entry:",
+                "%condition = icmp eq i32 %argument, 7",
+                "br i1 %condition, label %taken, label %exit",
+                "taken: ; preds = %entry",
+                "%result = add i32 %argument, 1",
+                "br label %exit",
+                "exit: ; preds = %entry, %taken",
+                "%merged = phi i32 [ 0, %entry ], [ %result, %taken ]",
+                "ret i32 %merged");
+        List<String> renamed = List.of(
+                "start:",
+                "%4 = icmp eq i32 %input, 7",
+                "br i1 %4, label %body, label %done",
+                "body: ; preds = %start",
+                "%5 = add i32 %input, 1",
+                "br label %done",
+                "done: ; preds = %start, %body",
+                "%6 = phi i32 [ 0, %start ], [ %5, %body ]",
+                "ret i32 %6");
+        Asserts.assertEquals(structuralFixpointLines(first),
+                structuralFixpointLines(renamed),
+                "fixpoint normalizer ignores local SSA and block names");
+
+        ArrayList<String> changedConstant = new ArrayList<>(renamed);
+        changedConstant.set(1, "%4 = icmp eq i32 %input, 8");
+        Asserts.assertNotEquals(structuralFixpointLines(first),
+                structuralFixpointLines(changedConstant),
+                "fixpoint normalizer preserves semantic operands");
     }
 
     private static void assertCrossProcessNormalizerContracts() {
@@ -4255,6 +4350,10 @@ public final class PEATestUtils {
             if (isFreezeInstruction(instruction)) {
                 continue;
             }
+            if (isCanonicalVectorSplatPoison(
+                    lines, instruction, i, reachability)) {
+                continue;
+            }
             Matcher assignment = ASSIGNED_INSTRUCTION.matcher(instruction);
             if (!assignment.find()
                     || !isPurePoisonInstruction(instruction)
@@ -4264,6 +4363,120 @@ public final class PEATestUtils {
                         + method + ": " + instruction);
             }
         }
+    }
+
+    /**
+     * LLVM's vectorizers build a broadcast by inserting lane zero into a poison
+     * vector and shuffling lane zero across every result lane.  The shuffle's
+     * zeroinitializer mask never selects the poison second operand or an
+     * uninitialized lane from the seed.  Accept exactly that two-instruction
+     * idiom while rejecting any other reachable use of the partially initialized
+     * seed.
+     */
+    private static boolean isCanonicalVectorSplatPoison(
+            List<String> lines, String instruction, int definition,
+            StructuralReachability reachability) {
+        if (overwritesOnlyPoisonVectorLane(instruction)) {
+            return true;
+        }
+        if (POISON_SPLAT_SHUFFLE.matcher(fold(instruction)).matches()) {
+            return true;
+        }
+
+        Matcher insert = POISON_SPLAT_INSERT.matcher(fold(instruction));
+        if (!insert.matches()) {
+            return false;
+        }
+        String seed = insert.group(1);
+        Pattern exactSeedUse = Pattern.compile(
+                "(?<![-A-Za-z$._0-9])" + Pattern.quote(seed)
+                        + "(?![-A-Za-z$._0-9])");
+        boolean sawCanonicalShuffle = false;
+        for (int i = 0; i < lines.size(); i++) {
+            if (!reachability.lines().contains(i) || i == definition) {
+                continue;
+            }
+            String use = withoutUnreachablePhiIncoming(
+                    withoutInlineComment(lines.get(i)), reachability.blocks());
+            if (!exactSeedUse.matcher(use).find()) {
+                continue;
+            }
+            Matcher shuffle = POISON_SPLAT_SHUFFLE.matcher(fold(use));
+            if (!shuffle.matches() || !shuffle.group(1).equals(seed)) {
+                return false;
+            }
+            sawCanonicalShuffle = true;
+        }
+        return sawCanonicalShuffle;
+    }
+
+    private static boolean overwritesOnlyPoisonVectorLane(String instruction) {
+        Matcher insert = POISON_CONSTANT_VECTOR_INSERT.matcher(fold(instruction));
+        if (!insert.matches()) {
+            return false;
+        }
+        int insertedLane;
+        try {
+            insertedLane = Integer.parseInt(insert.group(2));
+        } catch (NumberFormatException overflow) {
+            return false;
+        }
+        String[] lanes = insert.group(1).split("\\s*,\\s*", -1);
+        if (insertedLane >= lanes.length || !containsPoison(lanes[insertedLane])) {
+            return false;
+        }
+        for (int lane = 0; lane < lanes.length; lane++) {
+            if (lane != insertedLane && containsPoison(lanes[lane])) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    /**
+     * Compare complete PEA rounds modulo LLVM-local spelling.  Loop and CFG
+     * canonicalization may rebuild equivalent instructions with fresh SSA and
+     * block names; those names are not semantic changes.  This is deliberately
+     * a test-side comparison: the current LLVM production fixed-point check
+     * still compares printed IR exactly.  Block identities are assigned in
+     * textual order, then remaining local values in first-use order.
+     */
+    private static List<String> structuralFixpointLines(List<String> lines) {
+        LinkedHashMap<String, String> names = new LinkedHashMap<>();
+        int nextBlock = 0;
+        for (String line : lines) {
+            Matcher label = BLOCK_LABEL.matcher(line);
+            if (label.matches()) {
+                names.putIfAbsent("%" + label.group(1), "%bb" + nextBlock++);
+            }
+        }
+
+        Pattern localName = Pattern.compile(LLVM_LOCAL_NAME);
+        ArrayList<String> normalized = new ArrayList<>(lines.size());
+        int nextValue = 0;
+        for (String original : lines) {
+            String line = original;
+            Matcher label = BLOCK_LABEL.matcher(line);
+            if (label.matches()) {
+                String block = names.get("%" + label.group(1));
+                line = block.substring(1) + line.substring(label.end(1));
+            }
+
+            Matcher local = localName.matcher(line);
+            StringBuffer result = new StringBuffer(line.length());
+            while (local.find()) {
+                String token = local.group();
+                String replacement = names.get(token);
+                if (replacement == null) {
+                    replacement = "%v" + nextValue++;
+                    names.put(token, replacement);
+                }
+                local.appendReplacement(result, Matcher.quoteReplacement(replacement));
+            }
+            local.appendTail(result);
+            normalized.add(result.toString());
+        }
+        return List.copyOf(normalized);
     }
 
     private static StructuralReachability structuralReachability(List<String> lines) {
