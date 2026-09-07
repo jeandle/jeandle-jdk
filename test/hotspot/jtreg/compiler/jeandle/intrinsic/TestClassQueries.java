@@ -109,6 +109,7 @@ public class TestClassQueries {
                 compileOnly("constantVoidIsPrimitive"),
                 compileOnly("constantVoidGetModifiers"),
                 compileOnly("constantPrimitiveIsInstance"),
+                compileOnly("constantPrimitiveCastNull"),
                 compileOnly("constantStringIsInstance"),
                 compileOnly("constantStringGetSuperclass"),
                 compileOnly("constantObjectGetSuperclass"),
@@ -226,6 +227,8 @@ public class TestClassQueries {
             checkConstantIR(dumpPath, "constantVoidIsPrimitive", "ret i32 1");
             checkConstantIR(dumpPath, "constantVoidGetModifiers", "ret i32 1041");
             checkConstantObjectResultIR(dumpPath, "constantPrimitiveIsInstance", "ret i32 0");
+            checkConstantIR(dumpPath, "constantPrimitiveCastNull",
+                    "ret ptr addrspace\\(1\\) null");
             checkConstantIR(dumpPath, "constantGetClassAccessFlags", "ret i32 49");
             checkConstantIR(dumpPath, "constantPrimitiveGetClassAccessFlags", "ret i32 1041");
             checkConstantIR(dumpPath, "constantAssignableTrue", "ret i32 1");
@@ -420,6 +423,7 @@ public class TestClassQueries {
             Asserts.assertEquals(Modifier.PUBLIC | Modifier.ABSTRACT | Modifier.FINAL,
                     constantVoidGetModifiers(), "constant void getModifiers");
             Asserts.assertFalse(constantPrimitiveIsInstance(Integer.valueOf(1)));
+            Asserts.assertSame(null, constantPrimitiveCastNull());
             Asserts.assertTrue(constantStringIsInstance("value"));
             Asserts.assertFalse(constantStringIsInstance(Integer.valueOf(1)));
             Asserts.assertEquals(Object.class, constantStringGetSuperclass());
@@ -525,6 +529,7 @@ public class TestClassQueries {
                 constantVoidIsPrimitive();
                 constantVoidGetModifiers();
                 constantPrimitiveIsInstance(Integer.valueOf(1));
+                constantPrimitiveCastNull();
                 constantStringIsInstance("value");
                 constantStringGetSuperclass();
                 constantObjectGetSuperclass();
@@ -686,6 +691,10 @@ public class TestClassQueries {
 
         public static boolean constantPrimitiveIsInstance(Object object) {
             return int.class.isInstance(object);
+        }
+
+        public static Object constantPrimitiveCastNull() {
+            return int.class.cast(null);
         }
 
         public static boolean constantStringIsInstance(Object object) {
