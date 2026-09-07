@@ -84,67 +84,6 @@ void apply_memory_attr(llvm::CallBase* call, const CallSiteAttributeMetadata& at
   }
 }
 
-static Klass* exact_java_klass_metadata(llvm::Value* value) {
-  llvm::Argument* argument = llvm::dyn_cast<llvm::Argument>(value);
-  if (argument != nullptr) {
-    llvm::AttributeList attrs = argument->getParent()->getAttributes();
-    unsigned arg_no = argument->getArgNo();
-    if (!attrs.hasParamAttr(arg_no, llvm::jeandle::Attribute::JavaKlassExact)) {
-      return nullptr;
-    }
-    llvm::Attribute klass_attr =
-        attrs.getParamAttr(arg_no, llvm::jeandle::Attribute::JavaKlass);
-    if (!klass_attr.isValid()) {
-      return nullptr;
-    }
-    uint64_t klass_value = 0;
-    if (klass_attr.getValueAsString().getAsInteger(10, klass_value)) {
-      return nullptr;
-    }
-    return reinterpret_cast<Klass*>(klass_value);
-  }
-
-  llvm::CallBase* call = llvm::dyn_cast<llvm::CallBase>(value);
-  if (call != nullptr) {
-    if (!call->hasRetAttr(llvm::jeandle::Attribute::JavaKlassExact)) {
-      return nullptr;
-    }
-    llvm::Attribute klass_attr =
-        call->getAttributeAtIndex(llvm::AttributeList::ReturnIndex,
-                                  llvm::jeandle::Attribute::JavaKlass);
-    if (!klass_attr.isValid()) {
-      return nullptr;
-    }
-    uint64_t klass_value = 0;
-    if (klass_attr.getValueAsString().getAsInteger(10, klass_value)) {
-      return nullptr;
-    }
-    return reinterpret_cast<Klass*>(klass_value);
-  }
-
-  llvm::LoadInst* load = llvm::dyn_cast<llvm::LoadInst>(value);
-  if (load == nullptr ||
-      load->getMetadata(llvm::jeandle::Metadata::JavaKlassExact) == nullptr) {
-    return nullptr;
-  }
-  llvm::MDNode* klass_md =
-      load->getMetadata(llvm::jeandle::Metadata::JavaKlass);
-  if (klass_md == nullptr || klass_md->getNumOperands() != 1) {
-    return nullptr;
-  }
-  llvm::Metadata* md = klass_md->getOperand(0).get();
-  llvm::ConstantAsMetadata* constant_md =
-      llvm::dyn_cast<llvm::ConstantAsMetadata>(md);
-  if (constant_md == nullptr) {
-    return nullptr;
-  }
-  llvm::ConstantInt* klass_value =
-      llvm::dyn_cast<llvm::ConstantInt>(constant_md->getValue());
-  return klass_value == nullptr
-      ? nullptr
-      : reinterpret_cast<Klass*>(klass_value->getZExtValue());
-}
-
 // =============================================================================
 // JeandleIntrinsicLowering — construction
 // =============================================================================
@@ -975,6 +914,21 @@ llvm::Value* JeandleIntrinsicLowering::constant_klass_value(ciKlass* klass) cons
       klass_type, "class.constant.klass");
 }
 
+llvm::Value* JeandleIntrinsicLowering::klass_value_for_mirror(
+    llvm::Value* mirror, ciType* mirror_type) const {
+  llvm::PointerType* klass_type = llvm::PointerType::get(
+      *_interp->_context, llvm::jeandle::AddrSpace::CHeapAddrSpace);
+  if (mirror_type != nullptr) {
+    if (mirror_type->is_primitive_type()) {
+      return llvm::ConstantPointerNull::get(klass_type);
+    }
+    if (mirror_type->is_klass() && mirror_type->is_loaded()) {
+      return constant_klass_value(mirror_type->as_klass());
+    }
+  }
+  return _interp->call_java_op("jeandle.load_mirror_klass", {mirror});
+}
+
 bool JeandleIntrinsicLowering::try_fold_constant_class_query(
     vmIntrinsics::ID id, llvm::Value* mirror, jint* result) const {
   ciType* mirror_type = constant_class_type(mirror);
@@ -982,24 +936,6 @@ bool JeandleIntrinsicLowering::try_fold_constant_class_query(
     return false;
   }
 
-  if (mirror_type->is_primitive_type()) {
-    switch (id) {
-      case vmIntrinsics::_isPrimitive:
-        *result = 1;
-        return true;
-      case vmIntrinsics::_isArray:
-      case vmIntrinsics::_isInterface:
-      case vmIntrinsics::_isHidden:
-        *result = 0;
-        return true;
-      case vmIntrinsics::_getModifiers:
-      case vmIntrinsics::_getClassAccessFlags:
-        *result = JVM_ACC_ABSTRACT | JVM_ACC_FINAL | JVM_ACC_PUBLIC;
-        return true;
-      default:
-        return false;
-    }
-  }
 
   if (!mirror_type->is_klass() || !mirror_type->is_loaded()) {
     return false;
@@ -1063,45 +999,7 @@ bool JeandleIntrinsicLowering::lower_class_cast() {
   llvm::Value* object = _interp->_jvm->raw_peek(0).value();
   llvm::Value* mirror = _interp->_jvm->raw_peek(1).value();
   ciType* mirror_type = constant_class_type(mirror);
-  if (mirror_type != nullptr && mirror_type->is_primitive_type()) {
-    llvm::Value* is_null = builder.CreateICmpEQ(
-        object, llvm::ConstantPointerNull::get(
-                    llvm::cast<llvm::PointerType>(object->getType())),
-        "class.cast.is_null");
-    llvm::BasicBlock* pass =
-        llvm::BasicBlock::Create(ctx, "class_cast_pass", _interp->_llvm_func);
-    llvm::BasicBlock* fail =
-        llvm::BasicBlock::Create(ctx, "class_cast_fail", _interp->_llvm_func);
-    builder.CreateCondBr(is_null, pass, fail);
-    _interp->uncommon_trap(Deoptimization::Reason_intrinsic,
-                           Deoptimization::Action_maybe_recompile, fail);
-    builder.SetInsertPoint(pass);
-    _interp->_block->set_tail_llvm_block(pass);
-    _interp->_jvm->apop();
-    _interp->_jvm->apop();
-    _interp->_jvm->push(T_OBJECT, object);
-    return true;
-  }
-
-  if (mirror_type != nullptr && mirror_type->is_klass() && mirror_type->is_loaded()) {
-    Klass* target_klass = reinterpret_cast<Klass*>(mirror_type->as_klass()->constant_encoding());
-    Klass* object_klass = exact_java_klass_metadata(object);
-    if (object_klass != nullptr) {
-      if (object_klass->is_subtype_of(target_klass)) {
-        _interp->_jvm->apop();
-        _interp->_jvm->apop();
-        _interp->_jvm->push(T_OBJECT, object);
-        return true;
-      }
-      return false;
-    }
-  }
-
-  llvm::Value *klass =
-      mirror_type != nullptr && mirror_type->is_klass() &&
-              mirror_type->is_loaded()
-          ? constant_klass_value(mirror_type->as_klass())
-          : _interp->call_java_op("jeandle.load_mirror_klass", {mirror});
+  llvm::Value* klass = klass_value_for_mirror(mirror, mirror_type);
   llvm::PointerType* klass_ty =
       llvm::PointerType::get(ctx, llvm::jeandle::AddrSpace::CHeapAddrSpace);
   llvm::Value* is_primitive = builder.CreateICmpEQ(
@@ -1172,19 +1070,10 @@ bool JeandleIntrinsicLowering::lower_class_is_assignable_from() {
   llvm::PointerType* klass_ty =
       llvm::PointerType::get(ctx, llvm::jeandle::AddrSpace::CHeapAddrSpace);
   llvm::Constant* null_klass = llvm::ConstantPointerNull::get(klass_ty);
-  llvm::Value *super_klass =
-      super_type != nullptr && super_type->is_primitive_type() ? null_klass
-      : super_type != nullptr && super_type->is_klass() &&
-              super_type->is_loaded()
-          ? constant_klass_value(super_type->as_klass())
-          : _interp->call_java_op("jeandle.load_mirror_klass",
-                                  {super_mirror});
-  llvm::Value *sub_klass =
-      sub_type != nullptr && sub_type->is_primitive_type() ? null_klass
-      : sub_type != nullptr && sub_type->is_klass() && sub_type->is_loaded()
-          ? constant_klass_value(sub_type->as_klass())
-          : _interp->call_java_op("jeandle.load_mirror_klass",
-                                  {sub_mirror});
+  llvm::Value* super_klass =
+      klass_value_for_mirror(super_mirror, super_type);
+  llvm::Value* sub_klass =
+      klass_value_for_mirror(sub_mirror, sub_type);
   llvm::Value* super_primitive = builder.CreateICmpEQ(
       super_klass, null_klass,
       "class.assignable.super_primitive");
@@ -1247,8 +1136,8 @@ bool JeandleIntrinsicLowering::lower_class_boolean_query(vmIntrinsics::ID id) {
     return true;
   }
 
-  llvm::CallInst* klass =
-      _interp->call_java_op("jeandle.load_mirror_klass", {mirror});
+  ciType* mirror_type = constant_class_type(mirror);
+  llvm::Value* klass = klass_value_for_mirror(mirror, mirror_type);
   klass->setName("class.query.klass");
 
   llvm::PointerType* c_heap_ptr_ty =
@@ -1341,8 +1230,8 @@ bool JeandleIntrinsicLowering::lower_class_flags_query(vmIntrinsics::ID id) {
     return true;
   }
 
-  llvm::CallInst* klass =
-      _interp->call_java_op("jeandle.load_mirror_klass", {mirror});
+  ciType* mirror_type = constant_class_type(mirror);
+  llvm::Value* klass = klass_value_for_mirror(mirror, mirror_type);
   klass->setName("class.flags.klass");
   _interp->_jvm->apop();
 
@@ -1407,39 +1296,7 @@ bool JeandleIntrinsicLowering::lower_class_is_instance() {
   llvm::Value* object = _interp->_jvm->raw_peek(0).value();
   llvm::Value* mirror = _interp->_jvm->raw_peek(1).value();
   ciType* mirror_type = constant_class_type(mirror);
-  if (mirror_type != nullptr && mirror_type->is_primitive_type()) {
-    _interp->_jvm->apop();
-    _interp->_jvm->apop();
-    _interp->_jvm->ipush(builder.getInt32(0));
-    return true;
-  }
-  if (mirror_type != nullptr && mirror_type->is_klass() && mirror_type->is_loaded()) {
-    Klass* target_klass = reinterpret_cast<Klass*>(mirror_type->as_klass()->constant_encoding());
-    Klass* object_klass = exact_java_klass_metadata(object);
-    if (object_klass != nullptr && object_klass->is_subtype_of(target_klass)) {
-      llvm::Value* is_null = builder.CreateICmpEQ(
-          object, llvm::ConstantPointerNull::get(
-                      llvm::cast<llvm::PointerType>(object->getType())),
-          "class.is_instance.is_null");
-      _interp->_jvm->apop();
-      _interp->_jvm->apop();
-      _interp->_jvm->ipush(builder.CreateZExt(
-          builder.CreateNot(is_null), builder.getInt32Ty(),
-          "class.is_instance.static_result"));
-      return true;
-    }
-    if (object_klass != nullptr) {
-      _interp->_jvm->apop();
-      _interp->_jvm->apop();
-      _interp->_jvm->ipush(builder.getInt32(0));
-      return true;
-    }
-  }
-  llvm::Value *klass =
-      mirror_type != nullptr && mirror_type->is_klass() &&
-              mirror_type->is_loaded()
-          ? constant_klass_value(mirror_type->as_klass())
-          : _interp->call_java_op("jeandle.load_mirror_klass", {mirror});
+  llvm::Value* klass = klass_value_for_mirror(mirror, mirror_type);
   klass->setName("class.is_instance.klass");
 
   llvm::PointerType* c_heap_ptr_ty =
@@ -1486,7 +1343,7 @@ bool JeandleIntrinsicLowering::lower_class_get_superclass() {
   llvm::IRBuilder<>& builder = _interp->_ir_builder;
   llvm::Value* mirror = _interp->_jvm->raw_peek(0).value();
   ciType* mirror_type = constant_class_type(mirror);
-  if (mirror_type != nullptr) {
+  if (mirror_type != nullptr && !mirror_type->is_primitive_type()) {
     ciInstance* result_mirror = nullptr;
     if (mirror_type->is_klass() && mirror_type->is_loaded()) {
       ciKlass* klass = mirror_type->as_klass();
@@ -1508,12 +1365,10 @@ bool JeandleIntrinsicLowering::lower_class_get_superclass() {
     return true;
   }
 
-  llvm::CallInst *klass =
-      _interp->call_java_op("jeandle.load_mirror_klass", {mirror});
-  klass->setName("class.super.klass_from_mirror");
-
   llvm::PointerType* c_heap_ptr_ty =
       llvm::PointerType::get(ctx, llvm::jeandle::AddrSpace::CHeapAddrSpace);
+  llvm::Value* klass = klass_value_for_mirror(mirror, mirror_type);
+  klass->setName("class.super.klass_from_mirror");
   llvm::PointerType* java_heap_ptr_ty =
       llvm::PointerType::get(ctx, llvm::jeandle::AddrSpace::JavaHeapAddrSpace);
   llvm::Constant* null_klass = llvm::ConstantPointerNull::get(c_heap_ptr_ty);
