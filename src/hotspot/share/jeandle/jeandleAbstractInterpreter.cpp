@@ -2108,7 +2108,8 @@ void JeandleAbstractInterpreter::invoke() {
     args[0] = _jvm->pop(BasicType::T_OBJECT);
   }
 
-  llvm::InvokeInst* invoke = emit_java_call(target, method_signature, args,
+  llvm::InvokeInst* invoke = emit_java_call(target, holder, method_signature,
+                                             args, receiver != 0,
                                              is_method_handle_invoke, bc);
   RETURN_VOID_ON_JEANDLE_ERROR();
 
@@ -2119,15 +2120,13 @@ void JeandleAbstractInterpreter::invoke() {
 }
 
 llvm::InvokeInst* JeandleAbstractInterpreter::emit_java_call(ciMethod* target,
+                                                              ciKlass* declared_holder,
                                                               const ciSignature* method_signature,
                                                               llvm::ArrayRef<llvm::Value*> args,
+                                                              bool has_receiver,
                                                               bool is_method_handle_invoke,
                                                               Bytecodes::Code bc) {
-  // Derive receiver presence from the bytecode kind, matching invoke()'s logic.
-  const bool has_receiver = (bc == Bytecodes::_invokevirtual   ||
-                             bc == Bytecodes::_invokeinterface ||
-                             bc == Bytecodes::_invokespecial   ||
-                             (bc == Bytecodes::_invokehandle && !target->is_static()));
+  assert(declared_holder != nullptr, "declared holder must be available");
   const int arg_count = method_signature->count() + (has_receiver ? 1 : 0);
   assert(static_cast<int>(args.size()) == arg_count,
          "argument count mismatch: expected %d, got %zu", arg_count, args.size());
@@ -2146,6 +2145,12 @@ llvm::InvokeInst* JeandleAbstractInterpreter::emit_java_call(ciMethod* target,
   BasicType return_type = method_signature->return_type()->basic_type();
   llvm::FunctionType* func_type = llvm::FunctionType::get(JeandleType::java2llvm(return_type, *_context), args_type, false);
   std::string callee_name = JeandleFuncSig::method_name_with_signature(target);
+  if ((bc == Bytecodes::_invokevirtual || bc == Bytecodes::_invokeinterface) &&
+      !target->can_be_statically_bound()) {
+    // Keep dynamic calls distinct from Java function definitions so LLVM
+    // cannot resolve a virtual call as a direct call to a same-named symbol.
+    callee_name = std::string("__jeandle_dynamic_call.") + callee_name;
+  }
   llvm::FunctionCallee callee = _module.getOrInsertFunction(callee_name, func_type);
   llvm::Function* func = llvm::cast<llvm::Function>(callee.getCallee());
   func->setCallingConv(llvm::CallingConv::Hotspot_JIT);
@@ -2233,13 +2238,13 @@ llvm::InvokeInst* JeandleAbstractInterpreter::emit_java_call(ciMethod* target,
                                                  Bytecodes::name(bc));
   llvm::Attribute declared_holder_attr = llvm::Attribute::get(*_context,
                                                  llvm::jeandle::Attribute::DeclaredHolder,
-                                                 std::to_string(reinterpret_cast<uintptr_t>(ciEnv::get_instance_klass_for_declared_method_holder(holder))));
+                                                 std::to_string(reinterpret_cast<uintptr_t>(ciEnv::get_instance_klass_for_declared_method_holder(declared_holder))));
   invoke->addFnAttr(id_attr);
   invoke->addFnAttr(patch_bytes_attr);
   invoke->addFnAttr(bc_attr);
   invoke->addFnAttr(declared_holder_attr);
   if (dest == SharedRuntime::get_resolve_opt_virtual_call_stub()) {
-    assert(receiver, "opt virtual call must have a receiver");
+    assert(has_receiver, "opt virtual call must have a receiver");
     invoke->addParamAttr(0, llvm::Attribute::NoUndef);
   }
   if (call_type != JeandleCompiledCall::DYNAMIC_CALL) {

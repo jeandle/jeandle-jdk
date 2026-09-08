@@ -42,38 +42,75 @@ import jdk.test.lib.process.ProcessTools;
 
 public class TestIdentityHashCode {
 
+    private static final int[] LOCKING_MODES = {0, 1, 2};
+
     // Per-call-site log line emitted by Jeandle when identityHashCode is recognized.
     private static final String INTRINSIC_LOG_LINE =
         "Method `static jint java.lang.System.identityHashCode(jobject)` is parsed as intrinsic";
 
     public static void main(String[] args) throws Exception {
-        String dumpPath = Files.createTempDirectory("jeandle_identity_hashcode").toString();
+        for (int lockingMode : LOCKING_MODES) {
+            String dumpPath = Files.createTempDirectory(
+                    "jeandle_identity_hashcode_mode_" + lockingMode).toString();
+            OutputAnalyzer output = runChild(dumpPath, lockingMode, true);
+            output.shouldHaveExitValue(0);
+            Asserts.assertEQ(countIntrinsicLogs(output), 2,
+                    "Expected hashOf and hashOfNull to intrinsify with LockingMode="
+                    + lockingMode);
 
+            if (lockingMode == 2) {
+                checkEnabledIR(dumpPath);
+            }
+        }
+
+        String disabledDumpPath = Files.createTempDirectory(
+                "jeandle_identity_hashcode_disabled").toString();
+        OutputAnalyzer disabled = runChild(disabledDumpPath, 2, false);
+        disabled.shouldHaveExitValue(0);
+        Asserts.assertEQ(countIntrinsicLogs(disabled), 0,
+                "Disabled _identityHashCode must use normal invoke handling");
+
+        FileCheck disabledIR = new FileCheck(disabledDumpPath,
+                TestWrapper.class.getDeclaredMethod("hashOf", Object.class), false);
+        disabledIR.checkNotPattern("call hotspotcc i32 @jeandle\\.hashcode_fast");
+        disabledIR.checkPattern("java_lang_System_identityHashCode");
+    }
+
+    private static OutputAnalyzer runChild(String dumpPath, int lockingMode,
+                                           boolean enableIntrinsic) throws Exception {
         ArrayList<String> commandArgs = new ArrayList<>(List.of(
                 "-Xbatch",
                 "-XX:-TieredCompilation",
                 "-XX:+UseJeandleCompiler",
                 "-Xcomp",
+                "-XX:+UnlockDiagnosticVMOptions",
+                "-XX:+UnlockExperimentalVMOptions",
+                "-XX:LockingMode=" + lockingMode,
                 "-Xlog:jeandle=debug",
                 "-XX:+JeandleDumpIR",
                 "-XX:JeandleDumpDirectory=" + dumpPath,
                 "-XX:CompileCommand=compileonly," + TestWrapper.class.getName() + "::hashOf",
                 "-XX:CompileCommand=compileonly," + TestWrapper.class.getName() + "::hashOfNull",
                 TestWrapper.class.getName()));
+        if (!enableIntrinsic) {
+            commandArgs.add(commandArgs.size() - 1,
+                    "-XX:ControlIntrinsic=-_identityHashCode");
+        }
 
         ProcessBuilder pb = ProcessTools.createLimitedTestJavaProcessBuilder(commandArgs);
-        OutputAnalyzer output = ProcessTools.executeCommand(pb);
+        return ProcessTools.executeCommand(pb);
+    }
 
-        output.shouldHaveExitValue(0);
-
-        // Expecting count = 2 (not just shouldContain) ensures both hashOf and hashOfNull are intrinsified.
+    private static int countIntrinsicLogs(OutputAnalyzer output) {
         Matcher m = Pattern.compile(Pattern.quote(INTRINSIC_LOG_LINE)).matcher(output.getOutput());
         int intrinsicCount = 0;
-        while (m.find()) intrinsicCount++;
-        Asserts.assertEQ(intrinsicCount, 2,
-            "Expected exactly 2 intrinsic-log entries (one each for hashOf/hashOfNull), got "
-            + intrinsicCount);
+        while (m.find()) {
+            intrinsicCount++;
+        }
+        return intrinsicCount;
+    }
 
+    private static void checkEnabledIR(String dumpPath) throws Exception {
         // Verify the fast path is generated as a call to jeandle.hashcode_fast
         // (the JavaOp defined in jeandleRuntimeDefinedJavaOps.cpp), with the slow
         // path falling back to a static Java call to System.identityHashCode
@@ -106,6 +143,18 @@ public class TestIdentityHashCode {
             Asserts.assertEquals(a, System.identityHashCode(o),
                                  "Jeandle-compiled hash must match interpreter result");
             Asserts.assertEquals(0, b, "System.identityHashCode(null) must be 0");
+
+            Object cached = new Object();
+            int cachedExpected = System.identityHashCode(cached);
+            for (int i = 0; i < 20_000; i++) {
+                Asserts.assertEquals(cachedExpected, hashOf(cached));
+            }
+
+            Object locked = new Object();
+            int lockedExpected = System.identityHashCode(locked);
+            synchronized (locked) {
+                Asserts.assertEquals(lockedExpected, hashOf(locked));
+            }
 
             System.out.println("TestIdentityHashCode PASSED");
         }
