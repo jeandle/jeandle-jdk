@@ -384,7 +384,7 @@ public class TestPEANonVirtualizableInstances {
         useBlock.assertBefore("store atomic i32", 0, monitorEnter, 0);
         useBlock.assertBefore(monitorEnter, 0, fastHash, 0);
         PEATestUtils.IRBlock normalExitBlock = after.blockContaining(monitorExit, 1);
-        normalExitBlock.assertPresent("hashCode.result7");
+        normalExitBlock.assertPresent("hashCode.result");
         normalExitBlock.assertBefore("load atomic i32", 0, monitorExit, 0);
         after.assertBefore(fastHash, 1, monitorExit, 1);
     }

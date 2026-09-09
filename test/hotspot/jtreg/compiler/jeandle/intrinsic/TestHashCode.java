@@ -131,7 +131,7 @@ public class TestHashCode {
         fc.checkPattern("call hotspotcc i32 @jeandle\\.hashcode_fast");
         // Slow path block — a Java call to Object.hashCode, NOT uncommon_trap.
         fc.checkPattern("hashCode_slow_call");
-        fc.checkPattern("@\"__jeandle_dynamic_call\\.java_lang_Object_hashCode\\(\\)I\"");
+        fc.checkPattern("@\"__jeandle_dynamic_call\\.java_lang_Object_hashCode\\(\\)I\\.[0-9]+\"");
         // Merge block + result PHI.
         fc.checkPattern("hashCode_merge");
         fc.checkPattern("hashCode.result");
@@ -140,7 +140,7 @@ public class TestHashCode {
                 SpecialHash.class.getDeclaredMethod("hashFromSuper"), false);
         special.checkNotPattern("hashCode\\.methods_match");
         special.checkPattern("call hotspotcc i32 @jeandle\\.hashcode_fast");
-        special.checkPattern("@\"java_lang_Object_hashCode\\(\\)I\"");
+        special.checkPattern("@\"java_lang_Object_hashCode\\(\\)I\\.[0-9]+\"");
         special.checkNotPattern("__jeandle_dynamic_call");
 
         FileCheck interfaceCall = new FileCheck(dumpPath,

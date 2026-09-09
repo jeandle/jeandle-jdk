@@ -122,7 +122,7 @@ public class TestIdentityHashCode {
         fc.checkPattern("call hotspotcc i32 @jeandle\\.hashcode_fast");
         // Slow-path Java call (static dispatch to System.identityHashCode).
         fc.checkPattern("hashCode_slow_call");
-        fc.checkPattern("@\"java_lang_System_identityHashCode\\(Ljava/lang/Object;\\)I\"");
+        fc.checkPattern("@\"java_lang_System_identityHashCode\\(Ljava/lang/Object;\\)I\\.[0-9]+\"");
         // Merge PHI for null (0) / fast result / slow result.
         fc.checkPattern("hashCode_merge");
     }
