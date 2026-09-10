@@ -1330,4 +1330,34 @@ slow_path:
   ret void
 }
 
+define hotspotcc i32 @jeandle.memcmp(ptr noundef readonly captures(none) %0, ptr noundef readonly captures(none) %1, i64 noundef %2) "lower-phase"="1" #0 {
+entry:
+  %3 = icmp eq i64 %2, 0
+  br i1 %3, label %merge, label %loop
+
+continue:                                                
+  %4 = add nuw i64 %6, 1
+  %5 = icmp eq i64 %4, %2
+  br i1 %5, label %merge, label %loop
+
+loop:                                                
+  %6 = phi i64 [ %4, %continue ], [ 0, %entry ]
+  %7 = getelementptr inbounds nuw i8, ptr %0, i64 %6
+  %8 = load i8, ptr %7, align 1
+  %9 = getelementptr inbounds nuw i8, ptr %1, i64 %6
+  %10 = load i8, ptr %9, align 1
+  %11 = icmp eq i8 %8, %10
+  br i1 %11, label %continue, label %return_diff
+
+return_diff:                                               
+  %12 = zext i8 %10 to i32
+  %13 = zext i8 %8 to i32
+  %14 = sub nsw i32 %13, %12
+  br label %merge
+
+merge:                                               
+  %15 = phi i32 [ %14, %return_diff ], [ 0, %entry ], [ 0, %continue ]
+  ret i32 %15
+}
+
 attributes #0 = { nounwind "gc-leaf-function" }
