@@ -204,6 +204,7 @@ class JeandleIntrinsicLowering : public StackObj {
   bool lower_multiply_high(vmIntrinsics::ID id);
   bool lower_new_array();
   bool lower_unsafe_allocate_instance();
+  bool lower_object_notify(vmIntrinsics::ID id);
   bool lower_vectorized_mismatch();
   llvm::Value* emit_vectorized_mismatch_small(llvm::Value* a_addr,
                                               llvm::Value* b_addr,
