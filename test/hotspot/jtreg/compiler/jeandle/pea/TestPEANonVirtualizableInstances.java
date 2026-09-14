@@ -320,7 +320,7 @@ public class TestPEANonVirtualizableInstances {
         frontend.assertBefore(factoryName, 0, "llvm.experimental.deoptimize.i32", 0);
 
         PEATestUtils.IRBody lowered = run.finalIR(target);
-        String getLoad = "load atomic ptr addrspace(1), ptr addrspace(1)";
+        String getLoad = PEATestUtils.referenceLoad() + ", ptr addrspace(1)";
         String refersTo = "__jeandle_dynamic_call.java_lang_ref_Reference_refersToImpl"
                 + "(Ljava/lang/Object;)Z";
         String clear = "__jeandle_dynamic_call.java_lang_ref_Reference_clear()V";

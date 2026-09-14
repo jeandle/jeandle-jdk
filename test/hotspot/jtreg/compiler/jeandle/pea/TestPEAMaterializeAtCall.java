@@ -42,7 +42,7 @@ public class TestPEAMaterializeAtCall {
     private static final String WRAPPER =
             "compiler.jeandle.pea.TestPEAMaterializeAtCall$TestWrapper";
     private static final String INT_STORE = "store atomic i32";
-    private static final String REF_STORE = "store atomic ptr addrspace(1)";
+    private static final String REF_STORE = PEATestUtils.referenceStore();
     private static final String INT_LOAD = "load atomic i32";
 
     public static void main(String[] args) throws Exception {

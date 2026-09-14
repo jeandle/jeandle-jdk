@@ -19,8 +19,7 @@
  *          freshly allocated array field.
  * @library /test/lib
  * @build jdk.test.lib.Asserts
- * @run main/othervm -XX:-UseCompressedOops -XX:-UseCompressedClassPointers
- *                   -XX:+UseJeandleCompiler -Xbatch
+ * @run main/othervm -XX:+UseJeandleCompiler -Xbatch
  *                   -XX:CompileCommand=compileonly,java.math.MutableBigInteger::modInverse
  *                   compiler.jeandle.pea.TestPEAModInverseNestedReplay
  */
