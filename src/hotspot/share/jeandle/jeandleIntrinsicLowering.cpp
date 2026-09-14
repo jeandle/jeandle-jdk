@@ -187,7 +187,11 @@ bool JeandleIntrinsicLowering::is_supported(vmIntrinsics::ID id) {
 
     // Unsafe.allocateInstance
     case vmIntrinsics::_allocateInstance:
-    
+
+    // Object monitor notifications.
+    case vmIntrinsics::_notify:
+    case vmIntrinsics::_notifyAll:
+
     // bitcast
     case vmIntrinsics::_floatToRawIntBits:
     case vmIntrinsics::_intBitsToFloat:
@@ -462,6 +466,10 @@ bool JeandleIntrinsicLowering::lower(vmIntrinsics::ID id, const ciMethod* target
     // Unsafe.allocateInstance
     case vmIntrinsics::_allocateInstance:
       return lower_unsafe_allocate_instance();
+
+    case vmIntrinsics::_notify:
+    case vmIntrinsics::_notifyAll:
+      return lower_object_notify(id);
 
     // bitcast
     case vmIntrinsics::_floatToRawIntBits:
@@ -827,6 +835,29 @@ bool JeandleIntrinsicLowering::lower_java_op(const char* java_op_name,
 // =============================================================================
 // Per-intrinsic handlers
 // =============================================================================
+
+bool JeandleIntrinsicLowering::lower_object_notify(vmIntrinsics::ID id) {
+  const bool notify_all = id == vmIntrinsics::_notifyAll;
+  assert(notify_all || id == vmIntrinsics::_notify, "unexpected intrinsic");
+
+  llvm::Module& module = _interp->_module;
+  llvm::IRBuilder<>& builder = _interp->_ir_builder;
+  llvm::Function* current_thread_fn = module.getFunction("jeandle.current_thread");
+  assert(current_thread_fn != nullptr, "jeandle.current_thread JavaOp must exist");
+  llvm::CallInst* current_thread = builder.CreateCall(current_thread_fn);
+  current_thread->setCallingConv(llvm::CallingConv::Hotspot_JIT);
+
+  llvm::Value* receiver = _interp->_jvm->peek_value(0).value();
+  static constexpr CallSiteAttributeMetadata attrs = {
+      CTRL_NEEDS_EXCEPTION_EDGE, MEM_READ | MEM_WRITE | MEM_NEEDS_GC_STATE};
+  llvm::FunctionCallee callee = notify_all
+      ? JeandleRuntimeRoutine::monitor_notify_all_callee(module)
+      : JeandleRuntimeRoutine::monitor_notify_callee(module);
+  emit_callsite(callee, llvm::CallingConv::Hotspot_JIT,
+                {receiver, current_thread}, attrs);
+  _interp->_jvm->apop();
+  return true;
+}
 
 // ---- lower_llvm_bitcast ----
 bool JeandleIntrinsicLowering::lower_llvm_bitcast() {
