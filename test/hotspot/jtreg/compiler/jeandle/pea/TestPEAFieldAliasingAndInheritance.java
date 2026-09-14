@@ -22,22 +22,25 @@
  * @summary PEA scalar-replaces inherited and hidden fields through aliases,
  *          and materializes the original allocation for an identity consumer
  * @library /test/lib /
+ * @modules java.base/jdk.internal.misc
  * @build jdk.test.lib.Asserts jdk.test.whitebox.WhiteBox compiler.jeandle.pea.PEATestUtils
  * @run driver jdk.test.lib.helpers.ClassFileInstaller jdk.test.whitebox.WhiteBox
  * @run main/othervm -XX:-UseJeandleCompiler
- *      -XX:-UseCompressedOops -XX:-UseCompressedClassPointers
  *      compiler.jeandle.pea.TestPEAFieldAliasingAndInheritance
  */
 
 package compiler.jeandle.pea;
 
 import java.lang.reflect.Method;
+import jdk.internal.misc.Unsafe;
 
 import jdk.test.lib.Asserts;
 
 public class TestPEAFieldAliasingAndInheritance {
     private static final String WRAPPER =
             "compiler.jeandle.pea.TestPEAFieldAliasingAndInheritance$TestWrapper";
+
+    private static final Unsafe UNSAFE = Unsafe.getUnsafe();
 
     public static void main(String[] args) throws Exception {
         Method direct = TestWrapper.class.getMethod("testDirectInheritedAlias",
@@ -147,12 +150,16 @@ public class TestPEAFieldAliasingAndInheritance {
                 target + ": exact helper-alias field stores");
     }
 
+    private static int offset(Class<?> holder, String name) throws Exception {
+        return Math.toIntExact(UNSAFE.objectFieldOffset(holder.getDeclaredField(name)));
+    }
+
     private static void assertNonzeroDerivedFieldValueVirtualized(
             PEATestUtils.RunResult run, Method target, Method consumer) throws Exception {
         PEATestUtils.PEARound first = assertOneAllocationVirtualized(run, target);
         PEATestUtils.AllocationSite allocation = first.before().allocations().get(0);
         String derivedAddress = "getelementptr inbounds nuw i8, ptr addrspace(1) "
-                + allocation.result() + ", i64 28";
+                + allocation.result() + ", i64 " + offset(TestWrapper.Derived.class, "inherited");
         first.before().assertOccurrenceCount(derivedAddress, 1);
         Asserts.assertEquals(first.effectCount("EliminateStore", "store atomic i32"), 1L,
                 target + ": nonzero derived field store is scalarized exactly once");
@@ -178,7 +185,10 @@ public class TestPEAFieldAliasingAndInheritance {
         PEATestUtils.AllocationKey original = allocation.key();
         Asserts.assertEquals(original.kind(), PEATestUtils.AllocationKind.INSTANCE,
                 target + ": identity consumer allocation kind");
-        for (int offset : new int[] {16, 28, 40}) {
+        for (int offset : new int[] {
+                offset(TestWrapper.Derived.class, "inherited"),
+                offset(TestWrapper.Base.class, "baseLong"),
+                offset(TestWrapper.Derived.class, "reference")}) {
             before.assertOccurrenceCount(
                     "getelementptr inbounds nuw i8, ptr addrspace(1) "
                             + allocation.result() + ", i64 " + offset,
@@ -194,12 +204,12 @@ public class TestPEAFieldAliasingAndInheritance {
                 PEATestUtils.MethodId.of(consumer).llvmFunctionName(), 0);
         consumerBlock.assertOccurrenceCount("store atomic i32", 1);
         consumerBlock.assertOccurrenceCount("store atomic i64", 1);
-        consumerBlock.assertOccurrenceCount("store atomic ptr addrspace(1)", 1);
+        consumerBlock.assertOccurrenceCount(PEATestUtils.referenceStore(), 1);
         consumerBlock.assertBefore("store atomic i32", 0,
                 PEATestUtils.MethodId.of(consumer).llvmFunctionName(), 0);
         consumerBlock.assertBefore("store atomic i64", 0,
                 PEATestUtils.MethodId.of(consumer).llvmFunctionName(), 0);
-        consumerBlock.assertBefore("store atomic ptr addrspace(1)", 0,
+        consumerBlock.assertBefore(PEATestUtils.referenceStore(), 0,
                 PEATestUtils.MethodId.of(consumer).llvmFunctionName(), 0);
     }
 

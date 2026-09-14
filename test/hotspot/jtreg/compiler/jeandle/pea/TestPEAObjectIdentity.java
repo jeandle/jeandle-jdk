@@ -25,7 +25,6 @@
  * @build jdk.test.lib.Asserts jdk.test.whitebox.WhiteBox compiler.jeandle.pea.PEATestUtils
  * @run driver jdk.test.lib.helpers.ClassFileInstaller jdk.test.whitebox.WhiteBox
  * @run main/othervm -XX:-UseJeandleCompiler
- *      -XX:-UseCompressedOops -XX:-UseCompressedClassPointers
  *      compiler.jeandle.pea.TestPEAObjectIdentity
  */
 
@@ -211,9 +210,9 @@ public class TestPEAObjectIdentity {
                 finalAfter, target + ": structurally sound fixed point");
         finalAfter.assertBefore(JEANDLE_NEW_INSTANCE, 0, "store atomic i32", 0);
         finalAfter.assertBefore("store atomic i32", 0,
-                "store atomic ptr addrspace(1)", 0);
+                PEATestUtils.referenceStore(), 0);
         finalAfter.assertAbsentBetween("store atomic i32", 0, JEANDLE_NEW_INSTANCE,
-                "store atomic ptr addrspace(1)", 0);
+                PEATestUtils.referenceStore(), 0);
 
         loweredFinal.assertLineCount(LOWERED_NEW_INSTANCE, 1);
         assertCallWithDeoptBCI(loweredFinal, LOWERED_NEW_INSTANCE, 0, 1, target);
@@ -221,13 +220,14 @@ public class TestPEAObjectIdentity {
         loweredFinal.assertLineCount("alloc_fast_path.i: ; preds =", 1);
         loweredFinal.assertLineCount("alloc_slow_path.i: ; preds =", 1);
         loweredFinal.assertBefore(LOWERED_NEW_INSTANCE, 0, "store atomic i32", 0);
+        int publicationIndex = PEATestUtils.useCompressedOops() ? 0 : 1;
         loweredFinal.assertBetween("jeandle.pre_barrier.exit: ; preds =", 0,
-                "store atomic ptr addrspace(1)", 1,
+                PEATestUtils.referenceStore(), publicationIndex,
                 "jeandle.post_barrier.exit: ; preds =", 0);
         loweredFinal.assertBefore("store atomic i32", 0,
-                "store atomic ptr addrspace(1)", 1);
+                PEATestUtils.referenceStore(), publicationIndex);
         loweredFinal.assertAbsentBetween("store atomic i32", 0, LOWERED_NEW_INSTANCE,
-                "store atomic ptr addrspace(1)", 1);
+                PEATestUtils.referenceStore(), publicationIndex);
     }
 
     private static void assertCallWithDeoptBCI(PEATestUtils.IRBody body, String callee,
