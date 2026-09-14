@@ -227,6 +227,33 @@ DEF_JAVA_OP(post_barrier, 9, llvm::Type::getVoidTy(context),
   ir_builder.CreateRetVoid();
 JAVA_OP_END
 
+// Load the java.lang.Class mirror rooted in a non-null Klass::_java_mirror
+// OopHandle.  Class.getSuperclass() uses this after choosing the semantic
+// superclass Klass (including Object for arrays).
+DEF_JAVA_OP(load_mirror_from_klass, 1,
+            llvm::PointerType::get(context, llvm::jeandle::AddrSpace::JavaHeapAddrSpace),
+            llvm::PointerType::get(context, llvm::jeandle::AddrSpace::CHeapAddrSpace))
+  llvm::Value* klass = func->getArg(0);
+  llvm::GlobalVariable* mirror_offset_gv =
+      template_module.getGlobalVariable("Klass.java_mirror_offset", /*AllowInternal=*/true);
+  if (!mirror_offset_gv) {
+    RuntimeDefinedJavaOps::set_failed("Klass.java_mirror_offset global not found in template module");
+    return;
+  }
+
+  llvm::Value* mirror_offset =
+      ir_builder.CreateLoad(ir_builder.getInt32Ty(), mirror_offset_gv);
+  llvm::Value* oop_handle_addr =
+      ir_builder.CreateInBoundsGEP(ir_builder.getInt8Ty(), klass, mirror_offset);
+  llvm::Type* c_heap_ptr_ty =
+      llvm::PointerType::get(context, llvm::jeandle::AddrSpace::CHeapAddrSpace);
+  llvm::Value* oop_handle = ir_builder.CreateLoad(c_heap_ptr_ty, oop_handle_addr);
+  llvm::Type* mirror_ty =
+      llvm::PointerType::get(context, llvm::jeandle::AddrSpace::JavaHeapAddrSpace);
+  llvm::Value* mirror = ir_builder.CreateLoad(mirror_ty, oop_handle);
+  ir_builder.CreateRet(mirror);
+JAVA_OP_END
+
 // Object.getClass(): load the java.lang.Class mirror for an object.
 // Two-level load via the OopHandle stored in Klass::_java_mirror:
 //   1. Load klass from object header (jeandle.load_klass).
@@ -507,6 +534,7 @@ bool RuntimeDefinedJavaOps::define_all(llvm::Module& template_module) {
   define_card_table_barrier(template_module);
   define_pre_barrier(template_module);
   define_post_barrier(template_module);
+  define_load_mirror_from_klass(template_module);
   define_get_class(template_module);
   define_current_thread_obj(template_module);
   define_reference_refers_to(template_module);
