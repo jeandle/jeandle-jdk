@@ -320,11 +320,6 @@ class JeandleAbstractInterpreter : public StackObj {
   BasicBlockBuilder* _block_builder;
   llvm::IRBuilder<> _ir_builder;
 
-  // The intrinsic currently being lowered, or _none outside intrinsic lowering.
-  // Debug only: lets uncommon_trap verify that every deopt reason an intrinsic emits
-  // is declared in that intrinsic's trap-throttle mask (see kTrapThrottleTable).
-  DEBUG_ONLY(vmIntrinsics::ID _lowering_intrinsic_id = vmIntrinsics::_none;)
-
   // The JeandleBasicBlock and its JeandleVMState currently being interpreted.
   JeandleBasicBlock* _block;
   JeandleVMState* _jvm;
@@ -448,6 +443,8 @@ class JeandleAbstractInterpreter : public StackObj {
   void do_put_xxx(ciField* field, bool is_static);
 
   void arraylength();
+  llvm::Value* load_object_klass(llvm::Value* obj);
+  llvm::Value* get_layout_helper(llvm::Value* klass, jint& constant_value);
 
   // Implementation of array *aload and *astore bytecodes.
   void do_array_load(BasicType basic_type);
@@ -511,7 +508,7 @@ class JeandleAbstractInterpreter : public StackObj {
 
   void boundary_check(llvm::Value* array_oop, llvm::Value* index);
 
-  void uncommon_trap(Deoptimization::DeoptReason, Deoptimization::DeoptAction, llvm::BasicBlock* insert_block = nullptr, bool should_reexecute = false);
+  void uncommon_trap(Deoptimization::DeoptReason, Deoptimization::DeoptAction, llvm::BasicBlock* insert_block = nullptr);
 
   void return_current(llvm::Value* value);
 

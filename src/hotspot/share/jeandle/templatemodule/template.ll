@@ -74,6 +74,10 @@
 @Klass.super_check_offset_offset = external global i32
 @ObjArrayKlass.element_klass_offset = external global i32
 
+; InstanceKlass initialization state used by klass_is_initialized.
+@InstanceKlass.init_state_offset = external global i32
+@InstanceKlass.fully_initialized = external global i8
+
 ; Byte offsets for oopDesc structure fields.
 @oopDesc.klass_offset_in_bytes = external global i32
 @oopDesc.mark_offset_in_bytes = external global i32
@@ -92,6 +96,10 @@
 ; Heap layout switches consumed by VMConstants::fromModule on the LLVM side.
 @VMOptions.UseCompressedClassPointers = external global i1
 @VMOptions.UseCompressedOops = external global i1
+
+; Arraycopy optimization thresholds supplied by HotSpot at startup.
+@VMOptions.ArrayOperationPartialInlineSize = external global i32
+@VMOptions.ArrayCopyLoadStoreMaxElem = external global i32
 
 ; Byte offsets for java.lang.ref.Reference instance fields.
 @java_lang_ref_Reference.referent_offset = external global i32
@@ -200,23 +208,58 @@ uncompressed:
   ret ptr addrspace(0) %wide
 }
 
+; Test whether a previously loaded dynamic Klass is exactly the expected Klass.
+; Profile devirtualization shares one phase-1 load across all exact checks for
+; a receiver. JavaType traces actual_klass back to that load for path-sensitive
+; type propagation before JavaOperationLower(1) expands both operations.
+define hotspotcc i1 @jeandle.check_exact_klass(ptr addrspace(0) nocapture %expected_klass, ptr addrspace(0) nocapture %actual_klass) noinline "lower-phase"="1" #0 {
+  %is_exact = icmp eq ptr addrspace(0) %actual_klass, %expected_klass
+  ret i1 %is_exact
+}
+
 ; Load the reference Klass represented by a java.lang.Class mirror. Primitive
-; mirrors contain a null Klass*.
+; mirrors contain a null Klass*. Keeping this as a phase-1 JavaOp lets
+; ConstantFieldFolding answer the query from a constant mirror before exposing
+; the VM-injected field load.
 define hotspotcc ptr addrspace(0) @jeandle.load_mirror_klass(ptr addrspace(1) nocapture readonly %mirror) noinline "lower-phase"="1" #0 {
 entry:
   %klass_offset = load i32, ptr @java_lang_Class.klass_offset
   %klass_addr = getelementptr inbounds i8, ptr addrspace(1) %mirror, i32 %klass_offset
-  %klass = load ptr addrspace(0), ptr addrspace(1) %klass_addr, align 8
+  %klass = load atomic ptr addrspace(0), ptr addrspace(1) %klass_addr unordered, align 8
   ret ptr addrspace(0) %klass
 }
 
-; Load Klass::layout_helper while preserving the query as a phase-1 JavaOp.
+; Load Klass::layout_helper from a Klass pointer. Keeping this as a phase-1
+; JavaOp lets ConstantFieldFolding answer the query while the Klass is still a
+; compile-time constant; unresolved queries lower to the ordinary VM load.
 define hotspotcc i32 @jeandle.layout_helper(ptr addrspace(0) nocapture readonly %klass) noinline "lower-phase"="1" #0 {
 entry:
   %layout_helper_offset = load i32, ptr @Klass.layout_helper_offset
   %layout_helper_addr = getelementptr inbounds i8, ptr addrspace(0) %klass, i32 %layout_helper_offset
   %layout_helper = load atomic i32, ptr addrspace(0) %layout_helper_addr unordered, align 4, !invariant.load !1
   ret i32 %layout_helper
+}
+
+; Query a Klass' current initialization state. Keeping this opaque through
+; phase 0 lets ConstantFieldFolding replace the query with true for a constant
+; Klass already known by the VM to be initialized. Otherwise phase 1 lowers it
+; to the runtime state load, preserving later class initialization.
+define hotspotcc i1 @jeandle.klass_is_initialized(ptr addrspace(0) nocapture readonly %klass) noinline "lower-phase"="1" #0 {
+entry:
+  %init_state_offset = load i32, ptr @InstanceKlass.init_state_offset
+  %init_state_addr = getelementptr inbounds i8, ptr addrspace(0) %klass, i32 %init_state_offset
+  %init_state = load volatile i8, ptr addrspace(0) %init_state_addr, align 1
+  %fully_initialized = load i8, ptr @InstanceKlass.fully_initialized
+  %is_initialized = icmp eq i8 %init_state, %fully_initialized
+  ret i1 %is_initialized
+}
+
+; Load the element Klass from an ObjArrayKlass.
+define hotspotcc ptr addrspace(0) @jeandle.load_array_element_klass(ptr addrspace(0) nocapture %array_klass) noinline "lower-phase"="1" #0 {
+  %element_klass_offset = load i32, ptr @ObjArrayKlass.element_klass_offset
+  %element_klass_addr = getelementptr inbounds i8, ptr addrspace(0) %array_klass, i32 %element_klass_offset
+  %element_klass = load atomic ptr addrspace(0), ptr addrspace(0) %element_klass_addr unordered, align 8
+  ret ptr addrspace(0) %element_klass
 }
 
 ; This is the slow path for subtype checking when the fast path fails.
@@ -270,7 +313,7 @@ return_false:
 ; Check if the sub_klass extends from the super_klass using both primary and secondary supers.
 ; Fast path: checks primary super chain.
 ; Slow path: scans secondary supers array if needed.
-define hotspotcc i1 @jeandle.check_klass_subtype(ptr addrspace(0) nocapture %sub_klass, ptr addrspace(0) nocapture %super_klass) "lower-phase"="0" #0 {
+define hotspotcc i1 @jeandle.check_klass_subtype(ptr addrspace(0) nocapture %sub_klass, ptr addrspace(0) nocapture %super_klass) "lower-phase"="1" #0 {
 entry:
   %is_same_klass = icmp eq ptr addrspace(0) %sub_klass, %super_klass
   br i1 %is_same_klass, label %return_true, label %check_primary_supers
@@ -432,6 +475,14 @@ entry:
 declare hotspotcc ptr @jeandle.current_thread()
 declare hotspotcc ptr addrspace(1) @new_array(ptr, i32, ptr)
 declare hotspotcc void @SharedRuntime_register_finalizer(ptr, ptr addrspace(1))
+
+; ArrayCopyNode-like pseudo operation. Keep it opaque through phase 0 so
+; ArrayCopySpecialization can expand every call before phase 1 lowering.
+declare hotspotcc void @jeandle.arraycopy(
+    ptr addrspace(1), i32, ptr addrspace(1), i32, i32,
+    ptr addrspace(0), ptr addrspace(0), i32, i32
+) "lower-phase"="1"
+
 ; Slow-path runtime routines for monitor JavaOps. The LOCKING routine is an
 ; indirect routine called via a JIT stub (hotspotcc); declared here and
 ; resolved at link time via a routine-call reloc to the stub. The UNLOCKING
@@ -450,6 +501,32 @@ declare hotspotcc void @SharedRuntime_complete_monitor_locking_C(ptr addrspace(1
 ; do not simplify to the default CC -- RS4GC would otherwise synthesize a
 ; default-CC declaration and the lowered call would mismatch the runtime entry.
 declare hotspotcc void @__llvm_deoptimize(i32)
+
+; Arraycopy stub entry points resolved by jeandleRuntimeRoutine.hpp.
+declare i32 @StubRoutines_generic_arraycopy(ptr addrspace(1), i32, ptr addrspace(1), i32, i32)
+declare hotspotcc void @SharedRuntime_slow_arraycopy_C(ptr addrspace(1), i32, ptr addrspace(1), i32, i32, ptr)
+declare void @StubRoutines_jbyte_arraycopy(ptr addrspace(1), ptr addrspace(1), i64)
+declare void @StubRoutines_arrayof_jbyte_arraycopy(ptr addrspace(1), ptr addrspace(1), i64)
+declare void @StubRoutines_jbyte_disjoint_arraycopy(ptr addrspace(1), ptr addrspace(1), i64)
+declare void @StubRoutines_arrayof_jbyte_disjoint_arraycopy(ptr addrspace(1), ptr addrspace(1), i64)
+declare void @StubRoutines_jshort_arraycopy(ptr addrspace(1), ptr addrspace(1), i64)
+declare void @StubRoutines_arrayof_jshort_arraycopy(ptr addrspace(1), ptr addrspace(1), i64)
+declare void @StubRoutines_jshort_disjoint_arraycopy(ptr addrspace(1), ptr addrspace(1), i64)
+declare void @StubRoutines_arrayof_jshort_disjoint_arraycopy(ptr addrspace(1), ptr addrspace(1), i64)
+declare void @StubRoutines_jint_arraycopy(ptr addrspace(1), ptr addrspace(1), i64)
+declare void @StubRoutines_arrayof_jint_arraycopy(ptr addrspace(1), ptr addrspace(1), i64)
+declare void @StubRoutines_jint_disjoint_arraycopy(ptr addrspace(1), ptr addrspace(1), i64)
+declare void @StubRoutines_arrayof_jint_disjoint_arraycopy(ptr addrspace(1), ptr addrspace(1), i64)
+declare void @StubRoutines_jlong_arraycopy(ptr addrspace(1), ptr addrspace(1), i64)
+declare void @StubRoutines_arrayof_jlong_arraycopy(ptr addrspace(1), ptr addrspace(1), i64)
+declare void @StubRoutines_jlong_disjoint_arraycopy(ptr addrspace(1), ptr addrspace(1), i64)
+declare void @StubRoutines_arrayof_jlong_disjoint_arraycopy(ptr addrspace(1), ptr addrspace(1), i64)
+declare void @StubRoutines_oop_arraycopy(ptr addrspace(1), ptr addrspace(1), i64)
+declare void @StubRoutines_arrayof_oop_arraycopy(ptr addrspace(1), ptr addrspace(1), i64)
+declare void @StubRoutines_oop_disjoint_arraycopy(ptr addrspace(1), ptr addrspace(1), i64)
+declare void @StubRoutines_arrayof_oop_disjoint_arraycopy(ptr addrspace(1), ptr addrspace(1), i64)
+declare i32 @StubRoutines_checkcast_arraycopy(ptr addrspace(1), ptr addrspace(1), i64, i64, ptr addrspace(0))
+
 
 ; Unified array allocation JavaOp.  Both bytecode (newarray/anewarray) and intrinsic
 ; (_newArray / Array.newInstance) paths call this function.
@@ -787,9 +864,7 @@ return_true:
 
 check_subtype:
   %array_klass = call hotspotcc ptr addrspace(0) @jeandle.load_klass(ptr addrspace(1) %array_oop)
-  %element_klass_offset = load i32, ptr @ObjArrayKlass.element_klass_offset;
-  %element_klass_addr = getelementptr inbounds i8, ptr addrspace(0) %array_klass, i32 %element_klass_offset
-  %element_klass = load atomic ptr addrspace(0), ptr addrspace(0) %element_klass_addr unordered, align 8
+  %element_klass = call hotspotcc ptr addrspace(0) @jeandle.load_array_element_klass(ptr addrspace(0) %array_klass)
   %is_subtype = call hotspotcc i1 @jeandle.check_instanceof(ptr addrspace(0) %element_klass, ptr addrspace(1) nocapture nonnull %oop)
 
   ret i1 %is_subtype

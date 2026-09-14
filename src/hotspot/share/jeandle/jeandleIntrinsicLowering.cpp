@@ -20,7 +20,10 @@
 #include "jeandle/jeandleIntrinsicLowering.hpp"
 
 #include "jeandle/__llvmHeadersBegin__.hpp"
+#include "llvm/ADT/FloatingPointMode.h"
 #include "llvm/Analysis/ConstantFolding.h"
+#include "llvm/IR/Jeandle/Attributes.h"
+#include "llvm/IR/Jeandle/JavaType.h"
 #include "llvm/IR/Constants.h"
 #include "llvm/IR/DerivedTypes.h"
 #include "llvm/IR/MDBuilder.h"
@@ -32,11 +35,13 @@
 
 #include "jeandle/__hotspotHeadersBegin__.hpp"
 #include "ci/ciEnv.hpp"
+#include "ci/ciField.hpp"
 #include "ci/ciInstance.hpp"
 #include "ci/ciInstanceKlass.hpp"
 #include "ci/ciKlass.hpp"
 #include "ci/ciMethod.hpp"
 #include "ci/ciSignature.hpp"
+#include "ci/ciSymbol.hpp"
 #include "classfile/vmClasses.hpp"
 #include "classfile/javaClasses.hpp"
 #include "classfile/vmIntrinsics.hpp"
@@ -48,6 +53,8 @@
 #include "runtime/globals.hpp"
 #include "runtime/vm_version.hpp"
 #include "utilities/globalDefinitions.hpp"
+
+#include <cstring>
 
 // =============================================================================
 // Call-site IR annotation helpers (migrated from JeandleIntrinsicIRSemantics)
@@ -272,6 +279,12 @@ bool JeandleIntrinsicLowering::is_supported(vmIntrinsics::ID id) {
     case vmIntrinsics::_floatToIntBits:
     case vmIntrinsics::_doubleToLongBits:
 
+    // floating-point range checks
+    case vmIntrinsics::_floatIsFinite:
+    case vmIntrinsics::_floatIsInfinite:
+    case vmIntrinsics::_doubleIsFinite:
+    case vmIntrinsics::_doubleIsInfinite:
+
     // fence
     case vmIntrinsics::_loadFence:
     case vmIntrinsics::_storeFence:
@@ -285,6 +298,13 @@ bool JeandleIntrinsicLowering::is_supported(vmIntrinsics::ID id) {
     case vmIntrinsics::_compareUnsigned_i:
     case vmIntrinsics::_compareUnsigned_l:
 
+    // divide unsigned
+    case vmIntrinsics::_divideUnsigned_i:
+    case vmIntrinsics::_divideUnsigned_l:
+    // unsigned remainder
+    case vmIntrinsics::_remainderUnsigned_i:
+    case vmIntrinsics::_remainderUnsigned_l:
+
     // count leading/trailing zeros
     // No CPU gating: LLVM lowers ctlz/cttz to native sequences on both x86-64
     // (bsr/bsf fallback when LZCNT/TZCNT are absent) and aarch64 (CLZ, RBIT+CLZ),
@@ -293,6 +313,11 @@ bool JeandleIntrinsicLowering::is_supported(vmIntrinsics::ID id) {
     case vmIntrinsics::_numberOfLeadingZeros_l:
     case vmIntrinsics::_numberOfTrailingZeros_i:
     case vmIntrinsics::_numberOfTrailingZeros_l:
+
+    // reverse: LLVM bitreverse has exact i32/i64 Java operand widths and
+    // lowers to a target-appropriate instruction sequence.
+    case vmIntrinsics::_reverse_i:
+    case vmIntrinsics::_reverse_l:
 
     // reverseBytes: full-width variants are direct bswap; narrow variants need
     // explicit zero/sign-extension semantics.
@@ -326,50 +351,21 @@ bool JeandleIntrinsicLowering::is_supported(vmIntrinsics::ID id) {
     // legal on every target Jeandle supports.
     case vmIntrinsics::_multiplyHigh:
     case vmIntrinsics::_unsignedMultiplyHigh:
+
+    // arraycopy
+    case vmIntrinsics::_arraycopy:
+      return true;
+
+    // Single-block SHA compression. Availability is checked again by the
+    // lowering because platform stubs are generated conditionally.
+    case vmIntrinsics::_sha_implCompress:
+    case vmIntrinsics::_sha2_implCompress:
+    case vmIntrinsics::_sha5_implCompress:
+    case vmIntrinsics::_sha3_implCompress:
       return true;
 
     default:
       return false;
-  }
-}
-
-// =============================================================================
-// trap_throttle_mask — simple switch
-// =============================================================================
-
-static constexpr JeandleTrapReasonMask trap_reason_mask_val(Deoptimization::DeoptReason reason) {
-  return JeandleTrapReasonMask(1u) << static_cast<uint>(reason);
-}
-
-JeandleTrapReasonMask JeandleIntrinsicLowering::trap_throttle_mask(vmIntrinsics::ID id) {
-  switch (id) {
-    case vmIntrinsics::_isAssignableFrom:
-    case vmIntrinsics::_getClassAccessFlags:
-      return trap_reason_mask_val(Deoptimization::Reason_null_check);
-    case vmIntrinsics::_Class_cast:
-      return trap_reason_mask_val(Deoptimization::Reason_intrinsic);
-
-    case vmIntrinsics::_allocateInstance:
-      return trap_reason_mask_val(Deoptimization::Reason_null_check);
-    case vmIntrinsics::_Preconditions_checkIndex:
-    case vmIntrinsics::_Preconditions_checkLongIndex:
-      return trap_reason_mask_val(Deoptimization::Reason_intrinsic) |
-             trap_reason_mask_val(Deoptimization::Reason_range_check);
-    case vmIntrinsics::_addExactI:
-    case vmIntrinsics::_addExactL:
-    case vmIntrinsics::_subtractExactI:
-    case vmIntrinsics::_subtractExactL:
-    case vmIntrinsics::_multiplyExactI:
-    case vmIntrinsics::_multiplyExactL:
-    case vmIntrinsics::_incrementExactI:
-    case vmIntrinsics::_incrementExactL:
-    case vmIntrinsics::_decrementExactI:
-    case vmIntrinsics::_decrementExactL:
-    case vmIntrinsics::_negateExactI:
-    case vmIntrinsics::_negateExactL:
-      return trap_reason_mask_val(Deoptimization::Reason_intrinsic);
-    default:
-      return 0;
   }
 }
 
@@ -445,6 +441,10 @@ bool JeandleIntrinsicLowering::lower(vmIntrinsics::ID id, const ciMethod* target
     case vmIntrinsics::_numberOfTrailingZeros_l:
       return lower_count_zeros(id, llvm::Intrinsic::cttz);
 
+    case vmIntrinsics::_reverse_i:
+    case vmIntrinsics::_reverse_l:
+      return emit_llvm_builtin(llvm::Intrinsic::bitreverse);
+
     // Keep full-width variants as direct IR instead of relying on fallback
     // invoke inlining to recover llvm.bswap.
     case vmIntrinsics::_reverseBytes_i:
@@ -505,12 +505,12 @@ bool JeandleIntrinsicLowering::lower(vmIntrinsics::ID id, const ciMethod* target
 
     // getClass
     //
-    // TODO 1: When the receiver's Java type is known at compile time (e.g., the
-    // result of a `new` bytecode which carries a `java-klass` return attribute),
-    // we can skip the `jeandle.load_klass` call that reads the object header and
-    // use the known Klass pointer directly.
+    // Exact receiver types are folded later by LLVM's ConstantFieldFolding
+    // pass using the GetJavaMirror VM callback. This lowering keeps the
+    // dynamic JavaOp so CFF can also see type information propagated by the
+    // inline/PEA pipeline.
     //
-    // TODO 2: Optimize the comparison between class pointers.
+    // TODO: Optimize the comparison between class pointers.
     case vmIntrinsics::_getClass:
       return lower_java_op("jeandle.get_class",
                            {CTRL_NONE, MEM_READ});
@@ -567,6 +567,13 @@ bool JeandleIntrinsicLowering::lower(vmIntrinsics::ID id, const ciMethod* target
     case vmIntrinsics::_doubleToLongBits:
       return lower_fp_to_bits_canonical(id);
 
+    // floating-point range checks
+    case vmIntrinsics::_floatIsFinite:
+    case vmIntrinsics::_floatIsInfinite:
+    case vmIntrinsics::_doubleIsFinite:
+    case vmIntrinsics::_doubleIsInfinite:
+      return lower_fp_range_check(id);
+
     // floatToFloat16/float16ToFloat
     case vmIntrinsics::_floatToFloat16:
     case vmIntrinsics::_float16ToFloat:
@@ -584,13 +591,23 @@ bool JeandleIntrinsicLowering::lower(vmIntrinsics::ID id, const ciMethod* target
 
     // Preconditions
     case vmIntrinsics::_Preconditions_checkIndex:
+      return lower_preconditions_check_index(T_INT);
     case vmIntrinsics::_Preconditions_checkLongIndex:
-      return lower_preconditions_check_index(id);
+      return lower_preconditions_check_index(T_LONG);
 
     // CompareUnsigned
     case vmIntrinsics::_compareUnsigned_i:
     case vmIntrinsics::_compareUnsigned_l:
       return lower_compare_unsigned(id);
+
+    // divide unsigned
+    case vmIntrinsics::_divideUnsigned_i:
+    case vmIntrinsics::_divideUnsigned_l:
+      return lower_divide_unsigned(id);
+    // RemainderUnsigned
+    case vmIntrinsics::_remainderUnsigned_i:
+    case vmIntrinsics::_remainderUnsigned_l:
+      return lower_remainder_unsigned(id);
 
     // addExact and the other exact-arithmetic intrinsics share the same
     // overflow-trap path implemented by lower_exact_arith.
@@ -619,6 +636,16 @@ bool JeandleIntrinsicLowering::lower(vmIntrinsics::ID id, const ciMethod* target
     case vmIntrinsics::_multiplyHigh:
     case vmIntrinsics::_unsignedMultiplyHigh:
       return lower_multiply_high(id);
+
+    // arraycopy
+    case vmIntrinsics::_arraycopy:
+      return lower_arraycopy();
+
+    case vmIntrinsics::_sha_implCompress:
+    case vmIntrinsics::_sha2_implCompress:
+    case vmIntrinsics::_sha5_implCompress:
+    case vmIntrinsics::_sha3_implCompress:
+      return lower_digestBase_implCompress(id);
 
     default:
       return false;
@@ -723,6 +750,132 @@ bool JeandleIntrinsicLowering::lower_dual_path_libm(llvm::Intrinsic::ID llvm_id,
   } else {
     return emit_llvm_builtin(llvm_id);
   }
+}
+
+// =============================================================================
+// lower_digestBase_implCompress — single-block SHA compression
+// =============================================================================
+
+bool JeandleIntrinsicLowering::lower_digestBase_implCompress(vmIntrinsics::ID id) {
+  ciSignature* sig = _target->signature();
+  if (sig->count() != 2 || sig->type_at(0)->basic_type() != T_ARRAY ||
+      sig->type_at(1)->basic_type() != T_INT ||
+      sig->type_at(0)->name() == nullptr ||
+      strcmp(sig->type_at(0)->name(), "[B") != 0) {
+    return false;
+  }
+
+  const char* state_signature = nullptr;
+  const char* stub_name = nullptr;
+  BasicType state_element_type = T_ILLEGAL;
+  JeandleRuntimeCalleeFn callee_fn = nullptr;
+  switch (id) {
+    case vmIntrinsics::_sha_implCompress:
+      state_signature = "[I";
+      state_element_type = T_INT;
+      stub_name = "StubRoutines_sha1_implCompress";
+      callee_fn = &JeandleRuntimeRoutine::StubRoutines_sha1_implCompress_callee;
+      break;
+    case vmIntrinsics::_sha2_implCompress:
+      state_signature = "[I";
+      state_element_type = T_INT;
+      stub_name = "StubRoutines_sha256_implCompress";
+      callee_fn = &JeandleRuntimeRoutine::StubRoutines_sha256_implCompress_callee;
+      break;
+    case vmIntrinsics::_sha5_implCompress:
+      state_signature = "[J";
+      state_element_type = T_LONG;
+      stub_name = "StubRoutines_sha512_implCompress";
+      callee_fn = &JeandleRuntimeRoutine::StubRoutines_sha512_implCompress_callee;
+      break;
+    case vmIntrinsics::_sha3_implCompress:
+      state_signature = "[B";
+      state_element_type = T_BYTE;
+      stub_name = "StubRoutines_sha3_implCompress";
+      callee_fn = &JeandleRuntimeRoutine::StubRoutines_sha3_implCompress_callee;
+      break;
+    default:
+      return false;
+  }
+
+  // StubRoutines entries are generated only on supported platforms. Never
+  // materialize a direct call when the entry is absent.
+  if (JeandleRuntimeRoutine::find_routine_entry(stub_name) == nullptr) {
+    return false;
+  }
+
+  ciInstanceKlass* holder = _target->holder();
+  ciField* state_field = holder->get_field_by_name(ciSymbol::make("state"),
+                                                   ciSymbol::make(state_signature),
+                                                   false);
+  if (state_field == nullptr) {
+    return false;
+  }
+
+  ciField* block_size_field = nullptr;
+  if (id == vmIntrinsics::_sha3_implCompress) {
+    block_size_field = holder->get_field_by_name(ciSymbol::make("blockSize"),
+                                                 ciSymbol::make("I"), false);
+    if (block_size_field == nullptr) {
+      return false;
+    }
+  }
+
+  // The intrinsic is entered with receiver, byte[] and offset on the JVM
+  // stack. Peek until all optional checks and field lookups have succeeded so
+  // a false return leaves the stack untouched for the normal invoke path.
+  llvm::Value* receiver = _interp->_jvm->raw_peek(2).value();
+  llvm::Value* src = _interp->_jvm->raw_peek(1).value();
+  llvm::Value* ofs = _interp->_jvm->raw_peek(0).value();
+  _interp->null_check(src);
+
+  llvm::IRBuilder<>& builder = _interp->_ir_builder;
+  llvm::LLVMContext& context = *_interp->_context;
+  llvm::Type* java_oop_type = JeandleType::java2llvm(T_OBJECT, context);
+
+  llvm::Value* src_offset = builder.CreateAdd(
+      builder.getInt32(arrayOopDesc::base_offset_in_bytes(T_BYTE)), ofs,
+      "sha_src_offset");
+  llvm::Value* src_start = builder.CreateInBoundsPtrAdd(src, src_offset,
+                                                        "sha_src_start");
+
+  llvm::Value* state_field_addr = _interp->compute_instance_field_address(
+      receiver, state_field->offset_in_bytes());
+  BasicType state_ref_type = state_field->layout_type();
+  if (UseCompressedOops && is_reference_type(state_ref_type)) {
+    state_ref_type = T_NARROWOOP;
+  }
+  llvm::Value* state_array = _interp->load_from_address(state_field_addr,
+                                                        state_ref_type, false);
+  if (state_ref_type == T_NARROWOOP) {
+    state_array = builder.CreateAddrSpaceCast(state_array, java_oop_type,
+                                              "sha_state_array");
+  }
+
+  llvm::Value* state_base = builder.CreateInBoundsPtrAdd(
+      state_array, builder.getInt32(arrayOopDesc::base_offset_in_bytes(state_element_type)),
+      "sha_state_base");
+
+  _interp->_jvm->ipop();  // ofs
+  _interp->_jvm->apop();  // src
+  _interp->_jvm->apop();  // receiver
+
+  static constexpr CallSiteAttributeMetadata attrs = {
+      CTRL_NONE, MEM_READ | MEM_WRITE};
+  if (block_size_field == nullptr) {
+    emit_callsite(callee_fn(_interp->_module), llvm::CallingConv::C,
+                  {src_start, state_base}, attrs,
+                  /*is_gc_leaf_entry=*/true);
+  } else {
+    llvm::Value* block_size_addr = _interp->compute_instance_field_address(
+        receiver, block_size_field->offset_in_bytes());
+    llvm::Value* block_size = _interp->load_from_address(block_size_addr,
+                                                         T_INT, false);
+    emit_callsite(callee_fn(_interp->_module), llvm::CallingConv::C,
+                  {src_start, state_base, block_size}, attrs,
+                  /*is_gc_leaf_entry=*/true);
+  }
+  return true;
 }
 
 // =============================================================================
@@ -1587,11 +1740,17 @@ bool JeandleIntrinsicLowering::lower_llvm_fence(vmIntrinsics::ID id) {
 }
 
 // ---- lower_preconditions_check_index ----
-bool JeandleIntrinsicLowering::lower_preconditions_check_index(vmIntrinsics::ID id) {
+bool JeandleIntrinsicLowering::lower_preconditions_check_index(BasicType bt) {
+
+  if (_interp->too_many_traps(Deoptimization::Reason_intrinsic) ||
+      _interp->too_many_traps(Deoptimization::Reason_range_check)) {
+    return false;
+  }
+
   llvm::IRBuilder<>& builder = _interp->_ir_builder;
   llvm::LLVMContext& ctx = *_interp->_context;
   int cur_bci = _interp->_bytecodes.cur_bci();
-  bool is_long = id == vmIntrinsics::_Preconditions_checkLongIndex;
+  bool is_long = bt == T_LONG;
 
   // Peek logical values so the operand stack stays intact for the deopt bundle
   // captured by uncommon_trap; the real pops are deferred to the pass path.
@@ -1666,6 +1825,44 @@ bool JeandleIntrinsicLowering::lower_compare_unsigned(vmIntrinsics::ID id) {
   return true;
 }
 
+// ---- lower_remainder_unsigned ----
+bool JeandleIntrinsicLowering::lower_remainder_unsigned(vmIntrinsics::ID id) {
+  bool is_long = (id == vmIntrinsics::_remainderUnsigned_l);
+
+  llvm::Value* divisor = _interp->_jvm->peek_value().value();
+  _interp->zero_check(divisor);
+
+  divisor = is_long ? _interp->_jvm->lpop() : _interp->_jvm->ipop();
+  llvm::Value* dividend = is_long ? _interp->_jvm->lpop() : _interp->_jvm->ipop();
+  llvm::Value* result = _interp->_ir_builder.CreateURem(dividend, divisor);
+
+  if (is_long) {
+    _interp->_jvm->lpush(result);
+  } else {
+    _interp->_jvm->ipush(result);
+  }
+  return true;
+}
+
+// ---- lower_divide_unsigned ----
+bool JeandleIntrinsicLowering::lower_divide_unsigned(vmIntrinsics::ID id) {
+  bool is_long = (id == vmIntrinsics::_divideUnsigned_l);
+
+  llvm::Value* divisor = _interp->_jvm->peek_value(0).value();
+  _interp->zero_check(divisor);
+
+  divisor = is_long ? _interp->_jvm->lpop() : _interp->_jvm->ipop();
+  llvm::Value* dividend = is_long ? _interp->_jvm->lpop() : _interp->_jvm->ipop();
+  llvm::Value* result = _interp->_ir_builder.CreateUDiv(dividend, divisor);
+
+  if (is_long) {
+    _interp->_jvm->lpush(result);
+  } else {
+    _interp->_jvm->ipush(result);
+  }
+  return true;
+}
+
 // ---- lower_bit_count ----
 // Integer.bitCount(int) -> llvm.ctpop.i32 -> i32        (type matches, no truncate)
 // Long.bitCount(long)   -> llvm.ctpop.i64 -> i64 -> trunc i32  (type mismatch: Java returns int)
@@ -1717,6 +1914,25 @@ bool JeandleIntrinsicLowering::lower_count_zeros(vmIntrinsics::ID id,
   return true;
 }
 
+// ---- lower_fp_range_check ----
+// Float/Double.isFinite and isInfinite map directly to llvm.is.fpclass.
+bool JeandleIntrinsicLowering::lower_fp_range_check(vmIntrinsics::ID id) {
+  llvm::IRBuilder<>& builder = _interp->_ir_builder;
+  bool is_double = id == vmIntrinsics::_doubleIsFinite ||
+                   id == vmIntrinsics::_doubleIsInfinite;
+  bool is_finite = id == vmIntrinsics::_floatIsFinite ||
+                   id == vmIntrinsics::_doubleIsFinite;
+
+  llvm::Value* arg = is_double ? _interp->_jvm->dpop() : _interp->_jvm->fpop();
+  llvm::FPClassTest mask = is_finite ? llvm::fcFinite : llvm::fcInf;
+  llvm::Value* result = builder.CreateIntrinsic(
+      llvm::Intrinsic::is_fpclass,
+      {arg->getType()},
+      {arg, builder.getInt32(static_cast<uint32_t>(mask))});
+  _interp->_jvm->ipush(builder.CreateZExt(result, builder.getInt32Ty()));
+  return true;
+}
+
 // ---- lower_reverse_bytes_narrow ----
 // Character.reverseBytes(char) / Short.reverseBytes(short). The value sits on
 // the operand stack as a computational int, but only the low 16 bits are
@@ -1746,7 +1962,7 @@ bool JeandleIntrinsicLowering::lower_reverse_bytes_narrow(vmIntrinsics::ID id) {
 bool JeandleIntrinsicLowering::lower_new_array() {
   llvm::LLVMContext& ctx = *_interp->_context;
   llvm::IRBuilder<>& builder = _interp->_ir_builder;
-  llvm::Module& module = _interp->_module;
+  llvm::Module& m = _interp->_module;
 
   // Pop mirror (Class<?>) and length (int) from JVM stack.
   // Array.newInstance(Class<?>, int) is a static method.
@@ -1776,7 +1992,7 @@ bool JeandleIntrinsicLowering::lower_new_array() {
   // Klass-load block: acquire-load the cached array_klass from the mirror.
   builder.SetInsertPoint(klass_load_bb);
   llvm::GlobalVariable* offset_gv =
-      module.getGlobalVariable("java_lang_Class.array_klass_offset", /*AllowInternal=*/true);
+      m.getGlobalVariable("java_lang_Class.array_klass_offset", /*AllowInternal=*/true);
   llvm::Value* offset = builder.CreateLoad(builder.getInt32Ty(), offset_gv);
   llvm::Value* klass_field_addr =
       builder.CreateInBoundsGEP(builder.getInt8Ty(), mirror, offset);
@@ -1828,7 +2044,7 @@ bool JeandleIntrinsicLowering::lower_new_array() {
 
   static constexpr CallSiteAttributeMetadata fast_attrs =
       {CTRL_NEEDS_EXCEPTION_EDGE, MEM_READ | MEM_WRITE};
-  llvm::Function* new_array_op = module.getFunction("jeandle.new_array");
+  llvm::Function* new_array_op = m.getFunction("jeandle.new_array");
   llvm::CallBase* fast_call =
       emit_callsite(new_array_op, llvm::CallingConv::Hotspot_JIT,
                     {klass, length, size_in_bytes, base_offset, length_limit}, fast_attrs);
@@ -1838,14 +2054,14 @@ bool JeandleIntrinsicLowering::lower_new_array() {
 
   // Slow path: klass not cached or mirror is null → call new_array_from_mirror.
   builder.SetInsertPoint(slow_bb);
-  llvm::Function* current_thread_fn = module.getFunction("jeandle.current_thread");
+  llvm::Function* current_thread_fn = m.getFunction("jeandle.current_thread");
   llvm::CallInst* current_thread = builder.CreateCall(current_thread_fn);
   current_thread->setCallingConv(llvm::CallingConv::Hotspot_JIT);
 
   static constexpr CallSiteAttributeMetadata slow_attrs =
       {CTRL_NEEDS_EXCEPTION_EDGE, MEM_READ | MEM_WRITE};
   llvm::CallBase* slow_call = emit_callsite(
-      JeandleRuntimeRoutine::new_array_from_mirror_callee(module),
+      JeandleRuntimeRoutine::new_array_from_mirror_callee(m),
       llvm::CallingConv::Hotspot_JIT,
       {mirror, length, current_thread}, slow_attrs);
   builder.CreateBr(merge_bb);
@@ -1885,47 +2101,41 @@ bool JeandleIntrinsicLowering::lower_unsafe_allocate_instance() {
   llvm::BasicBlock* primitive_trap_bb = llvm::BasicBlock::Create(
       ctx, "unsafe_allocate_primitive_trap", _interp->_llvm_func);
 
-  // TODO: Fold constant mirrors, their Klass, and the dependent layout and
-  // initialization loads together in an LLVM pass.
-  llvm::Value* klass_addr = builder.CreateInBoundsGEP(
-      builder.getInt8Ty(), mirror,
-      builder.getInt32(java_lang_Class::klass_offset()));
-  llvm::Value* klass = builder.CreateLoad(
-      c_heap_ptr_ty, klass_addr, "unsafe_allocate.klass");
+  // Preserve the mirror-to-Klass query as a phase-1 JavaOp so
+  // ConstantFieldFolding can answer it for a constant Class mirror. Dynamic
+  // mirrors lower back to the same VM field load before code generation.
+  llvm::CallInst* klass =
+      _interp->call_java_op("jeandle.load_mirror_klass", {mirror});
+  klass->setName("unsafe_allocate.klass");
   llvm::Value* klass_is_null = builder.CreateICmpEQ(
       klass, llvm::ConstantPointerNull::get(c_heap_ptr_ty));
   builder.CreateCondBr(klass_is_null, primitive_trap_bb, allocation_check_bb);
   _interp->uncommon_trap(Deoptimization::Reason_null_check,
                          Deoptimization::Action_make_not_entrant,
-                         primitive_trap_bb,
-                         true /* should_reexecute */);
+                         primitive_trap_bb);
 
   builder.SetInsertPoint(allocation_check_bb);
-  llvm::Value* layout_addr = builder.CreateInBoundsGEP(
-      builder.getInt8Ty(), klass,
-      builder.getInt32(in_bytes(Klass::layout_helper_offset())));
-  llvm::Value* layout = builder.CreateLoad(
-      builder.getInt32Ty(), layout_addr, "unsafe_allocate.layout");
+  llvm::CallInst* layout =
+      _interp->call_java_op("jeandle.layout_helper", {klass});
+  layout->setName("unsafe_allocate.layout");
 
-  llvm::Value* init_state_addr = builder.CreateInBoundsGEP(
-      builder.getInt8Ty(), klass,
-      builder.getInt32(in_bytes(InstanceKlass::init_state_offset())));
-  llvm::Value* init_state = builder.CreateLoad(
-      builder.getInt8Ty(), init_state_addr, "unsafe_allocate.init_state");
-  llvm::Value* init_delta = builder.CreateSub(
-      builder.CreateZExt(init_state, builder.getInt32Ty()),
-      builder.getInt32(InstanceKlass::fully_initialized),
-      "unsafe_allocate.init_delta");
+  llvm::CallInst* is_initialized =
+      _interp->call_java_op("jeandle.klass_is_initialized", {klass});
+  is_initialized->setName("unsafe_allocate.is_initialized");
+  llvm::Value* needs_initialization = builder.CreateNot(
+      is_initialized, "unsafe_allocate.needs_initialization");
 
   // Match GraphKit::new_instance's reflective slow test. This also routes
   // arrays, interfaces, abstract classes and java.lang.Class to the runtime.
   llvm::Value* slow_path_bits = builder.CreateAnd(
       layout, builder.getInt32(Klass::_lh_instance_slow_path_bit),
       "unsafe_allocate.slow_path_bits");
-  llvm::Value* slow_test = builder.CreateOr(
-      slow_path_bits, init_delta, "unsafe_allocate.slow_test");
-  llvm::Value* needs_slow_path = builder.CreateICmpNE(
-      slow_test, builder.getInt32(0));
+  llvm::Value* has_slow_path_bits = builder.CreateICmpNE(
+      slow_path_bits, builder.getInt32(0),
+      "unsafe_allocate.has_slow_path_bits");
+  llvm::Value* needs_slow_path = builder.CreateOr(
+      has_slow_path_bits, needs_initialization,
+      "unsafe_allocate.needs_slow_path");
 
   // The layout helper stores the aligned instance size in bytes; its low bits
   // contain allocation flags and must not be passed to the TLAB allocator.
@@ -2281,8 +2491,7 @@ bool JeandleIntrinsicLowering::lower_exact_arith(vmIntrinsics::ID id,
   llvm::MDNode* bwmd = llvm::MDBuilder(ctx).createBranchWeights(1, 9999);
   builder.CreateCondBr(overflow, ov_bb, ok_bb, bwmd);
   _interp->uncommon_trap(Deoptimization::Reason_intrinsic,
-                         Deoptimization::Action_none, ov_bb,
-                         true /* should_reexecute */);
+                         Deoptimization::Action_none, ov_bb);
 
   builder.SetInsertPoint(ok_bb);
   _interp->_block->set_tail_llvm_block(ok_bb);
@@ -2320,5 +2529,344 @@ bool JeandleIntrinsicLowering::lower_multiply_high(vmIntrinsics::ID id) {
   llvm::Value* high = builder.CreateLShr(product, 64);
 
   _interp->_jvm->lpush(builder.CreateTrunc(high, builder.getInt64Ty()));
+  return true;
+}
+
+// ---- generate_guard ----
+llvm::BasicBlock* JeandleIntrinsicLowering::generate_guard(
+    llvm::Value* test, llvm::BasicBlock* slow_bb, float true_prob) {
+
+  llvm::BasicBlock* control_bb = _interp->_ir_builder.GetInsertBlock();
+  if (control_bb == nullptr) {
+    return nullptr;
+  }
+
+  llvm::ConstantInt* constant_test = llvm::dyn_cast<llvm::ConstantInt>(test);
+  if (constant_test != nullptr && constant_test->isZero()) {
+    return nullptr;
+  }
+
+  // Build an if node and its projections.
+  // If test is true we take the slow path, which we assume is uncommon.
+  llvm::Function* function = control_bb->getParent();
+  llvm::LLVMContext& ctx = function->getContext();
+  llvm::BasicBlock* if_slow =
+      llvm::BasicBlock::Create(ctx, "arraycopy_guard_slow", function);
+  llvm::BasicBlock* if_fast =
+      llvm::BasicBlock::Create(ctx, "arraycopy_guard_fast", function);
+
+  llvm::IRBuilder<> builder(control_bb);
+  llvm::BranchInst* guard = builder.CreateCondBr(test, if_slow, if_fast);
+  assert(true_prob > 0.0f && true_prob < 1.0f,
+         "branch probability must be in (0, 1)");
+  constexpr uint32_t BranchWeightScale = 1000000;
+  uint32_t true_weight = static_cast<uint32_t>(true_prob * BranchWeightScale);
+  assert(true_weight > 0 && true_weight < BranchWeightScale,
+         "branch probability must map to non-zero branch weights");
+  uint32_t false_weight = BranchWeightScale - true_weight;
+  llvm::MDBuilder mdb(ctx);
+  guard->setMetadata(llvm::LLVMContext::MD_prof,
+                     mdb.createBranchWeights(true_weight, false_weight));
+
+  llvm::IRBuilder<> slow_builder(if_slow);
+  if (slow_bb != nullptr) {
+    slow_builder.CreateBr(slow_bb);
+  }
+
+  _interp->_ir_builder.SetInsertPoint(if_fast);
+  return if_slow;
+}
+
+llvm::BasicBlock* JeandleIntrinsicLowering::generate_fair_guard(
+    llvm::Value* test, llvm::BasicBlock* region_bb) {
+  return generate_guard(test, region_bb, PROB_FAIR);
+}
+
+void JeandleIntrinsicLowering::generate_negative_guard(
+    llvm::Value* index, llvm::BasicBlock* slow_bb) {
+
+  llvm::BasicBlock* control_bb = _interp->_ir_builder.GetInsertBlock();
+  if (control_bb == nullptr) {
+    return;
+  }
+
+  llvm::ConstantInt* constant_index = llvm::dyn_cast<llvm::ConstantInt>(index);
+  if (constant_index != nullptr && constant_index->getSExtValue() >= 0) {
+    return;
+  }
+
+  // TODO: Match C2 more closely by consulting LLVM range information here.
+  // C2 skips this guard when _gvn.type(index)->higher_equal(TypeInt::POS).
+  // Jeandle currently only folds constant non-negative indexes at lowering
+  // time; later LLVM passes may still remove the generated compare.
+  llvm::IRBuilder<> builder(control_bb);
+  llvm::Value* is_negative = builder.CreateICmpSLT(
+      index, builder.getInt32(0), "arraycopy_index_is_negative");
+  llvm::BasicBlock* slow_control =
+      generate_guard(is_negative, slow_bb, PROB_MIN);
+  if (slow_control != nullptr) {
+    // C2 creates CastII(index, TypeInt::POS) on the fast path. Materialize the
+    // equivalent LLVM fact so later optimization can use the guarded range.
+    llvm::IRBuilder<> fast_builder(_interp->_ir_builder.GetInsertBlock());
+    llvm::Value* non_negative =
+        fast_builder.CreateNot(is_negative, "arraycopy_index_non_negative");
+    fast_builder.CreateIntrinsic(llvm::Intrinsic::assume, {}, {non_negative});
+    _interp->_ir_builder.SetInsertPoint(fast_builder.GetInsertBlock());
+  }
+}
+
+void JeandleIntrinsicLowering::generate_limit_guard(
+    llvm::Value* offset, llvm::Value* copy_length,
+    llvm::Value* array_length, llvm::BasicBlock* slow_bb) {
+  llvm::BasicBlock* control_bb = _interp->_ir_builder.GetInsertBlock();
+  if (control_bb == nullptr) {
+    return;
+  }
+
+  llvm::ConstantInt* constant_offset = llvm::dyn_cast<llvm::ConstantInt>(offset);
+  bool zero_offset = constant_offset !=nullptr && constant_offset->isZero();
+  // TODO: Match C2's subseq_length->eqv_uncast(array_length). This currently
+  // only catches exact SSA value identity; Jeandle does not yet strip
+  // control-dependent integer range casts/assumes like C2 Node::uncast().
+  if (zero_offset && copy_length == array_length) {
+    return;
+  }
+
+  llvm::IRBuilder<> builder(control_bb);
+  llvm::Value* last = copy_length;
+  if (!zero_offset) {
+    last = builder.CreateAdd(copy_length, offset, "arraycopy_end");
+  }
+  llvm::Value* is_over = builder.CreateICmpULT( array_length, last, "arraycopy_over");
+  generate_guard(is_over, slow_bb, PROB_MIN);
+}
+
+// ---- generate_array_guard_common ----
+// TODO: Add C2-like speculative/profiled array guards before this point, so
+// weak Object-typed arraycopy sites can avoid repeated runtime klass loads.
+llvm::BasicBlock* JeandleIntrinsicLowering::generate_array_guard_common(
+    llvm::Value* klass, llvm::BasicBlock* region_bb,
+    bool obj_array, bool not_array) {
+
+  llvm::IRBuilder<>& builder = _interp->_ir_builder;
+  llvm::BasicBlock* control_bb = builder.GetInsertBlock();
+  if (control_bb == nullptr) {
+    return nullptr;
+  }
+
+  jint layout_con = 0;
+  llvm::Value* layout_val = _interp->get_layout_helper(klass, layout_con);
+  if (layout_val == nullptr) {
+    bool query = obj_array
+        ? Klass::layout_helper_is_objArray(layout_con)
+        : Klass::layout_helper_is_array(layout_con);
+    if (query == not_array) {
+      return nullptr;
+    } else {
+      llvm::BasicBlock* always_branch = control_bb;
+      if (region_bb != nullptr) {
+        builder.CreateBr(region_bb);
+      }
+      // Match C2 generate_array_guard_common(): this is an always-taken guard
+      // edge, so there is no fast-control continuation.
+      builder.ClearInsertionPoint();
+      return always_branch;
+    }
+  }
+
+  llvm::Value* limit = obj_array
+      ? builder.getInt32(static_cast<int>(Klass::_lh_array_tag_type_value
+                                          << Klass::_lh_array_tag_shift))
+      : builder.getInt32(Klass::_lh_neutral_value);
+  llvm::Value* bol =
+      builder.CreateICmpSLT(layout_val, limit,
+                            obj_array ? "arraycopy_is_obj_array"
+                                      : "arraycopy_is_array");
+  if (not_array)
+    bol = builder.CreateNot(bol, "arraycopy_guard_not");
+  return generate_fair_guard(bol, region_bb);
+}
+
+// ---- lower_arraycopy ----
+bool JeandleIntrinsicLowering::lower_arraycopy() {
+  assert(_target->is_static(), "System.arraycopy is static");
+  llvm::LLVMContext& ctx = *_interp->_context;
+  llvm::IRBuilder<>& b = _interp->_ir_builder;
+  llvm::Module& m = _interp->_module;
+  llvm::Function* f = _interp->_llvm_func;
+
+  // Get the arguments.
+  llvm::Value* src = _interp->_jvm->peek_value(4).value();
+  llvm::Value* src_offset = _interp->_jvm->peek_value(3).value();
+  llvm::Value* dest = _interp->_jvm->peek_value(2).value();
+  llvm::Value* dest_offset = _interp->_jvm->peek_value(1).value();
+  llvm::Value* length = _interp->_jvm->peek_value(0).value();
+
+  // The following tests must be performed
+  // (1) src and dest are arrays.
+  // (2) src and dest arrays must have elements of the same BasicType
+  // (3) src and dest must not be null.
+  // (4) src_offset must not be negative.
+  // (5) dest_offset must not be negative.
+  // (6) length must not be negative.
+  // (7) src_offset + length must not exceed length of src.
+  // (8) dest_offset + length must not exceed length of dest.
+  // (9) each element of an oop array must be assignable
+
+  // (3) src and dest must not be null.
+  // always do this here because we need the JVM state for uncommon traps
+  _interp->null_check(src);
+  _interp->null_check(dest);
+
+  // TODO: Add C2's !can_emit_guards follow-up:
+  //   alloc = tightly_coupled_allocation(dest);
+  // after the mandatory null checks. Jeandle does not currently rediscover a
+  // tightly allocated destination when guard emission is disabled, so the later
+  // validated arraycopy pseudo node cannot use that allocation coupling yet.
+
+  bool validated = false;
+  bool negative_length_guard_generated = false;
+
+  // TODO: Add speculative_type_not_null + maybe_cast_profiled_obj-style guards
+  // to turn hot Object-typed sources and destinations into precise array types
+  // before creating the validated arraycopy pseudo node.
+
+  // TODO: Match C2s full admission/type-narrowing logic here: honor
+  // can_emit_guards/tightly_coupled_allocation and the !src->is_top() /
+  // !dest->is_top() reachability checks before entering the validated
+  // guard-admission path. Jeandle does not currently model C2 top/dead-control
+  // values at this lowering point, so it relies on LLVM CFG cleanup after
+  // emitting guards.
+
+  if (!_interp->too_many_traps(const_cast<ciMethod*>(_interp->_method),
+                               _interp->_bytecodes.cur_bci(),
+                               Deoptimization::Reason_intrinsic)) {
+    // validate arguments: enables transformation the ArrayCopyNode
+    validated = true;
+
+    llvm::BasicBlock* slow_bb = llvm::BasicBlock::Create(ctx, "arraycopy_slow", f);
+    _interp->uncommon_trap(Deoptimization::Reason_intrinsic,
+                           Deoptimization::Action_make_not_entrant, slow_bb);
+
+    // (1) src and dest are arrays.
+    generate_non_array_guard(_interp->load_object_klass(src), slow_bb);
+    if (b.GetInsertBlock() == nullptr) {
+      _interp->_block->set(JeandleBasicBlock::always_uncommon_trap);
+      return true;
+    }
+    generate_non_array_guard(_interp->load_object_klass(dest), slow_bb);
+    if (b.GetInsertBlock() == nullptr) {
+      _interp->_block->set(JeandleBasicBlock::always_uncommon_trap);
+      return true;
+    }
+    // (2) src and dest arrays must have elements of the same BasicType:
+    // completed by ArrayCopySpecialization, like C2 defers this to Ideal/macro
+    // expansion.
+
+    // (4) src_offset must not be negative.
+    generate_negative_guard(src_offset, slow_bb);
+    if (b.GetInsertBlock() == nullptr) {
+      _interp->_block->set(JeandleBasicBlock::always_uncommon_trap);
+      return true;
+    }
+
+    // (5) dest_offset must not be negative.
+    generate_negative_guard(dest_offset, slow_bb);
+    if (b.GetInsertBlock() == nullptr) {
+      _interp->_block->set(JeandleBasicBlock::always_uncommon_trap);
+      return true;
+    }
+
+    // (7) src_offset + length must not exceed length of src.
+    generate_limit_guard(
+        src_offset, length,
+        _interp->call_java_op("jeandle.arraylength", {src}), slow_bb);
+    if (b.GetInsertBlock() == nullptr) {
+      _interp->_block->set(JeandleBasicBlock::always_uncommon_trap);
+      return true;
+    }
+
+    // (8) dest_offset + length must not exceed length of dest.
+    generate_limit_guard(
+        dest_offset, length,
+        _interp->call_java_op("jeandle.arraylength", {dest}), slow_bb);
+    if (b.GetInsertBlock() == nullptr) {
+      _interp->_block->set(JeandleBasicBlock::always_uncommon_trap);
+      return true;
+    }
+
+    // (6) length must not be negative.
+    // This is also checked during arraycopy expansion, but C2 checks it here as
+    // well when Escape Analysis can eliminate the ArrayCopyNode.
+    if (JeandleDoPEA) {
+      generate_negative_guard(length, slow_bb);
+      negative_length_guard_generated = true;
+      if (b.GetInsertBlock() == nullptr) {
+        _interp->_block->set(JeandleBasicBlock::always_uncommon_trap);
+        return true;
+      }
+    }
+
+    // (9) each element of an oop array must be assignable.
+    // Mirrors C2 gen_subtype_check(src, dest_klass): if the source array Klass
+    // is not a subtype of the destination array Klass, the failure edge joins
+    // the shared intrinsic slow/deoptimization path. This intentionally
+    // validates only the no-checkcast ArrayCopyNode shape; C2's checkcast stub
+    // path belongs to non-validated/generic macro expansion.
+    if (src != dest) {
+      llvm::Value* dest_klass = _interp->load_object_klass(dest);
+      llvm::Value* is_instance = _interp->call_java_op(
+          "jeandle.instanceof", {dest_klass, src});
+      llvm::Value* not_instance = b.CreateICmpEQ(
+          is_instance, b.getInt32(0), "arraycopy_not_instance");
+      generate_guard(not_instance, slow_bb, PROB_MIN);
+    }
+    // TODO: JavaType can sharpen values from dominating jeandle.instanceof guards,
+    // but this guard tests a dynamically loaded dest_klass. The current analysis
+    //  cannot propagate the abstract Klass type of that value on the successful path,
+    // so it cannot yet reproduce C2's CheckCastPPNode type narrowing.
+  }
+
+  // C2 checks stopped() here before creating ArrayCopyNode::make(). Jeandle has
+  // no top control node; a null insertion block is the corresponding stopped
+  // state at this lowering point.
+  if (b.GetInsertBlock() == nullptr) {
+    return true;
+  }
+
+  _interp->_block->set_tail_llvm_block(b.GetInsertBlock());
+  _interp->_jvm->ipop(); // length
+  _interp->_jvm->ipop(); // destPos
+  _interp->_jvm->apop(); // dest
+  _interp->_jvm->ipop(); // srcPos
+  _interp->_jvm->apop(); // src
+
+  // The pseudo call is the Jeandle equivalent of C2 ArrayCopyNode::make(). It is
+  // created after guard admission, and the validated attribute corresponds
+  // to C2 ac->set_arraycopy(validated).
+  llvm::Function* arraycopy_callee = m.getFunction("jeandle.arraycopy");
+  assert(arraycopy_callee != nullptr,
+         "jeandle.arraycopy must be declared in template.ll");
+  static constexpr CallSiteAttributeMetadata arraycopy_attrs = {
+      CTRL_NEEDS_EXCEPTION_EDGE,
+      MEM_READ | MEM_WRITE | MEM_NEEDS_GC_STATE};
+  llvm::CallBase* arraycopy_call = emit_callsite(
+      arraycopy_callee, llvm::CallingConv::Hotspot_JIT,
+      {src, src_offset, dest, dest_offset, length,
+       _interp->load_object_klass(src), _interp->load_object_klass(dest),
+       _interp->call_java_op("jeandle.arraylength", {src}),
+       _interp->call_java_op("jeandle.arraylength", {dest})},
+      arraycopy_attrs);
+  arraycopy_call->addFnAttr(llvm::Attribute::get(
+      ctx, llvm::jeandle::Attribute::ArrayCopyKind,
+      llvm::jeandle::Attribute::ArrayCopyKindArrayCopy));
+  if (validated) {
+    arraycopy_call->addFnAttr(llvm::Attribute::get(
+        ctx, llvm::jeandle::Attribute::ValidatedArrayCopy));
+  }
+  if (negative_length_guard_generated) {
+    arraycopy_call->addFnAttr(llvm::Attribute::get(
+        ctx, llvm::jeandle::Attribute::ArrayCopyNegativeLengthGuard));
+  }
   return true;
 }

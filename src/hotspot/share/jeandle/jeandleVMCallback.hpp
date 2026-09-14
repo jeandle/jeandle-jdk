@@ -25,6 +25,7 @@
 #include "llvm/IR/Jeandle/VMCallback.h"
 
 #include <string>
+#include <vector>
 
 #include "jeandle/__hotspotHeadersBegin__.hpp"
 #include "memory/allocation.hpp"
@@ -48,6 +49,7 @@ class JeandleVMCallback : public AllStatic {
   static bool      is_subtype(uintptr_t sub_klass, uintptr_t super_klass);
   static uintptr_t get_common_super_klass(uintptr_t k1, uintptr_t k2);
   static uintptr_t get_field_type(uintptr_t klass_ptr, int offset);
+  static std::vector<uintptr_t> get_secondary_supers(uintptr_t klass_ptr);
   static bool      is_interface(uintptr_t klass_ptr);
   static bool      is_object_klass(uintptr_t klass_ptr);
   static bool      is_unverified_interface(uintptr_t klass_ptr);
@@ -68,6 +70,10 @@ class JeandleVMCallback : public AllStatic {
   // Oop handles.
   static std::string get_oop_handle_name(int oop_id);
   static uintptr_t   get_oop_klass(int oop_id);
+  static uintptr_t   get_klass_constant(uintptr_t klass_ptr);
+  static uintptr_t   get_mirror_klass(int oop_id);
+  static int         get_klass_layout_helper(uintptr_t klass_ptr);
+  static bool        is_klass_initialized(uintptr_t klass_ptr);
 
   // Returns the oop id of the java.lang.Class mirror for a VM Klass pointer,
   // or -1 if unavailable. Used by PEA's foldGetClass.
@@ -88,6 +94,15 @@ class JeandleVMCallback : public AllStatic {
   static uintptr_t get_signature_accessing_klass(uintptr_t method);
   static int64_t get_signature_arg_type(uintptr_t method, int index);
   static uintptr_t get_signature_arg_type_klass(uintptr_t method, int index);
+
+  // Profile-guided devirtualization.
+  static llvm::jeandle::ProfileDevirtualizationResult
+  get_profile_devirtualization_info(uintptr_t caller_ptr, uintptr_t callee_ptr,
+                                    uintptr_t holder_ptr, int bci,
+                                    int invoke_kind);
+
+  // Compiled call-site metadata.
+  static bool update_to_static_opt_virtual_call(int64_t id);
 
   // Replaces the now-removed ciEnv::get_instance_klass_for_klass: maps a raw
   // receiver Klass* to a ciInstanceKlass*, preserving the null-check + assert +

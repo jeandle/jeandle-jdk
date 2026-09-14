@@ -39,6 +39,7 @@
 #include "oops/arrayOop.hpp"
 #include "oops/array.hpp"
 #include "oops/compressedOops.inline.hpp"
+#include "oops/instanceKlass.hpp"
 #include "classfile/javaClasses.hpp"
 #include "oops/klass.hpp"
 #include "oops/objArrayKlass.hpp"
@@ -260,8 +261,9 @@ JAVA_OP_END
 //   3. Dereference the OopHandle to get the actual mirror oop in the Java heap.
 // The mirror is always reachable (a GC root inside the Klass), so no null check is needed.
 //
-// TODO: When the receiver's Klass is known at compile time (via `java-klass` attribute),
-// Step 1 (jeandle.load_klass) can be skipped.
+// Exact receiver types are folded by LLVM ConstantFieldFolding before this
+// JavaOp is expanded. This body remains the dynamic fallback for receivers
+// whose exact Klass is unavailable.
 DEF_JAVA_OP(get_class, 1, llvm::PointerType::get(context, llvm::jeandle::AddrSpace::JavaHeapAddrSpace),
             llvm::PointerType::get(context, llvm::jeandle::AddrSpace::JavaHeapAddrSpace))  // obj (receiver)
   llvm::Value* obj = func->getArg(0);
@@ -638,6 +640,8 @@ void RuntimeDefinedJavaOps::define_global_variables(llvm::Module& template_modul
   define_global("Klass.secondary_supers_offset",                    int32_type, static_cast<uint64_t>(Klass::secondary_supers_offset()));
   define_global("Klass.super_check_offset_offset",                  int32_type, static_cast<uint64_t>(Klass::super_check_offset_offset()));
   define_global("ObjArrayKlass.element_klass_offset",               int32_type, static_cast<uint64_t>(ObjArrayKlass::element_klass_offset()));
+  define_global("InstanceKlass.init_state_offset",                  int32_type, static_cast<uint64_t>(in_bytes(InstanceKlass::init_state_offset())));
+  define_global("InstanceKlass.fully_initialized",                  int8_type,  static_cast<uint64_t>(InstanceKlass::fully_initialized));
   define_global("oopDesc.klass_offset_in_bytes",                    int32_type, static_cast<uint64_t>(oopDesc::klass_offset_in_bytes()));
   define_global("oopDesc.mark_offset_in_bytes",                     int32_type, static_cast<uint64_t>(oopDesc::mark_offset_in_bytes()));
   define_global("java_lang_ref_Reference.referent_offset",          int32_type, static_cast<uint64_t>(java_lang_ref_Reference::referent_offset()));
@@ -678,6 +682,8 @@ void RuntimeDefinedJavaOps::define_global_variables(llvm::Module& template_modul
   define_global("CardTable.card_shift",                             int64_type, static_cast<uint64_t>(CardTable::card_shift()));
   define_global("HeapRegion.LogOfHRGrainBytes",                     int64_type, static_cast<uint64_t>(HeapRegion::LogOfHRGrainBytes));
   define_global("WordSize",                                         int64_type, static_cast<uint64_t>(sizeof(intptr_t)));
+  define_global("VMOptions.ArrayOperationPartialInlineSize",        int32_type, static_cast<uint64_t>(ArrayOperationPartialInlineSize));
+  define_global("VMOptions.ArrayCopyLoadStoreMaxElem",              int32_type, static_cast<uint64_t>(ArrayCopyLoadStoreMaxElem));
   define_global("G1CardTable.g1_young_card_val",                    int8_type,  static_cast<uint64_t>(G1CardTable::g1_young_card_val()));
   define_global("G1CardTable.dirty_card_val",                       int8_type,  static_cast<uint64_t>(G1CardTable::dirty_card_val()));
   define_global("ci_card_table_address",                            int64_type, static_cast<uint64_t>(p2i(ci_card_table_address())));

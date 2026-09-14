@@ -29,6 +29,8 @@
 #include "ci/ciMethod.hpp"
 
 class Klass;
+class ciInstanceKlass;
+class ciKlass;
 class ciType;
 
 namespace llvm {
@@ -58,6 +60,9 @@ bool is_unverified_interface(Klass* klass);
 // A klass is effectively final if no subtype can exist at runtime.
 bool is_effectively_final(ciKlass* klass);
 bool is_effectively_final(Klass* klass);
+
+// Check whether a receiver is a loaded, initialized instance subtype of holder.
+bool is_valid_instance_receiver(ciKlass* receiver, ciInstanceKlass* holder);
 
 // Attach JavaKlass (and JavaKlassExact when applicable) return-value attributes
 // to a CallBase, based on the Java return type derived from the callee signature.

@@ -25,6 +25,7 @@
 #include "llvm/IR/Jeandle/VMCallbackLog.h"
 #include "llvm/IR/Jeandle/InvokeType.h"
 #include "llvm/Transforms/Jeandle/CHADevirtualization.h"
+#include "llvm/Transforms/Jeandle/ProfileDevirtualization.h"
 
 #include "jeandle/jeandleAbstractInterpreter.hpp"
 #include "jeandle/jeandleCompilation.hpp"
@@ -32,6 +33,7 @@
 #include "jeandle/jeandleVMCallback.hpp"
 #include "jeandle/jeandleCompiledCall.hpp"
 #include "jeandle/jeandleCompiledCode.hpp"
+#include "jeandle/jeandleProfile.hpp"
 
 #include "jeandle/__hotspotHeadersBegin__.hpp"
 #include "ci/ciClassList.hpp"
@@ -48,6 +50,7 @@
 #include "ci/ciObject.hpp"
 #include "ci/ciType.hpp"
 #include "ci/ciUtilities.inline.hpp"
+#include "code/oopRecorder.hpp"
 #include "logging/log.hpp"
 #include "oops/fieldInfo.inline.hpp"
 #include "oops/fieldStreams.inline.hpp"
@@ -63,6 +66,7 @@
 
 #include <cstdint>
 #include <utility>
+#include <vector>
 
 namespace {
 
@@ -95,15 +99,45 @@ ciObject* oop_by_id(int oop_id) {
   return compilation->compiled_code()->oop_at(oop_id);
 }
 
-bool constant_field(int oop_id, int offset, ciField** field, ciConstant* con) {
+uintptr_t record_klass_metadata(ciKlass* klass) {
+  assert(klass != nullptr && klass->is_loaded(), "klass must be loaded");
+  ciEnv* env = ciEnv::current();
+  assert(env != nullptr && env->oop_recorder() != nullptr,
+         "Klass constants require an active compilation");
+
+  Metadata* encoding = klass->constant_encoding();
+  // LLVM embeds this Klass* as an integer-backed pointer constant. Keep it in
+  // the nmethod metadata table so class unloading can discover the dependency
+  // even if the oop load that exposed the Klass is later eliminated.
+  int metadata_index = env->oop_recorder()->find_index(encoding);
+  assert(env->oop_recorder()->metadata_at(metadata_index) == encoding,
+         "recorded Klass metadata must be recoverable");
+  (void)metadata_index;
+  return reinterpret_cast<uintptr_t>(encoding);
+}
+
+bool constant_field(int oop_id, int offset, ciField*& field, ciConstant& con, int& stable_dimension) {
   ciObject* base_oop = oop_by_id(oop_id);
   if (base_oop == nullptr || base_oop->is_null_object()) {
     return false;
   }
 
   if (base_oop->is_array()) {
-    // TODO: Support Stable array element folding in a follow-up pass.
-    return false;
+    JeandleCompilation* compilation = JeandleCompilation::current();
+    JeandleCompiledCode* compiled_code = compilation->compiled_code();
+    int base_stable_dimension = compiled_code->stable_array_dimension(oop_id);
+    if (!FoldStableValues || base_stable_dimension <= 0) {
+      return false;
+    }
+
+    ciConstant value = base_oop->as_array()->element_value_by_offset(offset);
+    if (!value.is_valid() || value.is_null_or_zero()) {
+      return false;
+    }
+
+    con = value;
+    stable_dimension = base_stable_dimension - 1;
+    return true;
   }
 
   if (!base_oop->is_instance()) {
@@ -138,8 +172,8 @@ bool constant_field(int oop_id, int offset, ciField** field, ciConstant* con) {
     return false;
   }
 
-  *field = found;
-  *con = value;
+  field = found;
+  con = value;
   return true;
 }
 
@@ -229,6 +263,16 @@ uintptr_t JeandleVMCallback::get_field_type(uintptr_t klass_ptr, int offset) {
     return 0;
   }
   return (uintptr_t)(Klass*)(field_klass->constant_encoding());
+}
+
+std::vector<uintptr_t> JeandleVMCallback::get_secondary_supers(uintptr_t klass_ptr) {
+    std::vector<uintptr_t> sec_supers;
+    Klass* holder = (Klass*)klass_ptr;
+    int cnt = holder->secondary_supers()->length();
+    for (int i = 0; i < cnt; i++) {
+      sec_supers.push_back((uintptr_t)holder->secondary_supers()->at(i)) ;
+    }
+    return sec_supers;
 }
 
 bool JeandleVMCallback::is_interface(uintptr_t klass_ptr) {
@@ -353,18 +397,29 @@ llvm::jeandle::ConstantFieldResult
 JeandleVMCallback::get_constant_field(int oop_id, int offset) {
   ciField* field = nullptr;
   ciConstant con;
-  if (!constant_field(oop_id, offset, &field, &con))
+  int stable_dimension = 0;
+  if (!constant_field(oop_id, offset, field, con, stable_dimension))
     return {-1, 0};
 
-  int basic_type = field->layout_type();
+  int basic_type;
+  if (field == nullptr) {
+    // @Stable array element.
+    basic_type = con.basic_type();
+  } else {
+    // Instance or static field.
+    basic_type = field->layout_type();
+    if (field->is_call_site_target()) {
+      ciObject* base_oop = oop_by_id(oop_id);
+      assert(base_oop != nullptr && base_oop->is_call_site(), "bad CallSite holder");
+      ciCallSite* call_site = base_oop->as_call_site();
+      if (!call_site->is_fully_initialized_constant_call_site()) {
+        ciMethodHandle* target = con.as_object()->as_method_handle();
+        ciEnv::current()->dependencies()->assert_call_site_target_value(call_site, target);
+      }
+    }
 
-  if (field->is_call_site_target()) {
-    ciObject* base_oop = oop_by_id(oop_id);
-    assert(base_oop != nullptr && base_oop->is_call_site(), "bad CallSite holder");
-    ciCallSite* call_site = base_oop->as_call_site();
-    if (!call_site->is_fully_initialized_constant_call_site()) {
-      ciMethodHandle* target = con.as_object()->as_method_handle();
-      ciEnv::current()->dependencies()->assert_call_site_target_value(call_site, target);
+    if (FoldStableValues && field->is_stable() && field->type()->is_array_klass()) {
+      stable_dimension = field->type()->as_array_klass()->dimension();
     }
   }
 
@@ -390,6 +445,9 @@ JeandleVMCallback::get_constant_field(int oop_id, int offset) {
     }
     JeandleCompiledCode* compiled_code = JeandleCompilation::current()->compiled_code();
     int result_id = compiled_code->find_or_insert_oop(object);
+    if (stable_dimension > 0) {
+      compiled_code->record_stable_array(result_id, stable_dimension);
+    }
     return {basic_type, static_cast<int64_t>(result_id)};
   }
   default:
@@ -426,7 +484,64 @@ uintptr_t JeandleVMCallback::get_oop_klass(int oop_id) {
   // The constant oop is a single, compile-time-known object instance, so its
   // klass is the value's exact dynamic type. Mirrors the encoding used by the
   // frontend when attaching !java-klass metadata (jeandleAbstractInterpreter.cpp).
-  return (uintptr_t)(Klass*)(klass->constant_encoding());
+  return record_klass_metadata(klass);
+}
+
+uintptr_t JeandleVMCallback::get_klass_constant(uintptr_t klass_ptr) {
+  if (klass_ptr == 0) {
+    return 0;
+  }
+  VM_ENTRY_MARK;
+  Klass* klass = reinterpret_cast<Klass*>(klass_ptr);
+  ciKlass* ci_klass = ciEnv::current()->get_klass(klass);
+  if (ci_klass == nullptr || !ci_klass->is_loaded()) {
+    return 0;
+  }
+  return record_klass_metadata(ci_klass);
+}
+
+uintptr_t JeandleVMCallback::get_mirror_klass(int oop_id) {
+  ciObject* oop = oop_by_id(oop_id);
+  if (oop == nullptr || oop->is_null_object() || !oop->is_instance()) {
+    return llvm::jeandle::MirrorKlassUnavailable;
+  }
+
+  ciType* mirror_type = oop->as_instance()->java_mirror_type();
+  if (mirror_type == nullptr) {
+    return llvm::jeandle::MirrorKlassUnavailable;
+  }
+  if (!mirror_type->is_klass()) {
+    // Primitive Class mirrors have a known-null hidden Klass field.
+    return 0;
+  }
+
+  ciKlass* klass = mirror_type->as_klass();
+  if (!klass->is_loaded()) {
+    return llvm::jeandle::MirrorKlassUnavailable;
+  }
+  return record_klass_metadata(klass);
+}
+
+int JeandleVMCallback::get_klass_layout_helper(uintptr_t klass_ptr) {
+  if (klass_ptr == 0) {
+    return 0;
+  }
+  Klass* klass = reinterpret_cast<Klass*>(klass_ptr);
+  return klass->layout_helper();
+}
+
+bool JeandleVMCallback::is_klass_initialized(uintptr_t klass_ptr) {
+  // Query through CI so the answer is a compilation-stable snapshot, matching
+  // C2's klass_needs_init_guard. Only a true answer is folded by LLVM.
+  VM_ENTRY_MARK;
+  Klass* klass = reinterpret_cast<Klass*>(klass_ptr);
+  if (klass == nullptr || !klass->is_instance_klass()) {
+    return false;
+  }
+  ciMetadata* metadata =
+      ciEnv::current()->get_metadata(reinterpret_cast<Metadata*>(klass));
+  return metadata != nullptr && metadata->is_instance_klass() &&
+         metadata->as_instance_klass()->is_initialized();
 }
 
 int JeandleVMCallback::get_java_mirror(uintptr_t klass_ptr) {
@@ -678,9 +793,7 @@ llvm::jeandle::CHAOptInfo optimize_virtual_call(ciMethod* caller,
       JeandleVMCallback::get_receiver_instance_klass(receiver_klass);
   ciInstanceKlass* actual_receiver = holder;
   bool actual_receiver_is_exact = false;
-  if (receiver_inst_klass->is_loaded() && receiver_inst_klass->is_initialized() &&
-      !receiver_inst_klass->is_interface() &&
-      (receiver_inst_klass == actual_receiver || receiver_inst_klass->is_subtype_of(actual_receiver))) {
+  if (is_valid_instance_receiver(receiver_inst_klass, actual_receiver)) {
     actual_receiver = receiver_inst_klass;
     actual_receiver_is_exact = is_exact;
   }
@@ -810,6 +923,81 @@ bool JeandleVMCallback::update_call_site(int64_t id, int dest, bool need_attache
   return true;
 }
 
+// ---------------------------------------------------------------------------
+// Profile-guided devirtualization
+// ---------------------------------------------------------------------------
+
+static llvm::jeandle::ProfileDevirtualizationTargetResult
+make_profile_target_result(ciKlass* receiver, ciMethod* target,
+                           int64_t count) {
+  assert(receiver != nullptr && target != nullptr,
+         "profile target must be resolved");
+  return {record_klass_metadata(receiver), reinterpret_cast<uintptr_t>(target),
+          count, JeandleFuncSig::method_name_with_signature(target)};
+}
+
+llvm::jeandle::ProfileDevirtualizationResult
+JeandleVMCallback::get_profile_devirtualization_info(
+    uintptr_t caller_ptr, uintptr_t callee_ptr, uintptr_t holder_ptr, int bci,
+    int invoke_kind) {
+  if (caller_ptr == 0 || callee_ptr == 0 || holder_ptr == 0 || bci < 0 ||
+      (invoke_kind != llvm::jeandle::InvokeVirtual &&
+       invoke_kind != llvm::jeandle::InvokeInterface)) {
+    return {};
+  }
+
+  ciMethod* caller = reinterpret_cast<ciMethod*>(caller_ptr);
+  ciMethod* callee = reinterpret_cast<ciMethod*>(callee_ptr);
+  ciInstanceKlass* holder = reinterpret_cast<ciInstanceKlass*>(holder_ptr);
+  assert(!callee->can_be_statically_bound(),
+         "statically bound calls are handled by the bytecode parser");
+
+  JeandleProfile::DevirtualizationInfo opt_info =
+      JeandleProfile(caller).devirtualization_at(callee, holder, bci);
+  if (!opt_info.is_valid()) {
+    return {};
+  }
+
+  llvm::jeandle::ProfileDevirtualizationTargetResult target =
+      make_profile_target_result(opt_info.receiver, opt_info.target,
+                                 opt_info.receiver_count);
+  llvm::jeandle::ProfileDevirtualizationTargetResult target2;
+  if (opt_info.receiver2 != nullptr) {
+    target2 = make_profile_target_result(opt_info.receiver2, opt_info.target2,
+                                         opt_info.receiver_count2);
+  }
+  return {std::move(target), opt_info.total_count,
+          llvm::jeandle::ProfileDevirtualizationInfo::packDeoptInfo(
+              opt_info.target->is_accessor(),
+              opt_info.target2 != nullptr && opt_info.target2->is_accessor(),
+              static_cast<llvm::jeandle::Deoptimization::DeoptReason>(
+                  opt_info.deopt_reason)),
+          opt_info.deoptimize_on_miss, std::move(target2)};
+}
+
+// Change a virtual callsite to opt virtual call site.
+bool JeandleVMCallback::update_to_static_opt_virtual_call(int64_t id) {
+  JeandleCompilation* compilation = JeandleCompilation::current();
+  assert(compilation != nullptr, "no active compilation");
+  JeandleCompiledCode* cc = compilation->compiled_code();
+  if (id < 0) {
+    return false;
+  }
+  if (static_cast<size_t>(id) >= cc->non_routine_call_sites().size()) {
+    return false;
+  }
+  CallSiteInfo* call_site = cc->non_routine_call_sites()[id];
+  if (call_site == nullptr) {
+    return false;
+  }
+  // This callback updates only JDK installation metadata. LLVM owns the IR
+  // rewrite, while callback-log replay can reproduce it from the recorded
+  // return value without requiring a live CallSiteInfo.
+  call_site->set_type(JeandleCompiledCall::STATIC_CALL);
+  call_site->set_target(SharedRuntime::get_resolve_opt_virtual_call_stub());
+  return true;
+}
+
 uintptr_t JeandleVMCallback::get_signature_accessing_klass(uintptr_t method) {
   ciMethod* m = jeandle_callback_method(method);
   ciKlass* k = m->signature()->accessing_klass();
@@ -845,6 +1033,7 @@ void JeandleVMCallback::register_callbacks() {
   callbacks.IsSubtype = &JeandleVMCallback::is_subtype;
   callbacks.GetCommonSuperKlass = &JeandleVMCallback::get_common_super_klass;
   callbacks.GetFieldType = &JeandleVMCallback::get_field_type;
+  callbacks.GetSecondarySupers = &JeandleVMCallback::get_secondary_supers;
   callbacks.IsInterface = &JeandleVMCallback::is_interface;
   callbacks.IsObjectKlass = &JeandleVMCallback::is_object_klass;
   callbacks.IsUnverifiedInterface = &JeandleVMCallback::is_unverified_interface;
@@ -859,6 +1048,10 @@ void JeandleVMCallback::register_callbacks() {
   callbacks.GetConstantField = &JeandleVMCallback::get_constant_field;
   callbacks.GetOopHandleName = &JeandleVMCallback::get_oop_handle_name;
   callbacks.GetOopKlass = &JeandleVMCallback::get_oop_klass;
+  callbacks.GetKlassConstant = &JeandleVMCallback::get_klass_constant;
+  callbacks.GetMirrorKlass = &JeandleVMCallback::get_mirror_klass;
+  callbacks.GetKlassLayoutHelper = &JeandleVMCallback::get_klass_layout_helper;
+  callbacks.IsKlassInitialized = &JeandleVMCallback::is_klass_initialized;
   callbacks.GetJavaMirror = &JeandleVMCallback::get_java_mirror;
   callbacks.GetInlineCalleeIR = &JeandleVMCallback::get_inline_callee_ir;
   callbacks.GetNewStatepointID = &JeandleVMCallback::get_new_statepoint_id;
@@ -870,6 +1063,10 @@ void JeandleVMCallback::register_callbacks() {
   callbacks.GetSignatureAccessingKlass = &JeandleVMCallback::get_signature_accessing_klass;
   callbacks.GetSignatureArgType = &JeandleVMCallback::get_signature_arg_type;
   callbacks.GetSignatureArgTypeKlass = &JeandleVMCallback::get_signature_arg_type_klass;
+  callbacks.GetProfileDevirtualizationInfo =
+      &JeandleVMCallback::get_profile_devirtualization_info;
+  callbacks.UpdateToStaticOptVirtualCall =
+      &JeandleVMCallback::update_to_static_opt_virtual_call;
   llvm::jeandle::registerVMCallbacks(callbacks);
 
   if (JeandleRecordVMCallbacks) {

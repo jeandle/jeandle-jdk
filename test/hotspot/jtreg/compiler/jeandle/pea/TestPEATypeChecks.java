@@ -24,7 +24,11 @@
  *          the allocation and the chained field access are eliminated; a failed
  *          cast folds to false and throws CCE without materializing the virtual
  *          receiver; a published receiver keeps the real check. A [VirtualRef,
- *          null] merge materializes the inner virtual (Graal mergeObjectEntry).
+ *          null] merge whose only use is an instanceof no longer reaches PEA:
+ *          JavaType's null-edge exclusion assigns the phi the exact inner type,
+ *          TypeCheckElimination folds the check and the merge dissolves, so the
+ *          inner allocation is eliminated as NeverEscape like the other folded
+ *          cases.
  *          foldLoadKlass is not Java-reachable (only phase-1 template bodies and
  *          the unloaded-catch path emit jeandle.load_klass), so the klass-query
  *          oracle here is foldCheckCast (instanceof/checkcast) only.
@@ -78,7 +82,7 @@ public class TestPEATypeChecks {
             assertFoldedVirtual(run, chained, 1);
             assertFoldedVirtual(run, ifaceField, 1);
             assertFoldedVirtual(run, failsNoEsc, 2);
-            assertNullOrVOMerge(run, nullOrVO);
+            assertFoldedVirtual(run, nullOrVO, 1);
             assertPublishedReceiver(run, failsPub);
         }
     }
@@ -102,20 +106,6 @@ public class TestPEATypeChecks {
         Asserts.assertTrue(report.effects("ReplaceCall").size() >= 1
                         || report.effects("EliminateAllocation").size() >= sourceCount,
                 target + ": type check folded or allocation eliminated by PEA");
-        report.assertFinalTransformIdle();
-        assertVerifierShape(run, report, target);
-    }
-
-    // A [VirtualRef, null] merge materializes the inner virtual (the Sub allocation
-    // is retained) even though the instanceof result is still computed correctly.
-    private static void assertNullOrVOMerge(PEATestUtils.RunResult run, Method target)
-            throws Exception {
-        PEATestUtils.PEAReport report = run.report(target);
-        PEATestUtils.IRBody after = report.finalAfter();
-        after.assertAbsent("poison");
-        Asserts.assertTrue(report.maxPartiallyEscapes() >= 1
-                        || !after.allocationBCIs().isEmpty(),
-                target + ": [VirtualRef, null] merge materializes the inner virtual");
         report.assertFinalTransformIdle();
         assertVerifierShape(run, report, target);
     }

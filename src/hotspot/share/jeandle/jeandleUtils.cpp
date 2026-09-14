@@ -30,6 +30,7 @@
 
 #include "jeandle/__hotspotHeadersBegin__.hpp"
 #include "ci/ciInstanceKlass.hpp"
+#include "ci/ciKlass.hpp"
 #include "ci/ciObjArrayKlass.hpp"
 #include "ci/ciType.hpp"
 #include "compiler/abstractCompiler.hpp"
@@ -80,6 +81,18 @@ bool is_effectively_final(Klass* klass) {
   if (klass->is_objArray_klass())
     return is_effectively_final(ObjArrayKlass::cast(klass)->bottom_klass());
   return false;
+}
+
+bool is_valid_instance_receiver(ciKlass* receiver, ciInstanceKlass* holder) {
+  if (receiver == nullptr || holder == nullptr ||
+      !receiver->is_instance_klass()) {
+    return false;
+  }
+
+  ciInstanceKlass* receiver_klass = receiver->as_instance_klass();
+  return receiver_klass->is_loaded() && receiver_klass->is_initialized() &&
+         !receiver_klass->is_interface() &&
+         receiver_klass->is_subtype_of(holder);
 }
 
 void attach_java_klass_ret_attr(llvm::CallBase* call,
@@ -219,9 +232,12 @@ std::string JeandleFuncSig::method_name(ciMethod* method) {
 }
 
 std::string JeandleFuncSig::method_name_with_signature(ciMethod* method) {
-  std::string signature = std::string(method->signature()->as_symbol()->as_utf8());
-  return method_name(method) + signature;
-
+  std::string signature =
+      std::string(method->signature()->as_symbol()->as_utf8());
+  // The binary name does not distinguish classes defined by different class
+  // loaders. Append the ciMethod identity so their LLVM symbols stay distinct.
+  return method_name(method) + signature + "." +
+         std::to_string(reinterpret_cast<uintptr_t>(method));
 }
 
 std::string JeandleFuncSig::root_method_name(ciMethod* method, bool is_osr_entry) {
