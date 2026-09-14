@@ -54,16 +54,16 @@
       llvm::PointerType::get(context, llvm::jeandle::AddrSpace::JavaHeapAddrSpace), \
       llvm::PointerType::get(context, llvm::jeandle::AddrSpace::CHeapAddrSpace))    \
                                                                                     \
-  def(monitor_notify,\
-      JeandleRuntimeRoutine::monitor_notify,\
-      llvm::Type::getVoidTy(context),\
-      llvm::PointerType::get(context, llvm::jeandle::AddrSpace::JavaHeapAddrSpace),\
+  def(monitor_notify,                                                               \
+      JeandleRuntimeRoutine::monitor_notify,                                        \
+      llvm::Type::getVoidTy(context),                                               \
+      llvm::PointerType::get(context, llvm::jeandle::AddrSpace::JavaHeapAddrSpace), \
       llvm::PointerType::get(context, llvm::jeandle::AddrSpace::CHeapAddrSpace))    \
                                                                                     \
-  def(monitor_notify_all,\
-      JeandleRuntimeRoutine::monitor_notify_all,\
-      llvm::Type::getVoidTy(context),\
-      llvm::PointerType::get(context, llvm::jeandle::AddrSpace::JavaHeapAddrSpace),\
+  def(monitor_notify_all,                                                           \
+      JeandleRuntimeRoutine::monitor_notify_all,                                    \
+      llvm::Type::getVoidTy(context),                                               \
+      llvm::PointerType::get(context, llvm::jeandle::AddrSpace::JavaHeapAddrSpace), \
       llvm::PointerType::get(context, llvm::jeandle::AddrSpace::CHeapAddrSpace))    \
                                                                                     \
   def(new_instance,                                                                 \

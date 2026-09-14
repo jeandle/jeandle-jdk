@@ -841,13 +841,9 @@ bool JeandleIntrinsicLowering::lower_object_notify(vmIntrinsics::ID id) {
   assert(notify_all || id == vmIntrinsics::_notify, "unexpected intrinsic");
 
   llvm::Module& module = _interp->_module;
-  llvm::IRBuilder<>& builder = _interp->_ir_builder;
-  llvm::Function* current_thread_fn = module.getFunction("jeandle.current_thread");
-  assert(current_thread_fn != nullptr, "jeandle.current_thread JavaOp must exist");
-  llvm::CallInst* current_thread = builder.CreateCall(current_thread_fn);
-  current_thread->setCallingConv(llvm::CallingConv::Hotspot_JIT);
-
   llvm::Value* receiver = _interp->_jvm->peek_value(0).value();
+  llvm::Value* current_thread = _interp->call_java_op("jeandle.current_thread", {});
+  _interp->_jvm->apop();
   static constexpr CallSiteAttributeMetadata attrs = {
       CTRL_NEEDS_EXCEPTION_EDGE, MEM_READ | MEM_WRITE | MEM_NEEDS_GC_STATE};
   llvm::FunctionCallee callee = notify_all
@@ -855,7 +851,6 @@ bool JeandleIntrinsicLowering::lower_object_notify(vmIntrinsics::ID id) {
       : JeandleRuntimeRoutine::monitor_notify_callee(module);
   emit_callsite(callee, llvm::CallingConv::Hotspot_JIT,
                 {receiver, current_thread}, attrs);
-  _interp->_jvm->apop();
   return true;
 }
 
