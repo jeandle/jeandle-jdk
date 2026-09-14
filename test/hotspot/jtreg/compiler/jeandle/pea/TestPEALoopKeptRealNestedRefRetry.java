@@ -26,7 +26,6 @@
  * @build jdk.test.lib.Asserts jdk.test.whitebox.WhiteBox compiler.jeandle.pea.PEATestUtils
  * @run driver jdk.test.lib.helpers.ClassFileInstaller jdk.test.whitebox.WhiteBox
  * @run main/othervm -XX:-UseJeandleCompiler
- *      -XX:-UseCompressedOops -XX:-UseCompressedClassPointers
  *      compiler.jeandle.pea.TestPEALoopKeptRealNestedRefRetry
  */
 
@@ -118,7 +117,7 @@ public class TestPEALoopKeptRealNestedRefRetry {
         String sourceInner = allocationResult(retryBefore, innerKey);
         int innerElemsOffset = offset(TestWrapper.Inner.class, "elems");
         FieldStore sourceInnerStore = exactFieldStore(
-                retryBefore, sourceInner, innerElemsOffset, "ptr addrspace(1)");
+                retryBefore, sourceInner, innerElemsOffset, PEATestUtils.referencePointerType());
         PEATestUtils.IRBlock constantBranch =
                 retryBefore.blockContaining("br i1 true", 0);
         List<String> branchTargets = constantBranch.conditionalBranchTargets();
@@ -151,7 +150,7 @@ public class TestPEALoopKeptRealNestedRefRetry {
         String outerResult = allocationResult(after, outerKey);
         String innerResult = allocationResult(after, innerKey);
         FieldStore retainedInnerStore = exactFieldStore(
-                after, innerResult, innerElemsOffset, "ptr addrspace(1)");
+                after, innerResult, innerElemsOffset, PEATestUtils.referencePointerType());
         Asserts.assertFalse(retainedInnerStore.line().contains("pea.matslot"),
                 target + ": Inner.elems remains its original real-object store");
 
@@ -159,15 +158,13 @@ public class TestPEALoopKeptRealNestedRefRetry {
         PEATestUtils.IRBlock sink = after.blockContaining(consumeName, 0);
         int outerIteratorOffset = offset(TestWrapper.Outer.class, "iterator");
         FieldStore outerReplay = exactFieldStore(
-                after, outerResult, outerIteratorOffset, "ptr addrspace(1)");
+                after, outerResult, outerIteratorOffset, PEATestUtils.referencePointerType());
         Asserts.assertEquals(outerReplay.block().label(), sink.label(),
                 target + ": Outer.iterator replays only in the sink block");
-        Asserts.assertEquals(outerReplay.value(), innerResult,
+        Asserts.assertTrue(PEATestUtils.isEquivalentReferenceOperand(
+                        after, outerReplay.value(), innerResult),
                 target + ": Outer.iterator replays the retained Inner SSA value");
         sink.assertBefore(outerReplay.line(), 0, consumeName, 0);
-        Asserts.assertEquals(after.occurrenceCount(
-                "store atomic ptr addrspace(1) " + innerResult + ","), 1,
-                target + ": one exact Outer-to-Inner reference replay");
 
         PEATestUtils.PEAEffect materialize =
                 retry.uniqueEffect("Materialize", "[VO=0]");

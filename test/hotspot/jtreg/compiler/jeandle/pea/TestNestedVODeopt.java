@@ -26,7 +26,6 @@
  * @build jdk.test.lib.Asserts jdk.test.whitebox.WhiteBox compiler.jeandle.pea.PEATestUtils
  * @run driver jdk.test.lib.helpers.ClassFileInstaller jdk.test.whitebox.WhiteBox
  * @run main/othervm -XX:-UseJeandleCompiler
- *      -XX:-UseCompressedOops -XX:-UseCompressedClassPointers
  *      compiler.jeandle.pea.TestNestedVODeopt
  */
 
@@ -230,7 +229,7 @@ public class TestNestedVODeopt {
         innerBlock.assertOccurrenceCount("getelementptr", 1);
         innerBlock.assertOccurrenceCount("store atomic", 1);
         innerBlock.assertOccurrenceCount("store atomic i32", 1);
-        innerBlock.assertOccurrenceCount("store atomic ptr addrspace(1)", 0);
+        innerBlock.assertOccurrenceCount(PEATestUtils.referenceStore(), 0);
 
         int markerOffset = offset(TestWrapper.Outer.class, "marker");
         int firstOffset = offset(TestWrapper.Outer.class, "first");
@@ -242,16 +241,16 @@ public class TestNestedVODeopt {
         assertScalarReplay(after, outerBlock, outerResult, markerOffset,
                 afterSeed, 24, outerCallee);
         assertReferenceReplay(after, outerBlock, outerResult, firstOffset,
-                "ptr addrspace(1)", innerResult, outerCallee);
+                PEATestUtils.referencePointerType(), innerResult, outerCallee);
         assertReferenceReplay(after, outerBlock, outerResult, secondOffset,
-                "ptr addrspace(1)", innerResult, outerCallee);
+                PEATestUtils.referencePointerType(), innerResult, outerCallee);
         outerBlock.assertOccurrenceCount("getelementptr", 4);
         outerBlock.assertOccurrenceCount("load atomic i32", 1);
         outerBlock.assertOccurrenceCount("store atomic", 4);
         outerBlock.assertOccurrenceCount("store atomic i32", 2);
-        outerBlock.assertOccurrenceCount("store atomic ptr addrspace(1)", 2);
-        outerBlock.assertOccurrenceCount(
-                "store atomic ptr addrspace(1) " + innerResult + ",", 2);
+        outerBlock.assertOccurrenceCount(PEATestUtils.referenceStore(), 2);
+        Asserts.assertEquals(PEATestUtils.equivalentReferenceStoreCount(
+                after, outerBlock, innerResult), 2L);
     }
 
     private static NestedDescriptors identifyNestedDescriptors(
@@ -410,7 +409,8 @@ public class TestNestedVODeopt {
             String consumer) {
         ReplayStore replay = exactReplayStore(
                 body, block, owner, offset, type);
-        Asserts.assertEquals(replay.value(), value,
+        Asserts.assertTrue(PEATestUtils.isEquivalentReferenceOperand(
+                        body, replay.value(), value),
                 body.methodId() + ": exact reference replay value for "
                         + owner + " at offset " + offset);
         block.assertBefore(replay.line(), 0, consumer, 0);

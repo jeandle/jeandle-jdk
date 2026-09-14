@@ -23,6 +23,7 @@ package compiler.jeandle.pea;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.lang.invoke.MethodType;
+import java.lang.management.ManagementFactory;
 import java.lang.reflect.Constructor;
 import java.lang.reflect.Executable;
 import java.lang.reflect.Method;
@@ -45,6 +46,8 @@ import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
+
+import com.sun.management.HotSpotDiagnosticMXBean;
 
 import jdk.test.lib.Asserts;
 import jdk.test.lib.process.OutputAnalyzer;
@@ -71,8 +74,6 @@ public final class PEATestUtils {
             "JeandleDoPEA",
             "JeandleDumpIR",
             "JeandleDumpDirectory",
-            "UseCompressedOops",
-            "UseCompressedClassPointers",
             "UseOnStackReplacement",
             "CICompilerCount",
             "CompileCommand",
@@ -92,10 +93,137 @@ public final class PEATestUtils {
             "jeandle-dump-pea-stats",
             "jeandle-trace-pea");
 
-    private static final String[] NO_COMPRESSED_OOPS = {
-            "-XX:-UseCompressedOops", "-XX:-UseCompressedClassPointers"};
     private static final String[] WHITEBOX_FLAGS = {
             "-Xbootclasspath/a:.", "-XX:+UnlockDiagnosticVMOptions", "-XX:+WhiteBoxAPI"};
+    // The PEA child VM is launched with createLimitedTestJavaProcessBuilder,
+    // which deliberately does not inherit jtreg test.vm.opts. Mirror only the
+    // two layout-affecting compressed-pointer flags so outer and child VMs
+    // analyze and dump the same physical reference representation.
+    // The outer jtreg VM does not install WhiteBox natives; use the standard
+    // diagnostic bean to observe the effective flags before spawning a child.
+    public static boolean useCompressedOops() {
+        return vmBooleanOption("UseCompressedOops");
+    }
+
+    public static boolean useCompressedClassPointers() {
+        return vmBooleanOption("UseCompressedClassPointers");
+    }
+
+    private static boolean vmBooleanOption(String name) {
+        HotSpotDiagnosticMXBean bean =
+                ManagementFactory.getPlatformMXBean(HotSpotDiagnosticMXBean.class);
+        return Boolean.parseBoolean(bean.getVMOption(name).getValue());
+    }
+
+    /** Physical oop pointer type used by reference loads/stores in the child IR. */
+    public static String referencePointerType() {
+        return "ptr addrspace(" + (useCompressedOops() ? 3 : 1) + ")";
+    }
+
+    public static String referenceStore() {
+        return "store atomic " + referencePointerType();
+    }
+
+    public static String referenceLoad() {
+        return "load atomic " + referencePointerType();
+    }
+
+    /**
+     * Returns whether a physical reference operand denotes the expected
+     * semantic Java-heap reference. With compressed oops the materializer
+     * stores an AS1 value through an explicit AS1-to-AS3 cast; in the wide
+     * representation the store operand is the semantic value itself.
+     */
+    public static boolean isEquivalentReferenceOperand(
+            IRBody body, String actual, String expected) {
+        if (Objects.equals(actual, expected)) {
+            return true;
+        }
+        if (!useCompressedOops() || actual == null || expected == null) {
+            return false;
+        }
+        return expected.equals(semanticReferenceOperand(body, actual));
+    }
+
+    /**
+     * Resolves a compressed physical operand back to its AS1 semantic source.
+     * The PEA dump uses an addrspacecast, while the optimized dump may contain
+     * the canonical zero-based narrow-oop encoding sequence.
+     */
+    public static String semanticReferenceOperand(IRBody body, String value) {
+        String current = value;
+        for (int depth = 0; depth < 8; depth++) {
+            String source = uniqueDefinitionOperand(body, Pattern.compile(
+                    "^" + Pattern.quote(current)
+                    + " = addrspacecast ptr addrspace\\(1\\) (" + LLVM_LOCAL_NAME
+                    + ") to ptr addrspace\\(3\\)(?:, .*)?$"));
+            if (source == null) {
+                source = loweredNarrowOopSource(body, current);
+            }
+            if (source == null || source.equals(current)) {
+                return current;
+            }
+            current = source;
+        }
+        return current;
+    }
+
+    private static String loweredNarrowOopSource(IRBody body, String value) {
+        String truncated = uniqueDefinitionOperand(body, Pattern.compile(
+                "^" + Pattern.quote(value) + " = inttoptr i32 ("
+                        + LLVM_LOCAL_NAME
+                        + ") to ptr addrspace\\(3\\)(?:, .*)?$"));
+        if (truncated == null) {
+            return null;
+        }
+        String shifted = uniqueDefinitionOperand(body, Pattern.compile(
+                "^" + Pattern.quote(truncated) + " = trunc i64 ("
+                        + LLVM_LOCAL_NAME + ") to i32(?:, .*)?$"));
+        if (shifted == null) {
+            return null;
+        }
+        String oopBits = uniqueDefinitionOperand(body, Pattern.compile(
+                "^" + Pattern.quote(shifted) + " = lshr i64 ("
+                        + LLVM_LOCAL_NAME + "), \\d+(?:, .*)?$"));
+        if (oopBits == null) {
+            return null;
+        }
+        return uniqueDefinitionOperand(body, Pattern.compile(
+                "^" + Pattern.quote(oopBits)
+                        + " = ptrtoint ptr addrspace\\(1\\) ("
+                        + LLVM_LOCAL_NAME + ") to i64(?:, .*)?$"));
+    }
+
+    private static String uniqueDefinitionOperand(IRBody body, Pattern definition) {
+        String result = null;
+        for (String line : body.lines()) {
+            Matcher matcher = definition.matcher(line);
+            if (!matcher.matches()) {
+                continue;
+            }
+            if (result != null && !result.equals(matcher.group(1))) {
+                throw new IllegalStateException(
+                        body.methodId() + ": ambiguous reference definition");
+            }
+            result = matcher.group(1);
+        }
+        return result;
+    }
+
+    /** Counts physical reference stores in a block whose value denotes {@code expected}. */
+    public static long equivalentReferenceStoreCount(
+            IRBody body, IRBlock block, String expected) {
+        Pattern store = Pattern.compile("^store atomic "
+                + Pattern.quote(referencePointerType()) + " (" + LLVM_LOCAL_NAME
+                + "),.*$");
+        return block.lines().stream()
+                .map(store::matcher)
+                .filter(Matcher::matches)
+                .filter(matcher -> isEquivalentReferenceOperand(
+                        body, matcher.group(1), expected))
+                .count();
+    }
+
     private static final Pattern MARKER = Pattern.compile(
             "^;; PEA-DUMP (before|after) iter=(\\d+) function (.*?)"
                     + "(?: transform_idle=(true|false|0|1))?$"
@@ -116,6 +244,7 @@ public final class PEATestUtils {
             "ReplaceCall",
             "EliminateStore",
             "EliminateAllocation",
+            "PlaceInstruction",
             "Materialize",
             "CreatePHI",
             "RewriteDeoptPool");
@@ -600,6 +729,16 @@ public final class PEATestUtils {
         private List<String> command(Path dumpDir) {
             ArrayList<String> command = new ArrayList<>();
             command.addAll(Arrays.asList(WHITEBOX_FLAGS));
+            // createLimitedTestJavaProcessBuilder does not inherit external
+            // compressed-pointer options. Propagate the effective outer-VM
+            // values without forcing either configuration. Explicit extraFlags
+            // are appended later and may intentionally override these values.
+            if (!useCompressedOops()) {
+                command.add("-XX:-UseCompressedOops");
+            }
+            if (!useCompressedClassPointers()) {
+                command.add("-XX:-UseCompressedClassPointers");
+            }
             if (lockingMode != null) {
                 command.add("-XX:+UnlockExperimentalVMOptions");
                 command.add("-XX:LockingMode=" + lockingMode);
@@ -619,7 +758,6 @@ public final class PEATestUtils {
             command.add("-Xlog:jeandle=debug");
             command.add(shape ? "-XX:+JeandleDumpIR" : "-XX:-JeandleDumpIR");
             command.add("-XX:JeandleDumpDirectory=" + dumpDir);
-            command.addAll(Arrays.asList(NO_COMPRESSED_OOPS));
             command.add("-D" + CONFIGURED_TARGETS_PROPERTY + "="
                     + targets.stream().map(PEATestUtils::configuredTarget)
                             .collect(Collectors.joining(",")));
@@ -2731,6 +2869,9 @@ public final class PEATestUtils {
         int at = root.nextOperand();
         while (at < operands.size()) {
             DecodedEncoding marker = decodeEncoding(method, operands.get(at));
+            if (marker.valueType() == 7) {
+                break;
+            }
             if (marker.valueType() != 6 || marker.index() != 0
                     || marker.basicType() != DeoptBasicType.METADATA) {
                 throw invalidDeopt(method,
@@ -2744,6 +2885,24 @@ public final class PEATestUtils {
                     methodOperand, virtualObjects);
             scopes.add(inline.scope());
             at = inline.nextOperand();
+        }
+        // Compressed-oop marker/value pairs are appended after the youngest
+        // Java scope and identify T_NARROWOOP values in address space 3.
+        while (at < operands.size()) {
+            DecodedEncoding marker = decodeEncoding(method, operands.get(at));
+            if (marker.valueType() != 7 || marker.index() != 0
+                    || marker.basicType() != DeoptBasicType.NARROW_OOP) {
+                throw invalidDeopt(method,
+                        "expected a narrow-oop marker at operand " + at);
+            }
+            requireOperands(method, operands, at, 2, "narrow-oop marker");
+            String narrowOperand = operands.get(at + 1);
+            if (!narrowOperand.startsWith("ptr addrspace(3)")) {
+                throw invalidDeopt(method,
+                        "narrow-oop marker requires a ptr addrspace(3) operand: "
+                                + narrowOperand);
+            }
+            at += 2;
         }
         validateVirtualObjectReferences(method, scopes, virtualObjects);
         return new DeoptBundle(scopes, virtualObjects);
@@ -2791,16 +2950,12 @@ public final class PEATestUtils {
         while (at < operands.size()) {
             DecodedEncoding encoding = decodeEncoding(method, operands.get(at));
             int valueType = encoding.valueType();
-            if (valueType == 6) {
+            if (valueType == 6 || valueType == 7) {
                 break;
             }
             if (valueType == 4) {
                 throw invalidDeopt(method,
                         "virtual-object descriptor appears after root scope values");
-            }
-            if (valueType == 7) {
-                throw invalidDeopt(method,
-                        "narrow-oop markers are unsupported with compressed pointers disabled");
             }
             if (valueType == 0 || valueType == 8) {
                 phase = requireScopePhase(method, phase, 0, "local");

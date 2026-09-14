@@ -42,7 +42,7 @@ public class TestPEAMultipleEscapeReplay {
     private static final String WRAPPER =
             "compiler.jeandle.pea.TestPEAMultipleEscapeReplay$TestWrapper";
     private static final String INT_STORE = "store atomic i32";
-    private static final String REF_STORE = "store atomic ptr addrspace(1)";
+    private static final String REF_STORE = PEATestUtils.referenceStore();
 
     public static void main(String[] args) throws Exception {
         PEATestUtils.assertPhiParserContracts();
