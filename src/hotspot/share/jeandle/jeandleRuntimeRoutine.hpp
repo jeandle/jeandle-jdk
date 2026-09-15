@@ -161,7 +161,6 @@
       llvm::Type::getInt32Ty(context),                                              \
       llvm::Type::getInt32Ty(context),                                              \
       llvm::PointerType::get(context, llvm::jeandle::AddrSpace::CHeapAddrSpace))    \
-                                                                                    \
 
 // Define a direct Jeandle runtime routine.
 // def( name            ,
