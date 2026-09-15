@@ -80,6 +80,8 @@ class JeandleAssembler : public StackObj {
 
   void emit_oop_addr_reloc(int offset, jobject oop_handle);
 
+  void emit_poll_return_reloc(int offset);
+
   // Redirect an offset from the displacement to the end of the call instruction.
   // This is used for ROUTINE_CALL and EXTERNAL_CALL.
   static int fixup_call_inst_offset(int offset);
