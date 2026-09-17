@@ -1410,10 +1410,9 @@ bool JeandleIntrinsicLowering::lower_hash_code(vmIntrinsics::ID id) {
 
   llvm::LLVMContext& ctx = *_interp->_context;
   llvm::IRBuilder<>& builder = _interp->_ir_builder;
-  llvm::Module& llvm_module = _interp->_module;
 
   // The single category-1 operand is at raw depth 0. Keep it on the JVM stack
-  // through every guard and GC-state call; emit_java_call expects the normal
+  // through every guard and uncommon trap; emit_java_call expects the normal
   // post-invoke stack and is emitted only after the pop below.
   llvm::Value* obj = _interp->_jvm->raw_peek(0).value();
   if (obj == nullptr) {
@@ -1446,22 +1445,13 @@ bool JeandleIntrinsicLowering::lower_hash_code(vmIntrinsics::ID id) {
 
   // --- vtable guard (genuinely virtual Object.hashCode only) ---
   if (needs_virtual_guard) {
-    llvm::Function* load_klass_fn = llvm_module.getFunction("jeandle.load_klass");
-    assert(load_klass_fn != nullptr, "jeandle.load_klass JavaOp not defined");
-    static constexpr CallSiteAttributeMetadata load_klass_attrs =
-        {CTRL_NONE, MEM_READ | MEM_NEEDS_GC_STATE};
-    llvm::CallBase* klass = emit_callsite(
-        load_klass_fn, llvm::CallingConv::Hotspot_JIT, {obj},
-        load_klass_attrs);
+    llvm::CallInst* klass =
+        _interp->call_java_op("jeandle.load_klass", {obj});
 
     if (is_interface) {
       // Delay expansion of the secondary-super scan until after safepoint
       // coverage verification; the direct subtype JavaOp exposes its loop too
       // early in this pipeline.
-      llvm::Function* check_instanceof_fn =
-          llvm_module.getFunction("jeandle.check_instanceof");
-      assert(check_instanceof_fn != nullptr,
-             "jeandle.check_instanceof JavaOp not defined");
       llvm::PointerType* c_heap_ptr_ty =
           llvm::PointerType::get(ctx, llvm::jeandle::AddrSpace::CHeapAddrSpace);
       Klass* interface_klass =
@@ -1469,11 +1459,9 @@ bool JeandleIntrinsicLowering::lower_hash_code(vmIntrinsics::ID id) {
       llvm::Value* interface_klass_value = builder.CreateIntToPtr(
           builder.getInt64(reinterpret_cast<intptr_t>(interface_klass)),
           c_heap_ptr_ty, "hashCode.interface_klass");
-      static constexpr CallSiteAttributeMetadata check_instanceof_attrs =
-          {CTRL_NONE, MEM_READ | MEM_WRITE};
-      llvm::CallBase* receiver_is_subtype = emit_callsite(
-          check_instanceof_fn, llvm::CallingConv::Hotspot_JIT,
-          {interface_klass_value, obj}, check_instanceof_attrs);
+      llvm::CallInst* receiver_is_subtype =
+          _interp->call_java_op("jeandle.check_instanceof",
+                                {interface_klass_value, obj});
 
       llvm::BasicBlock* interface_pass_bb = llvm::BasicBlock::Create(
           ctx, "hashCode.interface_check_pass", _interp->_llvm_func);
@@ -1516,11 +1504,8 @@ bool JeandleIntrinsicLowering::lower_hash_code(vmIntrinsics::ID id) {
 
   // --- fast path: inline mark-word hash extraction ---
   builder.SetInsertPoint(hash_fast_bb);
-  llvm::Function* fast_fn = llvm_module.getFunction("jeandle.hashcode_fast");
-  assert(fast_fn != nullptr, "jeandle.hashcode_fast JavaOp not defined");
-  static constexpr CallSiteAttributeMetadata fast_attrs = {CTRL_NONE, MEM_READ};
-  llvm::CallBase* fast_call = emit_callsite(
-      fast_fn, llvm::CallingConv::Hotspot_JIT, {obj}, fast_attrs);
+  llvm::CallInst* fast_call =
+      _interp->call_java_op("jeandle.hashcode_fast", {obj});
   llvm::Value* fast_ok =
       builder.CreateICmpNE(fast_call, builder.getInt32(0), "hashCode.fast_ok");
   builder.CreateCondBr(fast_ok, merge_bb, slow_call_bb);
