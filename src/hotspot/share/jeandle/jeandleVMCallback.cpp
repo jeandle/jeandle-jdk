@@ -1028,6 +1028,65 @@ uintptr_t JeandleVMCallback::get_signature_arg_type_klass(uintptr_t method, int 
   return reinterpret_cast<uintptr_t>(k->constant_encoding());
 }
 
+llvm::jeandle::CloneInstanceInfoResult
+JeandleVMCallback::get_clone_instance_info(uintptr_t klass_ptr,
+                                           bool klass_exact) {
+  VM_ENTRY_MARK;
+  using llvm::jeandle::CloneInstanceFieldInfo;
+  using llvm::jeandle::CloneInstanceInfoStatus;
+
+  Klass* holder = reinterpret_cast<Klass*>(klass_ptr);
+  if (holder == nullptr || !holder->is_instance_klass()) {
+    return {static_cast<int>(CloneInstanceInfoStatus::NotInstance), -1, {}};
+  }
+  ciEnv* env = ciEnv::current();
+  ciMetadata* meta = env->get_metadata(reinterpret_cast<Metadata*>(holder));
+  if (meta == nullptr || !meta->is_instance_klass()) {
+    return {static_cast<int>(CloneInstanceInfoStatus::NotApplicable), -1, {}};
+  }
+  ciInstanceKlass* ik = meta->as_instance_klass();
+
+  // Match ArrayCopyNode::get_count(). Injected fields are not represented by
+  // nof_nonstatic_fields(), so C2 declines rather than copying an incomplete
+  // instance layout.
+  if ((!klass_exact && (ik->is_interface() || ik->has_subklass())) ||
+      ik->has_injected_fields()) {
+    return {static_cast<int>(CloneInstanceInfoStatus::NotApplicable), -1, {}};
+  }
+  const int field_count = ik->nof_nonstatic_fields();
+  if (field_count > ArrayCopyLoadStoreMaxElem) {
+    return {static_cast<int>(CloneInstanceInfoStatus::NotApplicable),
+            field_count, {}};
+  }
+
+  if (!klass_exact) {
+    assert(!ik->is_interface(), "inconsistent klass hierarchy");
+    if (ik->has_subklass()) {
+      // Concurrent class loading after the clone-instance admission check.
+      return {static_cast<int>(CloneInstanceInfoStatus::TransformFailed),
+              field_count, {}};
+    }
+    env->dependencies()->assert_leaf_type(ik);
+  }
+
+  if (array_copy_requires_gc_barriers(/*tightly_coupled_alloc=*/true,
+                                      T_OBJECT)) {
+    return {
+        static_cast<int>(CloneInstanceInfoStatus::RequiresGCBarriers),
+        field_count, {}};
+  }
+
+  std::vector<CloneInstanceFieldInfo> fields;
+  fields.reserve(field_count);
+  for (int index = 0; index < field_count; ++index) {
+    ciField* field = ik->nonstatic_field_at(index);
+    fields.emplace_back(field->offset_in_bytes(),
+                        basictype_to_jbasictype(field->layout_type()));
+  }
+  return {static_cast<int>(CloneInstanceInfoStatus::Ready), field_count,
+          std::move(fields)};
+}
+
 void JeandleVMCallback::register_callbacks() {
   llvm::jeandle::VMCallbacks callbacks;
   callbacks.IsSubtype = &JeandleVMCallback::is_subtype;
@@ -1067,6 +1126,8 @@ void JeandleVMCallback::register_callbacks() {
       &JeandleVMCallback::get_profile_devirtualization_info;
   callbacks.UpdateToStaticOptVirtualCall =
       &JeandleVMCallback::update_to_static_opt_virtual_call;
+  callbacks.GetCloneInstanceInfo =
+      &JeandleVMCallback::get_clone_instance_info;
   llvm::jeandle::registerVMCallbacks(callbacks);
 
   if (JeandleRecordVMCallbacks) {
