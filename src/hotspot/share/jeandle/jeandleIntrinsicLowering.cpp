@@ -23,6 +23,7 @@
 #include "llvm/ADT/FloatingPointMode.h"
 #include "llvm/Analysis/ConstantFolding.h"
 #include "llvm/IR/Jeandle/Attributes.h"
+#include "llvm/IR/Jeandle/GCStrategy.h"
 #include "llvm/IR/Jeandle/JavaType.h"
 #include "llvm/IR/Constants.h"
 #include "llvm/IR/DerivedTypes.h"
@@ -45,6 +46,8 @@
 #include "logging/log.hpp"
 #include "oops/arrayOop.hpp"
 #include "oops/klass.hpp"
+#include "oops/klassVtable.hpp"
+#include "oops/klass.inline.hpp"
 #include "runtime/deoptimization.hpp"
 #include "runtime/globals.hpp"
 #include "runtime/vm_version.hpp"
@@ -281,7 +284,9 @@ bool JeandleIntrinsicLowering::is_supported(vmIntrinsics::ID id) {
 
     // arraycopy
     case vmIntrinsics::_arraycopy:
-      return true;
+    case vmIntrinsics::_clone:
+    case vmIntrinsics::_copyOf:
+    case vmIntrinsics::_copyOfRange:
 
     // Single-block SHA compression. Availability is checked again by the
     // lowering because platform stubs are generated conditionally.
@@ -556,6 +561,14 @@ bool JeandleIntrinsicLowering::lower(vmIntrinsics::ID id, const ciMethod* target
     // arraycopy
     case vmIntrinsics::_arraycopy:
       return lower_arraycopy();
+    case vmIntrinsics::_clone:
+      return lower_native_clone(
+          _interp->_bytecodes.cur_bc_raw() == Bytecodes::_invokevirtual &&
+          !target->can_be_statically_bound());
+    case vmIntrinsics::_copyOf:
+      return lower_array_copyOf(false);
+    case vmIntrinsics::_copyOfRange:
+      return lower_array_copyOf(true);
 
     case vmIntrinsics::_sha_implCompress:
     case vmIntrinsics::_sha2_implCompress:
@@ -583,7 +596,8 @@ llvm::CallBase* JeandleIntrinsicLowering::emit_callsite(llvm::FunctionCallee cal
   }
   llvm::CallBase* site;
   if (attrs.needs_exception_edge()) {
-    site = _interp->create_call_ex(callee, args, cc, bundles);
+    site = _interp->create_call_ex(callee, args, cc, bundles,
+                                   attrs.deoptimize_on_exception());
   } else {
     site = _interp->create_call(callee, args, cc, bundles);
     site->setDoesNotThrow();
@@ -596,6 +610,127 @@ llvm::CallBase* JeandleIntrinsicLowering::emit_callsite(llvm::FunctionCallee cal
                                *_interp->_context);
   }
   return site;
+}
+
+//-----------------------generate_method_call----------------------------
+// Jeandle counterpart of C2 LibraryCallKit::generate_method_call().
+//
+// Unlike emit_callsite(), this is a Java call rather than a runtime-routine
+// call. In particular, a virtual clone() slow path must retain the normal
+// invokevirtual dispatch so an overriding implementation is still selected.
+llvm::InvokeInst* JeandleIntrinsicLowering::generate_method_call(
+    const ciMethod* target,
+    bool is_virtual,
+    bool is_static,
+    bool res_not_null,
+    llvm::ArrayRef<llvm::Value*> args,
+    bool deoptimize_on_exception) {
+  assert(target != nullptr, "method target must be present");
+  assert(!(is_virtual && is_static), "call cannot be both virtual and static");
+
+  const ciSignature* signature = target->signature();
+  const BasicType return_type = signature->return_type()->basic_type();
+  llvm::SmallVector<llvm::Type*, 8> arg_types;
+  if (!is_static) {
+    arg_types.push_back(JeandleType::java2llvm(T_OBJECT, *_interp->_context));
+  }
+  for (int i = 0; i < signature->count(); ++i) {
+    arg_types.push_back(JeandleType::java2llvm(
+        signature->type_at(i)->basic_type(), *_interp->_context));
+  }
+
+  llvm::FunctionType* function_type = llvm::FunctionType::get(
+      JeandleType::java2llvm(return_type, *_interp->_context),
+      arg_types, false);
+
+  JeandleCompiledCall::Type call_type = JeandleCompiledCall::NOT_A_CALL;
+  address resolve_stub = nullptr;
+  bool dynamic_call = false;
+  if (is_static) {
+    assert(!is_virtual, "");
+    call_type = JeandleCompiledCall::STATIC_CALL;
+    resolve_stub = SharedRuntime::get_resolve_static_call_stub();
+  } else if (is_virtual && !target->can_be_statically_bound()) {
+    // Jeandle currently implements only C2's UseInlineCaches == true path
+    // for virtual calls; direct vtable-index dispatch is not supported.
+    call_type = JeandleCompiledCall::DYNAMIC_CALL;
+    resolve_stub = SharedRuntime::get_resolve_virtual_call_stub();
+    dynamic_call = true;
+  } else {
+    // This covers C2's optimized-virtual path, including invokespecial and
+    // statically bound invokevirtual calls.
+    call_type = JeandleCompiledCall::STATIC_CALL;
+    resolve_stub = SharedRuntime::get_resolve_opt_virtual_call_stub();
+  }
+  assert(resolve_stub != nullptr, "Java call resolver must be available");
+
+  std::string callee_name = JeandleFuncSig::method_name_with_signature(
+      const_cast<ciMethod*>(target));
+  if (dynamic_call) {
+    callee_name = std::string("__jeandle_dynamic_call.") + callee_name;
+  }
+
+  llvm::FunctionCallee callee = _interp->_module.getOrInsertFunction(
+      callee_name, function_type);
+  llvm::Function* callee_function =
+      llvm::cast<llvm::Function>(callee.getCallee());
+  callee_function->setCallingConv(llvm::CallingConv::Hotspot_JIT);
+  callee_function->setGC(llvm::jeandle::JeandleGC);
+  callee_function->addFnAttr(llvm::Attribute::get(
+      *_interp->_context, llvm::jeandle::Attribute::JavaMethod,
+      std::to_string(reinterpret_cast<uintptr_t>(target))));
+  if (target->is_accessor()) {
+    callee_function->addFnAttr(llvm::Attribute::get(
+        *_interp->_context, llvm::jeandle::Attribute::JavaAccessorMethod));
+  }
+
+  uint32_t statepoint_id = _interp->_compiled_code.next_statepoint_id();
+  _interp->_compiled_code.push_non_routine_call_site(
+      new CallSiteInfo(call_type, resolve_stub, false, statepoint_id));
+
+  // Keep the receiver on the JVM stack so the deopt bundle describes the
+  // original clone invocation rather than a post-call stack.
+  JeandleAbstractInterpreter::DispatchedDest dispatched =
+      _interp->dispatch_exception_for_invoke(deoptimize_on_exception);
+  RETURN_ON_JEANDLE_ERROR(nullptr);
+
+  llvm::InvokeInst* invoke = _interp->_ir_builder.CreateInvoke(
+      callee, dispatched._normal_dest, dispatched._unwind_dest, args,
+      {_interp->create_current_deopt_bundle()});
+  _interp->_ir_builder.SetInsertPoint(dispatched._normal_dest);
+  _interp->_block->set_tail_llvm_block(dispatched._normal_dest);
+
+  invoke->setCallingConv(llvm::CallingConv::Hotspot_JIT);
+  invoke->addFnAttr(llvm::Attribute::get(
+      *_interp->_context, llvm::jeandle::Attribute::StatepointID,
+      std::to_string(statepoint_id)));
+  invoke->addFnAttr(llvm::Attribute::get(
+      *_interp->_context, llvm::jeandle::Attribute::StatepointNumPatchBytes,
+      std::to_string(JeandleCompiledCall::call_site_patch_size(call_type))));
+  invoke->addFnAttr(llvm::Attribute::get(
+      *_interp->_context, llvm::jeandle::Attribute::Bytecode,
+      Bytecodes::name(_interp->_bytecodes.cur_bc_raw())));
+  invoke->addFnAttr(llvm::Attribute::get(
+      *_interp->_context, llvm::jeandle::Attribute::DeclaredHolder,
+      std::to_string(reinterpret_cast<uintptr_t>(
+          ciEnv::get_instance_klass_for_declared_method_holder(
+              target->holder())))));
+
+  if (resolve_stub == SharedRuntime::get_resolve_opt_virtual_call_stub()) {
+    assert(!is_static && !args.empty(), "optimized virtual call needs receiver");
+    invoke->addParamAttr(0, llvm::Attribute::NoUndef);
+  }
+  if (call_type != JeandleCompiledCall::DYNAMIC_CALL) {
+    invoke->addFnAttr(llvm::Attribute::get(
+        *_interp->_context, llvm::jeandle::Attribute::MonomorphicTarget));
+  }
+  if (res_not_null) {
+    assert(return_type == T_OBJECT, "");
+    invoke->addRetAttr(llvm::Attribute::NonNull);
+  }
+  attach_java_klass_ret_attr(
+      invoke, signature->return_type(), *_interp->_context);
+  return invoke;
 }
 
 // =============================================================================
@@ -1267,7 +1402,8 @@ bool JeandleIntrinsicLowering::lower_new_array() {
       builder.CreateLShr(layout_helper, builder.getInt32(Klass::_lh_header_size_shift)),
       builder.getInt32(Klass::_lh_header_size_mask));
   llvm::Value* log2_esize = builder.CreateAnd(layout_helper, builder.getInt32(0x1f));
-  llvm::Value* size_in_bytes = _interp->emit_array_size_in_bytes(length, log2_esize, base_offset);
+  llvm::Value* size_in_bytes = _interp->emit_array_size_in_bytes(
+      length, log2_esize, base_offset, MinObjAlignmentInBytes - 1);
   // Fast-path length cap, mirroring C2's reflective array path: the unscaled
   // FastAllocateSizeLimit bounds the byte size to <= FastAllocateSizeLimit << LogBytesPerLong
   // (~1MB) for any element type, so size_in_bytes cannot overflow i32. Larger reflective arrays
@@ -1833,6 +1969,71 @@ llvm::BasicBlock* JeandleIntrinsicLowering::generate_fair_guard(
   return generate_guard(test, region_bb, PROB_FAIR);
 }
 
+// C2's generate_slow_guard(): a guard whose taken edge is strongly unlikely.
+llvm::BasicBlock* JeandleIntrinsicLowering::generate_slow_guard(
+    llvm::Value* test, llvm::BasicBlock* slow_bb) {
+  return generate_guard(test, slow_bb, PROB_UNLIKELY_MAG(3));
+}
+
+// Match C2 LibraryCallKit::generate_virtual_guard().  The receiver Klass's
+// vtable entry must still point at the intrinsic target method; otherwise an
+// overriding implementation must execute through the normal clone path.
+llvm::BasicBlock* JeandleIntrinsicLowering::generate_virtual_guard(
+    llvm::Value* obj_klass, llvm::BasicBlock* slow_region) {
+  assert(_target != nullptr && !_target->is_static(),
+         "virtual guard requires an instance target");
+
+  llvm::IRBuilder<>& builder = _interp->_ir_builder;
+  llvm::PointerType* c_heap_ptr_ty = llvm::PointerType::get(
+      *_interp->_context, llvm::jeandle::AddrSpace::CHeapAddrSpace);
+
+  ciMethod* method = const_cast<ciMethod*>(_target);
+  const int vtable_index = method->vtable_index();
+  assert(vtable_index >= 0 ||
+         vtable_index == Method::nonvirtual_vtable_index,
+         "bad vtable index %d", vtable_index);
+
+  const int entry_offset =
+      in_bytes(Klass::vtable_start_offset()) +
+      vtable_index * vtableEntry::size_in_bytes() +
+      in_bytes(vtableEntry::method_offset());
+  llvm::Value* entry_addr = builder.CreateInBoundsGEP(
+      builder.getInt8Ty(), obj_klass, builder.getInt32(entry_offset),
+      "clone.vtable_entry_addr");
+  llvm::LoadInst* target_method = builder.CreateLoad(
+      c_heap_ptr_ty, entry_addr, "clone.vtable_target_method");
+  target_method->setAtomic(llvm::AtomicOrdering::Unordered);
+
+  llvm::Value* expected_method = builder.CreateIntToPtr(
+      builder.getInt64(reinterpret_cast<intptr_t>(method->constant_encoding())),
+      c_heap_ptr_ty, "clone.expected_method");
+  llvm::Value* mismatch = builder.CreateICmpNE(
+      target_method, expected_method, "clone.virtual_target_mismatch");
+  return generate_slow_guard(mismatch, slow_region);
+}
+
+// Match C2 LibraryCallKit::generate_access_flags_guard().  A set of modifier
+// bits keeps the intrinsic fast path; any mismatch is appended to the shared
+// slow region.
+llvm::BasicBlock* JeandleIntrinsicLowering::generate_access_flags_guard(
+    llvm::Value* klass, int modifier_mask, int modifier_bits,
+    llvm::BasicBlock* region) {
+  llvm::IRBuilder<>& builder = _interp->_ir_builder;
+  llvm::Value* flags_addr = builder.CreateInBoundsGEP(
+      builder.getInt8Ty(), klass,
+      builder.getInt32(in_bytes(Klass::access_flags_offset())),
+      "access_flags_guard.addr");
+  llvm::LoadInst* flags = builder.CreateLoad(
+      builder.getInt32Ty(), flags_addr, "access_flags_guard.flags");
+  flags->setAtomic(llvm::AtomicOrdering::Unordered);
+  llvm::Value* masked = builder.CreateAnd(
+      flags, builder.getInt32(modifier_mask), "access_flags_guard.masked");
+  llvm::Value* mismatch = builder.CreateICmpNE(
+      masked, builder.getInt32(modifier_bits),
+      "access_flags_guard.mismatch");
+  return generate_fair_guard(mismatch, region);
+}
+
 void JeandleIntrinsicLowering::generate_negative_guard(
     llvm::Value* index, llvm::BasicBlock* slow_bb) {
 
@@ -1905,7 +2106,7 @@ llvm::BasicBlock* JeandleIntrinsicLowering::generate_array_guard_common(
     return nullptr;
   }
 
-  jint layout_con = 0;
+  jint layout_con = Klass::_lh_neutral_value;
   llvm::Value* layout_val = _interp->get_layout_helper(klass, layout_con);
   if (layout_val == nullptr) {
     bool query = obj_array
@@ -2092,6 +2293,23 @@ bool JeandleIntrinsicLowering::lower_arraycopy() {
   _interp->_jvm->ipop(); // srcPos
   _interp->_jvm->apop(); // src
 
+  // jeandle.arraycopy uses native-width integer arguments.  Keep the Java
+  // int semantics at the lowering boundary by sign-extending the values;
+  // this preserves negative values for the slow/deoptimization path while
+  // legal non-negative offsets and lengths retain their value.
+  llvm::Value* src_offset_x = b.CreateSExt(
+      src_offset, b.getInt64Ty(), "arraycopy.src_offset_x");
+  llvm::Value* dest_offset_x = b.CreateSExt(
+      dest_offset, b.getInt64Ty(), "arraycopy.dest_offset_x");
+  llvm::Value* length_x = b.CreateSExt(
+      length, b.getInt64Ty(), "arraycopy.length_x");
+  llvm::Value* src_length_x = b.CreateSExt(
+      _interp->call_java_op("jeandle.arraylength", {src}), b.getInt64Ty(),
+      "arraycopy.src_length_x");
+  llvm::Value* dest_length_x = b.CreateSExt(
+      _interp->call_java_op("jeandle.arraylength", {dest}), b.getInt64Ty(),
+      "arraycopy.dest_length_x");
+
   // The pseudo call is the Jeandle equivalent of C2 ArrayCopyNode::make(). It is
   // created after guard admission, and the validated attribute corresponds
   // to C2 ac->set_arraycopy(validated).
@@ -2103,10 +2321,9 @@ bool JeandleIntrinsicLowering::lower_arraycopy() {
       MEM_READ | MEM_WRITE | MEM_NEEDS_GC_STATE};
   llvm::CallBase* arraycopy_call = emit_callsite(
       arraycopy_callee, llvm::CallingConv::Hotspot_JIT,
-      {src, src_offset, dest, dest_offset, length,
+      {src, src_offset_x, dest, dest_offset_x, length_x,
        _interp->load_object_klass(src), _interp->load_object_klass(dest),
-       _interp->call_java_op("jeandle.arraylength", {src}),
-       _interp->call_java_op("jeandle.arraylength", {dest})},
+       src_length_x, dest_length_x},
       arraycopy_attrs);
   arraycopy_call->addFnAttr(llvm::Attribute::get(
       ctx, llvm::jeandle::Attribute::ArrayCopyKind,
@@ -2119,5 +2336,441 @@ bool JeandleIntrinsicLowering::lower_arraycopy() {
     arraycopy_call->addFnAttr(llvm::Attribute::get(
         ctx, llvm::jeandle::Attribute::ArrayCopyNegativeLengthGuard));
   }
+  return true;
+}
+
+//------------------------barrier_set_clone--------------------------------
+
+// Jeandle LLVM IR counterpart of C2 BarrierSetC2::clone().
+void JeandleIntrinsicLowering::barrier_set_clone(llvm::Value* src_base,
+                                                 llvm::Value* dst_base,
+                                                 llvm::Value* size,
+                                                 bool is_array) {
+  llvm::IRBuilder<>& builder = _interp->_ir_builder;
+  llvm::Module& m = _interp->_module;
+  llvm::LLVMContext& ctx = builder.getContext();
+  assert(size != nullptr, "clone size must be available");
+
+  // Match C2's TypeX arithmetic in native address width. The arraycopy
+  // pseudo-op also uses i64 arguments, so large array clone sizes are kept
+  // intact instead of being truncated at the call boundary.
+  llvm::Value* size_x = size;
+  if (!size->getType()->isIntegerTy(64)) {
+    assert(size->getType()->isIntegerTy(32),
+           "clone size must be i32 or i64");
+    size_x = builder.CreateSExt(size, builder.getInt64Ty(),
+                                "clone.size_x");
+  }
+
+  llvm::PointerType* c_heap_ptr_ty =
+      llvm::PointerType::get(ctx, llvm::jeandle::AddrSpace::CHeapAddrSpace);
+
+  // Match BarrierSetC2::clone(): copy the payload in double-words.
+  int base_offset = arraycopy_payload_base_offset(is_array);
+  llvm::Value* offset = builder.getInt64(base_offset);
+  llvm::Value* payload_size = builder.CreateSub(
+      size_x, offset, "clone_payload_size");
+  if (is_array) {
+    // Array size excludes object-alignment padding, so round the payload up
+    // before converting it to double-words.
+    payload_size = builder.CreateAdd(
+        payload_size, builder.getInt64(BytesPerLong - 1),
+        "clone_rounded_payload_size");
+  }
+  payload_size = builder.CreateLShr(
+      payload_size, builder.getInt64(LogBytesPerLong),
+      "clone_payload_words");
+  llvm::Function* arraycopy = m.getFunction("jeandle.arraycopy");
+  assert(arraycopy != nullptr,
+         "jeandle.arraycopy must be declared in template.ll");
+  static constexpr CallSiteAttributeMetadata clone_attrs = {
+      CTRL_MAY_DEOPT, MEM_READ | MEM_WRITE | MEM_NEEDS_GC_STATE};
+  llvm::CallBase* copy = emit_callsite(
+      arraycopy, llvm::CallingConv::Hotspot_JIT,
+      {src_base, offset, dst_base, offset, payload_size,
+       llvm::ConstantPointerNull::get(c_heap_ptr_ty),
+       llvm::ConstantPointerNull::get(c_heap_ptr_ty), size_x, size_x},
+      clone_attrs);
+  copy->addFnAttr(llvm::Attribute::get(
+      ctx, llvm::jeandle::Attribute::ArrayCopyKind,
+      is_array ? llvm::jeandle::Attribute::ArrayCopyKindCloneArray
+               : llvm::jeandle::Attribute::ArrayCopyKindCloneInst));
+  copy->addFnAttr(llvm::Attribute::get(
+      ctx, llvm::jeandle::Attribute::ArrayCopyTightlyCoupledAllocation));
+}
+
+//------------------------clone_coping-----------------------------------
+// Helper function for lower_native_clone.
+
+// Jeandle counterpart of C2 LibraryCallKit::copy_to_clone().
+//
+// C2 marks the just-created allocation initialization as complete, emits
+// access_clone(), then places a StoreStore/CPUOrder memory barrier. Jeandle
+// cannot model AllocateNode/InitializeNode memory slices here yet. Jeandle
+// represents array and instance payload copies as CloneArray/CloneInst pseudo
+// calls and expands them to collector-correct stubs later; allocation-
+// initialization fusion remains a separate backend task.
+void JeandleIntrinsicLowering::copy_to_clone(llvm::Value* obj,
+                                             llvm::Value* alloc_obj,
+                                             llvm::Value* obj_size,
+                                             bool is_array) {
+  llvm::IRBuilder<>& builder = _interp->_ir_builder;
+  assert(obj_size != nullptr, "clone size must be available");
+
+  // TODO: Match C2's ReduceBulkZeroing path. Jeandle must expose the fresh
+  // allocation behind alloc_obj, verify that an array clone has a statically
+  // known array source type, mark the allocation complete, and record a
+  // complete_with_arraycopy initialization so the clone copy can own payload
+  // initialization and place StoreStore after the copy.
+
+  barrier_set_clone(obj, alloc_obj, obj_size, is_array);
+
+  // Jeandle cannot yet identify the tightly coupled AllocateNode used by C2's
+  // ReduceBulkZeroing path, so match C2's alloc == nullptr case: prevent
+  // compiler memory accesses from moving across the clone without emitting a
+  // second hardware StoreStore barrier after the allocation barrier.
+  builder.CreateFence(llvm::AtomicOrdering::SequentiallyConsistent,
+                      llvm::SyncScope::SingleThread);
+}
+
+// Follow C2 LibraryCallKit::inline_native_clone() control order. LLVM control
+// edges carry Jeandle's memory and I/O state, so only the result value needs an
+// explicit PHI at the final merge.
+bool JeandleIntrinsicLowering::lower_native_clone(bool is_virtual) {
+  assert(!_target->is_static(), "Object.clone must be an instance method");
+
+  llvm::LLVMContext& ctx = *_interp->_context;
+  llvm::IRBuilder<>& b = _interp->_ir_builder;
+  llvm::Module& m = _interp->_module;
+  llvm::Function* f = _interp->_llvm_func;
+
+  llvm::PointerType* java_heap_ptr_ty = llvm::PointerType::get(
+      ctx, llvm::jeandle::AddrSpace::JavaHeapAddrSpace);
+
+  // invoke() has already performed C2's null_check_receiver(). Keep the
+  // receiver on the JVM stack until every deoptimizing clone operation has
+  // captured its reexecute state.
+  llvm::Value* obj = _interp->_jvm->raw_peek(0).value();
+
+  // TODO: Match C2's speculative instance-clone narrowing here. Jeandle does
+  // not yet expose speculative receiver types or maybe_cast_profiled_obj().
+
+  // C2 MemBarCPUOrder prevents compiler reordering but has no AArch64 machine
+  // instruction. LLVM singlethread scope provides the same compiler-only fence.
+  b.CreateFence(llvm::AtomicOrdering::SequentiallyConsistent,
+                llvm::SyncScope::SingleThread);
+
+  llvm::BasicBlock* result_bb =
+      llvm::BasicBlock::Create(ctx, "clone_result", f);
+  llvm::SmallVector<llvm::Value*, 4> result_values;
+  llvm::SmallVector<llvm::BasicBlock*, 4> result_controls;
+
+  llvm::Value* obj_klass =
+      _interp->load_object_klass(obj);
+
+  // C2 generate_array_guard(obj_klass, nullptr) returns the array projection
+  // while leaving the builder on the instance projection.
+  llvm::BasicBlock* array_control = generate_array_guard(obj_klass, nullptr);
+  {
+    // This only restores the LLVM IRBuilder insertion point. Unlike C2's
+    // PreserveJVMState, it does not save control, memory, I/O, or the JVM
+    // stack/map.
+    llvm::IRBuilderBase::InsertPointGuard preserve_control(b);
+    if (array_control != nullptr) {
+      b.SetInsertPoint(array_control);
+      llvm::Value* obj_length =
+          _interp->emit_array_length(obj);
+      llvm::Value* array_size = nullptr;
+      llvm::InvokeInst* alloc_obj = _interp->emit_jeandle_newarray(
+          obj_klass, obj_length, 0, &array_size,
+          true /* deoptimize_on_exception */);
+
+      // Jeandle currently supports Serial and G1. Both use C2's card-table
+      // barrier-set rule for this tightly-coupled oop-array clone.
+      if (array_copy_requires_gc_barriers(
+              true /* tightly_coupled_alloc */, T_OBJECT)) {
+        llvm::BasicBlock* obj_array_control =
+            generate_objArray_guard(obj_klass, nullptr);
+
+        if (obj_array_control != nullptr) {
+          // This only restores the LLVM IRBuilder insertion point. Unlike C2's
+          // PreserveJVMState, it does not save control, memory, I/O, or the JVM
+          // stack/map.
+          llvm::IRBuilderBase::InsertPointGuard preserve_control(b);
+          b.SetInsertPoint(obj_array_control);
+          // Clones are always tightly coupled. Reuse the phase-1 JavaOp
+          // declaration so its ABI stays in sync with template.ll. The
+          // ArrayCopyNode is created with may_throw=true in C2, and its slow
+          // path retains the exception projection. Keep the same exception
+          // and deoptimization state on the Jeandle pseudo call.
+          llvm::Value* obj_length_x = b.CreateSExt(
+              obj_length, b.getInt64Ty(), "clone.object_array_length_x");
+          static constexpr CallSiteAttributeMetadata clone_arraycopy_attrs = {
+              CTRL_MAY_DEOPT | CTRL_NEEDS_EXCEPTION_EDGE |
+                  CTRL_DEOPT_ON_EXCEPTION,
+              MEM_READ | MEM_WRITE | MEM_NEEDS_GC_STATE};
+          llvm::CallBase* ac = emit_callsite(
+              m.getFunction("jeandle.arraycopy"),
+              llvm::CallingConv::Hotspot_JIT,
+              {obj, b.getInt64(0), alloc_obj, b.getInt64(0),
+               obj_length_x, obj_klass, obj_klass, obj_length_x,
+               obj_length_x},
+              clone_arraycopy_attrs, false /* is_gc_leaf_entry */);
+          ac->addFnAttr(llvm::Attribute::get(
+              ctx, llvm::jeandle::Attribute::ArrayCopyKind,
+              llvm::jeandle::Attribute::ArrayCopyKindCloneOopArray));
+          ac->addFnAttr(llvm::Attribute::get(
+              ctx,
+              llvm::jeandle::Attribute::ArrayCopyTightlyCoupledAllocation));
+
+          // Present the results of the object-array copy.
+          llvm::BasicBlock* obj_array_result_control = b.GetInsertBlock();
+          b.CreateBr(result_bb);
+          result_values.push_back(alloc_obj);
+          result_controls.push_back(obj_array_result_control);
+        }
+      }
+
+      // Otherwise, there are no barriers to worry about.
+      // (We can dispense with card marks if we know the allocation
+      // comes out of eden (TLAB)... In fact, ReduceInitialCardMarks
+      // causes the non-eden paths to take compensating steps to
+      // simulate a fresh allocation, so that no further
+      // card marks are required in compiled code to initialize
+      // the object.)
+      if (b.GetInsertBlock() != nullptr) {
+        copy_to_clone(obj, alloc_obj, array_size, true /* is_array */);
+
+        // Present the results of the array copy.
+        llvm::BasicBlock* array_result_control = b.GetInsertBlock();
+        b.CreateBr(result_bb);
+        result_values.push_back(alloc_obj);
+        result_controls.push_back(array_result_control);
+      }
+    }
+  }
+
+  // Accumulate instance guard failures in the same slow region as C2. A
+  // virtual-target mismatch reaches generate_method_call() below, which emits
+  // a dynamic Java call so that an overriding clone() is invoked.
+  llvm::BasicBlock* slow_region =
+      llvm::BasicBlock::Create(ctx, "clone_slow", f, result_bb);
+  if (b.GetInsertBlock() != nullptr) {
+    if (is_virtual) {
+      generate_virtual_guard(obj_klass, slow_region);
+    }
+
+    generate_access_flags_guard(
+        obj_klass, JVM_ACC_IS_CLONEABLE_FAST | JVM_ACC_HAS_FINALIZER,
+        JVM_ACC_IS_CLONEABLE_FAST, slow_region);
+  }
+
+  if (b.GetInsertBlock() != nullptr) {
+    // It's an instance, and it passed the slow-path tests. This is C2's
+    // _instance_path: allocate an object of the guarded Klass, copy its
+    // instance payload, and join the fast result with the other clone paths.
+    // new_instance() carries deoptimize_on_exception so allocation failures
+    // reexecute Object.clone, matching C2's PreserveJVMState contract.
+    llvm::Value* obj_size = nullptr;
+    llvm::InvokeInst* alloc_obj = _interp->new_instance(
+        obj_klass, nullptr, &obj_size,
+        true /* deoptimize_on_exception */);
+
+    if (b.GetInsertBlock() != nullptr) {
+      copy_to_clone(obj, alloc_obj, obj_size, false /* is_array */);
+
+      llvm::BasicBlock* instance_result_control = b.GetInsertBlock();
+      b.CreateBr(result_bb);
+      result_values.push_back(alloc_obj);
+      result_controls.push_back(instance_result_control);
+    }
+  }
+
+  // Generate code for the slow case. We make a call to clone().
+  b.SetInsertPoint(slow_region);
+  if (b.GetInsertBlock() != nullptr) {
+    // Match C2's generate_method_call(). In the virtual case this must be a
+    // real dynamic Java call so a subclass override of clone() is selected;
+    // a fixed clone_object() runtime entry would bypass that override.
+    llvm::CallBase* slow_result = generate_method_call(
+        _target, is_virtual, false, true /* res_not_null */, {obj},
+        true /* deoptimize_on_exception */);
+
+    // The builder insertion point comes from emit_callsite().
+    // Present the results of the slow call.
+    llvm::BasicBlock* slow_call_control = b.GetInsertBlock();
+    b.CreateBr(result_bb);
+    result_values.push_back(slow_result);
+    result_controls.push_back(slow_call_control);
+  }
+
+  assert(!result_values.empty(), "clone must have a live result path");
+  b.SetInsertPoint(result_bb);
+  llvm::PHINode* result = b.CreatePHI(
+      java_heap_ptr_ty, result_values.size(), "clone_result_value");
+  for (size_t i = 0; i < result_values.size(); ++i) {
+    result->addIncoming(result_values[i], result_controls[i]);
+  }
+
+  // C2 also merges result_i_o and result_mem. LLVM's side-effecting control
+  // flow already merges those states at result_bb.
+  _interp->_block->set_tail_llvm_block(result_bb);
+  _interp->_jvm->apop();
+  _interp->_jvm->apush(result);
+  return true;
+}
+
+// public static <T,U> T[] java.util.Arrays.copyOf(
+//     U[] original, int newLength, Class<? extends T[]> newType);
+// public static <T,U> T[] java.util.Arrays.copyOfRange(
+//     U[] original, int from, int to, Class<? extends T[]> newType);
+bool JeandleIntrinsicLowering::lower_array_copyOf(bool is_copyOfRange) {
+  if (_interp->too_many_traps(_interp->_method,
+                              _interp->_bytecodes.cur_bci(),
+                              Deoptimization::Reason_intrinsic)) {
+    return false;
+  }
+
+  assert(_target->is_static(), "Arrays.copyOf[Range] must be static");
+  llvm::LLVMContext& ctx = *_interp->_context;
+  llvm::IRBuilder<>& b = _interp->_ir_builder;
+  llvm::Module& m = _interp->_module;
+  llvm::Function* f = _interp->_llvm_func;
+
+  // Get the arguments.
+  llvm::Value* original =
+      _interp->_jvm->raw_peek(is_copyOfRange ? 3 : 2).value();
+  llvm::Value* start = is_copyOfRange
+      ? _interp->_jvm->raw_peek(2).value()
+      : b.getInt32(0);
+  llvm::Value* end = _interp->_jvm->raw_peek(1).value();
+  llvm::Value* array_type_mirror = _interp->_jvm->raw_peek(0).value();
+
+  // Keep the original arguments on the JVM stack until allocation and the
+  // copy pseudo call have captured the reexecute state.
+  _interp->null_check(array_type_mirror);
+  _interp->null_check(original);
+
+  llvm::Value* orig_length = _interp->emit_array_length(original);
+  llvm::Value* klass_node = _interp->call_java_op(
+      "jeandle.load_mirror_klass", {array_type_mirror});
+  _interp->null_check(klass_node);
+
+  llvm::BasicBlock* bailout =
+      llvm::BasicBlock::Create(ctx, "copyof_bailout", f);
+
+  // Despite the generic Java signature, newType can be a primitive class or
+  // a primitive-array class. Only reference-array destinations are handled by
+  // this intrinsic; all other mirrors reexecute the Java implementation.
+  generate_non_objArray_guard(klass_node, bailout);
+  if (b.GetInsertBlock() == nullptr) {
+    _interp->_block->set(JeandleBasicBlock::always_uncommon_trap);
+    return true;
+  }
+
+  // Bail out if either start or end is negative.
+  generate_negative_guard(start, bailout);
+  generate_negative_guard(end, bailout);
+
+  llvm::Value* length = end;
+  if (is_copyOfRange) {
+    length = b.CreateSub(end, start, "copyof.length");
+  }
+
+  // If start > end, Java must throw IllegalArgumentException. Reexecute the
+  // Java method instead of allowing new_array to throw NegativeArraySizeException.
+  generate_negative_guard(length, bailout);
+
+  // start > original.length is an ArrayIndexOutOfBoundsException in the Java
+  // implementation and must also be handled by reexecution.
+  llvm::Value* orig_tail =
+      b.CreateSub(orig_length, start, "copyof.original_tail");
+  generate_negative_guard(orig_tail, bailout);
+
+  // All failed guards above merge at bailout, matching C2's RegionNode.
+  _interp->uncommon_trap(Deoptimization::Reason_intrinsic,
+                         Deoptimization::Action_maybe_recompile,
+                         bailout);
+
+  // The number copied can be smaller than the requested result length; the
+  // allocation's normal zeroing supplies null padding for the remainder.
+  llvm::Value* tail_is_shorter = b.CreateICmpSLT(
+      orig_tail, length, "copyof.tail_is_shorter");
+  llvm::Value* moved = b.CreateSelect(
+      tail_is_shorter, orig_tail, length, "copyof.moved");
+
+  // TODO: Match C2's singleton target-Klass check and
+  // maybe_cast_profiled_obj()-style speculative narrowing of original before
+  // generating this subtype check.
+  llvm::Value* src_klass = _interp->load_object_klass(original);
+  bool validated = false;
+  if (!_interp->too_many_traps(_interp->_method,
+                              _interp->_bytecodes.cur_bci(),
+                              Deoptimization::Reason_class_check)) {
+    llvm::BasicBlock* class_check_fail =
+        llvm::BasicBlock::Create(ctx, "copyof_class_check_fail", f);
+    _interp->uncommon_trap(Deoptimization::Reason_class_check,
+                           Deoptimization::Action_make_not_entrant,
+                           class_check_fail);
+    llvm::Value* is_subtype = _interp->call_java_op(
+        "jeandle.check_klass_subtype", {src_klass, klass_node});
+    llvm::Value* not_subtype =
+        b.CreateNot(is_subtype, "copyof_not_subtype");
+    generate_guard(not_subtype, class_check_fail, PROB_MIN);
+    validated = true;
+  }
+
+  llvm::InvokeInst* newcopy = _interp->emit_jeandle_newarray(
+      klass_node, length, 0 /* nargs */);
+
+  llvm::Value* start_x =
+      b.CreateSExt(start, b.getInt64Ty(), "copyof.start_x");
+  llvm::Value* moved_x =
+      b.CreateSExt(moved, b.getInt64Ty(), "copyof.moved_x");
+  llvm::Value* orig_length_x = b.CreateSExt(
+      orig_length, b.getInt64Ty(), "copyof.original_length_x");
+  llvm::Value* length_x =
+      b.CreateSExt(length, b.getInt64Ty(), "copyof.length_x");
+
+  // This is the Jeandle counterpart of ArrayCopyNode::make(..., true, true):
+  // the destination allocation is tightly coupled and all length guards have
+  // already run. The specialization pass recognizes copyOf kinds separately
+  // so it can preserve their disjoint, object-array expansion.
+  llvm::Function* arraycopy_callee = m.getFunction("jeandle.arraycopy");
+  assert(arraycopy_callee != nullptr,
+         "jeandle.arraycopy must be declared in template.ll");
+  static constexpr CallSiteAttributeMetadata copyof_attrs = {
+      CTRL_NEEDS_EXCEPTION_EDGE,
+      MEM_READ | MEM_WRITE | MEM_NEEDS_GC_STATE};
+  llvm::CallBase* arraycopy_call = emit_callsite(
+      arraycopy_callee, llvm::CallingConv::Hotspot_JIT,
+      {original, start_x, newcopy, b.getInt64(0), moved_x,
+       src_klass, klass_node, orig_length_x, length_x},
+      copyof_attrs);
+  arraycopy_call->addFnAttr(llvm::Attribute::get(
+      ctx, llvm::jeandle::Attribute::ArrayCopyKind,
+      is_copyOfRange
+          ? llvm::jeandle::Attribute::ArrayCopyKindCopyOfRange
+          : llvm::jeandle::Attribute::ArrayCopyKindCopyOf));
+  arraycopy_call->addFnAttr(llvm::Attribute::get(
+      ctx, llvm::jeandle::Attribute::ArrayCopyNegativeLengthGuard));
+  arraycopy_call->addFnAttr(llvm::Attribute::get(
+      ctx, llvm::jeandle::Attribute::ArrayCopyTightlyCoupledAllocation));
+  if (validated) {
+    arraycopy_call->addFnAttr(llvm::Attribute::get(
+        ctx, llvm::jeandle::Attribute::ValidatedArrayCopy));
+  }
+
+  if (is_copyOfRange) {
+    _interp->_jvm->apop();  // newType
+    _interp->_jvm->ipop();  // to
+    _interp->_jvm->ipop();  // from
+    _interp->_jvm->apop();  // original
+  } else {
+    _interp->_jvm->apop();  // newType
+    _interp->_jvm->ipop();  // newLength
+    _interp->_jvm->apop();  // original
+  }
+  _interp->_jvm->apush(newcopy);
   return true;
 }

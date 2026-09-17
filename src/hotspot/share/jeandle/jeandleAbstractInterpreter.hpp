@@ -405,7 +405,8 @@ class JeandleAbstractInterpreter : public StackObj {
                                  llvm::ArrayRef<llvm::Value*> args,
                                  llvm::ArrayRef<llvm::OperandBundleDef> deopt_bundle = {});
   llvm::InvokeInst* call_java_op_ex(llvm::StringRef java_op, llvm::ArrayRef<llvm::Value*> args,
-                                    llvm::ArrayRef<llvm::OperandBundleDef> deopt_bundle = {});
+                                    llvm::ArrayRef<llvm::OperandBundleDef> deopt_bundle = {},
+                                    bool deoptimize_on_exception = false);
   llvm::CallInst*   create_call(llvm::FunctionCallee callee,
                                 llvm::ArrayRef<llvm::Value*> arg,
                                 llvm::CallingConv::ID calling_conv,
@@ -413,7 +414,8 @@ class JeandleAbstractInterpreter : public StackObj {
   llvm::InvokeInst* create_call_ex(llvm::FunctionCallee callee,
                                    llvm::ArrayRef<llvm::Value*> arg,
                                    llvm::CallingConv::ID calling_conv,
-                                   llvm::ArrayRef<llvm::OperandBundleDef> deopt_bundle = {});
+                                   llvm::ArrayRef<llvm::OperandBundleDef> deopt_bundle = {},
+                                   bool deoptimize_on_exception = false);
 
   llvm::OperandBundleDef create_current_deopt_bundle(bool should_reexecute = false);
 
@@ -459,7 +461,8 @@ class JeandleAbstractInterpreter : public StackObj {
     llvm::BasicBlock* _normal_dest;
   } DispatchedDest;
 
-  DispatchedDest dispatch_exception_for_invoke(); // Dispatch exceptions raised by invoke.
+  DispatchedDest dispatch_exception_for_invoke(
+      bool deoptimize_on_exception = false); // Dispatch exceptions raised by invoke.
   // Generate a series of IR to dispatch an exception to its handler.
   void dispatch_exception_to_handler(llvm::Value* exception_oop, llvm::LandingPadInst* landingpad = nullptr);
   void throw_exception(llvm::Value* exception_oop, llvm::LandingPadInst* landingpad = nullptr);
@@ -477,12 +480,21 @@ class JeandleAbstractInterpreter : public StackObj {
   // in template.ll collapses tight. Used by do_unified_newarray and multianewarray's
   // dimensions-array allocation. The reflection path (JeandleIntrinsicLowering::lower_new_array)
   // decodes layout_helper at runtime instead and shares emit_array_size_in_bytes.
-  llvm::InvokeInst* emit_jeandle_newarray(Klass* array_klass, llvm::Value* length);
+  llvm::Value* emit_array_length(llvm::Value* array_oop);
+  llvm::InvokeInst* emit_jeandle_newarray(
+      llvm::Value* array_klass, llvm::Value* length, int nargs,
+      llvm::Value** return_size_val = nullptr,
+      bool deoptimize_on_exception = false);
 
   // Builds the array size_in_bytes expression shared by the bytecode and reflection
   // allocation paths. Mirrors C2's GraphKit::new_array size computation.
   llvm::Value* emit_array_size_in_bytes(llvm::Value* length, llvm::Value* log2_element_size,
-                                        llvm::Value* base_offset);
+                                        llvm::Value* header_size, jint round_mask);
+
+  llvm::InvokeInst* new_instance(
+      llvm::Value* klass, llvm::Value* extra_slow_test,
+      llvm::Value** return_size_val = nullptr,
+      bool deoptimize_on_exception = false);
 
   // Implementation of _new
   void do_new();
