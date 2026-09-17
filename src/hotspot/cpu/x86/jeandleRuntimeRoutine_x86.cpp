@@ -214,3 +214,33 @@ void JeandleRuntimeRoutine::generate_exception_handler() {
 void JeandleRuntimeRoutine::generate_deopt_blob() {
   _routine_entry[_deopt_blob] = SharedRuntime::deopt_blob()->unpack();
 }
+
+// Clear a variable number of HeapWords using the C calling convention.
+// MacroAssembler::clear_mem implements C2's small-store, REP STOS, and
+// vectorized strategies, but requires base/count in rdi/rcx.
+void JeandleRuntimeRoutine::generate_zero_heap_words_stub() {
+  ResourceMark rm;
+  CodeBuffer buffer(_zero_heap_words_stub, 1024, 64);
+  MacroAssembler* masm = new MacroAssembler(&buffer);
+
+  address start = __ pc();
+
+  assert(c_rarg0 == rdi && c_rarg1 == rsi, "unexpected C calling convention");
+
+  // clear_mem requires the count in rcx. The public signature uses i32, so
+  // movl also clears the upper count bits before 64-bit loop control.
+  __ movl(rcx, c_rarg1);
+
+  __ clear_mem(rdi, rcx, rax, xmm0, false,
+               UseAVX > 2 ? k1 : knoreg);
+
+  __ ret(0);
+  masm->flush();
+
+  RuntimeStub* stub = RuntimeStub::new_runtime_stub(
+      _zero_heap_words_stub, &buffer, (int)(__ pc() - start),
+      0 /* frame size */, nullptr /* oop maps */, false);
+  address entry = stub->entry_point();
+  _routine_entry[_zero_heap_words_stub] = entry;
+  _gc_leaf_routines.insert(entry);
+}

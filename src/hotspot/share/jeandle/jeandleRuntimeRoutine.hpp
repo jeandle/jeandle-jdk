@@ -556,7 +556,8 @@ def(StubRoutines_generic_arraycopy,                                             
 #define ALL_JEANDLE_ASSEMBLY_ROUTINES(def) \
   def(exceptional_return)                  \
   def(exception_handler)                   \
-  def(deopt_blob)
+  def(deopt_blob)                          \
+  def(zero_heap_words_stub)
 
 
 // JeandleRuntimeRoutine contains C/C++/Assembly routines and Hotspot routines that can be called from Jeandle compiled code.
