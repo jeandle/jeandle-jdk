@@ -304,25 +304,6 @@ bool JeandleIntrinsicLowering::is_supported(vmIntrinsics::ID id) {
 }
 
 // =============================================================================
-// trap_throttle_mask — simple switch
-// =============================================================================
-
-static constexpr JeandleTrapReasonMask trap_reason_mask_val(Deoptimization::DeoptReason reason) {
-  return JeandleTrapReasonMask(1u) << static_cast<uint>(reason);
-}
-
-JeandleTrapReasonMask JeandleIntrinsicLowering::trap_throttle_mask(vmIntrinsics::ID id) {
-  switch (id) {
-    case vmIntrinsics::_Preconditions_checkIndex:
-    case vmIntrinsics::_Preconditions_checkLongIndex:
-      return trap_reason_mask_val(Deoptimization::Reason_intrinsic) |
-             trap_reason_mask_val(Deoptimization::Reason_range_check);
-    default:
-      return 0;
-  }
-}
-
-// =============================================================================
 // lower — unified flat switch
 // =============================================================================
 
