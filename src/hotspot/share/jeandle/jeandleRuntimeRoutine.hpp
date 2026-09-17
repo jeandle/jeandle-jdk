@@ -514,8 +514,26 @@ def(StubRoutines_generic_arraycopy,                                             
       llvm::PointerType::get(context, llvm::jeandle::AddrSpace::JavaHeapAddrSpace), \
       llvm::Type::getInt64Ty(context))                                              \
                                                                                     \
+  def(StubRoutines_oop_arraycopy_uninit,                                            \
+      StubRoutines::oop_arraycopy(true),                                            \
+      true,                                                                         \
+      true,                                                                         \
+      llvm::Type::getVoidTy(context),                                               \
+      llvm::PointerType::get(context, llvm::jeandle::AddrSpace::JavaHeapAddrSpace), \
+      llvm::PointerType::get(context, llvm::jeandle::AddrSpace::JavaHeapAddrSpace), \
+      llvm::Type::getInt64Ty(context))                                              \
+                                                                                    \
   def(StubRoutines_arrayof_oop_arraycopy,                                           \
       StubRoutines::arrayof_oop_arraycopy(),                                        \
+      true,                                                                         \
+      true,                                                                         \
+      llvm::Type::getVoidTy(context),                                               \
+      llvm::PointerType::get(context, llvm::jeandle::AddrSpace::JavaHeapAddrSpace), \
+      llvm::PointerType::get(context, llvm::jeandle::AddrSpace::JavaHeapAddrSpace), \
+      llvm::Type::getInt64Ty(context))                                              \
+                                                                                    \
+  def(StubRoutines_arrayof_oop_arraycopy_uninit,                                    \
+      StubRoutines::arrayof_oop_arraycopy(true),                                    \
       true,                                                                         \
       true,                                                                         \
       llvm::Type::getVoidTy(context),                                               \
@@ -532,8 +550,26 @@ def(StubRoutines_generic_arraycopy,                                             
       llvm::PointerType::get(context, llvm::jeandle::AddrSpace::JavaHeapAddrSpace), \
       llvm::Type::getInt64Ty(context))                                              \
                                                                                     \
+  def(StubRoutines_oop_disjoint_arraycopy_uninit,                                   \
+      StubRoutines::oop_disjoint_arraycopy(true),                                   \
+      true,                                                                         \
+      true,                                                                         \
+      llvm::Type::getVoidTy(context),                                               \
+      llvm::PointerType::get(context, llvm::jeandle::AddrSpace::JavaHeapAddrSpace), \
+      llvm::PointerType::get(context, llvm::jeandle::AddrSpace::JavaHeapAddrSpace), \
+      llvm::Type::getInt64Ty(context))                                              \
+                                                                                    \
   def(StubRoutines_arrayof_oop_disjoint_arraycopy,                                  \
       StubRoutines::arrayof_oop_disjoint_arraycopy(),                               \
+      true,                                                                         \
+      true,                                                                         \
+      llvm::Type::getVoidTy(context),                                               \
+      llvm::PointerType::get(context, llvm::jeandle::AddrSpace::JavaHeapAddrSpace), \
+      llvm::PointerType::get(context, llvm::jeandle::AddrSpace::JavaHeapAddrSpace), \
+      llvm::Type::getInt64Ty(context))                                              \
+                                                                                    \
+  def(StubRoutines_arrayof_oop_disjoint_arraycopy_uninit,                           \
+      StubRoutines::arrayof_oop_disjoint_arraycopy(true),                           \
       true,                                                                         \
       true,                                                                         \
       llvm::Type::getVoidTy(context),                                               \
@@ -551,6 +587,26 @@ def(StubRoutines_generic_arraycopy,                                             
       llvm::Type::getInt64Ty(context),                                              \
       llvm::Type::getInt64Ty(context),                                              \
       llvm::PointerType::get(context, llvm::jeandle::AddrSpace::CHeapAddrSpace))    \
+                                                                                    \
+  def(StubRoutines_checkcast_arraycopy_uninit,                                      \
+      StubRoutines::checkcast_arraycopy(true),                                      \
+      true,                                                                         \
+      true,                                                                         \
+      llvm::Type::getInt32Ty(context),                                              \
+      llvm::PointerType::get(context, llvm::jeandle::AddrSpace::JavaHeapAddrSpace), \
+      llvm::PointerType::get(context, llvm::jeandle::AddrSpace::JavaHeapAddrSpace), \
+      llvm::Type::getInt64Ty(context),                                              \
+      llvm::Type::getInt64Ty(context),                                              \
+      llvm::PointerType::get(context, llvm::jeandle::AddrSpace::CHeapAddrSpace))    \
+                                                                                    \
+    def(JeandleRuntime_clone,                                                       \
+      JeandleRuntimeRoutine::clone,                                                 \
+      true,                                                                         \
+      true,                                                                         \
+      llvm::Type::getVoidTy(context),                                               \
+      llvm::PointerType::get(context, llvm::jeandle::AddrSpace::JavaHeapAddrSpace), \
+      llvm::PointerType::get(context, llvm::jeandle::AddrSpace::JavaHeapAddrSpace), \
+      llvm::Type::getInt64Ty(context))                                              \
                                                                                     \
 
 #define ALL_JEANDLE_ASSEMBLY_ROUTINES(def) \
@@ -671,6 +727,9 @@ class JeandleRuntimeRoutine : public AllStatic {
   // (java.lang.Class) and allocates via Reflection::reflect_new_array.  Used when the
   // cached array_klass field in the mirror has not been populated yet.
   static void new_array_from_mirror(oopDesc* mirror, int length, JavaThread* current);
+
+  // Leaf entry used by collector-aware clone expansion.
+  static void clone(oopDesc* src, oopDesc* dst, size_t size);
 
   // Multi-dimensional array allocation routines
   static void multianewarray2(Klass* elem_type, int len1, int len2, JavaThread* current);

@@ -49,6 +49,10 @@ enum JeandleControlFlag : uint8_t {
   // The call may throw a Java exception and needs invoke-style exception
   // continuation handling.
   CTRL_NEEDS_EXCEPTION_EDGE = 1u << 1,
+  // A Java exception from the call must deoptimize and reexecute the
+  // intrinsic bytecode instead of being merged into the caller's exception
+  // state (C2's deoptimize_on_exception contract).
+  CTRL_DEOPT_ON_EXCEPTION    = 1u << 2,
 };
 
 // =============================================================================
@@ -72,16 +76,19 @@ struct CallSiteAttributeMetadata {
   uint8_t  control_flags;   // bitmask of JeandleControlFlag
   uint16_t memory_flags;    // bitmask of JeandleMemoryFlag
 
-  bool may_deopt()            const { return (control_flags & CTRL_MAY_DEOPT) != 0; }
-  bool needs_exception_edge() const { return (control_flags & CTRL_NEEDS_EXCEPTION_EDGE) != 0; }
-  bool reads_memory()         const { return (memory_flags  & MEM_READ) != 0; }
-  bool writes_memory()        const { return (memory_flags  & MEM_WRITE) != 0; }
-  bool needs_gc_state()       const { return (memory_flags  & MEM_NEEDS_GC_STATE) != 0; }
-  bool attach_deopt_bundle()  const {
-    return may_deopt() || needs_gc_state() || needs_exception_edge();
+  bool may_deopt()               const { return (control_flags & CTRL_MAY_DEOPT) != 0; }
+  bool needs_exception_edge()    const { return (control_flags & CTRL_NEEDS_EXCEPTION_EDGE) != 0; }
+  bool deoptimize_on_exception() const { return (control_flags & CTRL_DEOPT_ON_EXCEPTION) != 0; }
+  bool reads_memory()            const { return (memory_flags  & MEM_READ) != 0; }
+  bool writes_memory()           const { return (memory_flags  & MEM_WRITE) != 0; }
+  bool needs_gc_state()          const { return (memory_flags  & MEM_NEEDS_GC_STATE) != 0; }
+  bool attach_deopt_bundle()     const {
+    return may_deopt() || deoptimize_on_exception() ||
+           needs_gc_state() || needs_exception_edge();
   }
-  bool gc_leaf_by_flags()     const {
-    return !needs_gc_state() && !may_deopt() && !needs_exception_edge();
+  bool gc_leaf_by_flags()        const {
+    return !needs_gc_state() && !may_deopt() &&
+           !needs_exception_edge() && !deoptimize_on_exception();
   }
 };
 
@@ -141,6 +148,19 @@ class JeandleIntrinsicLowering : public StackObj {
                                 const CallSiteAttributeMetadata& attrs,
                                 bool is_gc_leaf_entry = false);
 
+  // C2's LibraryCallKit::generate_method_call() counterpart.  This emits a
+  // Java invoke with the normal Jeandle call-site protocol, including the
+  // selected static/optimized-virtual/dynamic call kind, exception edge,
+  // deoptimization state, and relocation metadata.  The arguments are
+  // supplied explicitly because intrinsic lowering must keep the original
+  // JVM stack intact until the deopt state has been captured.
+  llvm::InvokeInst* generate_method_call(const ciMethod* target,
+                                         bool is_virtual,
+                                         bool is_static,
+                                         bool res_not_null,
+                                         llvm::ArrayRef<llvm::Value*> args,
+                                         bool deoptimize_on_exception = false);
+
   // Emit a llvm.* builtin. Pops all Java args from the JVM stack (from signature),
   // appends extra_args, creates the intrinsic call, and pushes the result.
   bool emit_llvm_builtin(llvm::Intrinsic::ID llvm_id,
@@ -165,12 +185,28 @@ class JeandleIntrinsicLowering : public StackObj {
 
   // Helper functions to inline natives
   llvm::BasicBlock* generate_guard(llvm::Value* test, llvm::BasicBlock* slow_bb, float true_prob);
+  llvm::BasicBlock* generate_slow_guard(llvm::Value* test, llvm::BasicBlock* slow_bb);
   llvm::BasicBlock* generate_fair_guard(llvm::Value* test, llvm::BasicBlock* slow_bb);
+  llvm::BasicBlock* generate_virtual_guard(llvm::Value* obj_klass,
+                                           llvm::BasicBlock* slow_region = nullptr);
+  llvm::BasicBlock* generate_access_flags_guard(llvm::Value* klass,
+                                                int modifier_mask,
+                                                int modifier_bits,
+                                                llvm::BasicBlock* region);
   void generate_negative_guard(llvm::Value* index, llvm::BasicBlock* slow_bb);
   void generate_limit_guard(llvm::Value* offset, llvm::Value* copy_length,
                             llvm::Value* array_length, llvm::BasicBlock* slow_bb);
   llvm::BasicBlock* generate_non_array_guard(llvm::Value* klass, llvm::BasicBlock* region_bb) {
     return generate_array_guard_common(klass, region_bb, false, true);
+  }
+  llvm::BasicBlock* generate_array_guard(llvm::Value* klass, llvm::BasicBlock* region_bb) {
+    return generate_array_guard_common(klass, region_bb, false, false);
+  }
+  llvm::BasicBlock* generate_objArray_guard(llvm::Value* klass, llvm::BasicBlock* region_bb) {
+    return generate_array_guard_common(klass, region_bb, true, false);
+  }
+  llvm::BasicBlock* generate_non_objArray_guard(llvm::Value* klass, llvm::BasicBlock* region_bb) {
+    return generate_array_guard_common(klass, region_bb, true, true);
   }
   llvm::BasicBlock* generate_array_guard_common(llvm::Value* klass, llvm::BasicBlock* region_bb,
                                                 bool obj_array, bool not_array);
@@ -202,6 +238,14 @@ class JeandleIntrinsicLowering : public StackObj {
   // StringUTF16 trusted single-code-unit access. The byte[] backing stores
   // UTF16 values in the platform's native byte order.
   bool lower_string_char_access(bool is_store);
+  bool lower_array_copyOf(bool is_copyOfRange);
+  bool lower_native_clone(bool is_virtual);
+  void barrier_set_clone(llvm::Value* src_base,
+                         llvm::Value* dst_base,
+                         llvm::Value* size,
+                         bool is_array);
+  void copy_to_clone(llvm::Value* obj, llvm::Value* alloc_obj,
+                     llvm::Value* obj_size, bool is_array);
   llvm::Value* emit_vectorized_mismatch_small(llvm::Value* a_addr,
                                               llvm::Value* b_addr,
                                               llvm::Value* byte_length,

@@ -2301,10 +2301,10 @@ llvm::CallInst* JeandleAbstractInterpreter::create_call(llvm::FunctionCallee cal
 }
 
 // Generate IR for calling into llvm FunctionCallee, with exception handling.
-llvm::InvokeInst* JeandleAbstractInterpreter::create_call_ex(llvm::FunctionCallee callee, llvm::ArrayRef<llvm::Value *> args, llvm::CallingConv::ID calling_conv, llvm::ArrayRef<llvm::OperandBundleDef> deopt_bundle) {
+llvm::InvokeInst* JeandleAbstractInterpreter::create_call_ex(llvm::FunctionCallee callee, llvm::ArrayRef<llvm::Value *> args, llvm::CallingConv::ID calling_conv, llvm::ArrayRef<llvm::OperandBundleDef> deopt_bundle, bool deoptimize_on_exception) {
 
   // Handle exceptions for the routine.
-  DispatchedDest dispatched = dispatch_exception_for_invoke();
+  DispatchedDest dispatched = dispatch_exception_for_invoke(deoptimize_on_exception);
   RETURN_ON_JEANDLE_ERROR(nullptr);
 
   // Create the invoke instruction.
@@ -2569,10 +2569,10 @@ llvm::CallInst* JeandleAbstractInterpreter::call_java_op(llvm::StringRef java_op
 }
 
 // Call a Java operation, with exception handling.
-llvm::InvokeInst* JeandleAbstractInterpreter::call_java_op_ex(llvm::StringRef java_op, llvm::ArrayRef<llvm::Value*> args, llvm::ArrayRef<llvm::OperandBundleDef> deopt_bundle) {
+llvm::InvokeInst* JeandleAbstractInterpreter::call_java_op_ex(llvm::StringRef java_op, llvm::ArrayRef<llvm::Value*> args, llvm::ArrayRef<llvm::OperandBundleDef> deopt_bundle, bool deoptimize_on_exception) {
   llvm::Function* java_op_func = _module.getFunction(java_op);
   assert(java_op_func != nullptr, "invalid JavaOp");
-  llvm::InvokeInst* invoke_inst = create_call_ex(java_op_func, args, llvm::CallingConv::Hotspot_JIT, deopt_bundle);
+  llvm::InvokeInst* invoke_inst = create_call_ex(java_op_func, args, llvm::CallingConv::Hotspot_JIT, deopt_bundle, deoptimize_on_exception);
   return invoke_inst;
 }
 
@@ -2884,18 +2884,33 @@ llvm::Value* JeandleAbstractInterpreter::load_object_klass(llvm::Value* obj) {
 // compile-time constant with a non-neutral layout helper, return the value via
 // constant_value. Otherwise emit the unordered runtime load.
 llvm::Value* JeandleAbstractInterpreter::get_layout_helper(
-    llvm::Value* klass, jint& constant_value) {
-  uintptr_t klass_constant = llvm::jeandle::extractKlassConstant(klass);
-  if (klass_constant != 0) {
-    Klass* constant_klass = reinterpret_cast<Klass*>(klass_constant);
-    jint layout_helper = constant_klass->layout_helper();
-    if (layout_helper != Klass::_lh_neutral_value) {
-      constant_value = layout_helper;
-      return nullptr;
+    llvm::Value* klass, jint& layout_con) {
+  // Match GraphKit::get_layout_helper(): a known Klass is represented by a
+  // null returned value plus a constant layout_con; otherwise load the layout
+  // helper from the Klass at runtime. LLVM does not carry C2's TypeKlassPtr,
+  // so constant Klass pointers are recognized from the inttoptr form emitted
+  // at the bytecode allocation call sites.
+  layout_con = Klass::_lh_neutral_value;
+  if (!StressReflectiveCode) {
+    Klass* known_klass = nullptr;
+    if (auto* int_to_ptr = llvm::dyn_cast<llvm::ConstantExpr>(klass)) {
+      if (int_to_ptr->getOpcode() == llvm::Instruction::IntToPtr) {
+        auto* constant = llvm::dyn_cast<llvm::ConstantInt>(
+            int_to_ptr->getOperand(0));
+        if (constant != nullptr) {
+          known_klass = reinterpret_cast<Klass*>(constant->getZExtValue());
+        }
+      }
+    }
+    if (known_klass != nullptr) {
+      const jint known_layout = known_klass->layout_helper();
+      if (known_layout != Klass::_lh_neutral_value) {
+        layout_con = known_layout;
+        return nullptr;
+      }
     }
   }
 
-  constant_value = Klass::_lh_neutral_value;
   return call_java_op("jeandle.layout_helper", {klass});
 }
 
@@ -3145,7 +3160,7 @@ void JeandleAbstractInterpreter::do_new() {
   _jvm->apush(new_inst);
 }
 
-JeandleAbstractInterpreter::DispatchedDest JeandleAbstractInterpreter::dispatch_exception_for_invoke() {
+JeandleAbstractInterpreter::DispatchedDest JeandleAbstractInterpreter::dispatch_exception_for_invoke(bool deoptimize_on_exception) {
   int cur_bci = _bytecodes.cur_bci();
 
   DispatchedDest dispatched;
@@ -3168,17 +3183,26 @@ JeandleAbstractInterpreter::DispatchedDest JeandleAbstractInterpreter::dispatch_
   // This landingpad should always be entered during exception handling.
   landingpad->setCleanup(true);
 
-  // Read the exception oop from thread local storage.
-  llvm::Value* exception_oop_addr = _ir_builder.CreateIntToPtr(_ir_builder.getInt64((uint64_t)JavaThread::exception_oop_offset()),
-                                                               llvm::PointerType::get(*_context, llvm::jeandle::AddrSpace::TLSAddrSpace));
-  llvm::Value* exception_oop = _ir_builder.CreateLoad(JeandleType::java2llvm(BasicType::T_OBJECT, *_context), exception_oop_addr, true /* is_volatile */);
+  if (deoptimize_on_exception) {
+    // Match GraphKit::make_slow_call_ex(..., deoptimize=true): an allocation
+    // exception must not be merged into the caller's exception state.  The
+    // invoke's deopt bundle was built before any intrinsic operands were
+    // consumed, so the interpreter can reexecute the original bytecode.
+    uncommon_trap(Deoptimization::Reason_unhandled,
+                  Deoptimization::Action_none);
+  } else {
+    // Read the exception oop from thread local storage.
+    llvm::Value* exception_oop_addr = _ir_builder.CreateIntToPtr(_ir_builder.getInt64((uint64_t)JavaThread::exception_oop_offset()),
+                                                                 llvm::PointerType::get(*_context, llvm::jeandle::AddrSpace::TLSAddrSpace));
+    llvm::Value* exception_oop = _ir_builder.CreateLoad(JeandleType::java2llvm(BasicType::T_OBJECT, *_context), exception_oop_addr, true /* is_volatile */);
 
-  // Clear the exception oop field in thread local storage.
-  _ir_builder.CreateStore(llvm::ConstantPointerNull::get(llvm::cast<llvm::PointerType>(JeandleType::java2llvm(BasicType::T_OBJECT, *_context))),
-                          exception_oop_addr,
-                          true /* is_volatile */);
+    // Clear the exception oop field in thread local storage.
+    _ir_builder.CreateStore(llvm::ConstantPointerNull::get(llvm::cast<llvm::PointerType>(JeandleType::java2llvm(BasicType::T_OBJECT, *_context))),
+                            exception_oop_addr,
+                            true /* is_volatile */);
 
-  dispatch_exception_to_handler(exception_oop, landingpad);
+    dispatch_exception_to_handler(exception_oop, landingpad);
+  }
   RETURN_ON_JEANDLE_ERROR(dispatched);
 
   // Recover insert point.
@@ -3497,46 +3521,192 @@ void JeandleAbstractInterpreter::anewarray(int klass_index) {
 // GraphKit::new_array size computation.
 llvm::Value* JeandleAbstractInterpreter::emit_array_size_in_bytes(llvm::Value* length,
                                                                   llvm::Value* log2_element_size,
-                                                                  llvm::Value* base_offset) {
-  jint align_mask = static_cast<jint>(MinObjAlignmentInBytesMask);
-  llvm::Value* body_bytes = _ir_builder.CreateShl(length, log2_element_size);
-  llvm::Value* with_header = _ir_builder.CreateAdd(body_bytes, base_offset);
-  llvm::Value* with_align_pad = _ir_builder.CreateAdd(with_header, _ir_builder.getInt32(align_mask));
-  return _ir_builder.CreateAnd(with_align_pad, _ir_builder.getInt32(~align_mask));
+                                                                  llvm::Value* header_size,
+                                                                  jint round_mask) {
+  llvm::Value* body_bytes = _ir_builder.CreateShl(length, log2_element_size,
+                                                   "new_array.body_bytes");
+  llvm::Value* with_header = _ir_builder.CreateAdd(body_bytes, header_size);
+  if (round_mask == 0) {
+    return with_header;
+  }
+  llvm::Value* with_align_pad = _ir_builder.CreateAdd(
+      with_header, _ir_builder.getInt32(round_mask));
+  return _ir_builder.CreateAnd(with_align_pad,
+                               _ir_builder.getInt32(~round_mask));
 }
 
-llvm::InvokeInst* JeandleAbstractInterpreter::emit_jeandle_newarray(Klass* array_klass, llvm::Value* length) {
-  // Decode the array klass layout at IR build time. array_klass is known here, so size/base/max
-  // fold to i32 constants and the fast path in template.ll collapses to a tight bump-pointer plus
-  // inline zero loop.
-  jint lh = array_klass->layout_helper();
-  assert(Klass::layout_helper_is_array(lh), "must be an array klass");
+llvm::Value* JeandleAbstractInterpreter::emit_array_length(llvm::Value* array_oop) {
+  return call_java_op("jeandle.arraylength", {array_oop});
+}
 
-  int log2_element_size = Klass::layout_helper_log2_element_size(lh);
-  BasicType element_type = static_cast<BasicType>(Klass::layout_helper_element_type(lh));
-  int base_offset = arrayOopDesc::base_offset_in_bytes(element_type);
+llvm::InvokeInst* JeandleAbstractInterpreter::new_instance(
+    llvm::Value* klass, llvm::Value* extra_slow_test,
+    llvm::Value** return_size_val, bool deoptimize_on_exception) {
+  jint layout_con = Klass::_lh_neutral_value;
+  llvm::Value* layout_val = get_layout_helper(klass, layout_con);
+  bool layout_is_con = layout_val == nullptr;
 
-  // Fast-path length cap, mirroring C2 GraphKit::new_array. It must bound the array so that
-  // size_in_bytes cannot overflow i32: arrayOopDesc::max_array_length() is ~max_jint on LP64
-  // (an element count, not a byte size) and would let e.g. int[1<<30] wrap size_in_bytes and
-  // corrupt the heap. FastAllocateSizeLimit caps the fast path at ~1MB; larger arrays take the
-  // slow path. Scaled by element size so the byte limit is uniform across element types.
-  int length_limit = (int)FastAllocateSizeLimit << (LogBytesPerLong - log2_element_size);
+  // Match GraphKit::new_instance(): a missing extra test is the constant
+  // false condition (C2's intcon(0)). LLVM's allocation JavaOp takes an i1,
+  // so normalize an integer condition before using it below.
+  if (extra_slow_test == nullptr) {
+    extra_slow_test = _ir_builder.getInt1(false);
+  }
+  if (extra_slow_test->getType()->isIntegerTy(32)) {
+    extra_slow_test = _ir_builder.CreateICmpNE(
+        extra_slow_test, _ir_builder.getInt32(0),
+        "new_instance.extra_needs_slow_path");
+  }
+  assert(extra_slow_test->getType()->isIntegerTy(1),
+         "extra_slow_test must be i1 or i32");
 
-  llvm::Value* size_in_bytes = emit_array_size_in_bytes(length,
-      _ir_builder.getInt32(log2_element_size), _ir_builder.getInt32(base_offset));
+  llvm::Value* initial_slow_test = nullptr;
+  if (layout_is_con) {
+    assert(!StressReflectiveCode,
+           "stress mode does not use compile-time layout paths");
+    bool must_go_slow = Klass::layout_helper_needs_slow_path(layout_con);
+    initial_slow_test = must_go_slow ? _ir_builder.getInt1(true) : extra_slow_test;
+  } else {
+    llvm::Value* slow_path_bits = _ir_builder.CreateAnd(
+        layout_val, _ir_builder.getInt32(Klass::_lh_instance_slow_path_bit),
+        "new_instance.slow_path_bits");
+    initial_slow_test = _ir_builder.CreateICmpNE(
+        slow_path_bits, _ir_builder.getInt32(0),
+        "new_instance.layout_needs_slow_path");
+    auto* extra_slow_const = llvm::dyn_cast<llvm::ConstantInt>(extra_slow_test);
+    if (!(extra_slow_const && extra_slow_const->isZero())) {
+      initial_slow_test = _ir_builder.CreateOr(initial_slow_test, extra_slow_test, "new_instance.needs_slow_path");
+    }
+  }
 
-  llvm::PointerType* klass_type = llvm::PointerType::get(*_context, llvm::jeandle::AddrSpace::CHeapAddrSpace);
-  llvm::Value* array_klass_ptr = _ir_builder.CreateIntToPtr(_ir_builder.getInt64((intptr_t)array_klass), klass_type);
+  // The JavaOp allocation ABI and the layout-helper size are both i32 here.
+  // Instance layout helpers are jint values and the slow-path bit routes
+  // oversized classes away from the TLAB fast path.
+  llvm::Value* size = nullptr;
+  if (layout_is_con) {
+    size = _ir_builder.getInt32(
+        Klass::layout_helper_size_in_bytes(layout_con));
+  } else {
+    // Clear the low bits to extract layout_helper_size_in_bytes:
+    assert((int)Klass::_lh_instance_slow_path_bit < BytesPerLong,
+           "clear bit");
+    llvm::Value* mask = _ir_builder.getInt32(
+        ~(jint)right_n_bits(LogBytesPerLong));
+    size = _ir_builder.CreateAnd(layout_val, mask, "new_instance.size");
+  }
+  if (return_size_val != nullptr) {
+    *return_size_val = size;
+  }
 
-  return call_java_op_ex("jeandle.new_array",
-      {array_klass_ptr, length, size_in_bytes, _ir_builder.getInt32(base_offset), _ir_builder.getInt32(length_limit)},
-      {create_current_deopt_bundle()});
+  return call_java_op_ex(
+      "jeandle.new_instance",
+      {klass, size, initial_slow_test},
+      {create_current_deopt_bundle()}, deoptimize_on_exception);
+}
+
+
+//-------------------------------new_array-------------------------------------
+llvm::InvokeInst* JeandleAbstractInterpreter::emit_jeandle_newarray(
+    llvm::Value* array_klass, llvm::Value* length,
+    int nargs, llvm::Value** return_size_val, bool deoptimize_on_exception) {
+  jint layout_con = Klass::_lh_neutral_value;
+  llvm::Value* layout_val = get_layout_helper(array_klass, layout_con);
+  bool layout_is_con = layout_val == nullptr;
+
+  // Callers establish that array_klass is an array klass. An unknown layout
+  // is not evidence for an Object[] layout: clone may supply a primitive
+  // array klass, including one only discovered by LLVM's later type analysis.
+  // Keep the dynamic size/header/limit recipe below instead of speculating
+  // and deoptimizing on a layout mismatch. ConstantFieldFolding can specialize
+  // these operands later without reconstructing an allocation CFG. Always
+  // pass the original array_klass to new_array, even for a constant layout.
+
+  int round_mask = MinObjAlignmentInBytes - 1;
+  llvm::Value* header_size = nullptr;
+  llvm::Value* log2_element_size = nullptr;
+  if (layout_is_con) {
+    int hsize = Klass::layout_helper_header_size(layout_con);
+    int eshift = Klass::layout_helper_log2_element_size(layout_con);
+    if ((round_mask & ~right_n_bits(eshift)) == 0) {
+      round_mask = 0;
+    }
+    assert((hsize & right_n_bits(eshift)) == 0,
+           "hsize is pre-rounded");
+    header_size = _ir_builder.getInt32(hsize);
+    log2_element_size = _ir_builder.getInt32(eshift);
+  } else {
+    header_size = _ir_builder.CreateAnd(
+        _ir_builder.CreateLShr(
+            layout_val,
+            _ir_builder.getInt32(Klass::_lh_header_size_shift)),
+        _ir_builder.getInt32(Klass::_lh_header_size_mask),
+        "new_array.header_size");
+    log2_element_size = _ir_builder.CreateAnd(
+        layout_val,
+        _ir_builder.getInt32(Klass::_lh_log2_element_size_mask),
+        "new_array.log2_element_size");
+  }
+
+  llvm::Value* elem_shift = nullptr;
+  if (layout_is_con) {
+    int eshift = Klass::layout_helper_log2_element_size(layout_con);
+    if (eshift != 0) {
+      elem_shift = _ir_builder.getInt32(eshift);
+    }
+  } else {
+    assert(Klass::_lh_log2_element_size_shift == 0, "use shift in place");
+    // Unlike C2's LShiftINode, LLVM does not implicitly mask the shift
+    // amount.  Use the explicitly masked log2 value for the LLVM shift.
+    elem_shift = log2_element_size;
+  }
+
+  // Match GraphKit::new_array(): calculate the unrounded copy size in the
+  // native address width before exposing it to clone().  The allocation
+  // JavaOp still receives the separate i32 size_in_bytes below.
+  llvm::Value* lengthx = _ir_builder.CreateSExt(
+      length, _ir_builder.getInt64Ty(), "new_array.length_x");
+  llvm::Value* headerx = _ir_builder.CreateSExt(
+      header_size, _ir_builder.getInt64Ty(), "new_array.header_x");
+
+  llvm::Value* abody = lengthx;
+  if (elem_shift != nullptr) {
+    llvm::Value* elem_shift_x = _ir_builder.CreateZExt(
+        elem_shift, _ir_builder.getInt64Ty(),
+        "new_array.elem_shift_x");
+
+    abody = _ir_builder.CreateShl(lengthx, elem_shift_x, "new_array.body_size_x");
+  }
+
+  llvm::Value* non_rounded_size = _ir_builder.CreateAdd(headerx, abody, "new_array.unrounded_size_x");
+  if (return_size_val != nullptr) {
+    *return_size_val = non_rounded_size;
+  }
+
+  llvm::Value* size_in_bytes = emit_array_size_in_bytes(
+      length, log2_element_size, header_size, round_mask);
+
+  // C2 scales FastAllocateSizeLimit by element width for an exact array
+  // layout. With a dynamic layout the shift remains an SSA value; element
+  // widths are bounded by LogBytesPerLong, so this preserves the same limit.
+  llvm::Value* length_limit = _ir_builder.CreateShl(
+      _ir_builder.getInt32((int)FastAllocateSizeLimit),
+      _ir_builder.CreateSub(_ir_builder.getInt32(LogBytesPerLong),
+                            log2_element_size),
+      "new_array.length_limit");
+
+  return call_java_op_ex(
+      "jeandle.new_array",
+      {array_klass, length, size_in_bytes, header_size, length_limit},
+      {create_current_deopt_bundle()}, deoptimize_on_exception);
 }
 
 void JeandleAbstractInterpreter::do_unified_newarray(Klass* array_klass) {
   llvm::Value* length = _jvm->ipop();
-  llvm::InvokeInst* result = emit_jeandle_newarray(array_klass, length);
+  llvm::PointerType* klass_type = llvm::PointerType::get(
+      *_context, llvm::jeandle::AddrSpace::CHeapAddrSpace);
+  llvm::Value* array_klass_ptr = _ir_builder.CreateIntToPtr(
+      _ir_builder.getInt64((intptr_t)array_klass), klass_type);
+  llvm::InvokeInst* result = emit_jeandle_newarray(array_klass_ptr, length, 0);
 
   // newarray always produces an exact type.
   result->addRetAttr(llvm::Attribute::get(*_context,
@@ -3600,7 +3770,12 @@ void JeandleAbstractInterpreter::multianewarray() {
     Klass* int_array_klass = (Klass*)(ciTypeArrayKlass::make(T_INT)->constant_encoding());
     llvm::Value* dimensions_array_length = _ir_builder.getInt32(ndimensions);
 
-    llvm::InvokeInst* dimensions_array_oop = emit_jeandle_newarray(int_array_klass, dimensions_array_length);
+    llvm::PointerType* klass_type = llvm::PointerType::get(
+        *_context, llvm::jeandle::AddrSpace::CHeapAddrSpace);
+    llvm::Value* int_array_klass_ptr = _ir_builder.CreateIntToPtr(
+        _ir_builder.getInt64((intptr_t)int_array_klass), klass_type);
+    llvm::InvokeInst* dimensions_array_oop = emit_jeandle_newarray(
+        int_array_klass_ptr, dimensions_array_length, 0);
     RETURN_VOID_ON_JEANDLE_ERROR();
 
     llvm::Value* array_base_offset = _ir_builder.CreateLoad(llvm::Type::getInt32Ty(*_context),
@@ -3736,7 +3911,10 @@ void JeandleAbstractInterpreter::monitorexit() {
 }
 
 void JeandleAbstractInterpreter::null_check(llvm::Value* obj) {
-  assert(obj->getType() == llvm::PointerType::get(*_context, llvm::jeandle::AddrSpace::JavaHeapAddrSpace), "must be a java object");
+  // Match C2 GraphKit::null_check(): both Java oops and metadata pointers can
+  // be null-checked. LibraryCallKit::inline_array_copyOf(), for example,
+  // checks the Klass* loaded from a Class mirror.
+  assert(obj->getType()->isPointerTy(), "must be a pointer");
 
   int cur_bci = _bytecodes.cur_bci();
   llvm::BasicBlock* null_check_pass = llvm::BasicBlock::Create(*_context,

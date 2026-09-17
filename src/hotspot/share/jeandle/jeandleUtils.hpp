@@ -91,4 +91,11 @@ public:
   }
 };
 
+bool array_copy_requires_gc_barriers(bool tightly_coupled_alloc,
+                                     BasicType type);
+
+// Return the first byte copied by the raw clone operation. The offset is
+// always aligned to BytesPerLong and follows BarrierSetC2's clone layout.
+int arraycopy_payload_base_offset(bool is_array);
+
 #endif // SHARE_JEANDLE_UTILS_HPP
