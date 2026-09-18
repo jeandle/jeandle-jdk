@@ -181,6 +181,11 @@ bool JeandleIntrinsicLowering::is_supported(vmIntrinsics::ID id) {
     // currentThread
     case vmIntrinsics::_currentThread:
 
+    // Thread.ensureMaterializedForStackWalk is a compiler-only
+    // materialization barrier.  Its phase-1 JavaOp reaches PEA and is erased
+    // before code generation; there is no target-specific runtime action.
+    case vmIntrinsics::_ensureMaterializedForStackWalk:
+
     // Reference*
     case vmIntrinsics::_Reference_get:
     case vmIntrinsics::_Reference_refersTo0:
@@ -453,6 +458,15 @@ bool JeandleIntrinsicLowering::lower(vmIntrinsics::ID id, const ciMethod* target
     case vmIntrinsics::_currentThread:
       return lower_java_op("jeandle.current_thread_obj",
                            {CTRL_NONE, MEM_READ});
+
+    // Keep this as a phase-1 JavaOp rather than dropping the argument here.
+    // PEA recognizes the JavaOp as an explicit materialization point, while
+    // JavaOperationLower(1) later replaces it with a zero-code side-effect
+    // marker.  This mirrors C2's native-call escape edge followed by late
+    // call elision and remains correct when Jeandle scalar replacement is on.
+    case vmIntrinsics::_ensureMaterializedForStackWalk:
+      return lower_java_op("jeandle.ensure_materialized_for_stack_walk",
+                           {CTRL_NONE, MEM_NONE});
 
     // Reference*
     case vmIntrinsics::_Reference_get:
