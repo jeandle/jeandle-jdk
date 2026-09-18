@@ -275,17 +275,18 @@ public class TestStripMiningDisabled {
     }
 
     private static void checkDisabledStructural(String out, String variant) {
-        // Runtime-bound pre-test int loop: its symbolic maximum backedge count
-        // is INT_MAX, so it does not satisfy the strict exclusive threshold.
+        // Runtime-bound pre-test int loop: even when n is INT_MAX, the maximum
+        // backedge-taken count is INT_MAX - 1 (trip count minus one), so it
+        // satisfies the strict exclusive threshold.
         String intSuffix = CLASS + "_countedIntRuntimeBound";
         checkPipelineShape(out, intSuffix, variant);
-        Asserts.assertEquals(pollsInEarlyAfter(out, intSuffix), 2,
-            variant + ": " + intSuffix + ": boundary-risk loop must retain its loop poll");
+        Asserts.assertEquals(pollsInEarlyAfter(out, intSuffix), 1,
+            variant + ": " + intSuffix + ": int-counted fallback must leave only the return poll");
 
-        // A constant maximum immediately below INT_MAX satisfies the strict
-        // threshold, while a maximum equal to INT_MAX does not. The false
-        // runtime guard keeps these structural tests fast without making the
-        // branch constant during compilation.
+        // Both constant limits remain below the backedge-count threshold: a
+        // loop with INT_MAX trips has only INT_MAX - 1 taken backedges. The
+        // false runtime guard keeps these structural tests fast without making
+        // the branch constant during compilation.
         String belowSuffix = CLASS + "_countedIntBelowExclusiveLimit";
         checkPipelineShape(out, belowSuffix, variant);
         Asserts.assertEquals(pollsInEarlyAfter(out, belowSuffix), 1,
@@ -293,8 +294,8 @@ public class TestStripMiningDisabled {
 
         String atSuffix = CLASS + "_countedIntAtExclusiveLimit";
         checkPipelineShape(out, atSuffix, variant);
-        Asserts.assertEquals(pollsInEarlyAfter(out, atSuffix), 2,
-            variant + ": " + atSuffix + ": exact-limit loop must retain its loop poll");
+        Asserts.assertEquals(pollsInEarlyAfter(out, atSuffix), 1,
+            variant + ": " + atSuffix + ": exact trip limit is still below the backedge threshold");
 
         // Constant-bounded int loop: its live recurrence is needed only by the
         // loop poll's deopt state, so deletion prep removes the loop and poll
@@ -317,8 +318,9 @@ public class TestStripMiningDisabled {
 
     private static void checkDisabledTrace(String out, String variant) {
         String intSuffix = CLASS + "_countedIntRuntimeBound";
-        Asserts.assertTrue(IRDumpParser.traceChunkContains(out, intSuffix, "keep-one (keeper in"),
-            variant + ": " + intSuffix + ": exact symbolic limit must retain one loop poll");
+        Asserts.assertTrue(IRDumpParser.traceChunkContains(out, intSuffix,
+                "delete-all (int-counted-no-strip-mining), erased 1 of 1 poll(s)"),
+            variant + ": " + intSuffix + ": runtime int loop must use the counted-loop fallback");
         // Match the pass-header prefix, not the bare word: the delete-all reason
         // string "int-counted-no-strip-mining" contains "strip-mining".
         Asserts.assertFalse(IRDumpParser.traceChunkContains(out, intSuffix, "strip-mining<"),
@@ -330,8 +332,9 @@ public class TestStripMiningDisabled {
             variant + ": " + belowSuffix + ": below-limit loop must delete its loop poll");
 
         String atSuffix = CLASS + "_countedIntAtExclusiveLimit";
-        Asserts.assertTrue(IRDumpParser.traceChunkContains(out, atSuffix, "keep-one (keeper in"),
-            variant + ": " + atSuffix + ": exact-limit loop must retain one loop poll");
+        Asserts.assertTrue(IRDumpParser.traceChunkContains(out, atSuffix,
+                "delete-all (int-counted-no-strip-mining), erased 1 of 1 poll(s)"),
+            variant + ": " + atSuffix + ": trip limit still has fewer than INT_MAX backedges");
 
         String constSuffix = CLASS + "_countedConst5000";
         Asserts.assertTrue(IRDumpParser.traceChunkContains(out, constSuffix,

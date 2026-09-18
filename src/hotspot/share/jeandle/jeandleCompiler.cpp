@@ -197,7 +197,8 @@ bool JeandleCompiler::initialize_commandline_options() {
       "-imp-null-check-page-size=" + std::to_string(os::vm_page_size()),
       // Drive both short-loop poll elimination and strip mining from the
       // Jeandle-specific iteration budget.
-      "-jeandle-loop-strip-mining-iter=" + std::to_string(JeandleLoopStripMiningIter)
+      "-jeandle-loop-strip-mining-iter=" + std::to_string(JeandleLoopStripMiningIter),
+      "--vectorizer-ignore-atomicity=true"
     };
 
     // Forward the relevant JVM flags to Jeandle-LLVM cl::opts. Their values
@@ -232,7 +233,7 @@ bool JeandleCompiler::initialize_commandline_options() {
         argv.push_back(s.c_str());
     }
 
-    return llvm::cl::ParseCommandLineOptions(argv.size(), argv.data());
+  return llvm::cl::ParseCommandLineOptions(argv.size(), argv.data());
 }
 
 bool JeandleCompiler::initialize_dynamic_library() {

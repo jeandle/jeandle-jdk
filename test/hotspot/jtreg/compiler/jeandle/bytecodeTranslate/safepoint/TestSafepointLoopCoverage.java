@@ -72,33 +72,37 @@ public class TestSafepointLoopCoverage {
         return sum;
     }
 
-    static int conditionalCall(int n) {
+    // Use a long induction variable for the coverage-only cases below.  An
+    // int-counted loop is independently allowed to drop its poll when strip
+    // mining is disabled, which would mask whether the conditional call is
+    // actually present on every backedge path.
+    static int conditionalCall(long n) {
         int sum = 0;
-        for (int i = 0; i < n; i++) {
+        for (long i = 0; i < n; i++) {
             if ((i & 1) == 0) {
-                guaranteedSafepoint(i);
+                guaranteedSafepoint((int) i);
             }
-            sum += i;
+            sum += (int) i;
         }
         return sum;
     }
 
-    static int allocationOnly(int n) {
+    static int allocationOnly(long n) {
         int sum = 0;
-        for (int i = 0; i < n; i++) {
+        for (long i = 0; i < n; i++) {
             objectSink = new int[1];
-            sum += i;
+            sum += (int) i;
         }
         return sum;
     }
 
-    static int callsOnBothBranches(int n) {
+    static int callsOnBothBranches(long n) {
         int sum = 0;
-        for (int i = 0; i < n; i++) {
+        for (long i = 0; i < n; i++) {
             if ((i & 1) == 0) {
-                sum += guaranteedSafepoint(i);
+                sum += guaranteedSafepoint((int) i);
             } else {
-                sum += guaranteedSafepoint(-i);
+                sum += guaranteedSafepoint((int) -i);
             }
         }
         return sum;
