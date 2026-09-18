@@ -207,6 +207,7 @@ class JeandleIntrinsicLowering : public StackObj {
                                                llvm::Value* b_addr,
                                                llvm::Value* byte_length,
                                                llvm::Value* scale);
+  bool lower_hash_code(vmIntrinsics::ID id);
 
   };
 
