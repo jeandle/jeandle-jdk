@@ -717,7 +717,7 @@ llvm::jeandle::CHAOptInfo optimize_method_handle_intrinsic(
       // to a direct call we must cast the receiver and arguments to its
       // actual types.
       const int is_static = target->is_static() ? 1 : 0;
-      return {reinterpret_cast<uintptr_t>(target->holder()) | 1,
+      return {reinterpret_cast<uintptr_t>(target->holder()->constant_encoding()) | 1,
           reinterpret_cast<uintptr_t>(target),
           llvm::jeandle::CHAOptInfo::packTargetInfo(
               target->is_static(), target->is_accessor(),
@@ -792,7 +792,7 @@ llvm::jeandle::CHAOptInfo optimize_virtual_call(ciMethod* caller,
   // the CI layer (ciEnv::get_instance_klass is private; reachable because
   // JeandleVMCallback is a friend of ciEnv).
   ciInstanceKlass* receiver_inst_klass =
-      JeandleVMCallback::get_receiver_instance_klass(receiver_klass);
+      JeandleVMCallback::get_ci_instance_klass(receiver_klass);
   ciInstanceKlass* actual_receiver = holder;
   bool actual_receiver_is_exact = false;
   if (is_valid_instance_receiver(receiver_inst_klass, actual_receiver)) {
@@ -837,13 +837,13 @@ llvm::jeandle::CHAOptInfo optimize_virtual_call(ciMethod* caller,
 
 } // anonymous namespace
 
-ciInstanceKlass* JeandleVMCallback::get_receiver_instance_klass(Klass* receiver_klass) {
-  if (receiver_klass == nullptr) {
+ciInstanceKlass* JeandleVMCallback::get_ci_instance_klass(Klass* klass) {
+  if (klass == nullptr) {
     return nullptr;
   }
-  assert(receiver_klass->is_instance_klass(), "must be instance klass");
+  assert(klass->is_instance_klass(), "must be instance klass");
   VM_ENTRY_MARK;
-  return ciEnv::current()->get_instance_klass(receiver_klass);
+  return ciEnv::current()->get_instance_klass(klass);
 }
 
 llvm::jeandle::CHAOptResult JeandleVMCallback::get_cha_opt_info(uintptr_t caller_ptr, uintptr_t callee_ptr,
@@ -855,7 +855,9 @@ llvm::jeandle::CHAOptResult JeandleVMCallback::get_cha_opt_info(uintptr_t caller
 
   ciMethod* caller = reinterpret_cast<ciMethod*>(caller_ptr);
   ciMethod* callee = reinterpret_cast<ciMethod*>(callee_ptr);
-  ciInstanceKlass* holder = reinterpret_cast<ciInstanceKlass*>(holder_ptr);
+  // The declared holder is carried through the IR as a Klass*; resolve it
+  // through the CI layer for querying.
+  ciInstanceKlass* holder = JeandleVMCallback::get_ci_instance_klass(reinterpret_cast<Klass*>(holder_ptr));
   Klass* receiver_klass = reinterpret_cast<Klass*>(receiver_klass_ptr);
 
   llvm::jeandle::CHAOptInfo opt_info;
@@ -950,7 +952,9 @@ JeandleVMCallback::get_profile_devirtualization_info(
 
   ciMethod* caller = reinterpret_cast<ciMethod*>(caller_ptr);
   ciMethod* callee = reinterpret_cast<ciMethod*>(callee_ptr);
-  ciInstanceKlass* holder = reinterpret_cast<ciInstanceKlass*>(holder_ptr);
+  // The declared holder is carried through the IR as a Klass*; resolve it
+  // through the CI layer for querying.
+  ciInstanceKlass* holder = JeandleVMCallback::get_ci_instance_klass(reinterpret_cast<Klass*>(holder_ptr));
   assert(!callee->can_be_statically_bound(),
          "statically bound calls are handled by the bytecode parser");
 
