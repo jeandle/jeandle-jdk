@@ -9,7 +9,7 @@
 
 /*
  * @test
- * @summary Test Jeandle lowering of single-block SHA compression intrinsics.
+ * @summary Test Jeandle lowering of single- and multi-block digest compression intrinsics.
  * @requires os.arch == "amd64" | os.arch == "x86_64" | os.arch == "aarch64"
  * @library /test/lib /
  * @build jdk.test.lib.Asserts
@@ -34,7 +34,7 @@ import jdk.test.lib.process.ProcessTools;
 public class TestShaCompress {
     private static final HexFormat HEX = HexFormat.of();
     private static final String[] INTRINSIC_FLAGS = {
-            "UseSHA1Intrinsics", "UseSHA256Intrinsics",
+            "UseMD5Intrinsics", "UseSHA1Intrinsics", "UseSHA256Intrinsics",
             "UseSHA512Intrinsics", "UseSHA3Intrinsics"
     };
     private static final int[] TEST_LENGTHS = {
@@ -45,19 +45,66 @@ public class TestShaCompress {
         OutputAnalyzer reference = ProcessTools.executeCommand(
                 ProcessTools.createLimitedTestJavaProcessBuilder(
                         "-XX:+UnlockDiagnosticVMOptions",
-                        "-XX:-UseSHA1Intrinsics", "-XX:-UseSHA256Intrinsics",
+                        "-XX:-UseMD5Intrinsics", "-XX:-UseSHA1Intrinsics", "-XX:-UseSHA256Intrinsics",
                         "-XX:-UseSHA512Intrinsics", "-XX:-UseSHA3Intrinsics",
                         TestWrapper.class.getName()));
         reference.shouldHaveExitValue(0).shouldContain("TestShaCompress PASSED");
 
         Path dumpPath = Files.createTempDirectory("jeandle_sha_compress");
+        OutputAnalyzer output = runJeandle(dumpPath, List.of());
+        assertDigestResults(reference, output);
+
+        String ir = readIR(dumpPath);
+        assertRoutineMatchesFlag(output, ir, "UseSHA1Intrinsics",
+                "StubRoutines_sha1_implCompress", "SHA-1");
+        assertRoutineMatchesFlag(output, ir, "UseMD5Intrinsics",
+                "StubRoutines_md5_implCompress", "MD5");
+        assertRoutineMatchesFlag(output, ir, "UseSHA256Intrinsics",
+                "StubRoutines_sha256_implCompress", "SHA-256");
+        assertRoutineMatchesFlag(output, ir, "UseSHA512Intrinsics",
+                "StubRoutines_sha512_implCompress", "SHA-512");
+        assertRoutineMatchesFlag(output, ir, "UseSHA3Intrinsics",
+                "StubRoutines_sha3_implCompress", "SHA-3");
+        assertRoutineMatchesFlag(output, ir, "UseMD5Intrinsics",
+                "StubRoutines_md5_implCompressMB", "MD5 multi-block");
+        assertRoutineMatchesFlag(output, ir, "UseSHA1Intrinsics",
+                "StubRoutines_sha1_implCompressMB", "SHA-1 multi-block");
+        assertRoutineMatchesFlag(output, ir, "UseSHA256Intrinsics",
+                "StubRoutines_sha256_implCompressMB", "SHA-256 multi-block");
+        assertRoutineMatchesFlag(output, ir, "UseSHA512Intrinsics",
+                "StubRoutines_sha512_implCompressMB", "SHA-512 multi-block");
+        assertRoutineMatchesFlag(output, ir, "UseSHA3Intrinsics",
+                "StubRoutines_sha3_implCompressMB", "SHA-3 multi-block");
+        Asserts.assertTrue(containsCall(ir,
+                        "@\"sun_security_provider_DigestBase_implCompressMultiBlock0([BII)I"),
+                "MD2 must recompile the multi-block method with a stable Java fallback");
+
+        Path md5DisabledDumpPath = Files.createTempDirectory("jeandle_md5_disabled");
+        OutputAnalyzer md5Disabled = runJeandle(md5DisabledDumpPath,
+                List.of("-XX:DisableIntrinsic=_md5_implCompress"));
+        assertDigestResults(reference, md5Disabled);
+        String md5DisabledIR = readIR(md5DisabledDumpPath);
+        Asserts.assertFalse(containsRoutineCall(md5DisabledIR,
+                        "StubRoutines_md5_implCompress"),
+                "Disabled MD5 intrinsic must not emit a single-block stub call");
+        Asserts.assertFalse(containsRoutineCall(md5DisabledIR,
+                        "StubRoutines_md5_implCompressMB"),
+                "Disabled MD5 intrinsic must not emit a multi-block stub call");
+    }
+
+    private static OutputAnalyzer runJeandle(Path dumpPath, List<String> extraOptions)
+            throws Exception {
         List<String> commandArgs = new java.util.ArrayList<>(List.of(
-                "-Xbatch", "-XX:-TieredCompilation", "-XX:+UseJeandleCompiler", "-Xcomp",
+                "-Xbatch", "-XX:-TieredCompilation", "-XX:CompileThreshold=1",
+                "-XX:+UseJeandleCompiler", "-Xcomp",
                 "-XX:+UnlockDiagnosticVMOptions", "-XX:+UseSHA1Intrinsics",
+                "-XX:+UseMD5Intrinsics",
                 "-XX:+UseSHA256Intrinsics", "-XX:+UseSHA512Intrinsics", "-XX:+UseSHA3Intrinsics",
                 "-Xlog:jeandle=debug", "-XX:+JeandleDumpIR",
                 "-XX:JeandleDumpDirectory=" + dumpPath,
-                "-XX:CompileCommand=compileonly,sun/security/provider/DigestBase.implCompressMultiBlock0",
+                "-XX:CompileCommand=compileonly,sun/security/provider/DigestBase.implCompressMultiBlock",
+                "-XX:CompileCommand=compileonly,sun/security/provider/MD5.implCompress0",
+                "-XX:CompileCommand=compileonly,sun/security/provider/MD5.implCompress",
                 "-XX:CompileCommand=compileonly,sun/security/provider/SHA.implCompress0",
                 "-XX:CompileCommand=compileonly,sun/security/provider/SHA.implCompress",
                 "-XX:CompileCommand=compileonly,sun/security/provider/SHA2.implCompress0",
@@ -65,37 +112,37 @@ public class TestShaCompress {
                 "-XX:CompileCommand=compileonly,sun/security/provider/SHA5.implCompress0",
                 "-XX:CompileCommand=compileonly,sun/security/provider/SHA5.implCompress",
                 "-XX:CompileCommand=compileonly,sun/security/provider/SHA3.implCompress0",
-                "-XX:CompileCommand=compileonly,sun/security/provider/SHA3.implCompress",
-                TestWrapper.class.getName()));
+                "-XX:CompileCommand=compileonly,sun/security/provider/SHA3.implCompress"));
+        commandArgs.addAll(extraOptions);
+        commandArgs.add(TestWrapper.class.getName());
 
         OutputAnalyzer output = ProcessTools.executeCommand(
                 ProcessTools.createLimitedTestJavaProcessBuilder(commandArgs));
         output.shouldHaveExitValue(0).shouldContain("TestShaCompress PASSED");
-        List<String> referenceDigests = digestLines(reference);
-        Asserts.assertEquals(7 * TEST_LENGTHS.length, referenceDigests.size(),
-                "Unexpected number of reference SHA digests");
-        Asserts.assertEquals(referenceDigests, digestLines(output),
-                "SHA digests differ from the all-intrinsics-disabled reference run");
+        return output;
+    }
 
-        String ir = Files.walk(dumpPath)
-                .filter(Files::isRegularFile)
-                .filter(path -> path.toString().endsWith(".ll"))
-                .map(path -> {
-                    try {
-                        return Files.readString(path);
-                    } catch (Exception e) {
-                        throw new RuntimeException(e);
-                    }
-                })
-                .reduce("", String::concat);
-        assertRoutineMatchesFlag(output, ir, "UseSHA1Intrinsics",
-                "StubRoutines_sha1_implCompress", "SHA-1");
-        assertRoutineMatchesFlag(output, ir, "UseSHA256Intrinsics",
-                "StubRoutines_sha256_implCompress", "SHA-256");
-        assertRoutineMatchesFlag(output, ir, "UseSHA512Intrinsics",
-                "StubRoutines_sha512_implCompress", "SHA-512");
-        assertRoutineMatchesFlag(output, ir, "UseSHA3Intrinsics",
-                "StubRoutines_sha3_implCompress", "SHA-3");
+    private static void assertDigestResults(OutputAnalyzer reference, OutputAnalyzer output) {
+        List<String> referenceDigests = digestLines(reference);
+        Asserts.assertEquals(11 * TEST_LENGTHS.length, referenceDigests.size(),
+                "Unexpected number of reference digests");
+        Asserts.assertEquals(referenceDigests, digestLines(output),
+                "Digest results differ from the all-intrinsics-disabled reference run");
+    }
+
+    private static String readIR(Path dumpPath) throws Exception {
+        try (var paths = Files.walk(dumpPath)) {
+            return paths.filter(Files::isRegularFile)
+                    .filter(path -> path.toString().endsWith(".ll"))
+                    .map(path -> {
+                        try {
+                            return Files.readString(path);
+                        } catch (Exception e) {
+                            throw new RuntimeException(e);
+                        }
+                    })
+                    .reduce("", String::concat);
+        }
     }
 
     private static List<String> digestLines(OutputAnalyzer output) {
@@ -113,22 +160,44 @@ public class TestShaCompress {
                 .findFirst()
                 .orElseThrow(() -> new AssertionError("Missing effective VM flag: " + flag));
         boolean enabled = Boolean.parseBoolean(flagLine.substring(prefix.length()));
-        Asserts.assertEquals(enabled, ir.contains(routine),
+        Asserts.assertEquals(enabled, containsRoutineCall(ir, routine),
                 algorithm + " direct routine presence must match effective " + flag);
+    }
+
+    private static boolean containsRoutineCall(String ir, String routine) {
+        return containsCall(ir, "@" + routine + "(");
+    }
+
+    private static boolean containsCall(String ir, String callee) {
+        return ir.lines().anyMatch(line ->
+                (line.contains("call ") || line.contains("invoke ")) && line.contains(callee));
     }
 
     static class TestWrapper {
         public static void main(String[] args) throws Exception {
+            // Load every accelerated DigestBase implementation before the
+            // intrinsic root is compiled; MD2 exercises the Java fallback.
+            for (String algorithm : List.of("MD2", "MD5", "SHA-1", "SHA-224", "SHA-256",
+                    "SHA-384", "SHA-512", "SHA3-256")) {
+                MessageDigest.getInstance(algorithm, "SUN");
+            }
+
             HotSpotDiagnosticMXBean diagnostic = ManagementFactory.getPlatformMXBean(
                     HotSpotDiagnosticMXBean.class);
             for (String flag : INTRINSIC_FLAGS) {
                 System.out.println("FLAG " + flag + "=" + diagnostic.getVMOption(flag).getValue());
             }
 
+            check("MD5", "d41d8cd98f00b204e9800998ecf8427e",
+                    "d1ae06bbf9128955a34bedb6231eee62");
             check("SHA-1", "da39a3ee5e6b4b0d3255bfef95601890afd80709",
                     "4fd6558b2a93925fb7129447e1d1fac8cff56287");
+            check("SHA-224", "d14a028c2a3a2bc9476102bb288234c415a2b01f828ea62ac5b3e42f",
+                    "8baa263ee929dd49b84e560cc7b79ba111f032a0c9216d279e675184");
             check("SHA-256", "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
                     "4f1757ae4bffbae86d775b831765b75af154d52f7deaa46dd378051a2d3ad57f");
+            check("SHA-384", "38b060a751ac96384cd9327eb1b1e36a21fdb71114be07434c0cc7bf63f6e1da274edebfe76f65fbd51ad2f14898b95b",
+                    "f07f92376b47fb9d34ff613a44f18b04b55fb1c480b07de4e08a0e9bd484ffa765c21671c341c70b4024e6bdcda709e4");
             check("SHA-512", "cf83e1357eefb8bdf1542850d66d8007d620e4050b5715dc83f4a921d36ce9ce47d0d13c5d85f2b0ff8318d2877eec2f63b931bd47417a81a538327af927da3e",
                     "1809db04d02717483e04bc4333a14308bd2d0213ba7bf2c63f11eb1b8a0af8252e67fd104fd466fb95f945539824d8e4183155fa5ced0bee3dad46d9384a0bd5");
             check("SHA3-224", "6b4e03423667dbb73b6e15454f0eb1abd4597f9a1b078e3f5b5a6bc7",
@@ -139,7 +208,15 @@ public class TestShaCompress {
                     "a6f86672297e96e989aa3eff04b0c927be7ac2a072040ac2a9017e329cdb614b6fa7760d0f31ac970e3591d7cf4d90e3");
             check("SHA3-512", "a69f73cca23a9ac5c8b567dc185a756e97c982164fe25859e0d1dcc1475c80a615b2123af1f5f94c11e3e9402c3ac558f500199d95b6d3e301758586281dcd26",
                     "c4148471d4c463929e5af7df25fb4f66875ddf1c473e277e0170665afef3363984e9be12b11949f87a1d00b9e9c330b0fb3f64f31496037ca153f33fc2a5f382");
+            checkFallback("MD2", "8350e5a3e24c153df2275c9f80692773");
             System.out.println("TestShaCompress PASSED");
+        }
+
+        private static void checkFallback(String algorithm, String emptyExpected)
+                throws Exception {
+            byte[] empty = digest(algorithm, new byte[0], 0);
+            Asserts.assertEquals(emptyExpected, HEX.formatHex(empty), algorithm + " empty digest");
+            printDigestVectors(algorithm);
         }
 
         private static void check(String algorithm, String emptyExpected,
@@ -157,6 +234,10 @@ public class TestShaCompress {
             Asserts.assertEquals(vectorExpected, HEX.formatHex(actual),
                     algorithm + " boundary/non-aligned digest");
 
+            printDigestVectors(algorithm);
+        }
+
+        private static void printDigestVectors(String algorithm) throws Exception {
             for (int length : TEST_LENGTHS) {
                 byte[] data = new byte[length + 2];
                 for (int i = 0; i < length; i++) {
