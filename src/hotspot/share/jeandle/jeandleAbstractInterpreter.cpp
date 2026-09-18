@@ -2238,7 +2238,7 @@ llvm::InvokeInst* JeandleAbstractInterpreter::emit_java_call(ciMethod* target,
                                                  Bytecodes::name(bc));
   llvm::Attribute declared_holder_attr = llvm::Attribute::get(*_context,
                                                  llvm::jeandle::Attribute::DeclaredHolder,
-                                                 std::to_string(reinterpret_cast<uintptr_t>(ciEnv::get_instance_klass_for_declared_method_holder(declared_holder))));
+                                                 std::to_string(reinterpret_cast<uintptr_t>(ciEnv::get_instance_klass_for_declared_method_holder(declared_holder)->constant_encoding())));
   invoke->addFnAttr(id_attr);
   invoke->addFnAttr(patch_bytes_attr);
   invoke->addFnAttr(bc_attr);
