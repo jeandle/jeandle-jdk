@@ -32,7 +32,7 @@
 // Sets the default values for platform dependent flags used by the client compiler.
 // (see c1_globals.hpp)
 
-#ifndef COMPILER2
+#if !defined(COMPILER2) && !defined(JEANDLE)
 define_pd_global(bool, BackgroundCompilation,        true );
 define_pd_global(bool, InlineIntrinsics,             true );
 define_pd_global(bool, PreferInterpreterNativeStubs, false);
@@ -55,7 +55,7 @@ define_pd_global(uintx, CodeCacheMinimumUseSpace,    400*K);
 define_pd_global(bool, NeverActAsServerClassMachine, true );
 define_pd_global(uint64_t, MaxRAM,                  1ULL*G);
 define_pd_global(bool, CICompileOSR,                 true );
-#endif // !COMPILER2
+#endif // !COMPILER2 && !JEANDLE
 define_pd_global(bool, UseTypeProfile,               false);
 
 define_pd_global(bool, OptimizeSinglePrecision,      true );

@@ -26,6 +26,14 @@
  * @run driver jdk.test.lib.helpers.ClassFileInstaller jdk.test.whitebox.WhiteBox
  * @run main/othervm -XX:-UseJeandleCompiler
  *      compiler.jeandle.pea.TestPEADeoptImplicitTrap
+ * @run main/othervm -XX:-UseJeandleCompiler
+ *      -XX:-UseCompressedOops -XX:-UseCompressedClassPointers
+ *      -Dcompiler.jeandle.pea.runtimeOnly=true
+ *      compiler.jeandle.pea.TestPEADeoptImplicitTrap
+ * @run main/othervm -XX:+UseJeandleCompiler
+ *      -XX:-UseCompressedOops -XX:-UseCompressedClassPointers
+ *      -Dcompiler.jeandle.pea.runtimeOnly=true
+ *      compiler.jeandle.pea.TestPEADeoptImplicitTrap
  */
 
 package compiler.jeandle.pea;
@@ -80,13 +88,16 @@ public class TestPEADeoptImplicitTrap {
 
     public static void main(String[] args) throws Exception {
         for (Scenario scenario : Scenario.values()) {
-            runScenario(scenario);
+            runScenario(scenario, Boolean.getBoolean("compiler.jeandle.pea.runtimeOnly"));
         }
     }
 
-    private static void runScenario(Scenario scenario) throws Exception {
+    private static void runScenario(Scenario scenario, boolean runtimeOnly) throws Exception {
         Method target = targetFor(scenario);
         builder(false, target, scenario).runPEAOnOffEquivalent();
+        if (runtimeOnly) {
+            return;
+        }
         try (PEATestUtils.RunResult run = builder(true, target, scenario).run()) {
             assertTrapShape(run, target, scenario);
         }
