@@ -296,6 +296,10 @@ bool JeandleIntrinsicLowering::is_supported(vmIntrinsics::ID id) {
     case vmIntrinsics::_sha2_implCompress:
     case vmIntrinsics::_sha5_implCompress:
     case vmIntrinsics::_sha3_implCompress:
+
+    // StringUTF16 trusted single-code-unit access
+    case vmIntrinsics::_getCharStringU:
+    case vmIntrinsics::_putCharStringU:
       return true;
 
     default:
@@ -573,6 +577,12 @@ bool JeandleIntrinsicLowering::lower(vmIntrinsics::ID id, const ciMethod* target
     case vmIntrinsics::_identityHashCode:
     case vmIntrinsics::_hashCode:
       return lower_hash_code(id);
+
+    // StringUTF16 trusted single-code-unit access.
+    case vmIntrinsics::_getCharStringU:
+      return lower_string_char_access(/*is_store=*/false);
+    case vmIntrinsics::_putCharStringU:
+      return lower_string_char_access(/*is_store=*/true);
 
     default:
       return false;
@@ -2309,6 +2319,54 @@ bool JeandleIntrinsicLowering::lower_arraycopy() {
   if (negative_length_guard_generated) {
     arraycopy_call->addFnAttr(llvm::Attribute::get(
         ctx, llvm::jeandle::Attribute::ArrayCopyNegativeLengthGuard));
+  }
+  return true;
+}
+
+// StringUTF16 trusted single-code-unit access. Its byte[] backing stores
+// UTF-16 code units in native-endian order, matching the target data layout.
+// Keep the element access as i16 so LLVM can fold the two-byte element scale
+// into the target load/store addressing mode (for example, AArch64's
+// ldrh/strh [base, index, sxtw #1]).
+bool JeandleIntrinsicLowering::lower_string_char_access(bool is_store) {
+  llvm::IRBuilder<>& b = _interp->_ir_builder;
+  llvm::Type* i8 = b.getInt8Ty();
+  llvm::Type* i16 = b.getInt16Ty();
+
+  llvm::Value* array = _interp->_jvm->peek_value(is_store ? 2 : 1).value();
+  llvm::Value* index = _interp->_jvm->peek_value(is_store ? 1 : 0).value();
+
+  assert(arrayOopDesc::base_offset_in_bytes(T_CHAR) == arrayOopDesc::base_offset_in_bytes(T_BYTE),
+         "byte[] and char[] bases must agree");
+  assert(type2aelembytes(T_CHAR) == type2aelembytes(T_BYTE) * 2,
+         "char[] scale must be twice byte[] scale");
+
+  _interp->null_check(array);
+
+  llvm::Value* data = b.CreateInBoundsGEP(
+      i8, array, b.getInt32(arrayOopDesc::base_offset_in_bytes(T_BYTE)),
+      is_store ? "string_putchar_data" : "string_getchar_data");
+  llvm::Value* addr = b.CreateInBoundsGEP(
+      i16, data, index,
+      is_store ? "string_putchar_addr" : "string_getchar_addr");
+
+  if (is_store) {
+    llvm::Value* ch = _interp->_jvm->peek_value(0).value();
+    llvm::Value* ch16 = b.CreateTrunc(ch, i16, "string_putchar_value");
+    b.CreateStore(ch16, addr)->setAlignment(llvm::Align(1));
+
+    _interp->_jvm->ipop(); // c
+    _interp->_jvm->ipop(); // index
+    _interp->_jvm->apop(); // value
+  } else {
+    llvm::LoadInst* loaded = b.CreateLoad(i16, addr, "string_getchar_result");
+    loaded->setAlignment(llvm::Align(1));
+    llvm::Value* result = b.CreateZExt(
+        loaded, b.getInt32Ty(), "string_getchar_result_i32");
+
+    _interp->_jvm->ipop(); // index
+    _interp->_jvm->apop(); // value
+    _interp->_jvm->ipush(result);
   }
   return true;
 }

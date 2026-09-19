@@ -199,6 +199,9 @@ class JeandleIntrinsicLowering : public StackObj {
   bool lower_object_notify(vmIntrinsics::ID id);
   bool lower_vectorized_mismatch();
   bool lower_arraycopy();
+  // StringUTF16 trusted single-code-unit access. The byte[] backing stores
+  // UTF16 values in the platform's native byte order.
+  bool lower_string_char_access(bool is_store);
   llvm::Value* emit_vectorized_mismatch_small(llvm::Value* a_addr,
                                               llvm::Value* b_addr,
                                               llvm::Value* byte_length,
