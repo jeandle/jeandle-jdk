@@ -677,6 +677,16 @@ int JeandleCompiledCode::parse_stackmap_prologue(StackMapParser::record_iterator
   return third.getSmallConstant();
 }
 
+void JeandleCompiledCode::record_stable_array(int oop_id, int dimension) {
+  int& old_dimension = _stable_array_dimensions[oop_id];
+  old_dimension = MAX2(old_dimension, dimension);
+}
+
+int JeandleCompiledCode::stable_array_dimension(int oop_id) const {
+  auto it = _stable_array_dimensions.find(oop_id);
+  return it == _stable_array_dimensions.end() ? 0 : it->second;
+}
+
 JeandleStackMap* JeandleCompiledCode::parse_stackmap(StackMapParser& stackmaps,
                                                      StackMapParser::record_iterator& record,
                                                      StackMapParser::RecordAccessor::location_iterator& location,

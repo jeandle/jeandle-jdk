@@ -23,6 +23,7 @@
  *          loop and an inlined inner loop converges from the merged loop state
  *          without duplicate inner-loop replay
  * @library /test/lib /
+ * @modules java.base/jdk.internal.misc
  * @build jdk.test.lib.Asserts jdk.test.whitebox.WhiteBox compiler.jeandle.pea.PEATestUtils
  * @run driver jdk.test.lib.helpers.ClassFileInstaller jdk.test.whitebox.WhiteBox
  * @run main/othervm -XX:-UseJeandleCompiler
@@ -32,6 +33,7 @@
 package compiler.jeandle.pea;
 
 import java.lang.reflect.Method;
+import jdk.internal.misc.Unsafe;
 
 import jdk.test.lib.Asserts;
 
@@ -39,6 +41,7 @@ public class TestPEASeededLoopMaterialization {
     private static final String WRAPPER =
             "compiler.jeandle.pea.TestPEASeededLoopMaterialization$TestWrapper";
     private static final String SAFEPOINT_POLL = "jeandle.safepoint_poll";
+    private static final Unsafe UNSAFE = Unsafe.getUnsafe();
 
     public static void main(String[] args) throws Exception {
         PEATestUtils.assertStructuralParserContracts();
@@ -81,7 +84,11 @@ public class TestPEASeededLoopMaterialization {
         }
     }
 
-    private static void assertShape(Shape shape, Method target, Method publish) {
+    private static void assertShape(Shape shape, Method target, Method publish) throws Exception {
+        int headOffset = Math.toIntExact(UNSAFE.objectFieldOffset(
+                TestWrapper.Buffer.class.getDeclaredField("head")));
+        int lastOffset = Math.toIntExact(UNSAFE.objectFieldOffset(
+                TestWrapper.Buffer.class.getDeclaredField("last")));
         PEATestUtils.PEAReport report = shape.report();
         PEATestUtils.IRBody before = shape.before();
         PEATestUtils.IRBody after = shape.after();
@@ -99,10 +106,10 @@ public class TestPEASeededLoopMaterialization {
                 before, sourceAllocations.get(0).key());
         String sourceBuffer = sourceAllocations.get(0).result();
         PEATestUtils.IRBlock sourceSeed =
-                before.blockContaining("store atomic ptr addrspace(1)", 0);
-        sourceSeed.assertOccurrenceCount("store atomic ptr addrspace(1)", 2);
-        sourceSeed.assertPresent("ptr addrspace(1) " + sourceBuffer + ", i64 24");
-        sourceSeed.assertPresent("ptr addrspace(1) " + sourceBuffer + ", i64 32");
+                before.blockContaining(PEATestUtils.referenceStore(), 0);
+        sourceSeed.assertOccurrenceCount(PEATestUtils.referenceStore(), 2);
+        sourceSeed.assertPresent("ptr addrspace(1) " + sourceBuffer + ", i64 " + headOffset);
+        sourceSeed.assertPresent("ptr addrspace(1) " + sourceBuffer + ", i64 " + lastOffset);
 
         String retainedBuffer = retainedAllocations.get(0).result();
         PEATestUtils.IRBlock replay = after.blockContaining("pea.matslot", 0);
@@ -111,7 +118,7 @@ public class TestPEASeededLoopMaterialization {
                         && line.contains("getelementptr"))
                 .toList();
         long replayStores = replay.lines().stream()
-                .filter(line -> line.contains("store atomic ptr addrspace(1)")
+                .filter(line -> line.contains(PEATestUtils.referenceStore())
                         && line.contains("pea.matslot"))
                 .count();
         Asserts.assertEquals(replaySlotDefinitions.size(), 2,
@@ -139,15 +146,15 @@ public class TestPEASeededLoopMaterialization {
             Asserts.assertEquals(after.occurrenceCount(destination), 1,
                     target + ": replay slot " + slot + " is not stored elsewhere");
         }
-        String headReplay = "ptr addrspace(1) " + retainedBuffer + ", i64 24";
-        String lastReplay = "ptr addrspace(1) " + retainedBuffer + ", i64 32";
+        String headReplay = "ptr addrspace(1) " + retainedBuffer + ", i64 " + headOffset;
+        String lastReplay = "ptr addrspace(1) " + retainedBuffer + ", i64 " + lastOffset;
         Asserts.assertEquals(replaySlotDefinitions.stream()
                 .filter(line -> line.contains(headReplay)).count(), 1L,
                 target + ": one matslot definition addresses Buffer.head");
         Asserts.assertEquals(replaySlotDefinitions.stream()
                 .filter(line -> line.contains(lastReplay)).count(), 1L,
                 target + ": one matslot definition addresses Buffer.last");
-        replay.assertOccurrenceCount("store atomic ptr addrspace(1)", 2);
+        replay.assertOccurrenceCount(PEATestUtils.referenceStore(), 2);
 
         String effectBlock = "block=%" + replay.label() + " ";
         String effectAllocation = retainedBuffer + " = invoke hotspotcc";
