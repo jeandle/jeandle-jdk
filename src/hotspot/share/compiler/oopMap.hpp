@@ -480,7 +480,7 @@ private:
 // oops, it is filled in with references to all locations that contains a
 // derived oop (assumed to be very few).  When the GC is complete, the derived
 // pointers are updated based on their base pointers new value and an offset.
-#if COMPILER2_OR_JVMCI
+#if COMPILER2_OR_JVMCI_OR_JEANDLE
 class DerivedPointerTable : public AllStatic {
   friend class VMStructs;
  private:
@@ -517,6 +517,6 @@ class DerivedPointerTableDeactivate: public StackObj {
     }
   }
 };
-#endif // COMPILER2_OR_JVMCI
+#endif // COMPILER2_OR_JVMCI_OR_JEANDLE
 
 #endif // SHARE_COMPILER_OOPMAP_HPP

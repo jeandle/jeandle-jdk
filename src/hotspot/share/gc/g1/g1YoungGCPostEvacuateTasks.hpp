@@ -62,7 +62,7 @@ public:
 // - Resize TLABs
 class G1PostEvacuateCollectionSetCleanupTask2 : public G1BatchedTask {
   class EagerlyReclaimHumongousObjectsTask;
-#if COMPILER2_OR_JVMCI
+#if COMPILER2_OR_JVMCI_OR_JEANDLE
   class UpdateDerivedPointersTask;
 #endif
 

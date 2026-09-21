@@ -96,9 +96,9 @@ SafepointBlob*      SharedRuntime::_polling_page_vectors_safepoint_handler_blob;
 SafepointBlob*      SharedRuntime::_polling_page_safepoint_handler_blob;
 SafepointBlob*      SharedRuntime::_polling_page_return_handler_blob;
 
-#ifdef COMPILER2
+#if COMPILER2_OR_JEANDLE
 UncommonTrapBlob*   SharedRuntime::_uncommon_trap_blob;
-#endif // COMPILER2
+#endif // COMPILER2_OR_JEANDLE
 
 nmethod*            SharedRuntime::_cont_doYield_stub;
 
@@ -126,9 +126,9 @@ void SharedRuntime::generate_stubs() {
 
   generate_deopt_blob();
 
-#ifdef COMPILER2
+#if COMPILER2_OR_JEANDLE
   generate_uncommon_trap_blob();
-#endif // COMPILER2
+#endif // COMPILER2_OR_JEANDLE
 }
 
 #include <math.h>
