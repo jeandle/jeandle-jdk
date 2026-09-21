@@ -53,6 +53,11 @@ bool JeandleIntrinsicLowering::cpu_supports_spin_wait() {
   return UseZihintpause;
 }
 
+bool JeandleIntrinsicLowering::cpu_supports_string_simd() {
+  // The RVV String copy kernels are not yet supported; retain Java fallback.
+  return false;
+}
+
 bool JeandleIntrinsicLowering::supports_vectorized_mismatch_medium_path() {
   // The RVV vector extension is optional and not yet wired up here.
   return false;

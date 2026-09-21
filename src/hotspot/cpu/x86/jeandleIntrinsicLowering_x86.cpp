@@ -52,6 +52,12 @@ bool JeandleIntrinsicLowering::cpu_supports_spin_wait() {
   return true;
 }
 
+bool JeandleIntrinsicLowering::cpu_supports_string_simd() {
+  // 128-bit integer vector compares (PCMPEQB/PCMPEQW) need SSE2, which is
+  // baseline on x86-64. UseSSE reflects hardware detection and user overrides.
+  return UseSSE >= 2;
+}
+
 bool JeandleIntrinsicLowering::supports_vectorized_mismatch_medium_path() {
   return false;
 }
