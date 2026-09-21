@@ -1154,34 +1154,34 @@ void JeandleCompiledCode::build_exception_handler_table() {
     // See EHStreamer::emitExceptionTable in Jeandle-LLVM for corresponding encoding.
 
     uint8_t header_encoding = data_extractor.getU8(data_cursor);
-    assert(data_cursor && header_encoding == llvm::dwarf::DW_EH_PE_omit, "invalid exception handler table header");
+    guarantee(data_cursor && header_encoding == llvm::dwarf::DW_EH_PE_omit, "invalid exception handler table header");
 
     uint8_t type_encoding = data_extractor.getU8(data_cursor);
-    assert(data_cursor && type_encoding == llvm::dwarf::DW_EH_PE_omit, "invalid exception handler table type encoding");
+    guarantee(data_cursor && type_encoding == llvm::dwarf::DW_EH_PE_omit, "invalid exception handler table type encoding");
 
     uint8_t call_site_encoding = data_extractor.getU8(data_cursor);
-    assert(data_cursor && call_site_encoding == llvm::dwarf::DW_EH_PE_uleb128, "invalid exception handler table call site encoding");
+    guarantee(data_cursor && call_site_encoding == llvm::dwarf::DW_EH_PE_uleb128, "invalid exception handler table call site encoding");
 
     uint64_t call_site_table_length = data_extractor.getULEB128(data_cursor);
-    assert(data_cursor, "invalid exception handler table call site table length");
+    guarantee(data_cursor, "invalid exception handler table call site table length");
 
     uint64_t call_site_table_start = data_cursor.tell();
 
     while (data_cursor.tell() < call_site_table_start + call_site_table_length) {
       uint64_t start = data_extractor.getULEB128(data_cursor) + _prolog_length;
-      assert(data_cursor, "invalid exception handler start pc");
+      guarantee(data_cursor, "invalid exception handler start pc");
 
       uint64_t length = data_extractor.getULEB128(data_cursor);
-      assert(data_cursor, "invalid exception handler length");
+      guarantee(data_cursor, "invalid exception handler length");
 
       uint64_t langding_pad = data_extractor.getULEB128(data_cursor) + _prolog_length;
-      assert(data_cursor, "invalid exception handler landing pad");
+      guarantee(data_cursor, "invalid exception handler landing pad");
 
       _exception_handler_table.add_handler(start, start + length, langding_pad);
 
       // Read an action table entry, but we don't use it.
       data_extractor.getULEB128(data_cursor);
-      assert(data_cursor, "invalid exception handler action table entry");
+      guarantee(data_cursor, "invalid exception handler action table entry");
     }
   }
 }
