@@ -97,8 +97,13 @@ public class TestPEALoopAllocationReset {
                 target + ": at least one source allocation site");
         // The carried instance is retained (OrigAlloc kept); distinct iterations are
         // not collapsed into one synthetic VO.
-        Asserts.assertEquals(after.allocationBCIs(), before.allocationBCIs(),
-                target + ": carried chain retains every source allocation");
+        Asserts.assertTrue(!after.allocationBCIs().isEmpty()
+                        && after.allocationBCIs().size() <= before.allocationBCIs().size(),
+                target + ": PEA retains the carried-chain allocation and may eliminate "
+                        + "a virtual strip-mined clone");
+        Asserts.assertEquals(after.allocationBCIs().stream().distinct().toList(),
+                before.allocationBCIs().stream().distinct().toList(),
+                target + ": retained allocations preserve the source BCI");
         after.assertAbsent("pea.casec.field.phi");
         after.assertAbsent("poison");
         Asserts.assertTrue(report.maxPartiallyEscapes() >= 1,

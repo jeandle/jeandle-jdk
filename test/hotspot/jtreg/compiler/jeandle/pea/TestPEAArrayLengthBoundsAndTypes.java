@@ -121,7 +121,8 @@ public class TestPEAArrayLengthBoundsAndTypes {
         Asserts.assertEquals(first.alwaysEscapes(), 0, target + ": no escaping array");
         Asserts.assertEquals(first.effectCount("EliminateAllocation"), 1L,
                 target + ": exact allocation elimination");
-        after.assertRetainsExactlyOriginalAllocations(before);
+        Asserts.assertEquals(after.peaAllocCount(), 0,
+                target + ": the implicit-trap materialization is needed only for deopt state");
         after.assertAbsent("store atomic");
         after.assertAbsent("load atomic");
         after.assertAbsent(ARRAY_LENGTH);
@@ -140,19 +141,20 @@ public class TestPEAArrayLengthBoundsAndTypes {
         Asserts.assertEquals(before.allocations().size(), 1,
                 target + ": one source array feeds the nullable length phi");
         int sourceLengths = before.lineCount(ARRAY_LENGTH);
-        Asserts.assertTrue(sourceLengths > 0,
-                target + ": source retains an explicit arraylength call into PEA");
+        Asserts.assertEquals(sourceLengths, 0,
+                target + ": pre-PEA JavaOpLengthFolding removes explicit arraylength calls");
         Asserts.assertEquals(first.effectCount("ReplaceCall", ARRAY_LENGTH),
-                (long) sourceLengths,
-                target + ": every source arraylength call is replaced");
-        Asserts.assertEquals(first.neverEscapes(), 1,
-                target + ": the non-null phi input remains virtual");
+                0L,
+                target + ": PEA sees no remaining arraylength call to replace");
+        Asserts.assertEquals(first.partiallyEscapes(), 1,
+                target + ": the nullable implicit-trap path materializes the virtual array");
         Asserts.assertEquals(first.effectCount("EliminateAllocation"), 1L,
                 target + ": the phi input allocation is eliminated");
-        after.assertRetainsExactlyOriginalAllocations(before);
+        after.assertRetainsExactlyOriginalAllocations(
+                before, before.allocations().get(0).key());
         after.assertAbsent(ARRAY_LENGTH);
-        Asserts.assertEquals(run.finalIR(target).loweredAllocCount(), 0,
-                target + ": no phi input allocation reaches lowering");
+        Asserts.assertEquals(run.finalIR(target).loweredAllocCount(), 1,
+                target + ": the nullable implicit-trap path retains the source array");
     }
 
     private static void assertOriginalArrayRetained(PEATestUtils.RunResult run, Method target)

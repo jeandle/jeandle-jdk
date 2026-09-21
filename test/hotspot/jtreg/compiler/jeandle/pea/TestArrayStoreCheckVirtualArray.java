@@ -19,8 +19,8 @@
 
 /*
  * @test
- * @summary PEA folds array store checks only when the runtime array component
- *          type proves the value compatible
+ * @summary TCE removes statically provable array store checks before PEA,
+ *          while residual checks conservatively materialize virtual operands
  * @library /test/lib /
  * @build jdk.test.lib.Asserts jdk.test.whitebox.WhiteBox compiler.jeandle.pea.PEATestUtils
  * @run driver jdk.test.lib.helpers.ClassFileInstaller jdk.test.whitebox.WhiteBox
@@ -65,12 +65,12 @@ public class TestArrayStoreCheckVirtualArray {
                 unknown, materialized, primitive};
 
         try (PEATestUtils.RunResult run = PEATestUtils.shapeRun(WRAPPER, targets).run()) {
-            assertCompatibleVirtual(run, stringAndNull, 1, 3, 3);
-            assertCompatibleVirtual(run, component, 1, 1, 1);
-            assertCompatibleVirtual(run, covariance, 1, 2, 2);
-            assertConservative(run, incompatible, 2, 2, 1);
-            assertConservative(run, unknown, 1, 2, 1);
-            assertConservative(run, materialized, 1, 2, 1);
+            assertCompatibleVirtual(run, stringAndNull, 1, 3);
+            assertCompatibleVirtual(run, component, 1, 1);
+            assertCompatibleVirtual(run, covariance, 1, 1);
+            assertConservative(run, incompatible, 2, 1);
+            assertConservative(run, unknown, 1, 1);
+            assertConservative(run, materialized, 1, 1);
             assertPrimitiveControl(run, primitive);
         }
 
@@ -78,21 +78,21 @@ public class TestArrayStoreCheckVirtualArray {
     }
 
     private static void assertCompatibleVirtual(PEATestUtils.RunResult run, Method target,
-                                                int allocations, int sourceChecks,
-                                                int sourceStores)
+                                                int allocations, int sourceStores)
             throws Exception {
         PEATestUtils.PEAReport report = run.report(target);
         PEATestUtils.PEARound first = report.round(0);
         assertRound0Stats(report, target, allocations, 0, 0);
         Asserts.assertEquals(first.before().peaAllocCount(), allocations,
                 target + ": source allocations");
-        first.before().assertLineCount(ARRAY_STORE_CHECK, sourceChecks);
+        // These checks are statically provable from exact array/value types;
+        // the unconditional pre-PEA TCE must own their elimination.
+        first.before().assertAbsent(ARRAY_STORE_CHECK);
         first.before().assertLineCount("store atomic", sourceStores);
         Asserts.assertEquals(effectCount(first, "EliminateAllocation"), allocations,
                 target + ": allocation elimination effects");
         Asserts.assertEquals(effectTargetCount(first, "ReplaceCall", ARRAY_STORE_CHECK),
-                sourceChecks,
-                target + ": store-check replacement effects");
+                0, target + ": PEA must not replace checks already removed by TCE");
         Asserts.assertEquals(effectTargetCount(first, "EliminateStore", "store atomic"),
                 sourceStores, target + ": element-store effects");
         // GVN legitimately folds simple array-element load-after-store (e.g.
@@ -117,8 +117,7 @@ public class TestArrayStoreCheckVirtualArray {
     }
 
     private static void assertConservative(PEATestUtils.RunResult run, Method target,
-                                           int allocations, int sourceChecks,
-                                           int finalChecks)
+                                           int allocations, int residualChecks)
             throws Exception {
         PEATestUtils.PEAReport report = run.report(target);
         PEATestUtils.PEARound first = report.round(0);
@@ -128,15 +127,15 @@ public class TestArrayStoreCheckVirtualArray {
                 target + ": classified source allocations");
         Asserts.assertEquals(report.round0Before().peaAllocCount(), allocations,
                 target + ": source allocations before PEA");
-        report.round0Before().assertLineCount(ARRAY_STORE_CHECK, sourceChecks);
+        report.round0Before().assertLineCount(ARRAY_STORE_CHECK, residualChecks);
         Asserts.assertEquals(effectCount(first, "EliminateAllocation"), allocations,
                 target + ": analyzed source allocations");
         Asserts.assertEquals(effectCount(first, "Materialize"), allocations,
                 target + ": use-point materializations");
         Asserts.assertEquals(report.finalAfter().peaAllocCount(), allocations,
                 target + ": original allocations retained after PEA");
-        report.finalAfter().assertLineCount(ARRAY_STORE_CHECK, finalChecks);
-        assertOnlyLastSourceCheckRetained(report.round0Before(), report.finalAfter(), target);
+        report.finalAfter().assertLineCount(ARRAY_STORE_CHECK, residualChecks);
+        assertResidualChecksRetained(report.round0Before(), report.finalAfter(), target);
         assertOrigAllocationsRetained(run.frontendIR(target), report.finalAfter(),
                 allocations, target);
         assertLoweredOrigAllocationsRetained(run.frontendIR(target), run.finalIR(target),
@@ -190,15 +189,14 @@ public class TestArrayStoreCheckVirtualArray {
                 target + ": lowered allocations must preserve source BCI and order");
     }
 
-    private static void assertOnlyLastSourceCheckRetained(PEATestUtils.IRBody before,
-                                                           PEATestUtils.IRBody after,
-                                                           Method target) {
+    private static void assertResidualChecksRetained(PEATestUtils.IRBody before,
+                                                     PEATestUtils.IRBody after,
+                                                     Method target) {
         List<Integer> sourceBCIs = arrayStoreCheckBCIs(before);
         List<Integer> finalBCIs = arrayStoreCheckBCIs(after);
         Asserts.assertFalse(sourceBCIs.isEmpty(), target + ": missing source store check BCI");
-        Asserts.assertEquals(finalBCIs, List.of(sourceBCIs.get(sourceBCIs.size() - 1)),
-                target + ": PEA must retain the unknown/incompatible store check, "
-                        + "not a prior compatible check");
+        Asserts.assertEquals(finalBCIs, sourceBCIs,
+                target + ": PEA must retain every residual unknown/incompatible check");
     }
 
     private static List<Integer> arrayStoreCheckBCIs(PEATestUtils.IRBody body) {
