@@ -45,10 +45,14 @@
 #include "classfile/vmClasses.hpp"
 #include "classfile/javaClasses.hpp"
 #include "classfile/vmIntrinsics.hpp"
+#include "interpreter/bytecodes.hpp"
 #include "jeandle/jeandle_globals.hpp"
 #include "logging/log.hpp"
 #include "oops/arrayOop.hpp"
 #include "oops/klass.hpp"
+#include "oops/klass.inline.hpp"
+#include "oops/klassVtable.hpp"
+#include "oops/method.hpp"
 #include "runtime/deoptimization.hpp"
 #include "runtime/globals.hpp"
 #include "runtime/vm_version.hpp"
@@ -265,6 +269,10 @@ bool JeandleIntrinsicLowering::is_supported(vmIntrinsics::ID id) {
     // Unsafe.allocateInstance
     case vmIntrinsics::_allocateInstance:
 
+    // Object monitor notifications.
+    case vmIntrinsics::_notify:
+    case vmIntrinsics::_notifyAll:
+
     // bitcast
     case vmIntrinsics::_floatToRawIntBits:
     case vmIntrinsics::_intBitsToFloat:
@@ -354,6 +362,9 @@ bool JeandleIntrinsicLowering::is_supported(vmIntrinsics::ID id) {
 
     // arraycopy
     case vmIntrinsics::_arraycopy:
+    // hash code
+    case vmIntrinsics::_hashCode:
+    case vmIntrinsics::_identityHashCode:
       return true;
 
     // Single-block SHA compression. Availability is checked again by the
@@ -362,6 +373,10 @@ bool JeandleIntrinsicLowering::is_supported(vmIntrinsics::ID id) {
     case vmIntrinsics::_sha2_implCompress:
     case vmIntrinsics::_sha5_implCompress:
     case vmIntrinsics::_sha3_implCompress:
+
+    // StringUTF16 trusted single-code-unit access
+    case vmIntrinsics::_getCharStringU:
+    case vmIntrinsics::_putCharStringU:
       return true;
 
     default:
@@ -555,6 +570,10 @@ bool JeandleIntrinsicLowering::lower(vmIntrinsics::ID id, const ciMethod* target
     case vmIntrinsics::_allocateInstance:
       return lower_unsafe_allocate_instance();
 
+    case vmIntrinsics::_notify:
+    case vmIntrinsics::_notifyAll:
+      return lower_object_notify(id);
+
     // bitcast
     case vmIntrinsics::_floatToRawIntBits:
     case vmIntrinsics::_intBitsToFloat:
@@ -646,6 +665,16 @@ bool JeandleIntrinsicLowering::lower(vmIntrinsics::ID id, const ciMethod* target
     case vmIntrinsics::_sha5_implCompress:
     case vmIntrinsics::_sha3_implCompress:
       return lower_digestBase_implCompress(id);
+    // HashCode
+    case vmIntrinsics::_identityHashCode:
+    case vmIntrinsics::_hashCode:
+      return lower_hash_code(id);
+
+    // StringUTF16 trusted single-code-unit access.
+    case vmIntrinsics::_getCharStringU:
+      return lower_string_char_access(/*is_store=*/false);
+    case vmIntrinsics::_putCharStringU:
+      return lower_string_char_access(/*is_store=*/true);
 
     default:
       return false;
@@ -1603,6 +1632,24 @@ bool JeandleIntrinsicLowering::lower_class_get_superclass() {
   return true;
 }
 
+bool JeandleIntrinsicLowering::lower_object_notify(vmIntrinsics::ID id) {
+  const bool notify_all = id == vmIntrinsics::_notifyAll;
+  assert(notify_all || id == vmIntrinsics::_notify, "unexpected intrinsic");
+
+  llvm::Module& module = _interp->_module;
+  llvm::Value* receiver = _interp->_jvm->peek_value(0).value();
+  llvm::Value* current_thread = _interp->call_java_op("jeandle.current_thread", {});
+  _interp->_jvm->apop();
+  static constexpr CallSiteAttributeMetadata attrs = {
+      CTRL_NEEDS_EXCEPTION_EDGE, MEM_READ | MEM_WRITE | MEM_NEEDS_GC_STATE};
+  llvm::FunctionCallee callee = notify_all
+      ? JeandleRuntimeRoutine::monitor_notify_all_callee(module)
+      : JeandleRuntimeRoutine::monitor_notify_callee(module);
+  emit_callsite(callee, llvm::CallingConv::Hotspot_JIT,
+                {receiver, current_thread}, attrs);
+  return true;
+}
+
 // ---- lower_llvm_bitcast ----
 bool JeandleIntrinsicLowering::lower_llvm_bitcast() {
   llvm::LLVMContext& ctx = *_interp->_context;
@@ -2075,6 +2122,186 @@ bool JeandleIntrinsicLowering::lower_new_array() {
   result->addIncoming(slow_call, slow_normal_bb);
 
   _interp->_jvm->apush(result);
+  return true;
+}
+
+// ---- lower_hash_code ----
+//
+// Handles both Object.hashCode() and System.identityHashCode(Object).
+//
+// Mirrors C2's inline_native_hashcode:
+//
+//   identityHashCode:
+//     null      → 0                                          (JVM spec)
+//     fast path → jeandle.hashcode_fast(obj) JavaOp (unlocked + hash assigned)
+//     slow path → Java call to System.identityHashCode       (locked or hash not yet installed)
+//
+//   hashCode (virtual/interface):
+//     vtable guard → fast path (inline mark word hash) → slow path (Java call)
+//
+//   hashCode (invokespecial):
+//     fast path → slow path (no vtable guard needed; target is definitive)
+//
+bool JeandleIntrinsicLowering::lower_hash_code(vmIntrinsics::ID id) {
+  const bool is_identity = (id == vmIntrinsics::_identityHashCode);
+  assert(is_identity || id == vmIntrinsics::_hashCode, "unexpected intrinsic");
+  assert(is_identity == _target->is_static(), "unexpected hashCode binding");
+  assert(_target->signature()->count() == (is_identity ? 1 : 0),
+         "unexpected hashCode signature");
+
+  const Bytecodes::Code bc = _interp->_bytecodes.cur_bc_raw();
+  ciMethod* target = const_cast<ciMethod*>(_target);
+  ciKlass* declared_holder = _interp->_bytecodes.get_declared_method_holder();
+  if (declared_holder == nullptr) {
+    return false;
+  }
+
+  const bool is_interface = bc == Bytecodes::_invokeinterface;
+  if (is_interface && !declared_holder->is_interface()) {
+    return false;
+  }
+
+  // invokespecial and statically bound invokevirtual sites already have an
+  // exact target. invokeinterface needs both an Object.hashCode vtable guard
+  // and a declared-interface subtype guard before it may use the fast path.
+  const bool needs_virtual_guard = !is_identity &&
+                                   (is_interface ||
+                                    (bc == Bytecodes::_invokevirtual &&
+                                     !target->can_be_statically_bound()));
+  const int vtable_idx = needs_virtual_guard
+      ? target->vtable_index()
+      : Method::invalid_vtable_index;
+  assert(!needs_virtual_guard || vtable_idx >= 0,
+         "invalid hashCode vtable index: %d", vtable_idx);
+
+  llvm::LLVMContext& ctx = *_interp->_context;
+  llvm::IRBuilder<>& builder = _interp->_ir_builder;
+
+  // The single category-1 operand is at raw depth 0. Keep it on the JVM stack
+  // through every guard and uncommon trap; emit_java_call expects the normal
+  // post-invoke stack and is emitted only after the pop below.
+  llvm::Value* obj = _interp->_jvm->raw_peek(0).value();
+  if (obj == nullptr) {
+    return false;
+  }
+
+  // Create all basic blocks upfront so branch targets are always available.
+  llvm::BasicBlock* entry_bb  = builder.GetInsertBlock();
+  llvm::BasicBlock* not_null_bb =
+      is_identity ? llvm::BasicBlock::Create(ctx, "identityHashCode_not_null", _interp->_llvm_func)
+                  : nullptr;
+  llvm::BasicBlock* hash_fast_bb =
+      llvm::BasicBlock::Create(ctx, "hashCode_fast", _interp->_llvm_func);
+  llvm::BasicBlock* slow_call_bb =
+      llvm::BasicBlock::Create(ctx, "hashCode_slow_call", _interp->_llvm_func);
+  llvm::BasicBlock* merge_bb =
+      llvm::BasicBlock::Create(ctx, "hashCode_merge", _interp->_llvm_func);
+
+  // --- null check (identityHashCode only) ---
+  // System.identityHashCode(null) returns 0 per JVM spec.
+  if (is_identity) {
+    llvm::PointerType* java_heap_ptr_ty =
+        llvm::PointerType::get(ctx, llvm::jeandle::AddrSpace::JavaHeapAddrSpace);
+    llvm::Value* obj_is_null = builder.CreateICmpEQ(
+        obj, llvm::ConstantPointerNull::get(java_heap_ptr_ty),
+        "identityHashCode.obj_is_null");
+    builder.CreateCondBr(obj_is_null, merge_bb, not_null_bb);
+    builder.SetInsertPoint(not_null_bb);
+  }
+
+  // --- vtable guard (genuinely virtual Object.hashCode only) ---
+  if (needs_virtual_guard) {
+    llvm::CallInst* klass =
+        _interp->call_java_op("jeandle.load_klass", {obj});
+
+    if (is_interface) {
+      // Delay expansion of the secondary-super scan until after safepoint
+      // coverage verification; the direct subtype JavaOp exposes its loop too
+      // early in this pipeline.
+      llvm::PointerType* c_heap_ptr_ty =
+          llvm::PointerType::get(ctx, llvm::jeandle::AddrSpace::CHeapAddrSpace);
+      Klass* interface_klass =
+          reinterpret_cast<Klass*>(declared_holder->constant_encoding());
+      llvm::Value* interface_klass_value = builder.CreateIntToPtr(
+          builder.getInt64(reinterpret_cast<intptr_t>(interface_klass)),
+          c_heap_ptr_ty, "hashCode.interface_klass");
+      llvm::CallInst* receiver_is_subtype =
+          _interp->call_java_op("jeandle.check_instanceof",
+                                {interface_klass_value, obj});
+
+      llvm::BasicBlock* interface_pass_bb = llvm::BasicBlock::Create(
+          ctx, "hashCode.interface_check_pass", _interp->_llvm_func);
+      llvm::BasicBlock* interface_fail_bb = llvm::BasicBlock::Create(
+          ctx, "hashCode.interface_check_fail", _interp->_llvm_func);
+      builder.CreateCondBr(receiver_is_subtype,
+                           interface_pass_bb, interface_fail_bb);
+      _interp->uncommon_trap(Deoptimization::Reason_class_check,
+                             Deoptimization::Action_none,
+                             interface_fail_bb);
+      builder.SetInsertPoint(interface_pass_bb);
+    }
+
+    const int entry_offset = in_bytes(Klass::vtable_start_offset()) +
+                             vtable_idx * vtableEntry::size_in_bytes() +
+                             in_bytes(vtableEntry::method_offset());
+
+    llvm::PointerType* c_heap_ptr_ty =
+        llvm::PointerType::get(ctx, llvm::jeandle::AddrSpace::CHeapAddrSpace);
+    llvm::Value* entry_addr = builder.CreateGEP(
+        builder.getInt8Ty(), klass, builder.getInt32(entry_offset),
+        "hashCode.vtable_entry");
+    llvm::LoadInst* vtable_method = builder.CreateLoad(
+        c_heap_ptr_ty, entry_addr, "hashCode.vtable_method");
+    vtable_method->setAlignment(llvm::Align(sizeof(void*)));
+    vtable_method->setAtomic(llvm::AtomicOrdering::Unordered);
+
+    Method* expected_method = target->get_Method();
+    llvm::Value* expected = builder.CreateIntToPtr(
+        builder.getInt64((intptr_t)expected_method), c_heap_ptr_ty,
+        "hashCode.expected_method");
+
+    llvm::Value* methods_match = builder.CreateICmpEQ(
+        vtable_method, expected, "hashCode.methods_match");
+    builder.CreateCondBr(methods_match, hash_fast_bb, slow_call_bb);
+  } else {
+    // No vtable guard needed: branch directly to fast path.
+    builder.CreateBr(hash_fast_bb);
+  }
+
+  // --- fast path: inline mark-word hash extraction ---
+  builder.SetInsertPoint(hash_fast_bb);
+  llvm::CallInst* fast_call =
+      _interp->call_java_op("jeandle.hashcode_fast", {obj});
+  llvm::Value* fast_ok =
+      builder.CreateICmpNE(fast_call, builder.getInt32(0), "hashCode.fast_ok");
+  builder.CreateCondBr(fast_ok, merge_bb, slow_call_bb);
+
+  // --- slow path: Java call to the actual hashCode / identityHashCode method ---
+  _interp->_jvm->apop();
+  builder.SetInsertPoint(slow_call_bb);
+  llvm::InvokeInst* slow_call = _interp->emit_java_call(
+      target, declared_holder, _target->signature(), {obj},
+      /*has_receiver=*/!is_identity,
+      /*is_method_handle_invoke=*/false, bc);
+  RETURN_ON_JEANDLE_ERROR(true);
+  llvm::Value* slow_result = slow_call;
+  builder.CreateBr(merge_bb);
+  llvm::BasicBlock* slow_tail_bb = builder.GetInsertBlock();
+
+  // --- merge ---
+  builder.SetInsertPoint(merge_bb);
+  _interp->_block->set_tail_llvm_block(merge_bb);
+  const unsigned num_incoming = is_identity ? 3 : 2;
+  llvm::PHINode* result =
+      builder.CreatePHI(builder.getInt32Ty(), num_incoming, "hashCode.result");
+  if (is_identity) {
+    // null → 0
+    result->addIncoming(builder.getInt32(0), entry_bb);
+  }
+  result->addIncoming(fast_call, hash_fast_bb);
+  result->addIncoming(slow_result, slow_tail_bb);
+
+  _interp->_jvm->ipush(result);
   return true;
 }
 
@@ -2867,6 +3094,57 @@ bool JeandleIntrinsicLowering::lower_arraycopy() {
   if (negative_length_guard_generated) {
     arraycopy_call->addFnAttr(llvm::Attribute::get(
         ctx, llvm::jeandle::Attribute::ArrayCopyNegativeLengthGuard));
+  }
+  return true;
+}
+
+// StringUTF16 trusted single-code-unit access. Its byte[] backing stores
+// UTF-16 code units in native-endian order, matching the target data layout.
+// Keep the element access as i16 so LLVM can fold the two-byte element scale
+// into the target load/store addressing mode (for example, AArch64's
+// ldrh/strh [base, index, sxtw #1]).
+bool JeandleIntrinsicLowering::lower_string_char_access(bool is_store) {
+  llvm::IRBuilder<>& b = _interp->_ir_builder;
+  llvm::Type* i8 = b.getInt8Ty();
+  llvm::Type* i16 = b.getInt16Ty();
+
+  llvm::Value* array = _interp->_jvm->peek_value(is_store ? 2 : 1).value();
+  llvm::Value* index = _interp->_jvm->peek_value(is_store ? 1 : 0).value();
+
+  assert(arrayOopDesc::base_offset_in_bytes(T_CHAR) == arrayOopDesc::base_offset_in_bytes(T_BYTE),
+         "byte[] and char[] bases must agree");
+  assert(type2aelembytes(T_CHAR) == type2aelembytes(T_BYTE) * 2,
+         "char[] scale must be twice byte[] scale");
+
+  _interp->null_check(array);
+
+  llvm::Value* data = b.CreateInBoundsGEP(
+      i8, array, b.getInt32(arrayOopDesc::base_offset_in_bytes(T_BYTE)),
+      is_store ? "string_putchar_data" : "string_getchar_data");
+  llvm::Value* addr = b.CreateInBoundsGEP(
+      i16, data, index,
+      is_store ? "string_putchar_addr" : "string_getchar_addr");
+
+  if (is_store) {
+    llvm::Value* ch = _interp->_jvm->peek_value(0).value();
+    llvm::Value* ch16 = b.CreateTrunc(ch, i16, "string_putchar_value");
+    llvm::StoreInst* store = b.CreateStore(ch16, addr);
+    store->setAlignment(llvm::Align(2));
+    store->setAtomic(llvm::AtomicOrdering::Unordered);
+
+    _interp->_jvm->ipop(); // c
+    _interp->_jvm->ipop(); // index
+    _interp->_jvm->apop(); // value
+  } else {
+    llvm::LoadInst* loaded = b.CreateLoad(i16, addr, "string_getchar_result");
+    loaded->setAlignment(llvm::Align(2));
+    loaded->setAtomic(llvm::AtomicOrdering::Unordered);
+    llvm::Value* result = b.CreateZExt(
+        loaded, b.getInt32Ty(), "string_getchar_result_i32");
+
+    _interp->_jvm->ipop(); // index
+    _interp->_jvm->apop(); // value
+    _interp->_jvm->ipush(result);
   }
   return true;
 }
