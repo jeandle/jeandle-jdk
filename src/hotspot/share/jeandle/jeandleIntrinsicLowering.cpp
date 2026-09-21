@@ -175,9 +175,6 @@ bool JeandleIntrinsicLowering::is_supported(vmIntrinsics::ID id) {
     case vmIntrinsics::_onSpinWait:
       return cpu_supports_spin_wait();
 
-    case vmIntrinsics::_vectorizedMismatch:
-      return UseVectorizedMismatchIntrinsic;
-
     // floatToFloat16/float16ToFloat: gated on the same
     // VM_Version::supports_float16() predicate that turns on the template
     // interpreter's hardware entries (and gates C1/C2's intrinsic versions
@@ -359,6 +356,10 @@ bool JeandleIntrinsicLowering::is_supported(vmIntrinsics::ID id) {
     // legal on every target Jeandle supports.
     case vmIntrinsics::_multiplyHigh:
     case vmIntrinsics::_unsignedMultiplyHigh:
+
+    // These stub intrinsics use the common VM flag filtering in the caller.
+    case vmIntrinsics::_vectorizedMismatch:
+    case vmIntrinsics::_chacha20Block:
 
     // arraycopy
     case vmIntrinsics::_arraycopy:
@@ -561,6 +562,9 @@ bool JeandleIntrinsicLowering::lower(vmIntrinsics::ID id, const ciMethod* target
 
     case vmIntrinsics::_vectorizedMismatch:
       return lower_vectorized_mismatch();
+
+    case vmIntrinsics::_chacha20Block:
+      return lower_chacha20_block();
 
     // newArray
     case vmIntrinsics::_newArray:
@@ -2389,16 +2393,45 @@ bool JeandleIntrinsicLowering::lower_unsafe_allocate_instance() {
   return true;
 }
 
+// ChaCha20Cipher.chaCha20Block validates int[16] and byte[1024] before
+// invoking the private candidate, as required by the platform stub.
+bool JeandleIntrinsicLowering::lower_chacha20_block() {
+  assert(JeandleRuntimeRoutine::find_routine_entry("StubRoutines_chacha20Block") != nullptr,
+         "ChaCha20 stub must be initialized");
+
+  llvm::Value* result = _interp->_jvm->peek_value(0).value();
+  llvm::Value* state = _interp->_jvm->peek_value(1).value();
+  _interp->null_check(state);
+  _interp->null_check(result);
+
+  llvm::IRBuilder<>& b = _interp->_ir_builder;
+  llvm::Type* i8 = b.getInt8Ty();
+
+  _interp->_jvm->apop(); // result
+  _interp->_jvm->apop(); // state
+  llvm::Value* state_base = b.CreateInBoundsGEP(
+      i8, state, b.getInt32(arrayOopDesc::base_offset_in_bytes(T_INT)),
+      "chacha20_state_base");
+  llvm::Value* result_base = b.CreateInBoundsGEP(
+      i8, result, b.getInt32(arrayOopDesc::base_offset_in_bytes(T_BYTE)),
+      "chacha20_result_base");
+  static constexpr CallSiteAttributeMetadata attrs = {CTRL_NONE, MEM_READ | MEM_WRITE};
+  llvm::CallBase* call = emit_callsite(
+      JeandleRuntimeRoutine::StubRoutines_chacha20Block_callee(_interp->_module),
+      llvm::CallingConv::C, {state_base, result_base}, attrs,
+      /*is_gc_leaf_entry=*/true);
+  _interp->_jvm->ipush(call);
+  return true;
+}
+
 // ---- lower_vectorized_mismatch ----
 //
 // Use LLVM IR for byte ranges too small to benefit from the platform stub. The
 // larger ranges retain the platform StubRoutines implementation, including its
 // vector tiers where available.
 bool JeandleIntrinsicLowering::lower_vectorized_mismatch() {
-  if (!UseVectorizedMismatchIntrinsic ||
-      JeandleRuntimeRoutine::find_routine_entry("StubRoutines_vectorizedMismatch") == nullptr) {
-    return false;
-  }
+  assert(JeandleRuntimeRoutine::find_routine_entry("StubRoutines_vectorizedMismatch") != nullptr,
+         "vectorizedMismatch stub must be initialized");
 
   llvm::IRBuilder<>& b = _interp->_ir_builder;
   llvm::Type* i8 = b.getInt8Ty();
