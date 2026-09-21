@@ -25,6 +25,7 @@
 #include "classfile/javaClasses.hpp"
 #include "memory/oopFactory.hpp"
 #include "oops/access.hpp"
+#include "prims/unsafe.hpp"
 #include "runtime/deoptimization.hpp"
 #include "runtime/javaThread.inline.hpp"
 #include "runtime/reflection.hpp"
@@ -241,6 +242,21 @@ JRT_BLOCK_ENTRY(void, JeandleRuntimeRoutine::new_array_from_mirror(oopDesc* mirr
     }
   JRT_BLOCK_END;
   SharedRuntime::on_slowpath_allocation_exit(current);
+JRT_END
+
+
+JRT_ENTRY(void, JeandleRuntimeRoutine::unsafe_park(jint is_absolute, jlong time,
+                                                   JavaThread* current))
+  assert(check_jeandle_compiled_frame(current), "incorrect caller");
+  // Preserve the native jboolean ABI: arbitrary JVM int inputs are narrowed
+  // to the low byte before Unsafe interprets zero/nonzero.
+  Unsafe_park(current, static_cast<jboolean>(is_absolute), time);
+JRT_END
+
+JRT_ENTRY(void, JeandleRuntimeRoutine::unsafe_unpark(oopDesc* thread_oop,
+                                                     JavaThread* current))
+  assert(check_jeandle_compiled_frame(current), "incorrect caller");
+  Unsafe_unpark(thread_oop);
 JRT_END
 
 // It's a copy of OptoRuntime::new_instance_C

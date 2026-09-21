@@ -84,3 +84,8 @@ bool JeandleIntrinsicLowering::lower_writeback0() {
 bool JeandleIntrinsicLowering::lower_writeback_sync(vmIntrinsics::ID) {
   return false;
 }
+
+bool JeandleIntrinsicLowering::lower_store_store_fence() {
+  ShouldNotReachHere();
+  return false;
+}

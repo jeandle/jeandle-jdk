@@ -21,6 +21,7 @@
 #include "jeandle/__llvmHeadersBegin__.hpp"
 #include "llvm/IR/IRBuilder.h"
 #include "llvm/IR/IntrinsicsAArch64.h"
+#include "llvm/Support/ModRef.h"
 
 #include "jeandle/jeandleAbstractInterpreter.hpp"
 #include "jeandle/jeandleIntrinsicLowering.hpp"
@@ -114,5 +115,18 @@ bool JeandleIntrinsicLowering::lower_writeback_sync(vmIntrinsics::ID id) {
     builder.CreateIntrinsic(
       llvm::Intrinsic::aarch64_dmb, {}, {builder.getInt32(0xb)});
   }
+  return true;
+}
+
+bool JeandleIntrinsicLowering::lower_store_store_fence() {
+  llvm::IRBuilder<> &builder = _interp->_ir_builder;
+  _interp->_jvm->apop();
+  builder.CreateFence(
+      llvm::AtomicOrdering::Release,
+      builder.getContext().getOrInsertSyncScopeID("singlethread"));
+  llvm::CallInst *dmb = builder.CreateIntrinsic(llvm::Intrinsic::aarch64_dmb,
+                                                {}, {builder.getInt32(0xa)});
+  dmb->setMemoryEffects(
+      llvm::MemoryEffects::inaccessibleMemOnly(llvm::ModRefInfo::Mod));
   return true;
 }

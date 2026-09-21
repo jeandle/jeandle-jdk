@@ -113,3 +113,12 @@ bool JeandleIntrinsicLowering::lower_writeback_sync(vmIntrinsics::ID id) {
   }
   return true;
 }
+
+bool JeandleIntrinsicLowering::lower_store_store_fence() {
+  llvm::IRBuilder<> &builder = _interp->_ir_builder;
+  _interp->_jvm->apop();
+  builder.CreateFence(
+      llvm::AtomicOrdering::Release,
+      builder.getContext().getOrInsertSyncScopeID("singlethread"));
+  return true;
+}
