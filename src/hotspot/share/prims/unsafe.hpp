@@ -28,6 +28,9 @@
 
 #include "jni.h"
 
+class JavaThread;
+class oopDesc;
+
 extern "C" {
   void JNICALL JVM_RegisterJDKInternalMiscUnsafeMethods(JNIEnv *env, jclass unsafecls);
 }
@@ -35,5 +38,10 @@ extern "C" {
 jlong Unsafe_field_offset_to_byte_offset(jlong field_offset);
 
 jlong Unsafe_field_offset_from_byte_offset(jlong byte_offset);
+
+// Shared implementations for JNI and Jeandle runtime entries. The caller
+// must already have transitioned the current JavaThread to _thread_in_vm.
+void Unsafe_park(JavaThread* thread, jboolean is_absolute, jlong time);
+void Unsafe_unpark(oopDesc* thread_oop);
 
 #endif // SHARE_PRIMS_UNSAFE_HPP
