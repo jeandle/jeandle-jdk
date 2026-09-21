@@ -330,6 +330,11 @@ class JeandleAbstractInterpreter : public StackObj {
   // block.
   JeandleBasicBlock* _pruned_successor;
 
+  // Records the logical successor and actual LLVM predecessor when a taken
+  // back-edge is split through a safepoint poll block.
+  JeandleBasicBlock* _backedge_safepoint_successor;
+  llvm::BasicBlock* _backedge_safepoint_block;
+
   // Contains all blocks to interpret. Sorted by reverse-post-order.
   llvm::SmallVector<JeandleBasicBlock*> _work_list;
 
