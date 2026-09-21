@@ -108,6 +108,30 @@ void annotate_call(llvm::CallBase* call,
 void apply_memory_attr(llvm::CallBase* call,
                        const CallSiteAttributeMetadata& attrs);
 
+
+
+// Atomic operation shape, independent of the Java memory-ordering contract.
+// Ordinary Unsafe loads and stores do not need an operation enum: their shape
+// is fully described by the load/store direction passed to lower_unsafe_access.
+enum class UnsafeAtomicKind {
+  CompareAndSet,
+  WeakCompareAndSet,
+  CompareAndExchange,
+  GetAdd,
+  GetSet
+};
+
+// Java memory-ordering contract, shared by ordinary accesses and atomic
+// operations. Relaxed ordinary loads/stores use non-atomic LLVM IR, while a
+// relaxed weak CAS remains atomic and is represented by monotonic ordering.
+enum class UnsafeAccessKind {
+  Relaxed,
+  Opaque,
+  Acquire,
+  Release,
+  Volatile
+};
+
 class JeandleIntrinsicLowering : public StackObj {
  public:
   explicit JeandleIntrinsicLowering(JeandleAbstractInterpreter* interp);
@@ -179,6 +203,7 @@ class JeandleIntrinsicLowering : public StackObj {
   // Per-intrinsic handlers
   // ========================================================================
   bool lower_bit_count(vmIntrinsics::ID id);
+  bool lower_unsafe_park_unpark(vmIntrinsics::ID id);
   bool lower_count_zeros(vmIntrinsics::ID id, llvm::Intrinsic::ID llvm_id);
   bool lower_reverse_bytes_narrow(vmIntrinsics::ID id);
   bool lower_llvm_bitcast();
@@ -186,6 +211,7 @@ class JeandleIntrinsicLowering : public StackObj {
   bool lower_fp_range_check(vmIntrinsics::ID id);
   bool lower_float16_convert(vmIntrinsics::ID id);
   bool lower_llvm_fence(vmIntrinsics::ID id);
+  bool lower_store_store_fence();    // arch-specific
   bool lower_preconditions_check_index(BasicType bt);
   bool lower_spin_wait_hint();       // arch-specific
   bool lower_compare_unsigned(vmIntrinsics::ID id);
@@ -197,6 +223,30 @@ class JeandleIntrinsicLowering : public StackObj {
   bool lower_new_array();
   bool lower_unsafe_allocate_instance();
   bool lower_object_notify(vmIntrinsics::ID id);
+  bool lower_unsafe_access(bool is_store, BasicType type,
+                           UnsafeAccessKind access_kind);
+  bool lower_unsafe_atomic(BasicType type, UnsafeAtomicKind kind,
+                           UnsafeAccessKind access_kind);
+  bool guard_unsafe_primitive_access(BasicType type, int offset_depth,
+                                     int base_depth,
+                                     bool requires_atomic_alignment);
+  bool lower_unsafe_plain_primitive_access(BasicType type, bool is_store);
+  bool lower_unsafe_ordered_primitive_access(BasicType type, bool is_store,
+                                             UnsafeAccessKind access_kind);
+  bool lower_unsafe_reference_compare_and_exchange(UnsafeAccessKind access_kind,
+                                                   bool returns_old = true,
+                                                   bool weak = false);
+  bool lower_unsafe_compare_and_set(BasicType type,
+                                    UnsafeAccessKind access_kind,
+                                    bool weak = false);
+  bool lower_unsafe_compare_and_exchange(BasicType type,
+                                         UnsafeAccessKind access_kind);
+  bool lower_unsafe_atomic_rmw(BasicType type,
+                               llvm::AtomicRMWInst::BinOp operation,
+                               UnsafeAccessKind access_kind);
+  bool lower_unsafe_reference_get_and_set();
+  bool lower_unsafe_reference_load(UnsafeAccessKind access_kind);
+  bool lower_unsafe_reference_store(UnsafeAccessKind access_kind);
   bool lower_vectorized_mismatch();
   bool lower_arraycopy();
   // StringUTF16 trusted single-code-unit access. The byte[] backing stores

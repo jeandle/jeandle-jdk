@@ -29,6 +29,7 @@
 
 #include "jeandle/__hotspotHeadersBegin__.hpp"
 #include "ci/ciUtilities.hpp"
+#include "classfile/vmClasses.hpp"
 #include "gc/g1/g1BarrierSetRuntime.hpp"
 #include "gc/g1/g1CardTable.hpp"
 #include "gc/g1/g1ThreadLocalData.hpp"
@@ -227,6 +228,405 @@ DEF_JAVA_OP(post_barrier, 9, llvm::Type::getVoidTy(context),
     call_inst->setCallingConv(llvm::CallingConv::Hotspot_JIT);
   }
   ir_builder.CreateRetVoid();
+JAVA_OP_END
+
+// Unsafe reference loads are heap-only.  Intrinsic lowering keeps the raw
+// base-null form on the normal Unsafe path before entering these JavaOps.
+// Besides the requested access ordering, G1 needs a loaded-value SATB
+// keep-alive barrier when the unknown Unsafe slot is Reference.referent.
+static void define_unsafe_get_reference_with_order(
+    llvm::Module &template_module, const char *name,
+    llvm::AtomicOrdering ordering, bool bracket_with_cpu_order_fences) {
+    if (RuntimeDefinedJavaOps::failed()) {
+      return;
+    }
+    llvm::LLVMContext &context = template_module.getContext();
+    llvm::Type *oop_type = llvm::PointerType::get(
+        context, llvm::jeandle::AddrSpace::JavaHeapAddrSpace);
+    llvm::FunctionType *func_type = llvm::FunctionType::get(
+        oop_type, {oop_type, llvm::Type::getInt64Ty(context)}, false);
+    llvm::Function *func = llvm::cast<llvm::Function>(
+        template_module.getOrInsertFunction(name, func_type).getCallee());
+    func->setLinkage(llvm::Function::PrivateLinkage);
+    func->addFnAttr("lower-phase", "1");
+    func->addFnAttr(llvm::Attribute::NoInline);
+    func->addFnAttr(llvm::Attribute::NoUnwind);
+    func->addFnAttr("gc-leaf-function");
+    func->setCallingConv(llvm::CallingConv::Hotspot_JIT);
+    llvm::BasicBlock *entry = llvm::BasicBlock::Create(context, "entry", func);
+    llvm::IRBuilder<> builder(entry);
+
+    llvm::Value *base = func->getArg(0);
+    llvm::Value *offset = func->getArg(1);
+    llvm::Value *address =
+        builder.CreatePtrAdd(base, offset, llvm::Twine(name) + ".addr");
+    if (bracket_with_cpu_order_fences) {
+      // Match C2's MemBarCPUOrder around non-unordered unknown-oop loads. The
+      // single-thread scope is a compiler barrier and must not become a DMB.
+      builder.CreateFence(llvm::AtomicOrdering::SequentiallyConsistent,
+                          llvm::SyncScope::SingleThread);
+    }
+
+    llvm::Value *result = nullptr;
+    if (UseCompressedOops) {
+      llvm::Type *narrow_type = llvm::PointerType::get(
+          context, llvm::jeandle::AddrSpace::NarrowOopAddrSpace);
+      llvm::LoadInst *narrow = builder.CreateLoad(
+          narrow_type, address, llvm::Twine(name) + ".narrow");
+      narrow->setAtomic(ordering);
+      narrow->setAlignment(llvm::Align(4));
+      llvm::Function *decode =
+          template_module.getFunction("jeandle.decode_heap_oop");
+      assert(decode != nullptr, "Unsafe reference decode JavaOp missing");
+      llvm::CallInst *decoded = builder.CreateCall(decode, {narrow});
+      decoded->setCallingConv(llvm::CallingConv::Hotspot_JIT);
+      result = decoded;
+    } else {
+      llvm::LoadInst *wide =
+          builder.CreateLoad(oop_type, address, llvm::Twine(name) + ".oop");
+      wide->setAtomic(ordering);
+      wide->setAlignment(llvm::Align(8));
+      result = wide;
+    }
+
+    if (!UseG1GC) {
+      assert(UseSerialGC, "only Serial and G1 GC are supported");
+      if (bracket_with_cpu_order_fences) {
+        builder.CreateFence(llvm::AtomicOrdering::SequentiallyConsistent,
+                            llvm::SyncScope::SingleThread);
+      }
+      builder.CreateRet(result);
+      return;
+    }
+
+    llvm::GlobalVariable *referent_offset_gv =
+        template_module.getGlobalVariable(
+            "java_lang_ref_Reference.referent_offset",
+            /*AllowInternal=*/true);
+    if (referent_offset_gv == nullptr) {
+      RuntimeDefinedJavaOps::set_failed(
+          "java_lang_ref_Reference.referent_offset global not found in "
+          "template module");
+      return;
+    }
+    llvm::BasicBlock *check_base =
+        llvm::BasicBlock::Create(context, "check_reference_base", func);
+    llvm::BasicBlock *check_klass =
+        llvm::BasicBlock::Create(context, "check_reference_klass", func);
+    llvm::BasicBlock *apply_barrier =
+        llvm::BasicBlock::Create(context, "apply_referent_barrier", func);
+    llvm::BasicBlock *done = llvm::BasicBlock::Create(context, "done", func);
+
+    llvm::Value *referent_offset_i32 =
+        builder.CreateLoad(builder.getInt32Ty(), referent_offset_gv);
+    llvm::Value *referent_offset =
+        builder.CreateSExt(referent_offset_i32, builder.getInt64Ty());
+    builder.CreateCondBr(builder.CreateICmpEQ(offset, referent_offset),
+                         check_base, done);
+
+    builder.SetInsertPoint(check_base);
+    builder.CreateCondBr(builder.CreateIsNull(base), done, check_klass);
+
+    builder.SetInsertPoint(check_klass);
+    llvm::Type *klass_type = llvm::PointerType::get(
+        context, llvm::jeandle::AddrSpace::CHeapAddrSpace);
+    llvm::Value *reference_klass =
+        builder.CreateIntToPtr(builder.getInt64(reinterpret_cast<uintptr_t>(
+                                   vmClasses::Reference_klass())),
+                               klass_type);
+    llvm::Function *check_instanceof =
+        template_module.getFunction("jeandle.check_instanceof");
+    assert(check_instanceof != nullptr,
+           "Unsafe reference instanceof JavaOp missing");
+    llvm::CallInst *is_reference =
+        builder.CreateCall(check_instanceof, {reference_klass, base});
+    is_reference->setCallingConv(llvm::CallingConv::Hotspot_JIT);
+    builder.CreateCondBr(is_reference, apply_barrier, done);
+
+    builder.SetInsertPoint(apply_barrier);
+    llvm::Function *barrier =
+        template_module.getFunction("jeandle.g1_pre_barrier_loaded");
+    assert(barrier != nullptr, "G1 loaded-value barrier JavaOp missing");
+    llvm::CallInst *barrier_call = builder.CreateCall(barrier, {result});
+    barrier_call->setCallingConv(llvm::CallingConv::Hotspot_JIT);
+    if (ordering == llvm::AtomicOrdering::Unordered) {
+      // C2 brackets non-unordered Unsafe loads at the access layer. A plain
+      // referent load needs this narrower barrier only on the keep-alive path
+      // so it cannot be commoned across a safepoint that clears the referent.
+      builder.CreateFence(llvm::AtomicOrdering::SequentiallyConsistent,
+                          llvm::SyncScope::SingleThread);
+    }
+    builder.CreateBr(done);
+
+    builder.SetInsertPoint(done);
+    if (bracket_with_cpu_order_fences) {
+      builder.CreateFence(llvm::AtomicOrdering::SequentiallyConsistent,
+                          llvm::SyncScope::SingleThread);
+    }
+    builder.CreateRet(result);
+}
+
+static void define_unsafe_put_reference_with_order(
+    llvm::Module &template_module, const char *name,
+    llvm::AtomicOrdering ordering, bool bracket_with_cpu_order_fences) {
+    if (RuntimeDefinedJavaOps::failed())
+      return;
+    llvm::LLVMContext &context = template_module.getContext();
+    llvm::Type *oop_type = llvm::PointerType::get(
+        context, llvm::jeandle::AddrSpace::JavaHeapAddrSpace);
+    llvm::FunctionType *func_type = llvm::FunctionType::get(
+        llvm::Type::getVoidTy(context),
+        {oop_type, llvm::Type::getInt64Ty(context), oop_type}, false);
+    llvm::Function *func = llvm::cast<llvm::Function>(
+        template_module.getOrInsertFunction(name, func_type).getCallee());
+    func->setLinkage(llvm::Function::PrivateLinkage);
+    func->addFnAttr("lower-phase", "1");
+    func->addFnAttr(llvm::Attribute::NoInline);
+    func->addFnAttr(llvm::Attribute::NoUnwind);
+    func->addFnAttr("gc-leaf-function");
+    func->setCallingConv(llvm::CallingConv::Hotspot_JIT);
+    llvm::BasicBlock *entry = llvm::BasicBlock::Create(context, "entry", func);
+    llvm::IRBuilder<> builder(entry);
+    llvm::Value *address = builder.CreatePtrAdd(
+        func->getArg(0), func->getArg(1), llvm::Twine(name) + ".addr");
+    llvm::Value *value = func->getArg(2);
+    llvm::Function *pre = template_module.getFunction("jeandle.pre_barrier");
+    llvm::Function *post = template_module.getFunction("jeandle.post_barrier");
+    assert(pre != nullptr && post != nullptr,
+           "Unsafe reference store barrier JavaOp missing");
+    llvm::CallInst *pre_call = builder.CreateCall(pre, {address});
+    pre_call->setCallingConv(llvm::CallingConv::Hotspot_JIT);
+    if (bracket_with_cpu_order_fences) {
+      builder.CreateFence(llvm::AtomicOrdering::SequentiallyConsistent,
+                          llvm::SyncScope::SingleThread);
+    }
+    llvm::Value *stored = value;
+    llvm::Align align(8);
+    if (UseCompressedOops) {
+      llvm::Function *encode =
+          template_module.getFunction("jeandle.encode_heap_oop");
+      assert(encode != nullptr, "Unsafe reference encode JavaOp missing");
+      llvm::CallInst *encoded = builder.CreateCall(encode, {value});
+      encoded->setCallingConv(llvm::CallingConv::Hotspot_JIT);
+      stored = encoded;
+      align = llvm::Align(4);
+    }
+    llvm::StoreInst *store = builder.CreateStore(stored, address);
+    store->setAtomic(ordering);
+    store->setAlignment(align);
+    if (bracket_with_cpu_order_fences) {
+      builder.CreateFence(llvm::AtomicOrdering::SequentiallyConsistent,
+                          llvm::SyncScope::SingleThread);
+    }
+    llvm::CallInst *post_call = builder.CreateCall(post, {address, value});
+    post_call->setCallingConv(llvm::CallingConv::Hotspot_JIT);
+    builder.CreateRetVoid();
+}
+
+// Unsafe reference CAS/CAX is heap-only.  It keeps the SATB/card barriers and
+// compressed-oop conversion in one JavaOp so every oop crossing the call site
+// is visible to GC.  The three CAX variants deliberately preserve their
+// access-kind ordering; the older 718 implementation collapsed all to seq_cst.
+#define DEF_UNSAFE_REFERENCE_CAX(name, return_type, success_order,             \
+                                 failure_order, return_success, is_weak)       \
+    DEF_JAVA_OP(name, 9, return_type,                                          \
+                llvm::PointerType::get(                                        \
+                    context, llvm::jeandle::AddrSpace::JavaHeapAddrSpace),     \
+                llvm::Type::getInt64Ty(context),                               \
+                llvm::PointerType::get(                                        \
+                    context, llvm::jeandle::AddrSpace::JavaHeapAddrSpace),     \
+                llvm::PointerType::get(                                        \
+                    context, llvm::jeandle::AddrSpace::JavaHeapAddrSpace))     \
+    llvm::Value *base = func->getArg(0);                                       \
+    llvm::Value *offset = func->getArg(1);                                     \
+    llvm::Value *expected = func->getArg(2);                                   \
+    llvm::Value *update = func->getArg(3);                                     \
+    expected->setName(#name ".expected");                                      \
+    llvm::Value *address =                                                     \
+        ir_builder.CreatePtrAdd(base, offset, #name ".addr");                  \
+    llvm::Function *pre_loaded =                                               \
+        template_module.getFunction("jeandle.g1_pre_barrier_loaded");          \
+    llvm::Function *post =                                                     \
+        template_module.getFunction("jeandle.post_barrier");                   \
+    assert((!UseG1GC || pre_loaded != nullptr) && post != nullptr,             \
+           "Unsafe reference barrier JavaOp missing");                         \
+    if (UseG1GC) {                                                             \
+      /* A successful CAS overwrites expected, not a value reloaded before */  \
+      /* the cmpxchg.  Using expected closes that reload/cmpxchg race. */      \
+      llvm::CallInst *pre_call =                                               \
+          ir_builder.CreateCall(pre_loaded, {expected});                       \
+      pre_call->setCallingConv(llvm::CallingConv::Hotspot_JIT);                \
+    }                                                                          \
+    llvm::Value *expected_value = expected;                                    \
+    llvm::Value *update_value = update;                                        \
+    llvm::Value *old_value = nullptr;                                          \
+    if (UseCompressedOops) {                                                   \
+      llvm::Function *encode =                                                 \
+          template_module.getFunction("jeandle.encode_heap_oop");              \
+      llvm::Function *decode =                                                 \
+          template_module.getFunction("jeandle.decode_heap_oop");              \
+      assert(encode != nullptr && decode != nullptr,                           \
+             "Unsafe reference oop JavaOp missing");                           \
+      llvm::CallInst *encoded_expected =                                       \
+          ir_builder.CreateCall(encode, {expected});                           \
+      llvm::CallInst *encoded_update =                                         \
+          ir_builder.CreateCall(encode, {update});                             \
+      encoded_expected->setCallingConv(llvm::CallingConv::Hotspot_JIT);        \
+      encoded_update->setCallingConv(llvm::CallingConv::Hotspot_JIT);          \
+      llvm::AtomicCmpXchgInst *cax = ir_builder.CreateAtomicCmpXchg(           \
+          address, encoded_expected, encoded_update, llvm::Align(4),           \
+          success_order, failure_order);                                       \
+      cax->setWeak(is_weak);                                                   \
+      llvm::Value *old_narrow =                                                \
+          ir_builder.CreateExtractValue(cax, 0, #name ".old_narrow");          \
+      llvm::CallInst *decoded = ir_builder.CreateCall(decode, {old_narrow});   \
+      decoded->setCallingConv(llvm::CallingConv::Hotspot_JIT);                 \
+      old_value = decoded;                                                     \
+      llvm::Value *success =                                                   \
+          ir_builder.CreateExtractValue(cax, 1, #name ".success");             \
+      llvm::BasicBlock *barrier =                                              \
+          llvm::BasicBlock::Create(context, #name ".barrier", func);           \
+      llvm::BasicBlock *done =                                                 \
+          llvm::BasicBlock::Create(context, #name ".done", func);              \
+      ir_builder.CreateCondBr(success, barrier, done);                         \
+      ir_builder.SetInsertPoint(barrier);                                      \
+      llvm::CallInst *post_call =                                              \
+          ir_builder.CreateCall(post, {address, update});                      \
+      post_call->setCallingConv(llvm::CallingConv::Hotspot_JIT);               \
+      ir_builder.CreateBr(done);                                               \
+      ir_builder.SetInsertPoint(done);                                         \
+      if (return_success) {                                                    \
+        ir_builder.CreateRet(                                                  \
+            ir_builder.CreateZExt(success, ir_builder.getInt32Ty()));          \
+      } else {                                                                 \
+        ir_builder.CreateRet(old_value);                                       \
+      }                                                                        \
+    } else {                                                                   \
+      llvm::AtomicCmpXchgInst *cax = ir_builder.CreateAtomicCmpXchg(           \
+          address, expected_value, update_value, llvm::Align(8),               \
+          success_order, failure_order);                                       \
+      cax->setWeak(is_weak);                                                   \
+      old_value = ir_builder.CreateExtractValue(cax, 0, #name ".old");         \
+      llvm::Value *success =                                                   \
+          ir_builder.CreateExtractValue(cax, 1, #name ".success");             \
+      llvm::BasicBlock *barrier =                                              \
+          llvm::BasicBlock::Create(context, #name ".barrier", func);           \
+      llvm::BasicBlock *done =                                                 \
+          llvm::BasicBlock::Create(context, #name ".done", func);              \
+      ir_builder.CreateCondBr(success, barrier, done);                         \
+      ir_builder.SetInsertPoint(barrier);                                      \
+      llvm::CallInst *post_call =                                              \
+          ir_builder.CreateCall(post, {address, update});                      \
+      post_call->setCallingConv(llvm::CallingConv::Hotspot_JIT);               \
+      ir_builder.CreateBr(done);                                               \
+      ir_builder.SetInsertPoint(done);                                         \
+      if (return_success) {                                                    \
+        ir_builder.CreateRet(                                                  \
+            ir_builder.CreateZExt(success, ir_builder.getInt32Ty()));          \
+      } else {                                                                 \
+        ir_builder.CreateRet(old_value);                                       \
+      }                                                                        \
+    }                                                                          \
+    JAVA_OP_END
+
+DEF_UNSAFE_REFERENCE_CAX(unsafe_compare_and_set_reference,
+                         llvm::Type::getInt32Ty(context),
+                         llvm::AtomicOrdering::SequentiallyConsistent,
+                         llvm::AtomicOrdering::SequentiallyConsistent, true,
+                         false)
+DEF_UNSAFE_REFERENCE_CAX(unsafe_weak_compare_and_set_reference_plain,
+                         llvm::Type::getInt32Ty(context),
+                         llvm::AtomicOrdering::Monotonic,
+                         llvm::AtomicOrdering::Monotonic, true, true)
+DEF_UNSAFE_REFERENCE_CAX(unsafe_weak_compare_and_set_reference_acquire,
+                         llvm::Type::getInt32Ty(context),
+                         llvm::AtomicOrdering::Acquire,
+                         llvm::AtomicOrdering::Acquire, true, true)
+DEF_UNSAFE_REFERENCE_CAX(unsafe_weak_compare_and_set_reference_release,
+                         llvm::Type::getInt32Ty(context),
+                         llvm::AtomicOrdering::Release,
+                         llvm::AtomicOrdering::Monotonic, true, true)
+DEF_UNSAFE_REFERENCE_CAX(unsafe_weak_compare_and_set_reference,
+                         llvm::Type::getInt32Ty(context),
+                         llvm::AtomicOrdering::SequentiallyConsistent,
+                         llvm::AtomicOrdering::SequentiallyConsistent, true,
+                         true)
+DEF_UNSAFE_REFERENCE_CAX(
+    unsafe_compare_and_exchange_reference,
+    llvm::PointerType::get(context,
+                           llvm::jeandle::AddrSpace::JavaHeapAddrSpace),
+    llvm::AtomicOrdering::SequentiallyConsistent,
+    llvm::AtomicOrdering::SequentiallyConsistent, false, false)
+DEF_UNSAFE_REFERENCE_CAX(
+    unsafe_compare_and_exchange_reference_acquire,
+    llvm::PointerType::get(context,
+                           llvm::jeandle::AddrSpace::JavaHeapAddrSpace),
+    llvm::AtomicOrdering::Acquire, llvm::AtomicOrdering::Acquire, false, false)
+DEF_UNSAFE_REFERENCE_CAX(
+    unsafe_compare_and_exchange_reference_release,
+    llvm::PointerType::get(context,
+                           llvm::jeandle::AddrSpace::JavaHeapAddrSpace),
+    llvm::AtomicOrdering::Release, llvm::AtomicOrdering::Monotonic, false,
+    false)
+#undef DEF_UNSAFE_REFERENCE_CAX
+
+// Atomic Unsafe.getAndSetReference.  This is the direct C2 shape rather than
+// the Java CAS loop: the volatile API is one sequentially-consistent exchange,
+// with the same collector barriers as the reference CAS JavaOps.
+DEF_JAVA_OP(unsafe_get_and_set_reference, 9,
+            llvm::PointerType::get(
+                context, llvm::jeandle::AddrSpace::JavaHeapAddrSpace),
+            llvm::PointerType::get(
+                context, llvm::jeandle::AddrSpace::JavaHeapAddrSpace),
+            llvm::Type::getInt64Ty(context),
+            llvm::PointerType::get(
+                context, llvm::jeandle::AddrSpace::JavaHeapAddrSpace))
+  llvm::Value *base = func->getArg(0);
+  llvm::Value *offset = func->getArg(1);
+  llvm::Value *update = func->getArg(2);
+  llvm::Value *address =
+      ir_builder.CreatePtrAdd(base, offset, "unsafe_get_and_set_reference.addr");
+  llvm::Function *pre_loaded =
+      template_module.getFunction("jeandle.g1_pre_barrier_loaded");
+  llvm::Function *post = template_module.getFunction("jeandle.post_barrier");
+  assert((!UseG1GC || pre_loaded != nullptr) && post != nullptr,
+         "Unsafe reference barrier JavaOp missing");
+
+  llvm::Value *old_value = nullptr;
+  if (UseCompressedOops) {
+    llvm::Function *encode =
+        template_module.getFunction("jeandle.encode_heap_oop");
+    llvm::Function *decode =
+        template_module.getFunction("jeandle.decode_heap_oop");
+    assert(encode != nullptr && decode != nullptr,
+           "Unsafe reference oop JavaOp missing");
+    llvm::CallInst *encoded = ir_builder.CreateCall(encode, {update});
+    encoded->setCallingConv(llvm::CallingConv::Hotspot_JIT);
+    llvm::AtomicRMWInst *xchg = ir_builder.CreateAtomicRMW(
+        llvm::AtomicRMWInst::Xchg, address, encoded, llvm::Align(4),
+        llvm::AtomicOrdering::SequentiallyConsistent);
+    llvm::CallInst *decoded = ir_builder.CreateCall(
+        decode, {xchg}, "unsafe_get_and_set_reference.old");
+    decoded->setCallingConv(llvm::CallingConv::Hotspot_JIT);
+    old_value = decoded;
+  } else {
+    llvm::AtomicRMWInst *xchg = ir_builder.CreateAtomicRMW(
+        llvm::AtomicRMWInst::Xchg, address, update, llvm::Align(8),
+        llvm::AtomicOrdering::SequentiallyConsistent);
+    old_value = xchg;
+  }
+  old_value->setName("unsafe_get_and_set_reference.old");
+  if (UseG1GC) {
+    // The exchange result is the exact value overwritten by this operation.
+    // Keep the loaded-value barrier after the xchg, with no safepoint between
+    // them, rather than racing an independent load against the exchange.
+    llvm::CallInst *pre_call =
+        ir_builder.CreateCall(pre_loaded, {old_value});
+    pre_call->setCallingConv(llvm::CallingConv::Hotspot_JIT);
+  }
+  llvm::CallInst *post_call = ir_builder.CreateCall(post, {address, update});
+  post_call->setCallingConv(llvm::CallingConv::Hotspot_JIT);
+  ir_builder.CreateRet(old_value);
 JAVA_OP_END
 
 // Object.getClass(): load the java.lang.Class mirror for an object.
@@ -566,6 +966,43 @@ bool RuntimeDefinedJavaOps::define_all(llvm::Module& template_module) {
   define_card_table_barrier(template_module);
   define_pre_barrier(template_module);
   define_post_barrier(template_module);
+  define_unsafe_get_reference_with_order(
+      template_module, "jeandle.unsafe_get_reference",
+      llvm::AtomicOrdering::Unordered,
+      /*bracket_with_cpu_order_fences=*/false);
+  define_unsafe_put_reference_with_order(
+      template_module, "jeandle.unsafe_put_reference",
+      llvm::AtomicOrdering::Unordered, false);
+  define_unsafe_get_reference_with_order(
+      template_module, "jeandle.unsafe_get_reference_volatile",
+      llvm::AtomicOrdering::SequentiallyConsistent,
+      /*bracket_with_cpu_order_fences=*/false);
+  define_unsafe_put_reference_with_order(
+      template_module, "jeandle.unsafe_put_reference_volatile",
+      llvm::AtomicOrdering::SequentiallyConsistent, false);
+  define_unsafe_get_reference_with_order(
+      template_module, "jeandle.unsafe_get_reference_acquire",
+      llvm::AtomicOrdering::Acquire,
+      /*bracket_with_cpu_order_fences=*/true);
+  define_unsafe_put_reference_with_order(template_module,
+                                         "jeandle.unsafe_put_reference_release",
+                                         llvm::AtomicOrdering::Release, false);
+  define_unsafe_get_reference_with_order(
+      template_module, "jeandle.unsafe_get_reference_opaque",
+      llvm::AtomicOrdering::Monotonic,
+      /*bracket_with_cpu_order_fences=*/true);
+  define_unsafe_put_reference_with_order(template_module,
+                                         "jeandle.unsafe_put_reference_opaque",
+                                         llvm::AtomicOrdering::Monotonic, true);
+  define_unsafe_compare_and_set_reference(template_module);
+  define_unsafe_weak_compare_and_set_reference_plain(template_module);
+  define_unsafe_weak_compare_and_set_reference_acquire(template_module);
+  define_unsafe_weak_compare_and_set_reference_release(template_module);
+  define_unsafe_weak_compare_and_set_reference(template_module);
+  define_unsafe_compare_and_exchange_reference(template_module);
+  define_unsafe_compare_and_exchange_reference_acquire(template_module);
+  define_unsafe_compare_and_exchange_reference_release(template_module);
+  define_unsafe_get_and_set_reference(template_module);
   define_get_class(template_module);
   define_current_thread_obj(template_module);
   define_reference_refers_to(template_module);
