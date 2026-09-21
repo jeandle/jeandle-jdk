@@ -67,6 +67,10 @@
           "Use receiver type profile to devirtualize "                      \
           "invokevirtual/invokeinterface calls in Jeandle")                 \
                                                                             \
+  product(bool, JeandleIncrementalInline, true,                             \
+          "Delay @ForceInline methods that exceed normal depth or "         \
+          "bytecode-size limits for post-parse inlining")                   \
+                                                                            \
   product(intx, JeandleNodeCountInliningCutoff, 18000,                      \
           "If root LLVM IR instruction count exceeds limit stop inlining."  \
           "This value roughly follows C2's cutoff today; tune it later"     \
