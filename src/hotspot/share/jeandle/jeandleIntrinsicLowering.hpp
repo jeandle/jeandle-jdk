@@ -64,6 +64,9 @@ enum JeandleMemoryFlag : uint16_t {
   MEM_READ              = 1u << 0,
   MEM_WRITE             = 1u << 1,
   MEM_NEEDS_GC_STATE    = 1u << 2,
+  // The call observes externally changing state, such as a clock. Keep
+  // unknown memory effects so LLVM cannot CSE or reorder the call.
+  MEM_OBSERVES_EXTERNAL_STATE = 1u << 3,
 };
 
 // =============================================================================
@@ -80,6 +83,9 @@ struct CallSiteAttributeMetadata {
   bool reads_memory()         const { return (memory_flags  & MEM_READ) != 0; }
   bool writes_memory()        const { return (memory_flags  & MEM_WRITE) != 0; }
   bool needs_gc_state()       const { return (memory_flags  & MEM_NEEDS_GC_STATE) != 0; }
+  bool observes_external_state() const {
+    return (memory_flags & MEM_OBSERVES_EXTERNAL_STATE) != 0;
+  }
   bool attach_deopt_bundle()  const {
     return may_deopt() || needs_gc_state() || needs_exception_edge();
   }
@@ -193,6 +199,7 @@ class JeandleIntrinsicLowering : public StackObj {
   bool lower_preconditions_check_index(BasicType bt);
   bool lower_spin_wait_hint();       // arch-specific
   bool lower_compare_unsigned(vmIntrinsics::ID id);
+  bool lower_native_time_func(llvm::FunctionCallee callee);
   llvm::Value* emit_direct_mirror_from_klass(llvm::Value* klass,
                                              const char* name_prefix);
   ciObject* constant_oop(llvm::Value* value) const;
