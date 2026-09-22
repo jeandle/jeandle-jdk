@@ -630,127 +630,6 @@ llvm::CallBase* JeandleIntrinsicLowering::emit_callsite(llvm::FunctionCallee cal
   return site;
 }
 
-//-----------------------generate_method_call----------------------------
-// Jeandle counterpart of C2 LibraryCallKit::generate_method_call().
-//
-// Unlike emit_callsite(), this is a Java call rather than a runtime-routine
-// call. In particular, a virtual clone() slow path must retain the normal
-// invokevirtual dispatch so an overriding implementation is still selected.
-llvm::InvokeInst* JeandleIntrinsicLowering::generate_method_call(
-    const ciMethod* target,
-    bool is_virtual,
-    bool is_static,
-    bool res_not_null,
-    llvm::ArrayRef<llvm::Value*> args,
-    bool deoptimize_on_exception) {
-  assert(target != nullptr, "method target must be present");
-  assert(!(is_virtual && is_static), "call cannot be both virtual and static");
-
-  const ciSignature* signature = target->signature();
-  const BasicType return_type = signature->return_type()->basic_type();
-  llvm::SmallVector<llvm::Type*, 8> arg_types;
-  if (!is_static) {
-    arg_types.push_back(JeandleType::java2llvm(T_OBJECT, *_interp->_context));
-  }
-  for (int i = 0; i < signature->count(); ++i) {
-    arg_types.push_back(JeandleType::java2llvm(
-        signature->type_at(i)->basic_type(), *_interp->_context));
-  }
-
-  llvm::FunctionType* function_type = llvm::FunctionType::get(
-      JeandleType::java2llvm(return_type, *_interp->_context),
-      arg_types, false);
-
-  JeandleCompiledCall::Type call_type = JeandleCompiledCall::NOT_A_CALL;
-  address resolve_stub = nullptr;
-  bool dynamic_call = false;
-  if (is_static) {
-    assert(!is_virtual, "");
-    call_type = JeandleCompiledCall::STATIC_CALL;
-    resolve_stub = SharedRuntime::get_resolve_static_call_stub();
-  } else if (is_virtual && !target->can_be_statically_bound()) {
-    // Jeandle currently implements only C2's UseInlineCaches == true path
-    // for virtual calls; direct vtable-index dispatch is not supported.
-    call_type = JeandleCompiledCall::DYNAMIC_CALL;
-    resolve_stub = SharedRuntime::get_resolve_virtual_call_stub();
-    dynamic_call = true;
-  } else {
-    // This covers C2's optimized-virtual path, including invokespecial and
-    // statically bound invokevirtual calls.
-    call_type = JeandleCompiledCall::STATIC_CALL;
-    resolve_stub = SharedRuntime::get_resolve_opt_virtual_call_stub();
-  }
-  assert(resolve_stub != nullptr, "Java call resolver must be available");
-
-  std::string callee_name = JeandleFuncSig::method_name_with_signature(
-      const_cast<ciMethod*>(target));
-  if (dynamic_call) {
-    callee_name = std::string("__jeandle_dynamic_call.") + callee_name;
-  }
-
-  llvm::FunctionCallee callee = _interp->_module.getOrInsertFunction(
-      callee_name, function_type);
-  llvm::Function* callee_function =
-      llvm::cast<llvm::Function>(callee.getCallee());
-  callee_function->setCallingConv(llvm::CallingConv::Hotspot_JIT);
-  callee_function->setGC(llvm::jeandle::JeandleGC);
-  callee_function->addFnAttr(llvm::Attribute::get(
-      *_interp->_context, llvm::jeandle::Attribute::JavaMethod,
-      std::to_string(reinterpret_cast<uintptr_t>(target))));
-  if (target->is_accessor()) {
-    callee_function->addFnAttr(llvm::Attribute::get(
-        *_interp->_context, llvm::jeandle::Attribute::JavaAccessorMethod));
-  }
-
-  uint32_t statepoint_id = _interp->_compiled_code.next_statepoint_id();
-  _interp->_compiled_code.push_non_routine_call_site(
-      new CallSiteInfo(call_type, resolve_stub, false, statepoint_id));
-
-  // Keep the receiver on the JVM stack so the deopt bundle describes the
-  // original clone invocation rather than a post-call stack.
-  JeandleAbstractInterpreter::DispatchedDest dispatched =
-      _interp->dispatch_exception_for_invoke(deoptimize_on_exception);
-  RETURN_ON_JEANDLE_ERROR(nullptr);
-
-  llvm::InvokeInst* invoke = _interp->_ir_builder.CreateInvoke(
-      callee, dispatched._normal_dest, dispatched._unwind_dest, args,
-      {_interp->create_current_deopt_bundle()});
-  _interp->_ir_builder.SetInsertPoint(dispatched._normal_dest);
-  _interp->_block->set_tail_llvm_block(dispatched._normal_dest);
-
-  invoke->setCallingConv(llvm::CallingConv::Hotspot_JIT);
-  invoke->addFnAttr(llvm::Attribute::get(
-      *_interp->_context, llvm::jeandle::Attribute::StatepointID,
-      std::to_string(statepoint_id)));
-  invoke->addFnAttr(llvm::Attribute::get(
-      *_interp->_context, llvm::jeandle::Attribute::StatepointNumPatchBytes,
-      std::to_string(JeandleCompiledCall::call_site_patch_size(call_type))));
-  invoke->addFnAttr(llvm::Attribute::get(
-      *_interp->_context, llvm::jeandle::Attribute::Bytecode,
-      Bytecodes::name(_interp->_bytecodes.cur_bc_raw())));
-  invoke->addFnAttr(llvm::Attribute::get(
-      *_interp->_context, llvm::jeandle::Attribute::DeclaredHolder,
-      std::to_string(reinterpret_cast<uintptr_t>(
-          ciEnv::get_instance_klass_for_declared_method_holder(
-              target->holder())))));
-
-  if (resolve_stub == SharedRuntime::get_resolve_opt_virtual_call_stub()) {
-    assert(!is_static && !args.empty(), "optimized virtual call needs receiver");
-    invoke->addParamAttr(0, llvm::Attribute::NoUndef);
-  }
-  if (call_type != JeandleCompiledCall::DYNAMIC_CALL) {
-    invoke->addFnAttr(llvm::Attribute::get(
-        *_interp->_context, llvm::jeandle::Attribute::MonomorphicTarget));
-  }
-  if (res_not_null) {
-    assert(return_type == T_OBJECT, "");
-    invoke->addRetAttr(llvm::Attribute::NonNull);
-  }
-  attach_java_klass_ret_attr(
-      invoke, signature->return_type(), *_interp->_context);
-  return invoke;
-}
-
 // =============================================================================
 // emit_llvm_builtin — emit a llvm.* intrinsic call
 // =============================================================================
@@ -1640,7 +1519,8 @@ bool JeandleIntrinsicLowering::lower_hash_code(vmIntrinsics::ID id) {
   llvm::InvokeInst* slow_call = _interp->emit_java_call(
       target, declared_holder, _target->signature(), {obj},
       /*has_receiver=*/!is_identity,
-      /*is_method_handle_invoke=*/false, bc);
+      /*is_method_handle_invoke=*/false, bc,
+      /*call_does_dispatch=*/needs_virtual_guard);
   RETURN_ON_JEANDLE_ERROR(true);
   llvm::Value* slow_result = slow_call;
   builder.CreateBr(merge_bb);
@@ -2817,7 +2697,7 @@ bool JeandleIntrinsicLowering::lower_native_clone() {
   }
 
   // Accumulate instance guard failures in the same slow region as C2. A
-  // virtual-target mismatch reaches generate_method_call() below, which emits
+  // virtual-target mismatch reaches emit_java_call() below, which emits
   // a dynamic Java call so that an overriding clone() is invoked.
   llvm::BasicBlock* slow_region =
       llvm::BasicBlock::Create(ctx, "clone_slow", f, result_bb);
@@ -2858,11 +2738,14 @@ bool JeandleIntrinsicLowering::lower_native_clone() {
     // Match C2's generate_method_call(). In the virtual case this must be a
     // real dynamic Java call so a subclass override of clone() is selected;
     // a fixed clone_object() runtime entry would bypass that override.
-    llvm::CallBase* slow_result = generate_method_call(
-        _target, is_virtual, false, true /* res_not_null */, {obj},
-        true /* deoptimize_on_exception */);
+    llvm::CallBase* slow_result = _interp->emit_java_call(
+        const_cast<ciMethod*>(_target), declared_holder, _target->signature(),
+        {obj}, /*has_receiver=*/true, /*is_method_handle_invoke=*/false, bc,
+        /*call_does_dispatch=*/is_virtual,
+        /*deoptimize_on_exception=*/true,
+        /*result_is_non_null=*/true);
 
-    // The builder insertion point comes from emit_callsite().
+    // The builder insertion point comes from emit_java_call().
     // Present the results of the slow call.
     llvm::BasicBlock* slow_call_control = b.GetInsertBlock();
     b.CreateBr(result_bb);

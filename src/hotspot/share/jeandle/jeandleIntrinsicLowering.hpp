@@ -148,19 +148,6 @@ class JeandleIntrinsicLowering : public StackObj {
                                 const CallSiteAttributeMetadata& attrs,
                                 bool is_gc_leaf_entry = false);
 
-  // C2's LibraryCallKit::generate_method_call() counterpart.  This emits a
-  // Java invoke with the normal Jeandle call-site protocol, including the
-  // selected static/optimized-virtual/dynamic call kind, exception edge,
-  // deoptimization state, and relocation metadata.  The arguments are
-  // supplied explicitly because intrinsic lowering must keep the original
-  // JVM stack intact until the deopt state has been captured.
-  llvm::InvokeInst* generate_method_call(const ciMethod* target,
-                                         bool is_virtual,
-                                         bool is_static,
-                                         bool res_not_null,
-                                         llvm::ArrayRef<llvm::Value*> args,
-                                         bool deoptimize_on_exception = false);
-
   // Emit a llvm.* builtin. Pops all Java args from the JVM stack (from signature),
   // appends extra_args, creates the intrinsic call, and pushes the result.
   bool emit_llvm_builtin(llvm::Intrinsic::ID llvm_id,

@@ -2110,9 +2110,12 @@ void JeandleAbstractInterpreter::invoke() {
     args[0] = _jvm->pop(BasicType::T_OBJECT);
   }
 
-  llvm::InvokeInst* invoke = emit_java_call(target, holder, method_signature,
-                                             args, receiver != 0,
-                                             is_method_handle_invoke, bc);
+  const bool call_does_dispatch =
+      (bc == Bytecodes::_invokevirtual || bc == Bytecodes::_invokeinterface) &&
+      !target->can_be_statically_bound();
+  llvm::InvokeInst* invoke = emit_java_call(
+      target, holder, method_signature, args, receiver != 0,
+      is_method_handle_invoke, bc, call_does_dispatch);
   RETURN_VOID_ON_JEANDLE_ERROR();
 
   BasicType return_type = method_signature->return_type()->basic_type();
@@ -2127,8 +2130,16 @@ llvm::InvokeInst* JeandleAbstractInterpreter::emit_java_call(ciMethod* target,
                                                               llvm::ArrayRef<llvm::Value*> args,
                                                               bool has_receiver,
                                                               bool is_method_handle_invoke,
-                                                              Bytecodes::Code bc) {
+                                                              Bytecodes::Code bc,
+                                                              bool call_does_dispatch,
+                                                              bool deoptimize_on_exception,
+                                                              bool result_is_non_null) {
   assert(declared_holder != nullptr, "declared holder must be available");
+  assert(!call_does_dispatch ||
+             ((bc == Bytecodes::_invokevirtual ||
+               bc == Bytecodes::_invokeinterface) &&
+              has_receiver && !target->can_be_statically_bound()),
+         "only non-statically-bound virtual calls may dispatch");
   const int arg_count = method_signature->count() + (has_receiver ? 1 : 0);
   assert(static_cast<int>(args.size()) == arg_count,
          "argument count mismatch: expected %d, got %zu", arg_count, args.size());
@@ -2147,8 +2158,7 @@ llvm::InvokeInst* JeandleAbstractInterpreter::emit_java_call(ciMethod* target,
   BasicType return_type = method_signature->return_type()->basic_type();
   llvm::FunctionType* func_type = llvm::FunctionType::get(JeandleType::java2llvm(return_type, *_context), args_type, false);
   std::string callee_name = JeandleFuncSig::method_name_with_signature(target);
-  if ((bc == Bytecodes::_invokevirtual || bc == Bytecodes::_invokeinterface) &&
-      !target->can_be_statically_bound()) {
+  if (call_does_dispatch) {
     // Keep dynamic calls distinct from Java function definitions so LLVM
     // cannot resolve a virtual call as a direct call to a same-named symbol.
     callee_name = std::string("__jeandle_dynamic_call.") + callee_name;
@@ -2173,12 +2183,12 @@ llvm::InvokeInst* JeandleAbstractInterpreter::emit_java_call(ciMethod* target,
   switch (bc) {
     case Bytecodes::_invokevirtual:  // fall through
     case Bytecodes::_invokeinterface: {
-      if (target->can_be_statically_bound()) {
-        call_type = JeandleCompiledCall::STATIC_CALL;
-        dest = SharedRuntime::get_resolve_opt_virtual_call_stub();
-      } else {
+      if (call_does_dispatch) {
         call_type = JeandleCompiledCall::DYNAMIC_CALL;
         dest = SharedRuntime::get_resolve_virtual_call_stub();
+      } else {
+        call_type = JeandleCompiledCall::STATIC_CALL;
+        dest = SharedRuntime::get_resolve_opt_virtual_call_stub();
       }
       break;
     }
@@ -2214,7 +2224,8 @@ llvm::InvokeInst* JeandleAbstractInterpreter::emit_java_call(ciMethod* target,
   _compiled_code.push_non_routine_call_site(new CallSiteInfo(call_type, dest, is_method_handle_invoke, id));
 
   // Every invoke instruction may throw exceptions, handle them here.
-  DispatchedDest dispatched = dispatch_exception_for_invoke();
+  DispatchedDest dispatched =
+      dispatch_exception_for_invoke(deoptimize_on_exception);
   RETURN_ON_JEANDLE_ERROR(nullptr);
 
   // Create the invoke instruction with deopt operands.
@@ -2257,6 +2268,10 @@ llvm::InvokeInst* JeandleAbstractInterpreter::emit_java_call(ciMethod* target,
     llvm::Attribute method_handle_intrinsic_name = llvm::Attribute::get(
         *_context, llvm::jeandle::Attribute::MhIntrinsicName, vmIntrinsics::name_at(target->intrinsic_id()));
       invoke->addFnAttr(method_handle_intrinsic_name);
+  }
+  if (result_is_non_null) {
+    assert(return_type == T_OBJECT, "non-null result must be an object");
+    invoke->addRetAttr(llvm::Attribute::NonNull);
   }
 
   // Attach java-klass return type attribute to the call site.

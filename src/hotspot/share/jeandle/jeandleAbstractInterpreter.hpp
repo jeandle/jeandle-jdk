@@ -401,14 +401,18 @@ class JeandleAbstractInterpreter : public StackObj {
   bool try_lower_intrinsic(const ciMethod* target);
 
   // Emit a Java call with pre-built argument values. Does NOT touch the JVM
-  // stack — the caller manages stack discipline.
+  // stack — the caller manages stack discipline. call_does_dispatch is the
+  // result of call-site target analysis and may differ from the bytecode kind.
   llvm::InvokeInst* emit_java_call(ciMethod* target,
                                    ciKlass* declared_holder,
                                    const ciSignature* method_signature,
                                    llvm::ArrayRef<llvm::Value*> args,
                                    bool has_receiver,
                                    bool is_method_handle_invoke,
-                                   Bytecodes::Code bc);
+                                   Bytecodes::Code bc,
+                                   bool call_does_dispatch,
+                                   bool deoptimize_on_exception = false,
+                                   bool result_is_non_null = false);
   void stack_op(Bytecodes::Code code);
   void shift_op(BasicType type, Bytecodes::Code code);
   void checkcast();
