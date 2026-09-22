@@ -1335,6 +1335,18 @@ slow_path:
   ret void
 }
 
+; String compress/encode checks need the OR of two extracted error words.
+; Keep only this scalar OR behind a JavaOp until phase 9 (after O3), so
+; VectorCombine cannot replace the independent extracts with a dependent
+; shuffle/vector-OR/extract chain. The latter is slower on the measured AArch64
+; kernels. Scalar arguments also keep the JavaOp body free of that pattern.
+; This pure, GC-leaf operation is expanded by the existing JavaOperationLower(9)
+; and removed by JavaOperationDeletion; no runtime call or new pass is needed.
+define private hotspotcc i64 @jeandle.string_error_bits(i64 %low, i64 %high) noinline willreturn memory(none) "lower-phase"="9" #0 {
+  %encode_scalar_error = or i64 %low, %high
+  ret i64 %encode_scalar_error
+}
+
 declare i1 @llvm.expect.with.probability.i1(i1, i1, double) nounwind readnone
 
 attributes #0 = { nounwind "gc-leaf-function" }

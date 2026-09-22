@@ -310,6 +310,14 @@
       llvm::Type::getInt32Ty(context),                                              \
       llvm::Type::getInt32Ty(context))                                              \
                                                                                     \
+  def(StubRoutines_chacha20Block,                                                   \
+      StubRoutines::chacha20Block(),                                                \
+      true,                                                                         \
+      true,                                                                         \
+      llvm::Type::getInt32Ty(context),                                              \
+      llvm::PointerType::get(context, llvm::jeandle::AddrSpace::JavaHeapAddrSpace), \
+      llvm::PointerType::get(context, llvm::jeandle::AddrSpace::JavaHeapAddrSpace)) \
+                                                                                    \
   def(StubRoutines_sha1_implCompress,                                               \
       StubRoutines::sha1_implCompress(),                                            \
       true,                                                                         \

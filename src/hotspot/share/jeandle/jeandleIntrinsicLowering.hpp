@@ -131,6 +131,7 @@ class JeandleIntrinsicLowering : public StackObj {
   static bool cpu_supports_popcount();          // bitCount_i/bitCount_l
   static bool cpu_supports_spin_wait();         // onSpinWait
   static bool supports_vectorized_mismatch_medium_path();
+  static bool cpu_supports_string_simd();
 
   // ========================================================================
   // Shared emit helpers
@@ -216,10 +217,23 @@ class JeandleIntrinsicLowering : public StackObj {
   bool lower_unsafe_allocate_instance();
   bool lower_object_notify(vmIntrinsics::ID id);
   bool lower_vectorized_mismatch();
+  bool lower_chacha20_block();
   bool lower_arraycopy();
   // StringUTF16 trusted single-code-unit access. The byte[] backing stores
   // UTF16 values in the platform's native byte order.
   bool lower_string_char_access(bool is_store);
+  bool lower_string_compress(bool src_is_char_array, bool ascii_only = false,
+                             bool return_prefix_length = false);
+  bool lower_string_inflate(bool dst_is_char_array);
+  llvm::Value* emit_string_compress(llvm::Value* src, llvm::Value* dst,
+                                    llvm::Value* len, bool ascii_only);
+  void emit_string_inflate(llvm::Value* src, llvm::Value* dst, llvm::Value* len);
+  static unsigned simd_lanes(llvm::Type* elem_ty);
+  llvm::Value* load_vec_widened(llvm::Value* base, llvm::Type* elem_ty,
+                               llvm::Type* cmp_ty, llvm::Value* pos, unsigned lanes);
+  llvm::LoadInst* load_heap_elem(llvm::Type* elem_ty, llvm::Value* addr,
+                                 const llvm::Twine& name);
+
   llvm::Value* emit_vectorized_mismatch_small(llvm::Value* a_addr,
                                               llvm::Value* b_addr,
                                               llvm::Value* byte_length,

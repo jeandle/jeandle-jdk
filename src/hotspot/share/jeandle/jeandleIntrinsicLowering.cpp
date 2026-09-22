@@ -22,8 +22,10 @@
 #include "jeandle/__llvmHeadersBegin__.hpp"
 #include "llvm/ADT/FloatingPointMode.h"
 #include "llvm/Analysis/ConstantFolding.h"
+#include "llvm/Analysis/VectorUtils.h"
 #include "llvm/IR/Jeandle/Attributes.h"
 #include "llvm/IR/Jeandle/JavaType.h"
+#include "llvm/IR/Jeandle/Metadata.h"
 #include "llvm/IR/Constants.h"
 #include "llvm/IR/DerivedTypes.h"
 #include "llvm/IR/MDBuilder.h"
@@ -59,6 +61,24 @@
 #include "utilities/globalDefinitions.hpp"
 
 #include <cstring>
+
+// Intrinsic-generated loops have no independent Java deopt state for a poll.
+static void skip_safepoint_coverage_verifier(llvm::Module& module) {
+  module.getOrInsertNamedMetadata(
+      llvm::jeandle::Metadata::SkipSafepointCoverageVerifier);
+}
+
+static void emit_pea_materialization_marker(
+    llvm::IRBuilder<>& builder, llvm::Value* src, llvm::Value* dst) {
+  llvm::Function* sideeffect = llvm::Intrinsic::getOrInsertDeclaration(
+      builder.GetInsertBlock()->getModule(), llvm::Intrinsic::sideeffect);
+  llvm::SmallVector<llvm::Value*, 2> objects = {src, dst};
+  llvm::OperandBundleDef bundle("jeandle.pea.materialize", objects);
+  llvm::CallInst* marker = builder.CreateCall(sideeffect, {}, {bundle});
+  // Override the unknown bundle's default heap effects on this call only.
+  // Generic LLVM capture tracking remains conservative for bundle operands.
+  marker->setMemoryEffects(llvm::MemoryEffects::inaccessibleMemOnly());
+}
 
 // =============================================================================
 // Call-site IR annotation helpers (migrated from JeandleIntrinsicIRSemantics)
@@ -174,9 +194,6 @@ bool JeandleIntrinsicLowering::is_supported(vmIntrinsics::ID id) {
 
     case vmIntrinsics::_onSpinWait:
       return cpu_supports_spin_wait();
-
-    case vmIntrinsics::_vectorizedMismatch:
-      return UseVectorizedMismatchIntrinsic;
 
     // floatToFloat16/float16ToFloat: gated on the same
     // VM_Version::supports_float16() predicate that turns on the template
@@ -360,6 +377,10 @@ bool JeandleIntrinsicLowering::is_supported(vmIntrinsics::ID id) {
     case vmIntrinsics::_multiplyHigh:
     case vmIntrinsics::_unsignedMultiplyHigh:
 
+    // These stub intrinsics use the common VM flag filtering in the caller.
+    case vmIntrinsics::_vectorizedMismatch:
+    case vmIntrinsics::_chacha20Block:
+
     // arraycopy
     case vmIntrinsics::_arraycopy:
     // hash code
@@ -373,6 +394,15 @@ bool JeandleIntrinsicLowering::is_supported(vmIntrinsics::ID id) {
     case vmIntrinsics::_sha2_implCompress:
     case vmIntrinsics::_sha5_implCompress:
     case vmIntrinsics::_sha3_implCompress:
+
+    // String copy and encoding; lowering checks CPU support.
+    case vmIntrinsics::_compressStringC:
+    case vmIntrinsics::_compressStringB:
+    case vmIntrinsics::_inflateStringC:
+    case vmIntrinsics::_inflateStringB:
+    case vmIntrinsics::_encodeISOArray:
+    case vmIntrinsics::_encodeByteISOArray:
+    case vmIntrinsics::_encodeAsciiArray:
 
     // StringUTF16 trusted single-code-unit access
     case vmIntrinsics::_getCharStringU:
@@ -562,6 +592,9 @@ bool JeandleIntrinsicLowering::lower(vmIntrinsics::ID id, const ciMethod* target
     case vmIntrinsics::_vectorizedMismatch:
       return lower_vectorized_mismatch();
 
+    case vmIntrinsics::_chacha20Block:
+      return lower_chacha20_block();
+
     // newArray
     case vmIntrinsics::_newArray:
       return lower_new_array();
@@ -669,6 +702,28 @@ bool JeandleIntrinsicLowering::lower(vmIntrinsics::ID id, const ciMethod* target
     case vmIntrinsics::_identityHashCode:
     case vmIntrinsics::_hashCode:
       return lower_hash_code(id);
+
+    // String copy and prefix encoding
+    case vmIntrinsics::_compressStringC:
+      return lower_string_compress(/*src_is_char_array=*/true);
+    case vmIntrinsics::_compressStringB:
+      return lower_string_compress(/*src_is_char_array=*/false);
+    case vmIntrinsics::_inflateStringC:
+      return lower_string_inflate(/*dst_is_char_array=*/true);
+    case vmIntrinsics::_inflateStringB:
+      return lower_string_inflate(/*dst_is_char_array=*/false);
+    case vmIntrinsics::_encodeISOArray:
+      return lower_string_compress(/*src_is_char_array=*/true,
+                                   /*ascii_only=*/false,
+                                   /*return_prefix_length=*/true);
+    case vmIntrinsics::_encodeByteISOArray:
+      return lower_string_compress(/*src_is_char_array=*/false,
+                                   /*ascii_only=*/false,
+                                   /*return_prefix_length=*/true);
+    case vmIntrinsics::_encodeAsciiArray:
+      return lower_string_compress(/*src_is_char_array=*/true,
+                                   /*ascii_only=*/true,
+                                   /*return_prefix_length=*/true);
 
     // StringUTF16 trusted single-code-unit access.
     case vmIntrinsics::_getCharStringU:
@@ -2389,16 +2444,45 @@ bool JeandleIntrinsicLowering::lower_unsafe_allocate_instance() {
   return true;
 }
 
+// ChaCha20Cipher.chaCha20Block validates int[16] and byte[1024] before
+// invoking the private candidate, as required by the platform stub.
+bool JeandleIntrinsicLowering::lower_chacha20_block() {
+  assert(JeandleRuntimeRoutine::find_routine_entry("StubRoutines_chacha20Block") != nullptr,
+         "ChaCha20 stub must be initialized");
+
+  llvm::Value* result = _interp->_jvm->peek_value(0).value();
+  llvm::Value* state = _interp->_jvm->peek_value(1).value();
+  _interp->null_check(state);
+  _interp->null_check(result);
+
+  llvm::IRBuilder<>& b = _interp->_ir_builder;
+  llvm::Type* i8 = b.getInt8Ty();
+
+  _interp->_jvm->apop(); // result
+  _interp->_jvm->apop(); // state
+  llvm::Value* state_base = b.CreateInBoundsGEP(
+      i8, state, b.getInt32(arrayOopDesc::base_offset_in_bytes(T_INT)),
+      "chacha20_state_base");
+  llvm::Value* result_base = b.CreateInBoundsGEP(
+      i8, result, b.getInt32(arrayOopDesc::base_offset_in_bytes(T_BYTE)),
+      "chacha20_result_base");
+  static constexpr CallSiteAttributeMetadata attrs = {CTRL_NONE, MEM_READ | MEM_WRITE};
+  llvm::CallBase* call = emit_callsite(
+      JeandleRuntimeRoutine::StubRoutines_chacha20Block_callee(_interp->_module),
+      llvm::CallingConv::C, {state_base, result_base}, attrs,
+      /*is_gc_leaf_entry=*/true);
+  _interp->_jvm->ipush(call);
+  return true;
+}
+
 // ---- lower_vectorized_mismatch ----
 //
 // Use LLVM IR for byte ranges too small to benefit from the platform stub. The
 // larger ranges retain the platform StubRoutines implementation, including its
 // vector tiers where available.
 bool JeandleIntrinsicLowering::lower_vectorized_mismatch() {
-  if (!UseVectorizedMismatchIntrinsic ||
-      JeandleRuntimeRoutine::find_routine_entry("StubRoutines_vectorizedMismatch") == nullptr) {
-    return false;
-  }
+  assert(JeandleRuntimeRoutine::find_routine_entry("StubRoutines_vectorizedMismatch") != nullptr,
+         "vectorizedMismatch stub must be initialized");
 
   llvm::IRBuilder<>& b = _interp->_ir_builder;
   llvm::Type* i8 = b.getInt8Ty();
@@ -3096,6 +3180,606 @@ bool JeandleIntrinsicLowering::lower_arraycopy() {
         ctx, llvm::jeandle::Attribute::ArrayCopyNegativeLengthGuard));
   }
   return true;
+}
+
+unsigned JeandleIntrinsicLowering::simd_lanes(llvm::Type* elem_ty) {
+  return 128u / elem_ty->getIntegerBitWidth();
+}
+
+llvm::Value* JeandleIntrinsicLowering::load_vec_widened(llvm::Value* base, llvm::Type* elem_ty,
+                                                        llvm::Type* cmp_ty, llvm::Value* pos,
+                                                        unsigned lanes) {
+  llvm::IRBuilder<>& b = _interp->_ir_builder;
+  llvm::Value* addr = b.CreateInBoundsGEP(elem_ty, base, pos, "cmp_vaddr");
+  unsigned elem_bytes = elem_ty->getIntegerBitWidth() / 8;
+  llvm::Value* vec = b.CreateAlignedLoad(llvm::FixedVectorType::get(elem_ty, lanes), addr,
+                                         llvm::Align(elem_bytes), "cmp_vload");
+  if (elem_ty != cmp_ty) {
+    vec = b.CreateZExt(vec, llvm::FixedVectorType::get(cmp_ty, lanes), "cmp_vwiden");
+  }
+  return vec;
+}
+
+llvm::LoadInst* JeandleIntrinsicLowering::load_heap_elem(llvm::Type* elem_ty, llvm::Value* addr,
+                                                         const llvm::Twine& name) {
+  llvm::LoadInst* ld = _interp->_ir_builder.CreateLoad(elem_ty, addr, name);
+  ld->setAtomic(llvm::AtomicOrdering::Unordered);
+  return ld;
+}
+
+// ---- lower_string_compress ----
+// StringUTF16.compress(char[]/byte[], int, byte[], int, int), plus the
+// StringCoding ISO/ASCII prefix encoders. Valid non-aliasing inputs use
+// explicit vector IR; other cases reexecute Java before any destination write.
+bool JeandleIntrinsicLowering::lower_string_compress(bool src_is_char_array,
+                                                     bool ascii_only,
+                                                     bool return_prefix_length) {
+  assert(_target->is_static(), "String UTF16 encode candidate is static");
+  if (!cpu_supports_string_simd() ||
+      !_interp->_module.getDataLayout().isLittleEndian() ||
+      _interp->too_many_traps(_interp->_method, _interp->_bytecodes.cur_bci(),
+                              Deoptimization::Reason_intrinsic)) {
+    return false;
+  }
+  skip_safepoint_coverage_verifier(_interp->_module);
+  llvm::IRBuilder<>& b = _interp->_ir_builder;
+  llvm::Type* i8  = b.getInt8Ty();
+  llvm::Type* i16 = b.getInt16Ty();
+
+  // Stack bottom -> top: src, srcOff, dst, dstOff, len.
+  llvm::Value* len     = _interp->_jvm->peek_value(0).value();
+  llvm::Value* dst_off = _interp->_jvm->peek_value(1).value();
+  llvm::Value* dst     = _interp->_jvm->peek_value(2).value();
+  llvm::Value* src_off = _interp->_jvm->peek_value(3).value();
+  llvm::Value* src     = _interp->_jvm->peek_value(4).value();
+
+  // Keep the arguments on the stack for the original invoke's deopt state.
+  // Null follows the normal implicit-null-check/Java exception path. As in
+  // C2, callers are responsible for the non-overlap contract of the copy.
+  _interp->null_check(src);
+  _interp->null_check(dst);
+  llvm::BasicBlock* range_slow = nullptr;
+  if (!return_prefix_length) {
+    // Match C2's StringUTF16.compress range checks: an occasional bad range
+    // reexecutes Java without immediately discarding the compiled method.
+    range_slow = llvm::BasicBlock::Create(
+        *_interp->_context, "encode_range_reexecute", _interp->_llvm_func);
+    _interp->uncommon_trap(Deoptimization::Reason_intrinsic,
+                           Deoptimization::Action_maybe_recompile, range_slow);
+  } else {
+    // Preserve the existing prefix-encoder range policy; only null admission
+    // failures use the less destructive action above.
+    range_slow = llvm::BasicBlock::Create(
+        *_interp->_context, "encode_range_reexecute", _interp->_llvm_func);
+    _interp->uncommon_trap(Deoptimization::Reason_intrinsic,
+                           Deoptimization::Action_make_not_entrant, range_slow);
+  }
+  generate_negative_guard(len, range_slow);
+  generate_negative_guard(src_off, range_slow);
+  generate_negative_guard(dst_off, range_slow);
+
+  // Check logical characters, not physical UTF16 bytes. With non-negative
+  // int offsets and length, their sum fits uint32_t; the existing unsigned
+  // limit guard also catches signed-int overflow.
+  llvm::Value* src_length = _interp->call_java_op("jeandle.arraylength", {src});
+  if (!src_is_char_array) {
+    src_length = b.CreateLShr(src_length, b.getInt32(1));
+  }
+  generate_limit_guard(src_off, len, src_length, range_slow);
+  generate_limit_guard(dst_off, len, _interp->call_java_op("jeandle.arraylength", {dst}), range_slow);
+  emit_pea_materialization_marker(b, src, dst);
+  _interp->_block->set_tail_llvm_block(b.GetInsertBlock());
+
+  _interp->_jvm->ipop();
+  _interp->_jvm->ipop();
+  _interp->_jvm->apop();
+  _interp->_jvm->ipop();
+  _interp->_jvm->apop();
+
+  int src_base_offset = arrayOopDesc::base_offset_in_bytes(
+      src_is_char_array ? T_CHAR : T_BYTE);
+  llvm::Value* src_data = b.CreateInBoundsGEP(
+      i8, src, b.getInt32(src_base_offset), "encode_src_data");
+  llvm::Value* src16    = b.CreateInBoundsGEP(
+      i16, src_data, src_off, "encode_src");
+
+  llvm::Value* dst_data = b.CreateInBoundsGEP(
+      i8, dst, b.getInt32(arrayOopDesc::base_offset_in_bytes(T_BYTE)), "encode_dst_data");
+  llvm::Value* dst8     = b.CreateInBoundsGEP(
+      i8, dst_data, dst_off, "encode_dst");
+
+  llvm::Value* count = emit_string_compress(src16, dst8, len, ascii_only);
+  // Preserve the exact prefix writes, including on compression failure.
+  _interp->_jvm->ipush(return_prefix_length ? count :
+                       b.CreateSelect(b.CreateICmpEQ(count, len), len, b.getInt32(0)));
+  return true;
+}
+
+// ---- lower_string_inflate ----
+// StringLatin1.inflate(byte[], int, char[]/byte[], int, int). Check ranges in
+// characters; a UTF16 byte[] destination has two physical bytes per character.
+bool JeandleIntrinsicLowering::lower_string_inflate(bool dst_is_char_array) {
+  assert(_target->is_static(), "StringLatin1.inflate is static");
+  if (!cpu_supports_string_simd() ||
+      !_interp->_module.getDataLayout().isLittleEndian() ||
+      _interp->too_many_traps(_interp->_method, _interp->_bytecodes.cur_bci(),
+                              Deoptimization::Reason_intrinsic)) {
+    return false;
+  }
+  skip_safepoint_coverage_verifier(_interp->_module);
+  llvm::IRBuilder<>& b = _interp->_ir_builder;
+  llvm::Type* i8  = b.getInt8Ty();
+  llvm::Type* i16 = b.getInt16Ty();
+
+  // Stack bottom -> top: src, srcOff, dst, dstOff, len.
+  llvm::Value* len     = _interp->_jvm->peek_value(0).value();
+  llvm::Value* dst_off = _interp->_jvm->peek_value(1).value();
+  llvm::Value* dst     = _interp->_jvm->peek_value(2).value();
+  llvm::Value* src_off = _interp->_jvm->peek_value(3).value();
+  llvm::Value* src     = _interp->_jvm->peek_value(4).value();
+
+  // Keep null handling aligned with C2's implicit-null-check path. As in C2,
+  // callers are responsible for the non-overlap contract of the copy.
+  _interp->null_check(src);
+  _interp->null_check(dst);
+  // Match C2's range-trap policy.
+  llvm::BasicBlock* range_slow = llvm::BasicBlock::Create(
+      *_interp->_context, "inflate_range_reexecute", _interp->_llvm_func);
+  _interp->uncommon_trap(Deoptimization::Reason_intrinsic,
+                         Deoptimization::Action_maybe_recompile, range_slow);
+  generate_negative_guard(len, range_slow);
+  generate_negative_guard(src_off, range_slow);
+  generate_negative_guard(dst_off, range_slow);
+  generate_limit_guard(src_off, len, _interp->call_java_op("jeandle.arraylength", {src}), range_slow);
+  llvm::Value* dst_length = _interp->call_java_op("jeandle.arraylength", {dst});
+  if (!dst_is_char_array) {
+    dst_length = b.CreateLShr(dst_length, b.getInt32(1));
+  }
+  generate_limit_guard(dst_off, len, dst_length, range_slow);
+  emit_pea_materialization_marker(b, src, dst);
+  _interp->_block->set_tail_llvm_block(b.GetInsertBlock());
+
+  _interp->_jvm->ipop();
+  _interp->_jvm->ipop();
+  _interp->_jvm->apop();
+  _interp->_jvm->ipop();
+  _interp->_jvm->apop();
+
+  llvm::Value* src_data = b.CreateInBoundsGEP(
+      i8, src, b.getInt32(arrayOopDesc::base_offset_in_bytes(T_BYTE)), "inflate_src_data");
+  llvm::Value* src8     = b.CreateInBoundsGEP(
+      i8, src_data, src_off, "inflate_src");
+
+  int dst_base_offset = arrayOopDesc::base_offset_in_bytes(
+      dst_is_char_array ? T_CHAR : T_BYTE);
+  llvm::Value* dst_data = b.CreateInBoundsGEP(
+      i8, dst, b.getInt32(dst_base_offset), "inflate_dst_data");
+  llvm::Value* dst16    = b.CreateInBoundsGEP(
+      i16, dst_data, dst_off, "inflate_dst");
+
+  emit_string_inflate(src8, dst16, len);
+  return true;
+}
+
+// ---- emit_string_compress ----
+// Copy UTF16 characters to Latin1 bytes, or ASCII bytes when ascii_only is set.
+// src and dst already include the Java array offsets. len and all positions
+// count characters; each successful conversion writes one destination byte.
+// Return the encodable prefix length. lower_string_compress maps a partial
+// result to zero for StringUTF16.compress, but keeps it for the prefix encoders.
+//
+// The caller has checked both ranges and follows C2's non-overlap contract.
+// No safepoint or deopt occurs inside the copy; scalar accesses are unordered atomic, while
+// vector accesses are non-atomic as in C2. The induction bounds do not wrap.
+// The main loop uses explicit 4x unroll: four 128-bit input vectors, each
+// holding 8 UTF16 characters, process 32 characters per runtime iteration.
+// C++ for loops build this unrolled IR; the basic blocks form the runtime
+// loops. The unroll factor does not depend on LLVM's automatic loop unroller.
+llvm::Value* JeandleIntrinsicLowering::emit_string_compress(
+    llvm::Value* src, llvm::Value* dst, llvm::Value* len, bool ascii_only) {
+  llvm::IRBuilder<>& b   = _interp->_ir_builder;
+  llvm::LLVMContext& ctx = *_interp->_context;
+  llvm::Function* f      = _interp->_llvm_func;
+
+  // (1) Prepare vector types and byte-selection masks. Each input vector
+  // holds 8 UTF16 characters; two such vectors produce 16 packed bytes.
+  llvm::Type* i8  = b.getInt8Ty();
+  llvm::Type* i16 = b.getInt16Ty();
+  unsigned chars_per_vector = simd_lanes(i16);
+  constexpr unsigned vectors_per_block = 4;
+  unsigned chars_per_block = vectors_per_block * chars_per_vector;
+  llvm::Type* byte8_vector_type  =
+      llvm::FixedVectorType::get(i8, chars_per_vector);
+  llvm::Type* byte16_vector_type =
+      llvm::FixedVectorType::get(i8, 2 * chars_per_vector);
+  // The admission check requires little-endian targets: even bytes are the low bytes.
+  auto low_mask  = llvm::createStrideMask(0, 2, 2 * chars_per_vector);
+  auto high_mask = llvm::createStrideMask(1, 2, 2 * chars_per_vector);
+  // Round down to complete blocks so every vector load stays within len.
+  llvm::Value* block8_end  = b.CreateAnd(
+      len, b.getInt32(~(chars_per_vector - 1)), "encode_vec_end");
+  llvm::Value* block32_end = b.CreateAnd(
+      len, b.getInt32(~(chars_per_block - 1)), "encode_unrolled_end");
+
+  // Runtime flow: block32_loop -> block8_loop -> scalar_loop -> done.
+  // A stage also hands a failing block to the next stage at the SAME position;
+  // smaller checks then locate the first invalid character without skipping it.
+  llvm::BasicBlock* entry         = b.GetInsertBlock();
+  llvm::BasicBlock* block32_loop  =
+      llvm::BasicBlock::Create(ctx, "encode_unrolled_head", f);
+  llvm::BasicBlock* block32_check =
+      llvm::BasicBlock::Create(ctx, "encode_unrolled_body", f);
+  llvm::BasicBlock* block32_store =
+      llvm::BasicBlock::Create(ctx, "encode_unrolled_store", f);
+  llvm::BasicBlock* block8_loop   =
+      llvm::BasicBlock::Create(ctx, "encode_vec_head", f);
+  llvm::BasicBlock* block8_check  =
+      llvm::BasicBlock::Create(ctx, "encode_vec_body", f);
+  llvm::BasicBlock* block8_store  =
+      llvm::BasicBlock::Create(ctx, "encode_vec_store", f);
+  llvm::BasicBlock* scalar_loop   =
+      llvm::BasicBlock::Create(ctx, "encode_tail_head", f);
+  llvm::BasicBlock* scalar_check  =
+      llvm::BasicBlock::Create(ctx, "encode_tail_body", f);
+  llvm::BasicBlock* scalar_store  =
+      llvm::BasicBlock::Create(ctx, "encode_tail_store", f);
+  llvm::BasicBlock* done          = llvm::BasicBlock::Create(ctx, "encode_done", f);
+  b.CreateBr(block32_loop);
+
+  // (2) Main loop with 4x unroll: load 4 x 8 UTF16 characters and pack their
+  // low bytes into two 16-byte results. Check all 32 characters before storing;
+  // only a successful block advances by 32.
+  b.SetInsertPoint(block32_loop);
+  llvm::PHINode* block32_pos =
+      b.CreatePHI(b.getInt32Ty(), 2, "encode_unrolled_pos");
+  block32_pos->addIncoming(b.getInt32(0), entry);
+  b.CreateCondBr(b.CreateICmpULT(block32_pos, block32_end), block32_check,
+                 block8_loop);
+
+  b.SetInsertPoint(block32_check);
+  llvm::Value* char_offsets[vectors_per_block];
+  llvm::Value* char_vectors[vectors_per_block];
+  for (unsigned i = 0; i < vectors_per_block; ++i) {
+    char_offsets[i] = b.CreateAdd(
+        block32_pos, b.getInt32(i * chars_per_vector),
+        "encode_unrolled_offset", true, true);
+    char_vectors[i] = load_vec_widened(
+        src, i16, i16, char_offsets[i], chars_per_vector);
+  }
+  // Keep the low bytes in source order: [lo0, hi0, lo1, hi1, ...] becomes
+  // [lo0, lo1, ...]. Pairwise extraction maps to UZP1 on AArch64 and prepares
+  // two full-width stores. These bytes must not be written until validation.
+  llvm::Value* low_bytes[2];
+  for (unsigned i = 0; i < 2; ++i) {
+    low_bytes[i] = b.CreateShuffleVector(
+        b.CreateBitCast(char_vectors[2 * i], byte16_vector_type),
+        b.CreateBitCast(char_vectors[2 * i + 1], byte16_vector_type), low_mask,
+        "encode_packed");
+  }
+  // Latin1 requires every high byte to be zero. OR corresponding lanes first,
+  // then select the high bytes: any invalid character still leaves a nonzero
+  // bit. Its precise position is recovered by the smaller loops on failure.
+  llvm::Value* error_bytes = b.CreateShuffleVector(
+      b.CreateBitCast(b.CreateOr(char_vectors[0], char_vectors[1]),
+                      byte16_vector_type),
+      b.CreateBitCast(b.CreateOr(char_vectors[2], char_vectors[3]),
+                      byte16_vector_type),
+      high_mask, "encode_high_bytes");
+  if (ascii_only) {
+    // ASCII also requires bit 7 of each low byte to be zero. Merge these bits
+    // into the error bytes before testing. OR-ing two i1 predicates lets LLVM
+    // split the check into serial branches, unlike C2's combined error test.
+    llvm::Value* merged_low_bytes = b.CreateOr(low_bytes[0], low_bytes[1]);
+    llvm::Value* ascii_sign_bits  = b.CreateAnd(
+        merged_low_bytes,
+        b.CreateVectorSplat(2 * chars_per_vector, b.getInt8(0x80)));
+    error_bytes = b.CreateOr(error_bytes, ascii_sign_bits);
+  }
+  llvm::Value* error_words = b.CreateBitCast(
+      error_bytes, llvm::FixedVectorType::get(b.getInt64Ty(), 2));
+  // Reduce the 16 error bytes to a single zero/nonzero test. Keep this scalar
+  // OR opaque to O3; phase-9 JavaOp lowering expands it before code generation
+  // to preserve independent word extracts (see the template definition).
+  llvm::Value* error_bits      = _interp->call_java_op(
+      "jeandle.string_error_bits",
+      {b.CreateExtractElement(error_words, b.getInt32(0)),
+       b.CreateExtractElement(error_words, b.getInt32(1))});
+  llvm::Value* block32_invalid =
+      b.CreateICmpNE(error_bits, b.getInt64(0));
+  // A failing 32-character block has made no writes. Revisit it in 8-character
+  // blocks, then the scalar tail, to preserve the complete legal prefix.
+  b.CreateCondBr(block32_invalid, block8_loop, block32_store);
+
+  // All 32 characters are encodable: publish their bytes and advance the PHI.
+  b.SetInsertPoint(block32_store);
+  for (unsigned i = 0; i < 2; ++i) {
+    b.CreateAlignedStore(low_bytes[i],
+                         b.CreateInBoundsGEP(i8, dst, char_offsets[2 * i]),
+                         llvm::Align(1));
+  }
+  block32_pos->addIncoming(
+      b.CreateAdd(block32_pos, b.getInt32(chars_per_block),
+                  "encode_unrolled_next", true, true),
+      block32_store);
+  b.CreateBr(block32_loop);
+
+  // (3) Process 8 characters at a time, starting either at the end of the
+  // completed 32-character blocks or at the beginning of a failed block.
+  b.SetInsertPoint(block8_loop);
+  llvm::PHINode* block8_pos =
+      b.CreatePHI(b.getInt32Ty(), 3, "encode_vec_pos");
+  block8_pos->addIncoming(block32_pos, block32_loop);
+  block8_pos->addIncoming(block32_pos, block32_check);
+  b.CreateCondBr(b.CreateICmpULT(block8_pos, block8_end), block8_check,
+                 scalar_loop);
+
+  b.SetInsertPoint(block8_check);
+  llvm::Value* char_vector = load_vec_widened(
+      src, i16, i16, block8_pos, chars_per_vector);
+  llvm::Value* low_bytes8  =
+      b.CreateTrunc(char_vector, byte8_vector_type, "encode_vec_bytes");
+  // Duplicate the 8 high bytes into both halves of a 128-bit shuffle and
+  // inspect just one 64-bit half. Keeping the shuffle full-width avoids
+  // EXT + UZP2.8b when the original vector is also needed for the byte store.
+  llvm::Value* char_bytes      = b.CreateBitCast(char_vector, byte16_vector_type);
+  llvm::Value* high_bytes      = b.CreateShuffleVector(
+      char_bytes, char_bytes, high_mask, "encode_high_full");
+  llvm::Value* high_byte_words = b.CreateBitCast(
+      high_bytes, llvm::FixedVectorType::get(b.getInt64Ty(), 2));
+  llvm::Value* error_bits8     =
+      b.CreateExtractElement(high_byte_words, b.getInt32(0));
+  if (ascii_only) {
+    error_bits8 = b.CreateOr(
+        error_bits8,
+        b.CreateAnd(b.CreateBitCast(low_bytes8, b.getInt64Ty()),
+                    b.getInt64(0x8080808080808080ULL)));
+  }
+  llvm::Value* block8_invalid =
+      b.CreateICmpNE(error_bits8, b.getInt64(0));
+  // Do not store any lane from a failing block. The scalar continuation
+  // writes exactly its valid prefix, then returns at the first invalid char.
+  b.CreateCondBr(block8_invalid, scalar_loop, block8_store);
+
+  b.SetInsertPoint(block8_store);
+  b.CreateAlignedStore(low_bytes8,
+                       b.CreateInBoundsGEP(i8, dst, block8_pos), llvm::Align(1));
+  block8_pos->addIncoming(
+      b.CreateAdd(block8_pos, b.getInt32(chars_per_vector), "encode_vec_next",
+                  /*HasNUW=*/true, /*HasNSW=*/true),
+      block8_store);
+  b.CreateBr(block8_loop);
+
+  // (4) Copy individual characters until len or the first invalid character.
+  // This handles both a short remainder and a failed 8-character block.
+  // Check before each store so the first invalid character and suffix remain
+  // untouched. len == 0 goes straight to done without accessing either array.
+  b.SetInsertPoint(scalar_loop);
+  llvm::PHINode* scalar_pos =
+      b.CreatePHI(b.getInt32Ty(), 3, "encode_tail_pos");
+  scalar_pos->addIncoming(block8_pos, block8_loop);
+  scalar_pos->addIncoming(block8_pos, block8_check);
+  b.CreateCondBr(b.CreateICmpULT(scalar_pos, len), scalar_check, done);
+
+  b.SetInsertPoint(scalar_check);
+  llvm::Value* character = load_heap_elem(
+      i16, b.CreateInBoundsGEP(i16, src, scalar_pos), "encode_tail_char");
+  b.CreateCondBr(b.CreateICmpUGT(character, b.getInt16(ascii_only ? 0x7f : 0xff)),
+                 done, scalar_store);
+
+  b.SetInsertPoint(scalar_store);
+  llvm::StoreInst* write = b.CreateAlignedStore(
+      b.CreateTrunc(character, i8), b.CreateInBoundsGEP(i8, dst, scalar_pos), llvm::Align(1));
+  write->setAtomic(llvm::AtomicOrdering::Unordered);
+  scalar_pos->addIncoming(
+      b.CreateAdd(scalar_pos, b.getInt32(1), "encode_tail_next",
+                  /*HasNUW=*/true, /*HasNSW=*/true),
+      scalar_store);
+  b.CreateBr(scalar_loop);
+
+  // Resume parsing the caller here; scalar_pos is the number of bytes written.
+  b.SetInsertPoint(done);
+  _interp->_block->set_tail_llvm_block(done);
+  return scalar_pos;
+}
+
+// ---- emit_string_inflate ----
+// Copy Latin1 bytes to UTF16 characters. src and dst already include the Java
+// array offsets. len and positions count source bytes / destination characters;
+// GEP(i16, dst, pos) applies the destination's two-byte stride.
+// The caller has checked both ranges, follows C2's non-overlap contract, and
+// ensured that dst is character-aligned. No safepoint or deopt occurs inside the copy.
+// The main loop uses explicit 4x unroll: four 128-bit input vectors, each
+// holding 16 Latin1 bytes, produce 64 UTF16 characters per runtime iteration.
+// C++ for loops build this unrolled IR; the basic blocks form the runtime
+// loops. The unroll factor does not depend on LLVM's automatic loop unroller.
+void JeandleIntrinsicLowering::emit_string_inflate(
+    llvm::Value* src, llvm::Value* dst, llvm::Value* len) {
+  llvm::IRBuilder<>& b   = _interp->_ir_builder;
+  llvm::LLVMContext& ctx = *_interp->_context;
+  llvm::Function* f      = _interp->_llvm_func;
+
+  // (1) Prepare widening types and masks. One 16-byte input vector becomes
+  // 16 UTF16 characters; the smaller tier stores them in two 8-character halves.
+  llvm::Type* i8  = b.getInt8Ty();
+  llvm::Type* i16 = b.getInt16Ty();
+  unsigned chars_per_half   = simd_lanes(i16);
+  unsigned bytes_per_vector = 2 * chars_per_half;
+  llvm::Type* byte_vector_type =
+      llvm::FixedVectorType::get(i8, bytes_per_vector);
+  llvm::Type* char_vector_type =
+      llvm::FixedVectorType::get(i16, chars_per_half);
+  llvm::Value* zero_bytes = llvm::Constant::getNullValue(byte_vector_type);
+  // Interleave each byte with zero to form little-endian UTF16 characters.
+  auto zip_mask = llvm::createInterleaveMask(bytes_per_vector, 2);
+  auto zip_low  = llvm::ArrayRef<int>(zip_mask).take_front(bytes_per_vector);
+  auto zip_high = llvm::ArrayRef<int>(zip_mask).take_back(bytes_per_vector);
+  // Bound the runtime loops to complete 16-byte and 64-byte input blocks.
+  llvm::Value* block16_end = b.CreateAnd(
+      len, b.getInt32(~(bytes_per_vector - 1)), "inflate_vec_end");
+  constexpr unsigned vectors_per_large_block = 4;
+  llvm::Value* block64_end = b.CreateAnd(
+      len,
+      b.getInt32(~(vectors_per_large_block * bytes_per_vector - 1)),
+      "inflate_large_end");
+
+  // Runtime flow: 64-byte loop -> 16-byte loop -> optional 8-byte copy -> done.
+  // A final 1..7-byte remainder uses an overlapping 8-byte copy when len >= 8;
+  // inputs shorter than 8 take the scalar loop instead.
+  llvm::BasicBlock* entry        = b.GetInsertBlock();
+  llvm::BasicBlock* block64_loop =
+      llvm::BasicBlock::Create(ctx, "inflate_unrolled_head", f);
+  llvm::BasicBlock* block64_copy =
+      llvm::BasicBlock::Create(ctx, "inflate_unrolled_body", f);
+  llvm::BasicBlock* block16_loop =
+      llvm::BasicBlock::Create(ctx, "inflate_vec_head", f);
+  llvm::BasicBlock* block16_copy =
+      llvm::BasicBlock::Create(ctx, "inflate_vec_body", f);
+  llvm::BasicBlock* block8_check =
+      llvm::BasicBlock::Create(ctx, "inflate_check8", f);
+  llvm::BasicBlock* block8_copy  =
+      llvm::BasicBlock::Create(ctx, "inflate_copy8", f);
+  llvm::BasicBlock* last8_check  =
+      llvm::BasicBlock::Create(ctx, "inflate_last8", f);
+  llvm::BasicBlock* scalar_loop  =
+      llvm::BasicBlock::Create(ctx, "inflate_tail_head", f);
+  llvm::BasicBlock* scalar_copy  =
+      llvm::BasicBlock::Create(ctx, "inflate_tail_body", f);
+  llvm::BasicBlock* done         = llvm::BasicBlock::Create(ctx, "inflate_done", f);
+  b.CreateBr(block64_loop);
+
+  // (2) Main loop with 4x unroll: load 4 x 16 Latin1 bytes and widen them to
+  // 64 UTF16 characters (128 output bytes) before advancing by 64 input bytes.
+  // There is no validity check: every Latin1 byte has a UTF16 representation.
+  b.SetInsertPoint(block64_loop);
+  llvm::PHINode* block64_pos =
+      b.CreatePHI(b.getInt32Ty(), 2, "inflate_large_pos");
+  block64_pos->addIncoming(b.getInt32(0), entry);
+  b.CreateCondBr(b.CreateICmpULT(block64_pos, block64_end), block64_copy,
+                 block16_loop);
+  b.SetInsertPoint(block64_copy);
+  llvm::Value* input_vectors[vectors_per_large_block];
+  llvm::Value* byte_offsets[vectors_per_large_block];
+  for (unsigned i = 0; i < vectors_per_large_block; ++i) {
+    byte_offsets[i] = b.CreateAdd(
+        block64_pos, b.getInt32(i * bytes_per_vector),
+        "inflate_large_offset", true, true);
+    input_vectors[i] = load_vec_widened(src, i8, i8, byte_offsets[i], bytes_per_vector);
+  }
+  // Load all 64 bytes before storing, as in C2's large-array tier. Widen
+  // each full input vector before the store; splitting it into two byte
+  // shuffles makes LLVM introduce constrained ST2 pairs and zero-register
+  // copies instead of straightforward widening and paired stores.
+  llvm::Type* wide_vector_type =
+      llvm::FixedVectorType::get(i16, bytes_per_vector);
+  for (unsigned i = 0; i < vectors_per_large_block; ++i) {
+    llvm::Value* expanded = b.CreateZExt(
+        input_vectors[i], wide_vector_type, "inflate_large_chars");
+    b.CreateAlignedStore(expanded,
+                         b.CreateInBoundsGEP(i16, dst, byte_offsets[i]),
+                         llvm::Align(2));
+  }
+  block64_pos->addIncoming(
+      b.CreateAdd(block64_pos,
+                  b.getInt32(vectors_per_large_block * bytes_per_vector),
+                  "inflate_large_next", true, true),
+      block64_copy);
+  b.CreateBr(block64_loop);
+
+  // (3) After the 64-byte loop, consume the remaining complete 16-byte blocks.
+  // Interleave each input byte with zero, then store the low and high halves
+  // as consecutive groups of 8 UTF16 characters.
+  b.SetInsertPoint(block16_loop);
+  llvm::PHINode* block16_pos =
+      b.CreatePHI(b.getInt32Ty(), 2, "inflate_vec_pos");
+  block16_pos->addIncoming(block64_pos, block64_loop);
+  b.CreateCondBr(b.CreateICmpULT(block16_pos, block16_end), block16_copy,
+                 block8_check);
+
+  b.SetInsertPoint(block16_copy);
+  llvm::Value* input16    = load_vec_widened(src, i8, i8, block16_pos, bytes_per_vector);
+  llvm::Value* low_chars  = b.CreateBitCast(
+      b.CreateShuffleVector(input16, zero_bytes, zip_low), char_vector_type);
+  llvm::Value* high_chars = b.CreateBitCast(
+      b.CreateShuffleVector(input16, zero_bytes, zip_high), char_vector_type);
+  b.CreateAlignedStore(low_chars,
+                       b.CreateInBoundsGEP(i16, dst, block16_pos),
+                       llvm::Align(2));
+  llvm::Value* high_half_pos = b.CreateAdd(
+      block16_pos, b.getInt32(chars_per_half), "inflate_half", true, true);
+  b.CreateAlignedStore(high_chars,
+                       b.CreateInBoundsGEP(i16, dst, high_half_pos),
+                       llvm::Align(2));
+  block16_pos->addIncoming(
+      b.CreateAdd(block16_pos, b.getInt32(bytes_per_vector),
+                  "inflate_vec_next", true, true),
+      block16_copy);
+  b.CreateBr(block16_loop);
+
+  // (4) Fewer than 16 bytes remain. If at least 8 remain, copy one 8-byte
+  // block at block16_end. The next step handles any leftover 1..7 bytes.
+  b.SetInsertPoint(block8_check);
+  llvm::Value* bytes_after_block16 =
+      b.CreateSub(len, block16_end, "inflate_remaining", true, true);
+  b.CreateCondBr(
+      b.CreateICmpUGE(bytes_after_block16, b.getInt32(chars_per_half)),
+      block8_copy, last8_check);
+
+  b.SetInsertPoint(block8_copy);
+  llvm::Value* input8 =
+      load_vec_widened(src, i8, i16, block16_end, chars_per_half);
+  b.CreateAlignedStore(input8,
+                       b.CreateInBoundsGEP(i16, dst, block16_end),
+                       llvm::Align(2));
+  b.CreateBr(last8_check);
+
+  // (5) Cover the last partial block by copying [len - 8, len). For len == 25,
+  // the earlier steps copied [0, 16) and [16, 24); this step copies [17, 25).
+  // The repeated stores are safe because the arrays do not alias, and the
+  // vector stays entirely within the checked ranges. Multiples of 8 are done.
+  // Test len >= 8 before evaluating len - 8 or issuing the final vector load.
+  b.SetInsertPoint(last8_check);
+  llvm::BasicBlock* last8_copy   =
+      llvm::BasicBlock::Create(ctx, "inflate_last_copy", f);
+  llvm::BasicBlock* last8_needed =
+      llvm::BasicBlock::Create(ctx, "inflate_last_check", f);
+  b.CreateCondBr(b.CreateICmpULT(len, b.getInt32(chars_per_half)),
+                 scalar_loop, last8_needed);
+  b.SetInsertPoint(last8_needed);
+  b.CreateCondBr(
+      b.CreateICmpEQ(
+          b.CreateAnd(len, b.getInt32(chars_per_half - 1)), b.getInt32(0)),
+      done, last8_copy);
+  b.SetInsertPoint(last8_copy);
+  llvm::Value* last8_pos   = b.CreateSub(
+      len, b.getInt32(chars_per_half), "inflate_last_offset", true, true);
+  llvm::Value* last8_chars =
+      load_vec_widened(src, i8, i16, last8_pos, chars_per_half);
+  b.CreateAlignedStore(last8_chars,
+                       b.CreateInBoundsGEP(i16, dst, last8_pos),
+                       llvm::Align(2));
+  b.CreateBr(done);
+
+  // (6) len < 8: no vector load is safe, so widen one byte at a time from
+  // position zero. len == 0 reaches done without reading or writing data.
+  b.SetInsertPoint(scalar_loop);
+  llvm::PHINode* scalar_pos =
+      b.CreatePHI(b.getInt32Ty(), 2, "inflate_tail_pos");
+  scalar_pos->addIncoming(b.getInt32(0), last8_check);
+  b.CreateCondBr(b.CreateICmpULT(scalar_pos, len), scalar_copy, done);
+  b.SetInsertPoint(scalar_copy);
+  llvm::Value* input_byte = load_heap_elem(
+      i8, b.CreateInBoundsGEP(i8, src, scalar_pos), "inflate_tail_byte");
+  llvm::StoreInst* write = b.CreateAlignedStore(
+      b.CreateZExt(input_byte, i16), b.CreateInBoundsGEP(i16, dst, scalar_pos), llvm::Align(2));
+  write->setAtomic(llvm::AtomicOrdering::Unordered);
+  scalar_pos->addIncoming(
+      b.CreateAdd(scalar_pos, b.getInt32(1), "inflate_tail_next", true, true),
+      scalar_copy);
+  b.CreateBr(scalar_loop);
+
+  // Both the vector and scalar paths rejoin the Java caller at this block.
+  b.SetInsertPoint(done);
+  _interp->_block->set_tail_llvm_block(done);
 }
 
 // StringUTF16 trusted single-code-unit access. Its byte[] backing stores
