@@ -841,8 +841,13 @@ ciInstanceKlass* JeandleVMCallback::get_ci_instance_klass(Klass* klass) {
   if (klass == nullptr) {
     return nullptr;
   }
-  assert(klass->is_instance_klass(), "must be instance klass");
   VM_ENTRY_MARK;
+  // Array classes expose methods inherited from Object, including clone().
+  // CHA still requires an instance klass as the declared method holder.
+  if (klass->is_array_klass()) {
+    return ciEnv::current()->Object_klass();
+  }
+  assert(klass->is_instance_klass(), "must be instance or array klass");
   return ciEnv::current()->get_instance_klass(klass);
 }
 

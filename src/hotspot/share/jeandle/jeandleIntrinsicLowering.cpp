@@ -572,9 +572,7 @@ bool JeandleIntrinsicLowering::lower(vmIntrinsics::ID id, const ciMethod* target
     case vmIntrinsics::_arraycopy:
       return lower_arraycopy();
     case vmIntrinsics::_clone:
-      return lower_native_clone(
-          _interp->_bytecodes.cur_bc_raw() == Bytecodes::_invokevirtual &&
-          !target->can_be_statically_bound());
+      return lower_native_clone();
     case vmIntrinsics::_copyOf:
       return lower_array_copyOf(false);
     case vmIntrinsics::_copyOfRange:
@@ -2587,6 +2585,9 @@ bool JeandleIntrinsicLowering::lower_string_char_access(bool is_store) {
     _interp->_jvm->apop(); // value
     _interp->_jvm->ipush(result);
   }
+  return true;
+}
+
 //------------------------barrier_set_clone--------------------------------
 
 // Jeandle LLVM IR counterpart of C2 BarrierSetC2::clone().
@@ -2684,8 +2685,25 @@ void JeandleIntrinsicLowering::copy_to_clone(llvm::Value* obj,
 // Follow C2 LibraryCallKit::inline_native_clone() control order. LLVM control
 // edges carry Jeandle's memory and I/O state, so only the result value needs an
 // explicit PHI at the final merge.
-bool JeandleIntrinsicLowering::lower_native_clone(bool is_virtual) {
+bool JeandleIntrinsicLowering::lower_native_clone() {
   assert(!_target->is_static(), "Object.clone must be an instance method");
+
+  const Bytecodes::Code bc = _interp->_bytecodes.cur_bc_raw();
+  ciKlass* declared_holder =
+      _interp->_bytecodes.get_declared_method_holder();
+
+  // C2 passes call_does_dispatch through LibraryIntrinsic::is_virtual().
+  // Besides statically bound calls, C2 treats Object methods invoked on
+  // arrays as monomorphic because arrays cannot override them. Array clone
+  // bytecodes retain the array type as their declared holder, so preserve
+  // that distinction while expanding the intrinsic.
+  const bool is_virtual =
+      bc == Bytecodes::_invokevirtual &&
+      !_target->can_be_statically_bound() &&
+      (declared_holder == nullptr || !declared_holder->is_array_klass());
+
+  JeandlePreserveReexecuteState reexecute_scope(_interp);
+  _interp->_should_reexecute = true;
 
   llvm::LLVMContext& ctx = *_interp->_context;
   llvm::IRBuilder<>& b = _interp->_ir_builder;

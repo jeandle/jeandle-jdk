@@ -537,7 +537,7 @@ declare void @StubRoutines_arrayof_jbyte_disjoint_arraycopy(
     ptr addrspace(1) writeonly captures(none) %dest,
     i64 %count
 ) memory(argmem: readwrite) nounwind
- 
+
 ; jshort
 declare void @StubRoutines_jshort_arraycopy(
     ptr addrspace(1) readonly captures(none) %src,

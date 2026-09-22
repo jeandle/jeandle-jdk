@@ -239,7 +239,7 @@ class JeandleIntrinsicLowering : public StackObj {
   // UTF16 values in the platform's native byte order.
   bool lower_string_char_access(bool is_store);
   bool lower_array_copyOf(bool is_copyOfRange);
-  bool lower_native_clone(bool is_virtual);
+  bool lower_native_clone();
   void barrier_set_clone(llvm::Value* src_base,
                          llvm::Value* dst_base,
                          llvm::Value* size,

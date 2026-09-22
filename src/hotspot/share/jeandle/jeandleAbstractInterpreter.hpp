@@ -307,6 +307,7 @@ class JeandleAbstractInterpreter : public StackObj {
 
  private:
   friend class JeandleIntrinsicLowering;
+  friend class JeandlePreserveReexecuteState;
 
   JeandleParseContext _parse_context;
   ciMethod* _method;
@@ -319,6 +320,9 @@ class JeandleAbstractInterpreter : public StackObj {
   JeandleCompiledCode& _compiled_code;
   BasicBlockBuilder* _block_builder;
   llvm::IRBuilder<> _ir_builder;
+
+  /* C2 JVMState::should_reexecute equivalent for the current intrinsic scope. */
+  bool _should_reexecute = false;
 
   // The JeandleBasicBlock and its JeandleVMState currently being interpreted.
   JeandleBasicBlock* _block;
@@ -427,7 +431,7 @@ class JeandleAbstractInterpreter : public StackObj {
                                    llvm::ArrayRef<llvm::OperandBundleDef> deopt_bundle = {},
                                    bool deoptimize_on_exception = false);
 
-  llvm::OperandBundleDef create_current_deopt_bundle(bool should_reexecute = false);
+  llvm::OperandBundleDef create_current_deopt_bundle();
 
   void add_safepoint_poll();
   void add_return_safepoint_poll();
@@ -552,6 +556,19 @@ class JeandleAbstractInterpreter : public StackObj {
   }
   bool too_many_traps(ciMethod *method, int bci, Deoptimization::DeoptReason reason);
   bool too_many_traps(Deoptimization::DeoptReason reason);
+};
+
+// C2 PreserveReexecuteState equivalent. Keep the reexecute marker scoped so
+// every deopt bundle emitted while lowering an intrinsic observes one state.
+// The Jeandle prefix avoids colliding with C2's global helper of the same name.
+class JeandlePreserveReexecuteState : public StackObj {
+ public:
+  explicit JeandlePreserveReexecuteState(JeandleAbstractInterpreter* interp);
+  ~JeandlePreserveReexecuteState();
+
+ private:
+  JeandleAbstractInterpreter* _interp;
+  bool _saved;
 };
 
 #endif // SHARE_JEANDLE_ABSTRACT_INTERPRETER_HPP

@@ -134,8 +134,14 @@ public class TestObjectClone {
                                        boolean reduceInitialCardMarks) throws Exception {
         FileCheck exact = new FileCheck(dumpPath.toString(),
                 ExactCloneable.class.getDeclaredMethod("copy"), false);
-        exact.checkPatternAnywhere("invoke.*@jeandle\\.new_instance");
-        exact.checkPatternAnywhere("(?:call|invoke).*@jeandle\\.arraycopy");
+        exact.checkPatternAnywhere(
+                "invoke.*@jeandle\\.new_instance.*\\[ \"deopt\"\\(i64 1,");
+        exact.checkNotPattern(
+                "invoke.*@jeandle\\.new_instance.*\\[ \"deopt\"\\(i64 0,");
+        exact.checkPatternAnywhere(
+                "(?:call|invoke).*@jeandle\\.arraycopy.*\\[ \"deopt\"\\(i64 1,");
+        exact.checkNotPattern(
+                "(?:call|invoke).*@jeandle\\.arraycopy.*\\[ \"deopt\"\\(i64 0,");
         exact.checkNotPattern("call.*@jeandle\\.clone_post_barrier");
 
         if (!reduceInitialCardMarks) {
@@ -152,12 +158,20 @@ public class TestObjectClone {
                 CloneBase.class.getDeclaredMethod("cloneThroughBase", CloneBase.class), false);
         virtual.checkPatternAnywhere("clone\\.virtual_target_mismatch");
         virtual.checkPatternAnywhere(
-                "invoke.*__jeandle_dynamic_call.*java_lang_Object_clone.*\\[ \"deopt\"\\(");
+                "invoke.*__jeandle_dynamic_call.*java_lang_Object_clone.*\\[ \"deopt\"\\(i64 1,");
+        virtual.checkNotPattern(
+                "invoke.*__jeandle_dynamic_call.*java_lang_Object_clone.*\\[ \"deopt\"\\(i64 0,");
 
         FileCheck array = new FileCheck(dumpPath.toString(),
                 TestMethods.class.getDeclaredMethod("cloneByteArray", byte[].class), false);
-        array.checkPatternAnywhere("invoke.*@jeandle\\.new_array");
-        array.checkPatternAnywhere("(?:call|invoke).*@jeandle\\.arraycopy");
+        array.checkPatternAnywhere(
+                "invoke.*@jeandle\\.new_array.*\\[ \"deopt\"\\(i64 1,");
+        array.checkNotPattern(
+                "invoke.*@jeandle\\.new_array.*\\[ \"deopt\"\\(i64 0,");
+        array.checkPatternAnywhere(
+                "(?:call|invoke).*@jeandle\\.arraycopy.*\\[ \"deopt\"\\(i64 1,");
+        array.checkNotPattern(
+                "(?:call|invoke).*@jeandle\\.arraycopy.*\\[ \"deopt\"\\(i64 0,");
 
         checkPrimitiveArrayFastPath(dumpPath, "cloneByteArray", byte[].class);
         checkPrimitiveArrayFastPath(dumpPath, "cloneShortArray", short[].class);
@@ -176,7 +190,23 @@ public class TestObjectClone {
         dynamic.checkNotPattern("new_array\\.object_array_layout_matches");
         dynamic.checkNotPattern("new_array\\.class_check_deopt");
         dynamic.checkPatternAnywhere("new_array\\.log2_element_size = and i32");
-        dynamic.checkPatternAnywhere("invoke.*@jeandle\\.new_array.*\\[ \"deopt\"\\(");
+        dynamic.checkPatternAnywhere(
+                "invoke.*@jeandle\\.new_array.*\\[ \"deopt\"\\(i64 1,");
+        dynamic.checkNotPattern(
+                "invoke.*@jeandle\\.new_array.*\\[ \"deopt\"\\(i64 0,");
+        dynamic.checkPatternAnywhere(
+                "(?:call|invoke).*@jeandle\\.arraycopy.*\\[ \"deopt\"\\(i64 1,");
+        dynamic.checkNotPattern(
+                "(?:call|invoke).*@jeandle\\.arraycopy.*\\[ \"deopt\"\\(i64 0,");
+        dynamic.checkNotPattern("clone\\.virtual_target_mismatch");
+        dynamic.checkNotPattern(
+                "__jeandle_dynamic_call.*java_lang_Object_clone");
+        if (!reduceInitialCardMarks) {
+            // With card marks enabled, oop-array clone uses a distinct
+            // exception-producing arraycopy rather than the generic clone copy.
+            dynamic.checkPatternAnywhere(
+                    "invoke.*@jeandle\\.arraycopy.*\\[ \"deopt\"\\(i64 1,");
+        }
     }
 
     static void checkPrimitiveArrayFastPath(Path dumpPath,
@@ -187,6 +217,9 @@ public class TestObjectClone {
         raw.checkNotPattern("new_array\\.object_array_layout_matches");
         raw.checkNotPattern("new_array\\.class_check_deopt");
         raw.checkPatternAnywhere("new_array\\.log2_element_size = and i32");
+        raw.checkNotPattern("clone\\.virtual_target_mismatch");
+        raw.checkNotPattern(
+                "__jeandle_dynamic_call.*java_lang_Object_clone");
 
         FileCheck optimized = new FileCheck(
                 dumpPath.toString(),

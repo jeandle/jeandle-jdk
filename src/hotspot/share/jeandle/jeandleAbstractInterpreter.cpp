@@ -1548,6 +1548,8 @@ void JeandleAbstractInterpreter::interpret_block(JeandleBasicBlock* block) {
 }
 
 void JeandleAbstractInterpreter::uncommon_trap(Deoptimization::DeoptReason reason, Deoptimization::DeoptAction action, llvm::BasicBlock* insert_block) {
+  JeandlePreserveReexecuteState reexecute_scope(this);
+  _should_reexecute = true;
   auto saved_insert_block = _ir_builder.GetInsertBlock();
   auto saved_insert_point = _ir_builder.GetInsertPoint();
 
@@ -1569,7 +1571,7 @@ void JeandleAbstractInterpreter::uncommon_trap(Deoptimization::DeoptReason reaso
       &_module, llvm::Intrinsic::experimental_deoptimize, {ret_type});
   deopt_decl->setCallingConv(llvm::CallingConv::Hotspot_JIT);
   llvm::CallInst* call = _ir_builder.CreateCall(
-      deopt_decl, {request}, {create_current_deopt_bundle(true /* should_reexecute */)});
+      deopt_decl, {request}, {create_current_deopt_bundle()});
   call->setCallingConv(llvm::CallingConv::Hotspot_JIT);
 
   // LangRef: the block holding this intrinsic must terminate with a `ret`
@@ -2560,6 +2562,13 @@ void JeandleAbstractInterpreter::arith_op(BasicType type, Bytecodes::Code code) 
   }
 }
 
+JeandlePreserveReexecuteState::JeandlePreserveReexecuteState(JeandleAbstractInterpreter* interp)
+  : _interp(interp), _saved(interp->_should_reexecute) {}
+
+JeandlePreserveReexecuteState::~JeandlePreserveReexecuteState() {
+  _interp->_should_reexecute = _saved;
+}
+
 // Call a Java operation, without exception handling.
 llvm::CallInst* JeandleAbstractInterpreter::call_java_op(llvm::StringRef java_op, llvm::ArrayRef<llvm::Value*> args, llvm::ArrayRef<llvm::OperandBundleDef> deopt_bundle ) {
   llvm::Function* java_op_func = _module.getFunction(java_op);
@@ -2576,7 +2585,7 @@ llvm::InvokeInst* JeandleAbstractInterpreter::call_java_op_ex(llvm::StringRef ja
   return invoke_inst;
 }
 
-llvm::OperandBundleDef JeandleAbstractInterpreter::create_current_deopt_bundle(bool should_reexecute) {
+llvm::OperandBundleDef JeandleAbstractInterpreter::create_current_deopt_bundle() {
   ensure_orig_pc_slot();
   int bci = _bytecodes.cur_bci();
   // Per-bci liveness lets deopt_args drop locals that are dead at this bci, so they
@@ -2584,7 +2593,7 @@ llvm::OperandBundleDef JeandleAbstractInterpreter::create_current_deopt_bundle(b
   // liveness_at_bci caches the analysis in ciMethod after first use, so this is cheap;
   // in debug modes (retain locals / DeoptimizeALot) it returns all-live -> no pruning.
   MethodLivenessResult liveness = _method->liveness_at_bci(bci);
-  return llvm::OperandBundleDef("deopt", _jvm->deopt_args(_ir_builder, liveness, _parse_context, bci, should_reexecute));
+  return llvm::OperandBundleDef("deopt", _jvm->deopt_args(_ir_builder, liveness, _parse_context, bci, _should_reexecute));
 }
 
 TypedValue JeandleAbstractInterpreter::constant_to_value(ciConstant con) {
