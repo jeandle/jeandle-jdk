@@ -20,182 +20,298 @@
 
 /*
  * @test
- * @summary Test the intrinsic implementation of Unsafe.writeback0,
- *          writebackPreSync0, and writebackPostSync0
+ * @summary Test Unsafe cache writeback intrinsics and their disabled fallback
  * @requires os.arch=="amd64" | os.arch=="x86_64" | os.arch=="aarch64"
  * @library /test/lib /
  * @modules java.base/jdk.internal.misc
  * @build jdk.test.lib.Asserts jdk.test.whitebox.WhiteBox
  * @run driver jdk.test.lib.helpers.ClassFileInstaller jdk.test.whitebox.WhiteBox
- * @run main/othervm -Xbootclasspath/a:. -XX:+UnlockDiagnosticVMOptions -XX:+WhiteBoxAPI compiler.jeandle.intrinsic.TestWriteback0
+ * @run main/othervm -Xbootclasspath/a:. -XX:+UnlockDiagnosticVMOptions
+ *                   -XX:+WhiteBoxAPI compiler.jeandle.intrinsic.TestWriteback0
  */
 
 package compiler.jeandle.intrinsic;
 
 import compiler.jeandle.fileCheck.FileCheck;
 import java.nio.file.Files;
+import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 import jdk.internal.misc.Unsafe;
-import jdk.test.lib.Asserts;
 import jdk.test.lib.process.OutputAnalyzer;
 import jdk.test.lib.process.ProcessTools;
 import jdk.test.whitebox.WhiteBox;
 
 public class TestWriteback0 {
-    // Specific intrinsic patterns for precise validation
-    private static final String[] INTRINSIC_PATTERNS = {
-        "Unsafe.writeback0.*is parsed as intrinsic",
-        "Unsafe.writebackPreSync0.*is parsed as intrinsic",
-        "Unsafe.writebackPostSync0.*is parsed as intrinsic"
-    };
+    private static final Unsafe U = Unsafe.getUnsafe();
+    private static final String WRITEBACK_LOG =
+            "jdk.internal.misc.Unsafe.writeback0(jlong)` is parsed as intrinsic";
+    private static final String PRE_SYNC_LOG =
+            "jdk.internal.misc.Unsafe.writebackPreSync0()` is parsed as intrinsic";
+    private static final String POST_SYNC_LOG =
+            "jdk.internal.misc.Unsafe.writebackPostSync0()` is parsed as intrinsic";
+    private static final String FALLBACK_SYMBOL =
+            "jdk_internal_misc_Unsafe_writeback(PreSync0|PostSync0|0)";
 
     public static void main(String[] args) throws Exception {
-        testJeandleIntrinsic();
-        testFallbackToJNI();
+        if (!Unsafe.isWritebackEnabled()) {
+            System.out.println("Unsafe cache writeback is not supported; test skipped");
+            return;
+        }
+
+        runIntrinsicMode(true);
+        runIntrinsicMode(false);
+        if (System.getProperty("os.arch").equals("aarch64")) {
+            runStoreOrderingMode();
+        }
     }
 
-    // Test Jeandle intrinsic implementation
-    // Directly compile Unsafe.writebackMemory to avoid relying on inlining
-    private static void testJeandleIntrinsic() throws Exception {
-        String dumpPath = Files.createTempDirectory("jeandle_test_writeback0").toString();
-
-        ArrayList<String> commandArgs = new ArrayList<>(List.of(
+    private static void runIntrinsicMode(boolean enabled) throws Exception {
+        String dumpPath = Files.createTempDirectory(
+                enabled ? "jeandle_writeback_enabled" : "jeandle_writeback_disabled").toString();
+        ArrayList<String> args = new ArrayList<>(List.of(
                 "--add-exports=java.base/jdk.internal.misc=ALL-UNNAMED",
-                "-Xbatch", "-XX:-TieredCompilation", "-XX:+UseJeandleCompiler",
-                "-Xlog:jeandle=debug", "-XX:+JeandleDumpIR",
+                "-Xbatch", "-XX:-TieredCompilation", "-XX:+UseJeandleCompiler", "-Xcomp",
+                "-Xlog:jeandle=debug", "-XX:+JeandleDumpIR", "-XX:+JeandleDumpObjects",
                 "-XX:JeandleDumpDirectory=" + dumpPath,
-                // Compile writebackMemory directly, not testWriteback (which needs inlining)
-                "-XX:CompileCommand=compileonly,jdk.internal.misc.Unsafe::writebackMemory",
-                TestWrapper.class.getName()));
-
-        ProcessBuilder pb = ProcessTools.createLimitedTestJavaProcessBuilder(commandArgs);
-        OutputAnalyzer output = ProcessTools.executeCommand(pb);
-
-        output.shouldHaveExitValue(0);
-
-        // Verify each intrinsic is parsed
-        for (String pattern : INTRINSIC_PATTERNS) {
-            boolean found = Pattern.compile(pattern)
-                .matcher(output.getOutput())
-                .find();
-            Asserts.assertTrue(found, "Missing intrinsic: " + pattern);
+                "-XX:CompileCommand=compileonly,jdk.internal.misc.Unsafe::writebackMemory"));
+        if (!enabled) {
+            args.add("-XX:+UnlockDiagnosticVMOptions");
+            args.add("-XX:DisableIntrinsic=_writeback0,_writebackPreSync0,_writebackPostSync0");
         }
+        args.add(TestWrapper.class.getName());
 
-        // Verify LLVM IR contains platform-specific intrinsics.
-        // writebackMemory is compiled directly, so intrinsics are lowered even in
-        // non-optimized IR (no inlining required).
-        //
-        // The writeback instruction is selected at compile time based on what the
-        // CPU supports (mirroring C2's cache_wb() and Jeandle's lower_writeback0):
-        //   optimized = supports_clflushopt()
-        //   no_evict  = supports_clwb()
-        //   if (optimized) { no_evict ? CLWB : CLFLUSHOPT } else { CLFLUSH }
-        String arch = System.getProperty("os.arch");
-        FileCheck checker = new FileCheck(dumpPath,
-                Unsafe.class.getMethod("writebackMemory", long.class, long.class), false);
-        if (arch.equals("amd64") || arch.equals("x86_64")) {
-            boolean hasClflushopt = cpuSupports("clflushopt"); // == supports_clflushopt()
-            boolean hasClwb = cpuSupports("clwb");             // == supports_clwb()
-            String writebackPattern;
-            boolean expectSfence;
-            if (hasClflushopt && hasClwb) {
-                writebackPattern = "@llvm\\.x86\\.clwb";
-                expectSfence = true;
-            } else if (hasClflushopt) {
-                writebackPattern = "@llvm\\.x86\\.clflushopt";
-                expectSfence = true;
-            } else {
-                writebackPattern = "@llvm\\.x86\\.sse2\\.clflush";
-                expectSfence = false;
-            }
-            checker.checkPattern(writebackPattern);
-            if (expectSfence) {
-                checker.checkPattern("@llvm\\.x86\\.sse\\.sfence");
-            } else {
-                checker.checkNotPattern("@llvm\\.x86\\.sse\\.sfence");
-            }
-        } else if (arch.equals("aarch64")) {
-            checker.checkPattern("dc cvap");
-            checker.checkPattern("@llvm\\.aarch64\\.dmb");
+        ProcessBuilder pb = ProcessTools.createLimitedTestJavaProcessBuilder(args);
+        OutputAnalyzer output = ProcessTools.executeCommand(pb);
+        output.shouldHaveExitValue(0).shouldContain("TestWriteback0 PASSED");
+
+        var method = Unsafe.class.getMethod("writebackMemory", long.class, long.class);
+        if (enabled) {
+            output.shouldContain(WRITEBACK_LOG)
+                  .shouldContain(PRE_SYNC_LOG)
+                  .shouldContain(POST_SYNC_LOG);
+            checkEnabledIR(dumpPath, method, false);
+            checkEnabledIR(dumpPath, method, true);
+        } else {
+            output.shouldNotContain(WRITEBACK_LOG)
+                  .shouldNotContain(PRE_SYNC_LOG)
+                  .shouldNotContain(POST_SYNC_LOG);
+            checkDisabledIR(dumpPath, method, false);
+            checkDisabledIR(dumpPath, method, true);
         }
     }
 
-    // Whether the CPU supports a given feature, queried through WhiteBox's
-    // getCPUFeatures() (identical source to VM_Version::supports_*()).
+    private static void checkDisabledIR(String dumpPath, java.lang.reflect.Method method,
+                                        boolean optimized) throws Exception {
+        for (String name : List.of("writebackPreSync0", "writeback0", "writebackPostSync0")) {
+            FileCheck call = new FileCheck(dumpPath, method, optimized);
+            call.checkPattern("invoke .*jdk_internal_misc_Unsafe_" + name);
+        }
+        if (optimized) {
+            // Raw dumps still contain unused template helper bodies with target
+            // intrinsics. Optimization removes them, so absence is meaningful
+            // only in the optimized module containing the compiled root.
+            FileCheck checker = new FileCheck(dumpPath, method, true);
+            checker.checkNotPattern(
+                    "(call|invoke) .*@llvm\\.x86\\.(clwb|clflushopt|sse2\\.clflush|sse\\.sfence)");
+            checker.checkNotPattern("(call|invoke) .*@llvm\\.aarch64\\.dmb");
+            checker.checkNotPattern("(call|invoke) .*@StubRoutines_data_cache_writeback");
+        }
+    }
+
+    private static void checkEnabledIR(String dumpPath, java.lang.reflect.Method method,
+                                       boolean optimized) throws Exception {
+        FileCheck checker = new FileCheck(dumpPath, method, optimized);
+        String arch = System.getProperty("os.arch");
+        if (arch.equals("amd64") || arch.equals("x86_64")) {
+            boolean hasClflushopt = cpuSupports("clflushopt");
+            boolean hasClwb = cpuSupports("clwb");
+            if (hasClflushopt || hasClwb) {
+                checkPatternAnywhere(dumpPath, method, optimized,
+                        "call void @llvm\\.x86\\.sse\\.sfence");
+            } else {
+                checker.checkNotPattern("call void @llvm\\.x86\\.sse\\.sfence");
+            }
+            if (hasClflushopt && hasClwb) {
+                checkPatternAnywhere(dumpPath, method, optimized,
+                        "call void @llvm\\.x86\\.clwb");
+            } else if (hasClflushopt) {
+                checkPatternAnywhere(dumpPath, method, optimized,
+                        "call void @llvm\\.x86\\.clflushopt");
+            } else {
+                checkPatternAnywhere(dumpPath, method, optimized,
+                        "call void @llvm\\.x86\\.sse2\\.clflush");
+            }
+        } else {
+            // writebackMemory is a loop: LLVM block layout may print its exit
+            // (post-sync DMB) before the loop body (cache-writeback call).
+            // Check presence here; the straight-line ordering probe below
+            // verifies the executable order precisely.
+            checkPatternAnywhere(dumpPath, method, optimized,
+                    "call void @StubRoutines_data_cache_writeback");
+            checkPatternAnywhere(dumpPath, method, optimized,
+                    "call void @llvm\\.aarch64\\.dmb\\(i32 11\\)$");
+            checkAArch64MemoryContract(dumpPath, method, optimized);
+        }
+        checker.checkNotPattern(FALLBACK_SYMBOL);
+    }
+
+    private static void checkPatternAnywhere(String dumpPath,
+                                             java.lang.reflect.Method method,
+                                             boolean optimized,
+                                             String pattern) throws Exception {
+        new FileCheck(dumpPath, method, optimized).checkPattern(pattern);
+    }
+
+    private static void checkAArch64MemoryContract(String dumpPath,
+                                                   java.lang.reflect.Method method,
+                                                   boolean optimized) throws Exception {
+        String ir = Files.readString(findIRDump(dumpPath, method, optimized));
+
+        Matcher writebackCall = Pattern.compile(
+                "(?m)^\\s*call void @StubRoutines_data_cache_writeback\\([^\\n]*\\) #(\\d+)\\s*$")
+                .matcher(ir);
+        if (!writebackCall.find()) {
+            throw new AssertionError("writeback stub call has no attribute group");
+        }
+        String writebackAttrs = findAttributeGroup(ir, writebackCall.group(1));
+        if (!writebackAttrs.contains("\"gc-leaf-function\"")) {
+            throw new AssertionError("writeback stub call is not gc-leaf");
+        }
+        assertUnknownMemoryEffects(writebackCall.group(), writebackAttrs,
+                "writeback stub call");
+
+        Matcher dmbDeclaration = Pattern.compile(
+                "(?m)^declare void @llvm\\.aarch64\\.dmb\\(i32\\) #(\\d+)\\s*$")
+                .matcher(ir);
+        if (!dmbDeclaration.find()) {
+            throw new AssertionError("AArch64 DMB declaration has no attribute group");
+        }
+        assertUnknownMemoryEffects(dmbDeclaration.group(),
+                findAttributeGroup(ir, dmbDeclaration.group(1)), "AArch64 DMB");
+    }
+
+    private static String findAttributeGroup(String ir, String group) {
+        Matcher attributes = Pattern.compile(
+                "(?m)^attributes #" + group + " = \\{([^\\n]*)\\}\\s*$").matcher(ir);
+        if (!attributes.find()) {
+            throw new AssertionError("missing LLVM attribute group #" + group);
+        }
+        return attributes.group(1);
+    }
+
+    private static void assertUnknownMemoryEffects(String site, String attributes,
+                                                   String description) {
+        if (site.contains("memory(") || attributes.contains("memory(")) {
+            throw new AssertionError(description + " has restricted LLVM memory effects");
+        }
+    }
+
+    private static Path findIRDump(String dumpPath, java.lang.reflect.Method method,
+                                   boolean optimized) throws Exception {
+        String prefix = method.getDeclaringClass().getName().replace('.', '_')
+                + "_" + method.getName();
+        try (var files = Files.list(Path.of(dumpPath))) {
+            return files.filter(Files::isRegularFile)
+                    .filter(path -> {
+                        String name = path.getFileName().toString();
+                        if (!name.startsWith(prefix)) {
+                            return false;
+                        }
+                        return optimized ? name.endsWith("_optimized.ll")
+                                : name.endsWith(".ll") && !name.endsWith("_optimized.ll");
+                    })
+                    .sorted()
+                    .reduce((first, second) -> second)
+                    .orElseThrow(() -> new AssertionError("No matched IR dump found"));
+        }
+    }
+
+    private static void runStoreOrderingMode() throws Exception {
+        String dumpPath = Files.createTempDirectory("jeandle_writeback_store_order").toString();
+        ArrayList<String> args = new ArrayList<>(List.of(
+                "--add-exports=java.base/jdk.internal.misc=ALL-UNNAMED",
+                "-Xbatch", "-XX:-TieredCompilation", "-XX:+UseJeandleCompiler", "-Xcomp",
+                "-Xlog:jeandle=debug", "-XX:+JeandleDumpIR", "-XX:+JeandleDumpObjects",
+                "-XX:JeandleDumpDirectory=" + dumpPath,
+                "-XX:CompileCommand=compileonly," + StoreOrderingWrapper.class.getName()
+                        + "::storeWritebackStore",
+                "-XX:CompileCommand=inline,jdk.internal.misc.Unsafe::writebackMemory",
+                StoreOrderingWrapper.class.getName()));
+
+        OutputAnalyzer output = ProcessTools.executeCommand(
+                ProcessTools.createLimitedTestJavaProcessBuilder(args));
+        output.shouldHaveExitValue(0)
+              .shouldContain("StoreOrderingWrapper PASSED")
+              .shouldContain(WRITEBACK_LOG)
+              .shouldContain(PRE_SYNC_LOG)
+              .shouldContain(POST_SYNC_LOG);
+
+        FileCheck checker = new FileCheck(dumpPath,
+                StoreOrderingWrapper.class.getDeclaredMethod(
+                        "storeWritebackStore", long.class, long.class, long.class), true);
+        checker.checkPattern("store (atomic )?i64 %1");
+        checker.checkPattern("call void @StubRoutines_data_cache_writeback");
+        checker.checkPattern("call void @llvm\\.aarch64\\.dmb\\(i32 11\\)$");
+        checker.checkPattern("store (atomic )?i64 %2");
+        checker.checkNotPattern(FALLBACK_SYMBOL);
+        checkAArch64MemoryContract(dumpPath,
+                StoreOrderingWrapper.class.getDeclaredMethod(
+                        "storeWritebackStore", long.class, long.class, long.class), true);
+    }
+
     private static boolean cpuSupports(String feature) {
         String features = WhiteBox.getWhiteBox().getCPUFeatures();
         return Pattern.compile("(?<![a-z0-9])" + Pattern.quote(feature) + "(?![a-z0-9])")
                       .matcher(features).find();
     }
 
-    // Test fallback when intrinsic is not supported
-    private static void testFallbackToJNI() throws Exception {
-        ArrayList<String> commandArgs = new ArrayList<>(List.of(
-                "--add-exports=java.base/jdk.internal.misc=ALL-UNNAMED",
-                "-Xbatch", "-XX:-TieredCompilation", "-XX:+UseJeandleCompiler", "-Xcomp",
-                "-XX:CompileCommand=compileonly," + TestWrapper.class.getName() + "::testWriteback",
-                // Force disable intrinsic to simulate unsupported platform
-                "-XX:CompileCommand=option," + TestWrapper.class.getName() + "::testWriteback,DisableIntrinsic,_writeback0",
-                TestWrapper.class.getName()));
-
-        ProcessBuilder pb = ProcessTools.createLimitedTestJavaProcessBuilder(commandArgs);
-        OutputAnalyzer output = ProcessTools.executeCommand(pb);
-
-        output.shouldHaveExitValue(0);
-        output.shouldContain("TestWriteback0 PASSED");
-    }
-
     static class TestWrapper {
-        private static final Unsafe U = Unsafe.getUnsafe();
-
-        public static void main(String[] args) throws Exception {
-            // Check if writeback is supported on this platform
-            if (U.dataCacheLineFlushSize() == 0) {
-                System.out.println("writeback not supported, skipping");
-                return;
-            }
-
-            int cacheLineSize = U.dataCacheLineFlushSize();
-            long addr = U.allocateMemory(1024);
-
+        public static void main(String[] args) {
+            int lineSize = U.dataCacheLineFlushSize();
+            long allocation = U.allocateMemory(lineSize * 6L);
+            long address = (allocation + lineSize - 1) & -lineSize;
             try {
-                // Test 1: Zero length (should be no-op)
-                testWriteback(addr, 0);
-
-                // Test 2: Single cache line
-                testWriteback(addr, cacheLineSize);
-
-                // Test 3: Multiple cache lines
-                testWriteback(addr, cacheLineSize * 4);
-
-                // Test 4: Partial cache line (implementation should handle this)
-                testWriteback(addr, cacheLineSize / 2);
-
-                // Test 5: Offset within a page (non-cache-line-aligned)
-                long offsetAddr = addr + 123;
-                testWriteback(offsetAddr, cacheLineSize);
-
-                // Test 6: Large range covering many cache lines
-                testWriteback(addr, 1024);
-
-                // Warm up to trigger compilation
-                for (int i = 0; i < 20_000; i++) {
-                    testWriteback(addr, cacheLineSize);
-                }
-
+                U.setMemory(address, lineSize * 4L, (byte) 0x5a);
+                U.writebackMemory(address, 0);
+                U.writebackMemory(address, 1);
+                U.writebackMemory(address + 1, lineSize - 1L);
+                U.writebackMemory(address, lineSize);
+                U.writebackMemory(address + 1, lineSize);
+                U.writebackMemory(address, lineSize * 4L);
                 System.out.println("TestWriteback0 PASSED");
             } finally {
-                U.freeMemory(addr);
+                U.freeMemory(allocation);
             }
         }
+    }
 
-        // writeback0, writebackPreSync0, and writebackPostSync0 are all private
-        // on Unsafe; call writebackMemory which internally calls all three.
-        public static void testWriteback(long address, long length) {
-            U.writebackMemory(address, length);
+    static class StoreOrderingWrapper {
+        private static long value;
+
+        static void storeWritebackStore(long address, long first, long second) {
+            value = first;
+            U.writebackMemory(address, Long.BYTES);
+            value = second;
+        }
+
+        public static void main(String[] args) {
+            int lineSize = U.dataCacheLineFlushSize();
+            long allocation = U.allocateMemory(lineSize * 2L);
+            long address = (allocation + lineSize - 1) & -lineSize;
+            try {
+                long second = 0x7766554433221100L;
+                storeWritebackStore(address, 0x1122334455667788L, second);
+                if (value != second) {
+                    throw new AssertionError("second store was not observed");
+                }
+                System.out.println("StoreOrderingWrapper PASSED");
+            } finally {
+                U.freeMemory(allocation);
+            }
         }
     }
 }
