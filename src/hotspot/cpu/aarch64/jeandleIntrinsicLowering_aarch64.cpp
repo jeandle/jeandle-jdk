@@ -89,8 +89,8 @@ bool JeandleIntrinsicLowering::lower_writeback0() {
   _interp->null_check(_interp->_jvm->peek_value(1).value());
   llvm::Value* address = _interp->_jvm->lpop();
   _interp->_jvm->apop();
-  llvm::PointerType* ptr_type = llvm::PointerType::get(
-      builder.getContext(), llvm::jeandle::AddrSpace::CHeapAddrSpace);
+  // Unsafe.writeback0 accepts an arbitrary native address, not a C-heap object.
+  llvm::PointerType* ptr_type = llvm::PointerType::getUnqual(builder.getContext());
   llvm::Value* address_ptr = builder.CreateIntToPtr(address, ptr_type);
   static constexpr CallSiteAttributeMetadata writeback_attrs = {
       CTRL_NONE, MEM_READ | MEM_WRITE};

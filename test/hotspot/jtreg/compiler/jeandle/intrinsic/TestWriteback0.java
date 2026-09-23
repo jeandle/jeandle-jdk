@@ -177,6 +177,9 @@ public class TestWriteback0 {
         if (!writebackCall.find()) {
             throw new AssertionError("writeback stub call has no attribute group");
         }
+        if (writebackCall.group().contains("addrspace(")) {
+            throw new AssertionError("writeback address is not in the raw address space");
+        }
         String writebackAttrs = findAttributeGroup(ir, writebackCall.group(1));
         if (!writebackAttrs.contains("\"gc-leaf-function\"")) {
             throw new AssertionError("writeback stub call is not gc-leaf");
