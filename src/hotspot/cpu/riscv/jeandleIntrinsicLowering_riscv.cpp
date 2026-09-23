@@ -47,6 +47,10 @@ bool JeandleIntrinsicLowering::cpu_supports_popcount() {
   return false;
 }
 
+bool JeandleIntrinsicLowering::cpu_supports_cache_writeback() {
+  return false;
+}
+
 bool JeandleIntrinsicLowering::cpu_supports_spin_wait() {
   // RISC-V PAUSE instruction requires the Zihintpause extension.
   // UseZihintpause is set by VM_Version when the hardware supports it.
@@ -55,11 +59,6 @@ bool JeandleIntrinsicLowering::cpu_supports_spin_wait() {
 
 bool JeandleIntrinsicLowering::supports_vectorized_mismatch_medium_path() {
   // The RVV vector extension is optional and not yet wired up here.
-  return false;
-}
-
-bool JeandleIntrinsicLowering::cpu_supports_cache_writeback() {
-  // TODO: emit CMO.CLEAN via inline ASM when the Zicbom extension is available.
   return false;
 }
 
@@ -79,13 +78,9 @@ bool JeandleIntrinsicLowering::lower_spin_wait_hint() {
 }
 
 bool JeandleIntrinsicLowering::lower_writeback0() {
-  ShouldNotReachHere();
   return false;
 }
 
-bool JeandleIntrinsicLowering::lower_writeback_sync(vmIntrinsics::ID id) {
-  // TODO: emit FENCE via a RISC-V fence intrinsic when cache writeback
-  // is supported on RISC-V (Zicbom extension).
-  ShouldNotReachHere();
+bool JeandleIntrinsicLowering::lower_writeback_sync(vmIntrinsics::ID) {
   return false;
 }

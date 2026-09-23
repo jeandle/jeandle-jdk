@@ -128,7 +128,7 @@ class JeandleIntrinsicLowering : public StackObj {
   static bool cpu_supports_popcount();          // bitCount_i/bitCount_l
   static bool cpu_supports_spin_wait();         // onSpinWait
   static bool supports_vectorized_mismatch_medium_path();
-  static bool cpu_supports_cache_writeback();   // writeback0
+  static bool cpu_supports_cache_writeback();   // Unsafe writeback family
 
   // ========================================================================
   // Shared emit helpers
