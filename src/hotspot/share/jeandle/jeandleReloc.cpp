@@ -83,6 +83,10 @@ void JeandleCallReloc::emit_reloc(JeandleAssembler &assembler) {
       ShouldNotReachHere();
       break;
   }
+
+  if (_call->is_poll_return()) {
+    assembler.emit_poll_return_reloc(inst_end_offset());
+  }
 }
 
 int JeandleCallReloc::inst_end_offset() {
