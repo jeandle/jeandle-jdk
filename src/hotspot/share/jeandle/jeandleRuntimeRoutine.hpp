@@ -368,7 +368,7 @@
       true,                                                                         \
       true,                                                                         \
       llvm::Type::getVoidTy(context),                                               \
-      llvm::PointerType::get(context, llvm::jeandle::AddrSpace::CHeapAddrSpace)))   \
+      llvm::PointerType::getUnqual(context)))                                       \
                                                                                     \
 def(StubRoutines_generic_arraycopy,                                                 \
       StubRoutines::generic_arraycopy(),                                            \
