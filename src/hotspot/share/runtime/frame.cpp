@@ -1467,6 +1467,18 @@ void frame::describe(FrameValues& values, int frame_no, const RegisterMap* reg_m
       }
     }
 
+    if (is_jeandle_compiled_frame() && cm->orig_pc_offset() > 0) {
+      intptr_t* orig_pc_addr = (intptr_t*)((address)unextended_sp() + cm->orig_pc_offset());
+      int sp_off_bytes  = (int)((address)orig_pc_addr - (address)sp());
+      int usp_off_bytes = (int)((address)orig_pc_addr - (address)unextended_sp());
+
+      values.describe(frame_no, orig_pc_addr,
+                      err_msg("orig pc slot for #%d (sp%+dB, unextended_sp%+dB)",
+                              frame_no, sp_off_bytes, usp_off_bytes),
+                      1);
+    }
+
+
     if (reg_map != nullptr && is_java_frame()) {
       int scope_no = 0;
       for (ScopeDesc* scope = cm->scope_desc_at(pc()); scope != nullptr; scope = scope->sender(), scope_no++) {
