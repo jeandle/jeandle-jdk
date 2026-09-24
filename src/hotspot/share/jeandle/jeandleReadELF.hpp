@@ -22,11 +22,13 @@
 #define SHARE_JEANDLE_READ_ELF_HPP
 
 #include "jeandle/__llvmHeadersBegin__.hpp"
+#include "llvm/ADT/SmallVector.h"
 #include "llvm/Object/ELFObjectFile.h"
 #include "llvm/Support/MemoryBuffer.h"
 
 #include "jeandle/__hotspotHeadersBegin__.hpp"
 #include "memory/allStatic.hpp"
+#include "jeandle/jeandleConstSectionPlan.hpp"
 
 using ELFT = llvm::object::ELF64LE;
 using ELFObject = llvm::object::ELFObjectFile<ELFT>;
@@ -50,6 +52,28 @@ class ReadELF : public AllStatic {
 
   static bool findSection(ELFObject& elf,
                           SectionInfo& section_info);
+
+  static bool is_jeandle_const_section(llvm::StringRef name) {
+    return name == ".rodata" ||
+           name.starts_with(".rodata.") ||
+           name == ".data.rel.ro" ||
+           name.starts_with(".data.rel.ro.");
+  }
+
+  static void collect_const_sections(ELFObject& elf,
+                                     llvm::SmallVectorImpl<SectionInfo>& const_sections);
+
+  // Week 5 (F2): every llvm::Expected is checked, so a malformed ELF makes the
+  // planner fail (and the caller fall back) instead of aborting the VM via
+  // Expected::value().
+  //
+  // consts_base_alignment is forwarded to the planner so that a section whose
+  // alignment the CodeBuffer cannot guarantee for the consts base is rejected
+  // rather than silently emitted at a misaligned address.
+  static bool build_const_section_plan(ELFObject& elf,
+                                       ConstSectionPlan& plan,
+                                       uint64_t consts_base_alignment =
+                                         ConstSectionPlan::MAX_SUPPORTED_CONST_ALIGNMENT);
 };
 
 #endif // SHARE_JEANDLE_READ_ELF_HPP
