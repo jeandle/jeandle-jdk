@@ -107,6 +107,37 @@ public class TestStringEquals {
             Asserts.assertFalse(arrayEqualsC(c1, null));
             Asserts.assertFalse(arrayEqualsC(null, c1));
             Asserts.assertTrue(arrayEqualsC(null, null));
+
+            // Sweep every length across the jeandle.memcmp dispatch paths
+            // (byte loop n < 8, qword loop 8 <= n < 32, vector loop n >= 32)
+            // with a mismatch at every offset, so the overlapping-tail
+            // boundaries and early exits are all covered.
+            java.util.Random r = new java.util.Random(12345);
+            for (int len = 1; len <= 80; len++) {
+                byte[] ba = new byte[len];
+                byte[] bb = new byte[len];
+                r.nextBytes(ba);
+                System.arraycopy(ba, 0, bb, 0, len);
+                Asserts.assertTrue(arrayEqualsB(ba, bb), "byte len=" + len + " equal");
+                for (int p = 0; p < len; p++) {
+                    bb[p] ^= 1;
+                    Asserts.assertFalse(arrayEqualsB(ba, bb), "byte len=" + len + " diff@" + p);
+                    bb[p] ^= 1;
+                }
+
+                char[] ca = new char[len];
+                char[] cb = new char[len];
+                for (int i = 0; i < len; i++) {
+                    ca[i] = (char) ('a' + r.nextInt(26));
+                }
+                System.arraycopy(ca, 0, cb, 0, len);
+                Asserts.assertTrue(arrayEqualsC(ca, cb), "char len=" + len + " equal");
+                for (int p = 0; p < len; p++) {
+                    cb[p] ^= 1;
+                    Asserts.assertFalse(arrayEqualsC(ca, cb), "char len=" + len + " diff@" + p);
+                    cb[p] ^= 1;
+                }
+            }
         }
 
         public static boolean arrayEqualsB(byte[] a, byte[] b) {
