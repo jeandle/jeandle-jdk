@@ -2434,8 +2434,7 @@ bool JeandleIntrinsicLowering::lower_arrayequals(BasicType element_type) {
   llvm::Value* right_array_base = b.CreatePtrAdd(right, array_base_offset, "right_array_element_base");
   llvm::PointerType* c_heap_ptr_ty =
       llvm::PointerType::get(ctx, llvm::jeandle::AddrSpace::CHeapAddrSpace);
-  left_array_base = b.CreateAddrSpaceCast(left_array_base, c_heap_ptr_ty);
-  right_array_base = b.CreateAddrSpaceCast(right_array_base, c_heap_ptr_ty);
+
   llvm::Value* element_byte_size = llvm::ConstantInt::get(left_length->getType(),type2aelembytes(element_type));
   llvm::Value* left_byte_length = b.CreateMul(element_byte_size, left_length);
   if (left_byte_length->getType() != b.getInt64Ty()) left_byte_length = b.CreateIntCast(left_byte_length, b.getInt64Ty(), false);
