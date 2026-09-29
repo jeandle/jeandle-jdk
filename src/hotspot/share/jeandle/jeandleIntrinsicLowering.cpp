@@ -900,32 +900,8 @@ ciType* JeandleIntrinsicLowering::constant_class_type(llvm::Value* mirror) const
   return mirror_object->as_instance()->java_mirror_type();
 }
 
-llvm::Value* JeandleIntrinsicLowering::constant_klass_value(ciKlass* klass) const {
-  assert(klass != nullptr && klass->is_loaded(), "klass must be loaded");
-  ciEnv* env = ciEnv::current();
-  assert(env != nullptr && env->oop_recorder() != nullptr,
-         "constant klass requires an active oop recorder");
-  env->oop_recorder()->find_index(klass->constant_encoding());
-  llvm::PointerType* klass_type = llvm::PointerType::get(
-      *_interp->_context, llvm::jeandle::AddrSpace::CHeapAddrSpace);
-  return _interp->_ir_builder.CreateIntToPtr(
-      _interp->_ir_builder.getInt64(
-          reinterpret_cast<intptr_t>(klass->constant_encoding())),
-      klass_type, "class.constant.klass");
-}
-
 llvm::Value* JeandleIntrinsicLowering::klass_value_for_mirror(
-    llvm::Value* mirror, ciType* mirror_type) const {
-  llvm::PointerType* klass_type = llvm::PointerType::get(
-      *_interp->_context, llvm::jeandle::AddrSpace::CHeapAddrSpace);
-  if (mirror_type != nullptr) {
-    if (mirror_type->is_primitive_type()) {
-      return llvm::ConstantPointerNull::get(klass_type);
-    }
-    if (mirror_type->is_klass() && mirror_type->is_loaded()) {
-      return constant_klass_value(mirror_type->as_klass());
-    }
-  }
+    llvm::Value* mirror, ciType*) const {
   return _interp->call_java_op("jeandle.load_mirror_klass", {mirror});
 }
 
@@ -942,15 +918,6 @@ bool JeandleIntrinsicLowering::try_fold_constant_class_query(
   }
   ciKlass* klass = mirror_type->as_klass();
   switch (id) {
-    case vmIntrinsics::_isPrimitive:
-      *result = 0;
-      return true;
-    case vmIntrinsics::_isArray:
-      *result = klass->is_array_klass() ? 1 : 0;
-      return true;
-    case vmIntrinsics::_isInterface:
-      *result = klass->is_interface() ? 1 : 0;
-      return true;
     case vmIntrinsics::_isHidden:
       *result = klass->is_instance_klass() &&
                         klass->as_instance_klass()->is_hidden()
@@ -1048,23 +1015,13 @@ bool JeandleIntrinsicLowering::lower_class_is_assignable_from() {
   _interp->null_check(sub_mirror);
   ciType* super_type = constant_class_type(super_mirror);
   ciType* sub_type = constant_class_type(sub_mirror);
-  if (super_type != nullptr && sub_type != nullptr) {
-    bool foldable = true;
-    bool result = false;
-    if (super_type->is_primitive_type() || sub_type->is_primitive_type()) {
-      result = super_type == sub_type;
-    } else if (super_type->is_klass() && sub_type->is_klass() &&
-               super_type->is_loaded() && sub_type->is_loaded()) {
-      result = sub_type->as_klass()->is_subtype_of(super_type->as_klass());
-    } else {
-      foldable = false;
-    }
-    if (foldable) {
-      _interp->_jvm->apop();
-      _interp->_jvm->apop();
-      _interp->_jvm->ipush(builder.getInt32(result ? 1 : 0));
-      return true;
-    }
+  if (super_type != nullptr && sub_type != nullptr &&
+      (super_type->is_primitive_type() || sub_type->is_primitive_type())) {
+    bool result = super_type == sub_type;
+    _interp->_jvm->apop();
+    _interp->_jvm->apop();
+    _interp->_jvm->ipush(builder.getInt32(result ? 1 : 0));
+    return true;
   }
 
   llvm::PointerType* klass_ty =
@@ -1129,6 +1086,15 @@ bool JeandleIntrinsicLowering::lower_class_boolean_query(vmIntrinsics::ID id) {
   // Physical JVM slot map, top to bottom:
   //   raw depth 0: java.lang.Class receiver
   llvm::Value* mirror = _interp->_jvm->raw_peek(0).value();
+
+  if (id == vmIntrinsics::_isArray || id == vmIntrinsics::_isInterface) {
+    const char* operation = id == vmIntrinsics::_isArray
+        ? "jeandle.class_is_array" : "jeandle.class_is_interface";
+    _interp->_jvm->apop();
+    _interp->_jvm->ipush(_interp->call_java_op(operation, {mirror}));
+    return true;
+  }
+
   jint constant_result = 0;
   if (try_fold_constant_class_query(id, mirror, &constant_result)) {
     _interp->_jvm->apop();
@@ -1163,24 +1129,13 @@ bool JeandleIntrinsicLowering::lower_class_boolean_query(vmIntrinsics::ID id) {
   builder.SetInsertPoint(query_bb);
   llvm::Value* query_result = nullptr;
   switch (id) {
-    case vmIntrinsics::_isArray: {
-      llvm::CallInst* layout_helper =
-          _interp->call_java_op("jeandle.layout_helper", {klass});
-      layout_helper->setName("class.query.layout_helper");
-      query_result = builder.CreateICmpSLT(
-          layout_helper, builder.getInt32(Klass::_lh_neutral_value), "class.query.is_array");
-      break;
-    }
-    case vmIntrinsics::_isInterface:
     case vmIntrinsics::_isHidden: {
       llvm::Value* access_flags_addr = builder.CreateInBoundsGEP(
           builder.getInt8Ty(), klass,
           builder.getInt32(in_bytes(Klass::access_flags_offset())));
       llvm::Value* access_flags =
           builder.CreateLoad(builder.getInt32Ty(), access_flags_addr, "class.query.access_flags");
-      const jint flag = id == vmIntrinsics::_isInterface
-          ? static_cast<jint>(JVM_ACC_INTERFACE)
-          : static_cast<jint>(JVM_ACC_IS_HIDDEN_CLASS);
+      const jint flag = static_cast<jint>(JVM_ACC_IS_HIDDEN_CLASS);
       llvm::Value* masked = builder.CreateAnd(access_flags, builder.getInt32(flag));
       query_result = builder.CreateICmpNE(masked, builder.getInt32(0), "class.query.flag_set");
       break;

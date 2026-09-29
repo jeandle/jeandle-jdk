@@ -228,6 +228,56 @@ entry:
   ret ptr addrspace(0) %klass
 }
 
+; Keep Class.isArray opaque until ConstantFieldFolding has propagated mirror
+; values across control-flow merges. Unfolded calls use the usual Klass layout
+; helper check after phase-1 lowering.
+define hotspotcc i32 @jeandle.class_is_array(ptr addrspace(1) nocapture readonly %mirror) noinline "lower-phase"="1" #0 {
+entry:
+  %klass_offset = load i32, ptr @java_lang_Class.klass_offset
+  %klass_addr = getelementptr inbounds i8, ptr addrspace(1) %mirror, i32 %klass_offset
+  %klass = load atomic ptr addrspace(0), ptr addrspace(1) %klass_addr unordered, align 8
+  %is_primitive = icmp eq ptr addrspace(0) %klass, null
+  br i1 %is_primitive, label %done, label %read_layout
+
+read_layout:
+  %layout_helper_offset = load i32, ptr @Klass.layout_helper_offset
+  %layout_helper_addr = getelementptr inbounds i8, ptr addrspace(0) %klass, i32 %layout_helper_offset
+  %layout_helper = load atomic i32, ptr addrspace(0) %layout_helper_addr unordered, align 4
+  %is_array = icmp slt i32 %layout_helper, 0
+  %array_result = zext i1 %is_array to i32
+  br label %done
+
+done:
+  %result = phi i32 [ 0, %entry ], [ %array_result, %read_layout ]
+  ret i32 %result
+}
+
+; Keep Class.isInterface opaque across mirror phi nodes. The callback can fold
+; the query when all incoming mirrors agree; otherwise lower to the access
+; flags test used by the original intrinsic.
+define hotspotcc i32 @jeandle.class_is_interface(ptr addrspace(1) nocapture readonly %mirror) noinline "lower-phase"="1" #0 {
+entry:
+  %klass_offset = load i32, ptr @java_lang_Class.klass_offset
+  %klass_addr = getelementptr inbounds i8, ptr addrspace(1) %mirror, i32 %klass_offset
+  %klass = load atomic ptr addrspace(0), ptr addrspace(1) %klass_addr unordered, align 8
+  %is_primitive = icmp eq ptr addrspace(0) %klass, null
+  br i1 %is_primitive, label %done, label %read_flags
+
+read_flags:
+  %access_flags_offset = load i32, ptr @Klass.access_flags_offset
+  %access_flags_addr = getelementptr inbounds i8, ptr addrspace(0) %klass, i32 %access_flags_offset
+  %access_flags = load atomic i32, ptr addrspace(0) %access_flags_addr unordered, align 4
+  ; JVM_ACC_INTERFACE (0x0200).
+  %interface_bits = and i32 %access_flags, 512
+  %is_interface = icmp ne i32 %interface_bits, 0
+  %interface_result = zext i1 %is_interface to i32
+  br label %done
+
+done:
+  %result = phi i32 [ 0, %entry ], [ %interface_result, %read_flags ]
+  ret i32 %result
+}
+
 ; Load Klass::layout_helper from a Klass pointer. Keeping this as a phase-1
 ; JavaOp lets ConstantFieldFolding answer the query while the Klass is still a
 ; compile-time constant; unresolved queries lower to the ordinary VM load.

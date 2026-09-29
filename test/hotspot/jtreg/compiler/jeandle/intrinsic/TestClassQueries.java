@@ -96,6 +96,10 @@ public class TestClassQueries {
                 compileOnly("queryIsInterface"),
                 compileOnly("queryIsHidden"),
                 compileOnly("constantIsArray"),
+                compileOnly("phiIsArray"),
+                compileOnly("phiMixedIsArray"),
+                compileOnly("phiIsInterface"),
+                compileOnly("phiMixedIsInterface"),
                 compileOnly("constantIsPrimitive"),
                 compileOnly("constantIsInterface"),
                 compileOnly("constantIsHidden"),
@@ -175,22 +179,13 @@ public class TestClassQueries {
                         "%class\\.modifiers\\.value = load i32",
                         "%class\\.flags\\.result = phi i32"));
         checkMethodIR(dumpPath, enabled, "queryIsArray", "java_lang_Class", "isArray",
-                new Class<?>[] {Class.class}, List.of(
-                        "%class\\.query\\.is_primitive = icmp eq ptr %class\\.query\\.klass, null",
-                        "%class\\.query\\.is_array = icmp slt i32 "
-                                + "%class\\.query\\.layout_helper, 0",
-                        "%class\\.query\\.non_primitive_result = zext i1 "
-                                + "%class\\.query\\.is_array to i32"));
+                new Class<?>[] {Class.class}, List.of());
         checkMethodIR(dumpPath, enabled, "queryIsPrimitive", "java_lang_Class", "isPrimitive",
                 new Class<?>[] {Class.class}, List.of(
                         "%class\\.query\\.is_primitive = icmp eq ptr %class\\.query\\.klass, null",
                         "%class\\.query\\.result = zext i1 %class\\.query\\.is_primitive to i32"));
         checkMethodIR(dumpPath, enabled, "queryIsInterface", "java_lang_Class", "isInterface",
-                new Class<?>[] {Class.class}, List.of(
-                        "%class\\.query\\.is_primitive = icmp eq ptr %class\\.query\\.klass, null",
-                        "and i32 %class\\.query\\.access_flags, 512",
-                        "%class\\.query\\.non_primitive_result = zext i1 "
-                                + "%class\\.query\\.flag_set to i32"));
+                new Class<?>[] {Class.class}, List.of());
         checkMethodIR(dumpPath, enabled, "queryIsHidden", "java_lang_Class", "isHidden",
                 new Class<?>[] {Class.class}, List.of(
                         "%class\\.query\\.is_primitive = icmp eq ptr %class\\.query\\.klass, null",
@@ -214,6 +209,8 @@ public class TestClassQueries {
                         "%class\\.flags\\.result = phi i32"));
         if (enabled) {
             checkConstantIR(dumpPath, "constantIsArray", "ret i32 1");
+            checkConstantIR(dumpPath, "phiIsArray", "ret i32 1", boolean.class);
+            checkConstantIR(dumpPath, "phiIsInterface", "ret i32 1", boolean.class);
             checkConstantIR(dumpPath, "constantIsPrimitive", "ret i32 1");
             checkConstantIR(dumpPath, "constantIsInterface", "ret i32 1");
             checkConstantIR(dumpPath, "constantIsHidden", "ret i32 0");
@@ -268,8 +265,9 @@ public class TestClassQueries {
     }
 
     private static void checkConstantIR(String dumpPath, String methodName,
-                                        String resultPattern) throws Exception {
-        Method method = TestWrapper.class.getMethod(methodName);
+                                        String resultPattern, Class<?>... parameterTypes)
+            throws Exception {
+        Method method = TestWrapper.class.getMethod(methodName, parameterTypes);
         FileCheck optimized = new FileCheck(dumpPath, method, true);
         optimized.checkPattern(resultPattern);
         optimized.checkNotPattern("java_lang_Class_(isArray|isPrimitive|isInterface|isHidden|getModifiers)");
@@ -334,7 +332,10 @@ public class TestClassQueries {
         String nativeCall = "(call|invoke) hotspotcc [^\\r\\n]*" + targetOwner + "_"
                 + targetName;
         if (enabled) {
-            if (isDirectClassQuery(wrapperName)) {
+            if (wrapperName.equals("queryIsArray") || wrapperName.equals("queryIsInterface")) {
+                String query = wrapperName.equals("queryIsArray") ? "array" : "interface";
+                checker.checkPattern("call hotspotcc i32 @jeandle\\.class_is_" + query);
+            } else if (isDirectClassQuery(wrapperName)) {
                 checker.checkPattern("call hotspotcc ptr @jeandle\\.load_mirror_klass"
                         + "\\(ptr addrspace\\(1\\) %[-A-Za-z$._0-9]+\\)");
                 checker.checkNotPattern("call hotspotcc [^\\r\\n]*"
@@ -407,6 +408,14 @@ public class TestClassQueries {
             warmup();
 
             Asserts.assertTrue(constantIsArray(), "constant isArray");
+            Asserts.assertTrue(phiIsArray(true), "phi isArray true branch");
+            Asserts.assertTrue(phiIsArray(false), "phi isArray false branch");
+            Asserts.assertTrue(phiMixedIsArray(true), "mixed phi array branch");
+            Asserts.assertFalse(phiMixedIsArray(false), "mixed phi class branch");
+            Asserts.assertTrue(phiIsInterface(true), "phi isInterface true branch");
+            Asserts.assertTrue(phiIsInterface(false), "phi isInterface false branch");
+            Asserts.assertTrue(phiMixedIsInterface(true), "mixed phi interface branch");
+            Asserts.assertFalse(phiMixedIsInterface(false), "mixed phi class branch");
             Asserts.assertTrue(constantIsPrimitive(), "constant isPrimitive");
             Asserts.assertTrue(constantIsInterface(), "constant isInterface");
             Asserts.assertFalse(constantIsHidden(), "constant isHidden");
@@ -516,6 +525,10 @@ public class TestClassQueries {
                 queryIsInterface(TestInterface.class);
                 queryIsHidden(Object.class);
                 constantIsArray();
+                phiIsArray((i & 1) == 0);
+                phiMixedIsArray((i & 1) == 0);
+                phiIsInterface((i & 1) == 0);
+                phiMixedIsInterface((i & 1) == 0);
                 constantIsPrimitive();
                 constantIsInterface();
                 constantIsHidden();
@@ -639,6 +652,46 @@ public class TestClassQueries {
 
         public static boolean constantIsArray() {
             return String[].class.isArray();
+        }
+
+        public static boolean phiIsArray(boolean chooseStringArray) {
+            Class<?> klass;
+            if (chooseStringArray) {
+                klass = String[].class;
+            } else {
+                klass = int[].class;
+            }
+            return klass.isArray();
+        }
+
+        public static boolean phiMixedIsArray(boolean chooseArray) {
+            Class<?> klass;
+            if (chooseArray) {
+                klass = String[].class;
+            } else {
+                klass = String.class;
+            }
+            return klass.isArray();
+        }
+
+        public static boolean phiIsInterface(boolean chooseInterface) {
+            Class<?> klass;
+            if (chooseInterface) {
+                klass = TestInterface.class;
+            } else {
+                klass = TestAnnotation.class;
+            }
+            return klass.isInterface();
+        }
+
+        public static boolean phiMixedIsInterface(boolean chooseInterface) {
+            Class<?> klass;
+            if (chooseInterface) {
+                klass = TestInterface.class;
+            } else {
+                klass = String.class;
+            }
+            return klass.isInterface();
         }
 
         public static boolean constantIsPrimitive() {
