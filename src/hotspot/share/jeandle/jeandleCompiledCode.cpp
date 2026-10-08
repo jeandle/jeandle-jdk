@@ -250,6 +250,8 @@ void JeandleCompiledCode::finalize() {
   masm->align(static_cast<int>(align));
 
   _prolog_length = masm->offset();
+  RISCV_ONLY(assert(is_aligned(_prolog_length, NativeInstruction::instruction_size),
+                    "Jeandle blob start must be 4-byte aligned for call patching: %d", _prolog_length);)
 
   assembler.emit_insts(((address) _obj->getBufferStart()) + offset, code_size);
 

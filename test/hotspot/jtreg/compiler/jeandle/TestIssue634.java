@@ -28,6 +28,11 @@
  *      -XX:CompileCommand=compileonly,TestIssue634::* TestIssue634
  */
 
+// Jeandle methods are always compiled without compressed instructions, so
+// -XX:-UseRVC does not change the code LLVM emits. The two @run legs differ
+// only in HotSpot's own prolog and stub compression, which is what moves the
+// copied blob start off a 4-byte boundary. They do not cover compressed code
+// inside Jeandle methods.
 public class TestIssue634 {
     static class Base {
         int mix(int a, int b) {
