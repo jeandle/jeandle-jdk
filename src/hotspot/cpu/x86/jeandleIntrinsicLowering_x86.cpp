@@ -27,6 +27,7 @@
 
 #include "jeandle/__hotspotHeadersBegin__.hpp"
 #include "runtime/globals.hpp"
+#include "runtime/vm_version.hpp"
 
 // =============================================================================
 // Arch-specific CPU feature checks (x86)
@@ -56,6 +57,12 @@ bool JeandleIntrinsicLowering::supports_vectorized_mismatch_medium_path() {
   return false;
 }
 
+bool JeandleIntrinsicLowering::cpu_supports_cache_writeback() {
+  // Matches C2's predicate for Op_CacheWB/Op_CacheWBPreSync/Op_CacheWBPostSync:
+  // predicate(VM_Version::supports_data_cache_line_flush())
+  return VM_Version::supports_data_cache_line_flush();
+}
+
 // =============================================================================
 // Arch-specific intrinsic lowering (x86)
 // =============================================================================
@@ -68,5 +75,37 @@ bool JeandleIntrinsicLowering::lower_spin_wait_hint() {
   builder.CreateIntrinsic(
       llvm::Intrinsic::x86_sse2_pause, llvm::ArrayRef<llvm::Type*>{}, {});
   // void return: nothing to push on the JVM operand stack
+  return true;
+}
+
+bool JeandleIntrinsicLowering::lower_writeback0() {
+  llvm::IRBuilder<>& builder = _interp->_ir_builder;
+  _interp->null_check(_interp->_jvm->peek_value(1).value());
+  llvm::Value* address = _interp->_jvm->lpop();
+  _interp->_jvm->apop();
+
+  llvm::PointerType* ptr_type = llvm::PointerType::get(builder.getContext(), 0);
+  llvm::Value* address_ptr = builder.CreateIntToPtr(address, ptr_type);
+  if (VM_Version::supports_clflushopt()) {
+    llvm::Intrinsic::ID id = VM_Version::supports_clwb()
+        ? llvm::Intrinsic::x86_clwb
+        : llvm::Intrinsic::x86_clflushopt;
+    builder.CreateIntrinsic(id, {}, {address_ptr});
+  } else {
+    builder.CreateIntrinsic(llvm::Intrinsic::x86_sse2_clflush, {}, {address_ptr});
+  }
+  return true;
+}
+
+bool JeandleIntrinsicLowering::lower_writeback_sync(vmIntrinsics::ID id) {
+  llvm::IRBuilder<>& builder = _interp->_ir_builder;
+  _interp->null_check(_interp->_jvm->peek_value(0).value());
+  _interp->_jvm->apop();
+
+  if (id == vmIntrinsics::_writebackPostSync0 &&
+      (VM_Version::supports_clflushopt() || VM_Version::supports_clwb())) {
+    builder.CreateIntrinsic(
+        llvm::Intrinsic::x86_sse_sfence, llvm::ArrayRef<llvm::Type*>{}, {});
+  }
   return true;
 }

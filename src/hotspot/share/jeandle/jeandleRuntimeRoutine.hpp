@@ -350,6 +350,13 @@
       llvm::Type::getVoidTy(context),                                               \
       llvm::PointerType::get(context, llvm::jeandle::AddrSpace::CHeapAddrSpace))    \
                                                                                     \
+  AARCH64_ONLY(def(StubRoutines_data_cache_writeback,                               \
+      StubRoutines::data_cache_writeback(),                                         \
+      true,                                                                         \
+      true,                                                                         \
+      llvm::Type::getVoidTy(context),                                               \
+      llvm::PointerType::getUnqual(context)))                                       \
+                                                                                    \
 def(StubRoutines_generic_arraycopy,                                                 \
       StubRoutines::generic_arraycopy(),                                            \
       true,                                                                         \
