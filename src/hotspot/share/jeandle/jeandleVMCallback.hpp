@@ -105,13 +105,13 @@ class JeandleVMCallback : public AllStatic {
   static bool update_to_static_opt_virtual_call(int64_t id);
 
   // Replaces the now-removed ciEnv::get_instance_klass_for_klass: maps a raw
-  // receiver Klass* to a ciInstanceKlass*, preserving the null-check + assert +
+  // Klass* to a ciInstanceKlass*, preserving the null-check + assert +
   // VM_ENTRY_MARK the old public wrapper carried. Public because it is called
   // from the file-local CHA helpers in jeandleVMCallback.cpp (anonymous-namespace
   // free functions, which have no member access). The private ciEnv::get_instance
   // klass it delegates to is reachable because JeandleVMCallback is a friend of
   // ciEnv.
-  static ciInstanceKlass* get_receiver_instance_klass(Klass* receiver_klass);
+  static ciInstanceKlass* get_ci_instance_klass(Klass* klass);
 };
 
 #endif // SHARE_JEANDLE_VM_CALLBACK_HPP
