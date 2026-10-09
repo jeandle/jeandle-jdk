@@ -18,6 +18,7 @@
  *
  */
 
+#include "classfile/vmIntrinsics.hpp"
 #include "jeandle/__llvmHeadersBegin__.hpp"
 #include "llvm/Analysis/ConstantFolding.h"
 #include "llvm/Analysis/LoopInfo.h"
@@ -30,6 +31,7 @@
 #include "llvm/IR/Jeandle/GCStrategy.h"
 #include "llvm/IR/Jeandle/JavaType.h"
 #include "llvm/IR/Jeandle/Metadata.h"
+#include <string>
 
 #include "jeandle/jeandleAbstractInterpreter.hpp"
 #include "jeandle/jeandleCompiledCall.hpp"
@@ -46,7 +48,6 @@
 #include "ci/ciSymbols.hpp"
 #include "ci/ciTypeFlow.hpp"
 #include "oops/arrayOop.hpp"
-#include "oops/objArrayKlass.hpp"
 #include "classfile/javaClasses.hpp"
 #include "compiler/compilerDirectives.hpp"
 #include "compiler/compileTask.hpp"
@@ -184,6 +185,24 @@ bool JeandleVMState::update_phi_nodes(JeandleVMState* income_jvm, llvm::BasicBlo
   return true;
 }
 
+void JeandleVMState::invalidate_debug_only_locals(MethodLivenessResult raw_liveness) {
+  if (!raw_liveness.is_valid()) {
+    return;
+  }
+  assert((size_t)raw_liveness.size() == _locals.size(), "liveness size must match locals");
+
+  for (size_t i = 0; i < _locals.size(); ++i) {
+    if (raw_liveness.at(i) || _locals[i].is_null()) {
+      continue;
+    }
+
+    llvm::PHINode* phi_node = llvm::cast<llvm::PHINode>(_locals[i].value());
+    assert(phi_node->use_empty(), "debug-only local must be unused before block parsing");
+    phi_node->eraseFromParent();
+    invalidate_local(i);
+  }
+}
+
 // Stack operations:
 
 void JeandleVMState::push(BasicType type, llvm::Value* value) {
@@ -257,7 +276,7 @@ llvm::SmallVector<llvm::Value*> JeandleVMState::deopt_args(llvm::IRBuilder<>& bu
   // scope first. Using bci+bci gives the backend a cheap postorder search key
   // for the current method scope. It also makes the IR easier to inspect by
   // eye: the BCI position and value are visible directly as a duplicated int32.
-  /* TODO: scalar */
+  // PEA scalar rewriting of these values is handled on the LLVM side.
 
   if (parse_context.is_inlinee()) {
     uint64_t encode = DeoptValueEncoding(0, DeoptValueEncoding::MethodType, llvm::jeandle::T_METADATA).encode();
@@ -291,7 +310,7 @@ llvm::SmallVector<llvm::Value*> JeandleVMState::deopt_args(llvm::IRBuilder<>& bu
     // slots (one per word) so the two-slot layout of later locals stays aligned.
     bool dead = !_locals[i].is_null() && liveness.is_valid() && !liveness.at(i);
     if (!_locals[i].is_null() && !dead) {
-      uint64_t encode = DeoptValueEncoding(i, DeoptValueEncoding::LocalType, 
+      uint64_t encode = DeoptValueEncoding(i, DeoptValueEncoding::LocalType,
           static_cast<HotspotBasicType>(_locals[i].computational_type())).encode();
 #ifdef ASSERT
       if (log_is_enabled(Trace, jeandle)) {
@@ -308,7 +327,7 @@ llvm::SmallVector<llvm::Value*> JeandleVMState::deopt_args(llvm::IRBuilder<>& bu
       // A dead double-word local takes two illegal slots, indexed i and i+1.
       int slots = (!_locals[i].is_null() && is_double_word) ? 2 : 1;
       for (int s = 0; s < slots; s++) {
-        uint64_t encode = DeoptValueEncoding(i + s, DeoptValueEncoding::LocalType, 
+        uint64_t encode = DeoptValueEncoding(i + s, DeoptValueEncoding::LocalType,
             llvm::jeandle::T_ILLEGAL).encode();
 #ifdef ASSERT
         if (log_is_enabled(Trace, jeandle)) {
@@ -354,7 +373,13 @@ llvm::SmallVector<llvm::Value*> JeandleVMState::deopt_args(llvm::IRBuilder<>& bu
     TypedValue obj = _locks[i].object();
     assert(obj.computational_type() == T_OBJECT, "should be object type");
     llvm::Value* lock = _locks[i].lock();
-    uint64_t encode = DeoptValueEncoding(i, DeoptValueEncoding::MonitorType,
+    // The monitor encoding's Index field is a kind discriminant consumed by the
+    // HotSpot parser (see DeoptValueEncoding::MonitorType in Deoptimization.h):
+    // index=0 = REAL (non-eliminated) lock, owner = a live oop. The frontend
+    // always emits real locks (PEA lock elision + deopt reconstruction is the
+    // LLVM transform's job), so index is always 0 here. The lock's position in
+    // the monitors array (i) is its identity; it is NOT carried in the encoding.
+    uint64_t encode = DeoptValueEncoding(0, DeoptValueEncoding::MonitorType,
                                         static_cast<HotspotBasicType>(obj.computational_type())).encode();
 #ifdef ASSERT
     if (log_is_enabled(Trace, jeandle)) {
@@ -410,12 +435,24 @@ JeandleBasicBlock::JeandleBasicBlock(int block_id,
                                      _limit_bci(limit_bci),
                                      _reverse_post_order(-1),
                                      _jvm(nullptr),
+                                     _merged_predecessor_count(0),
                                      _predecessors(),
                                      _successors(),
                                      _header_llvm_block(header_llvm_block),
                                      _tail_llvm_block(header_llvm_block),
                                      _ci_block(ci_block),
                                      _initial_jvm(nullptr) {}
+
+bool JeandleBasicBlock::record_predecessor_merge(bool merged) {
+  // Handler incoming states are generated per throwing bytecode rather than
+  // per static CFG edge, and handler readiness is handled conservatively.
+  if (merged && !is_exception_handler()) {
+    assert(_merged_predecessor_count < _predecessors.size(),
+           "more successful predecessor merges than CFG predecessor edges");
+    ++_merged_predecessor_count;
+  }
+  return merged;
+}
 
 bool JeandleBasicBlock::merge_VM_state_from(JeandleVMState* vm_state, llvm::BasicBlock* incoming, ciMethod* method, bool is_osr) {
   if (_jvm == nullptr) {
@@ -435,24 +472,30 @@ bool JeandleBasicBlock::merge_VM_state_from(JeandleVMState* vm_state, llvm::Basi
       initialize_VM_state_from(vm_state, incoming, method->liveness_at_bci(_start_bci), is_osr);
     }
 
-    return true;
+    return record_predecessor_merge(true);
 
   } else if (!is_set(is_compiled) && !is_set(is_loop_header)) {
     assert(_predecessors.size() > 1 || is_exception_handler(), "more than one predecessors are needed for phi nodes");
-    return _jvm->update_phi_nodes(vm_state, incoming, is_osr);
-  } else if (is_set(is_loop_header)) {
+    return record_predecessor_merge(_jvm->update_phi_nodes(vm_state, incoming, is_osr));
+  } else if (is_set(is_loop_header) || _initial_jvm != nullptr) {
     if (_initial_jvm == nullptr) {
-      return _jvm->update_phi_nodes(vm_state, incoming, is_osr);
+      assert(is_set(is_loop_header), "only an uncompiled loop header can lack an initial VM state");
+      return record_predecessor_merge(_jvm->update_phi_nodes(vm_state, incoming, is_osr));
     }
-    assert(_initial_jvm != nullptr, "loop header initial JeandleVMState is needed");
-    return _initial_jvm->update_phi_nodes(vm_state, incoming, is_osr);
+    // The block may already have been compiled before all of its predecessors
+    // were visited. Update the PHIs in its saved entry state rather than the
+    // VM state mutated while interpreting the block.
+    return record_predecessor_merge(_initial_jvm->update_phi_nodes(vm_state, incoming, is_osr));
   }
 
   // Bad bytecodes.
   return false;
 }
 
-void JeandleBasicBlock::initialize_VM_state_from(JeandleVMState* incoming_state, llvm::BasicBlock* incoming_block, MethodLivenessResult liveness, bool is_osr) {
+void JeandleBasicBlock::initialize_VM_state_from(JeandleVMState* incoming_state,
+                                                 llvm::BasicBlock* incoming_block,
+                                                 MethodLivenessResult liveness,
+                                                 bool is_osr) {
   assert(_jvm == nullptr, "cannot initialize twice");
 
   llvm::IRBuilder<> ir_builder(_header_llvm_block);
@@ -558,8 +601,8 @@ void BasicBlockBuilder::setup_exception_handlers() {
     int bci = codes.cur_bci();
     JeandleBasicBlock* block = _bci2block[bci];
     if (block->is_exception_handler()) {
-      int covered_bci = block->exeption_range_start_bci();
-      while (covered_bci < block->exeption_range_limit_bci()) {
+      int covered_bci = block->exception_range_start_bci();
+      while (covered_bci < block->exception_range_limit_bci()) {
         JeandleBasicBlock* covered_block = _bci2block[covered_bci];
 
         // Connect each exception handler block only once.
@@ -763,7 +806,7 @@ JeandleAbstractInterpreter::JeandleAbstractInterpreter(const JeandleParseContext
                                                        _parse_context(parse_context),
                                                        _method(parse_context.method()),
                                                        _profile(_method),
-                                                       _llvm_func(JeandleFuncSig::create_llvm_func(_method, target_module, entry_bci != InvocationEntryBci)),
+                                                       _llvm_func(JeandleFuncSig::create_llvm_func(_method, target_module, _parse_context.is_root(), entry_bci != InvocationEntryBci)),
                                                        _entry_bci(entry_bci),
                                                        _context(&target_module.getContext()),
                                                        _bytecodes(_method),
@@ -1139,8 +1182,24 @@ void JeandleAbstractInterpreter::interpret_block(JeandleBasicBlock* block) {
     return;
   }
 
-  if (block->is_set(JeandleBasicBlock::is_loop_header)) {
-    // Copy loop header's initial JeandleVMState.
+  if (block->is_set(JeandleBasicBlock::is_loop_header) ||
+      block->is_exception_handler() ||
+      !block->is_ready()) {
+    // A local kept alive only for debugging is never read by bytecodes from
+    // this block. If an incoming edge can arrive after the block is parsed, its
+    // first value does not establish a stable LLVM PHI type. Keep the local
+    // unavailable instead of consulting another compiler's type-flow analysis.
+    _jvm->invalidate_debug_only_locals(_method->raw_liveness_at_bci(block->start_bci()));
+
+    // This follows C2's Parse::do_all_blocks(): loop headers and exception
+    // handlers always preserve their entry state, and a block that is not ready
+    // preserves it for late predecessor merges. C2 gates the readiness check
+    // with has_irreducible because ciTypeFlow models irreducible loops and its
+    // RPO guarantees that ordinary blocks in reducible control flow are ready.
+    // Jeandle builds a separate OSR-rooted CFG and does not model
+    // irreducibility, so check readiness directly. This may preserve an extra
+    // state for a dead or pruned predecessor, but does not delay parsing or
+    // affect correctness.
     block->set_initial_jvm(_jvm->copy());
   }
 
@@ -1488,22 +1547,7 @@ void JeandleAbstractInterpreter::interpret_block(JeandleBasicBlock* block) {
   }
 }
 
-void JeandleAbstractInterpreter::uncommon_trap(Deoptimization::DeoptReason reason, Deoptimization::DeoptAction action, llvm::BasicBlock* insert_block, bool should_reexecute) {
-#ifdef ASSERT
-  // Structural guard against trap-throttle drift: any deopt reason an intrinsic emits
-  // must be in its trap-throttle mask, or try_lower_intrinsic's pre-check would not
-  // throttle it.  (Exceptions go through builtin_throw, not here, so null/range/div0
-  // are correctly out of scope.)
-  if (_lowering_intrinsic_id != vmIntrinsics::_none) {
-    const JeandleTrapReasonMask mask =
-        JeandleIntrinsicLowering::trap_throttle_mask(_lowering_intrinsic_id);
-    assert((mask & (JeandleTrapReasonMask(1) << static_cast<uint>(reason))) != 0,
-           "intrinsic %s emits deopt reason %d not in its trap-throttle mask; "
-           "add it to trap_throttle_mask()",
-           vmIntrinsics::name_at(_lowering_intrinsic_id), static_cast<int>(reason));
-  }
-#endif
-
+void JeandleAbstractInterpreter::uncommon_trap(Deoptimization::DeoptReason reason, Deoptimization::DeoptAction action, llvm::BasicBlock* insert_block) {
   auto saved_insert_block = _ir_builder.GetInsertBlock();
   auto saved_insert_point = _ir_builder.GetInsertPoint();
 
@@ -1525,7 +1569,7 @@ void JeandleAbstractInterpreter::uncommon_trap(Deoptimization::DeoptReason reaso
       &_module, llvm::Intrinsic::experimental_deoptimize, {ret_type});
   deopt_decl->setCallingConv(llvm::CallingConv::Hotspot_JIT);
   llvm::CallInst* call = _ir_builder.CreateCall(
-      deopt_decl, {request}, {create_current_deopt_bundle(should_reexecute)});
+      deopt_decl, {request}, {create_current_deopt_bundle(true /* should_reexecute */)});
   call->setCallingConv(llvm::CallingConv::Hotspot_JIT);
 
   // LangRef: the block holding this intrinsic must terminate with a `ret`
@@ -1666,12 +1710,18 @@ bool JeandleAbstractInterpreter::path_is_suitable_for_unstable_if_prune(
   return !too_many_traps(_method, bci, Deoptimization::Reason_unstable_if);
 }
 
-void JeandleAbstractInterpreter::do_if_branch(llvm::Value* cond) {
+void JeandleAbstractInterpreter::do_if_branch(llvm::Value* cond, unsigned operands) {
   int bci = _bytecodes.cur_bci();
   JeandleBasicBlock* taken_jbb = bci2block()[_bytecodes.get_dest()];
   JeandleBasicBlock* fallthrough_jbb = bci2block()[_bytecodes.next_bci()];
   llvm::BasicBlock* taken_block = taken_jbb->header_llvm_block();
   llvm::BasicBlock* fallthrough_block = fallthrough_jbb->header_llvm_block();
+  auto consume_operands = [&]() {
+    while (operands != 0) {
+      --operands;
+      _jvm->raw_pop();
+    }
+  };
 
   // Degenerate `if (cond) {}` where taken == fallthrough. BasicBlockBuilder
   // pushes the shared target into _successors twice, so the post-loop merge
@@ -1679,7 +1729,10 @@ void JeandleAbstractInterpreter::do_if_branch(llvm::Value* cond) {
   // skip branch weights and the unstable-if prune; !prof on a same-target CondBr trips a
   // verifier null-deref on LLVM 22 aarch64.
   if (taken_jbb == fallthrough_jbb) {
+    consume_operands();
     if (taken_jbb->is_exception_handler()) {
+      // The CondBr contributes two distinct CFG edges to the shared target.
+      merge_into_exception_handler(taken_jbb);
       merge_into_exception_handler(taken_jbb);
     }
     _ir_builder.CreateCondBr(cond, taken_block, fallthrough_block);
@@ -1687,18 +1740,14 @@ void JeandleAbstractInterpreter::do_if_branch(llvm::Value* cond) {
   }
 
   // Unstable-if prune: strict-zero one-side prune into uncommon_trap(Reason_unstable_if).
-  // Operands are still on the stack here -- if_* helpers defer the pop until
-  // after this returns so the trap deopt bundle sees pre-if state, same effect
-  // as C2's repush_if_args() without re-pushing.
+  // Operands are still on the stack here so the trap deopt bundle sees the
+  // pre-if state, same effect as C2's repush_if_args() without re-pushing.
   JeandleProfile::BranchCounts counts = _profile.branch_at(bci);
   if (path_is_suitable_for_unstable_if_prune(bci, counts)) {
     auto emit_pruned_branch = [&](JeandleBasicBlock* hot_jbb,
                                   llvm::BasicBlock* hot_block,
                                   bool cond_true_is_hot,
                                   JeandleBasicBlock* pruned_jbb) {
-      if (hot_jbb->is_exception_handler()) {
-        merge_into_exception_handler(hot_jbb);
-      }
       llvm::BasicBlock* trap_block =
           llvm::BasicBlock::Create(*_context, "unstable_if_trap", _llvm_func);
       llvm::BranchInst* br =
@@ -1715,6 +1764,10 @@ void JeandleAbstractInterpreter::do_if_branch(llvm::Value* cond) {
       // then the liveness info will be more accurate.
       uncommon_trap(Deoptimization::Reason_unstable_if,
                     Deoptimization::Action_reinterpret, trap_block);
+      consume_operands();
+      if (hot_jbb->is_exception_handler()) {
+        merge_into_exception_handler(hot_jbb);
+      }
       // Skip the pruned JBB in the post-loop successor merge; its preallocated
       // header_llvm_block is reclaimed by remove_dead_blocks.
       _pruned_successor = pruned_jbb;
@@ -1732,6 +1785,7 @@ void JeandleAbstractInterpreter::do_if_branch(llvm::Value* cond) {
     }
   }
 
+  consume_operands();
   if (taken_jbb->is_exception_handler()) {
     merge_into_exception_handler(taken_jbb);
   }
@@ -1749,8 +1803,7 @@ void JeandleAbstractInterpreter::if_zero(llvm::CmpInst::Predicate p) {
   // Peek (do not pop): a pruned uncommon_trap must see the operand on the stack.
   llvm::Value* v = _jvm->raw_peek(0).value();
   llvm::Value* cond = _ir_builder.CreateICmp(p, v, JeandleType::int_const(_ir_builder, 0));
-  do_if_branch(cond);
-  _jvm->ipop();
+  do_if_branch(cond, 1);
 }
 
 void JeandleAbstractInterpreter::if_icmp(llvm::CmpInst::Predicate p) {
@@ -1761,9 +1814,7 @@ void JeandleAbstractInterpreter::if_icmp(llvm::CmpInst::Predicate p) {
   llvm::Value* r = _jvm->raw_peek(0).value();
   llvm::Value* l = _jvm->raw_peek(1).value();
   llvm::Value* cond = _ir_builder.CreateICmp(p, l, r);
-  do_if_branch(cond);
-  _jvm->ipop();
-  _jvm->ipop();
+  do_if_branch(cond, 2);
 }
 
 void JeandleAbstractInterpreter::lcmp() {
@@ -1784,9 +1835,7 @@ void JeandleAbstractInterpreter::if_acmp(llvm::CmpInst::Predicate p) {
   llvm::Value* r = _jvm->raw_peek(0).value();
   llvm::Value* l = _jvm->raw_peek(1).value();
   llvm::Value* cond = _ir_builder.CreateICmp(p, l, r);
-  do_if_branch(cond);
-  _jvm->apop();
-  _jvm->apop();
+  do_if_branch(cond, 2);
 }
 
 void JeandleAbstractInterpreter::if_null(llvm::CmpInst::Predicate p) {
@@ -1796,8 +1845,7 @@ void JeandleAbstractInterpreter::if_null(llvm::CmpInst::Predicate p) {
   // Peek (do not pop): a pruned uncommon_trap must see the operand on the stack.
   llvm::Value* v = _jvm->raw_peek(0).value();
   llvm::Value* cond = _ir_builder.CreateICmp(p, v, llvm::ConstantPointerNull::get(llvm::cast<llvm::PointerType>(v->getType())));
-  do_if_branch(cond);
-  _jvm->apop();
+  do_if_branch(cond, 1);
 }
 
 /*
@@ -2049,18 +2097,48 @@ void JeandleAbstractInterpreter::invoke() {
     assert(method_signature == target->signature(), "method signature unmatched");
   }
 
-  // Construct arguments.
+  // Pop arguments from the JVM stack in reverse order, then the receiver.
   const int arg_size = method_signature->count() + receiver;
   llvm::SmallVector<llvm::Value*> args(arg_size);
-  llvm::SmallVector<llvm::Type*> args_type(arg_size);
   for (int i = method_signature->count() - 1; i >= 0; --i) {
     BasicType type = method_signature->type_at(i)->basic_type();
     args[i + receiver] = _jvm->pop(type);
-    args_type[i + receiver] = JeandleType::java2llvm(type, *_context);
   }
   if (receiver) {
     args[0] = _jvm->pop(BasicType::T_OBJECT);
+  }
+
+  llvm::InvokeInst* invoke = emit_java_call(target, holder, method_signature,
+                                             args, receiver != 0,
+                                             is_method_handle_invoke, bc);
+  RETURN_VOID_ON_JEANDLE_ERROR();
+
+  BasicType return_type = method_signature->return_type()->basic_type();
+  if (return_type != BasicType::T_VOID) {
+    _jvm->push(return_type, invoke);
+  }
+}
+
+llvm::InvokeInst* JeandleAbstractInterpreter::emit_java_call(ciMethod* target,
+                                                              ciKlass* declared_holder,
+                                                              const ciSignature* method_signature,
+                                                              llvm::ArrayRef<llvm::Value*> args,
+                                                              bool has_receiver,
+                                                              bool is_method_handle_invoke,
+                                                              Bytecodes::Code bc) {
+  assert(declared_holder != nullptr, "declared holder must be available");
+  const int arg_count = method_signature->count() + (has_receiver ? 1 : 0);
+  assert(static_cast<int>(args.size()) == arg_count,
+         "argument count mismatch: expected %d, got %zu", arg_count, args.size());
+
+  // Build argument types: [receiver?] then signature params in declaration order.
+  llvm::SmallVector<llvm::Type*> args_type(arg_count);
+  if (has_receiver) {
     args_type[0] = JeandleType::java2llvm(BasicType::T_OBJECT, *_context);
+  }
+  for (int i = 0; i < method_signature->count(); ++i) {
+    BasicType type = method_signature->type_at(i)->basic_type();
+    args_type[i + (has_receiver ? 1 : 0)] = JeandleType::java2llvm(type, *_context);
   }
 
   // Declare callee function type.
@@ -2069,6 +2147,8 @@ void JeandleAbstractInterpreter::invoke() {
   std::string callee_name = JeandleFuncSig::method_name_with_signature(target);
   if ((bc == Bytecodes::_invokevirtual || bc == Bytecodes::_invokeinterface) &&
       !target->can_be_statically_bound()) {
+    // Keep dynamic calls distinct from Java function definitions so LLVM
+    // cannot resolve a virtual call as a direct call to a same-named symbol.
     callee_name = std::string("__jeandle_dynamic_call.") + callee_name;
   }
   llvm::FunctionCallee callee = _module.getOrInsertFunction(callee_name, func_type);
@@ -2133,7 +2213,7 @@ void JeandleAbstractInterpreter::invoke() {
 
   // Every invoke instruction may throw exceptions, handle them here.
   DispatchedDest dispatched = dispatch_exception_for_invoke();
-  RETURN_VOID_ON_JEANDLE_ERROR();
+  RETURN_ON_JEANDLE_ERROR(nullptr);
 
   // Create the invoke instruction with deopt operands.
   llvm::InvokeInst* invoke = _ir_builder.CreateInvoke(callee, dispatched._normal_dest, dispatched._unwind_dest, args,
@@ -2158,22 +2238,29 @@ void JeandleAbstractInterpreter::invoke() {
                                                  Bytecodes::name(bc));
   llvm::Attribute declared_holder_attr = llvm::Attribute::get(*_context,
                                                  llvm::jeandle::Attribute::DeclaredHolder,
-                                                 std::to_string(reinterpret_cast<uintptr_t>(ciEnv::get_instance_klass_for_declared_method_holder(holder))));
+                                                 std::to_string(reinterpret_cast<uintptr_t>(ciEnv::get_instance_klass_for_declared_method_holder(declared_holder)->constant_encoding())));
   invoke->addFnAttr(id_attr);
   invoke->addFnAttr(patch_bytes_attr);
   invoke->addFnAttr(bc_attr);
   invoke->addFnAttr(declared_holder_attr);
-  if (target->can_be_statically_bound()) {
+  if (dest == SharedRuntime::get_resolve_opt_virtual_call_stub()) {
+    assert(has_receiver, "opt virtual call must have a receiver");
+    invoke->addParamAttr(0, llvm::Attribute::NoUndef);
+  }
+  if (call_type != JeandleCompiledCall::DYNAMIC_CALL) {
     invoke->addFnAttr(llvm::Attribute::get(*_context,
                                             llvm::jeandle::Attribute::MonomorphicTarget));
+  }
+  if (target->is_method_handle_intrinsic()) {
+    llvm::Attribute method_handle_intrinsic_name = llvm::Attribute::get(
+        *_context, llvm::jeandle::Attribute::MhIntrinsicName, vmIntrinsics::name_at(target->intrinsic_id()));
+      invoke->addFnAttr(method_handle_intrinsic_name);
   }
 
   // Attach java-klass return type attribute to the call site.
   attach_java_klass_ret_attr(invoke, method_signature->return_type(), *_context);
 
-  if (return_type != BasicType::T_VOID) {
-    _jvm->push(return_type, invoke);
-  }
+  return invoke;
 }
 
 bool JeandleAbstractInterpreter::try_lower_intrinsic(const ciMethod* target) {
@@ -2192,27 +2279,10 @@ bool JeandleAbstractInterpreter::try_lower_intrinsic(const ciMethod* target) {
     }
   }
 
-  // 3) Trap-throttle check
-  const int cur_bci = _bytecodes.cur_bci();
-  JeandleTrapReasonMask mask = JeandleIntrinsicLowering::trap_throttle_mask(id);
-  for (uint reason_idx = 0; mask != 0; ++reason_idx, mask >>= 1) {
-    if ((mask & 1u) != 0 &&
-        too_many_traps(const_cast<ciMethod*>(_method), cur_bci,
-                       static_cast<Deoptimization::DeoptReason>(reason_idx))) {
-      return false;
-    }
-  }
-
-  // 4) Lower
+  // 3) Lower. Trap throttling is intrinsic-specific: a lowering may decline,
+  // choose a less speculative mode, or deliberately keep emitting its trap.
   JeandleIntrinsicLowering lowering(this);
-  // Publish the intrinsic being lowered so uncommon_trap can verify (debug) that every
-  // deopt reason it emits is declared in the trap-throttle mask.  Save/restore rather
-  // than clear, so the invariant still holds if intrinsic lowering ever nests.
-  DEBUG_ONLY(const vmIntrinsics::ID prev_id = _lowering_intrinsic_id);
-  DEBUG_ONLY(_lowering_intrinsic_id = id);
-  bool lowered = lowering.lower(id, target);
-  DEBUG_ONLY(_lowering_intrinsic_id = prev_id);
-  return lowered;
+  return lowering.lower(id, target);
 }
 
 // Generate IR for calling into llvm FunctionCallee, without exception handling.
@@ -2367,9 +2437,7 @@ void JeandleAbstractInterpreter::checkcast() {
   ciKlass* ci_super_klass = _bytecodes.get_klass(will_link);
 
   if (!will_link) {
-    uncommon_trap(Deoptimization::Reason_unloaded,
-                  Deoptimization::Action_reinterpret);
-    _block->set(JeandleBasicBlock::always_uncommon_trap);
+    null_assert(obj);
     return;
   }
 
@@ -2404,9 +2472,9 @@ void JeandleAbstractInterpreter::instanceof(int klass_index) {
   ciKlass* ci_super_klass = _bytecodes.get_klass(will_link);
 
   if (!will_link) {
-    uncommon_trap(Deoptimization::Reason_unloaded,
-                  Deoptimization::Action_reinterpret);
-    _block->set(JeandleBasicBlock::always_uncommon_trap);
+    null_assert(obj);
+    _jvm->apop(); // Object was already fetched by raw_peek().
+    _jvm->ipush(JeandleType::int_const(_ir_builder, 0));
     return;
   }
 
@@ -2782,12 +2850,53 @@ void JeandleAbstractInterpreter::add_return_safepoint_poll() {
 }
 
 void JeandleAbstractInterpreter::arraylength() {
-    null_check(_jvm->raw_peek().value());
+  null_check(_jvm->raw_peek().value());
 
-    llvm::Value* array_oop = _jvm->apop();
+  llvm::Value* array_oop = _jvm->apop();
 
-    llvm::CallInst* call = call_java_op("jeandle.arraylength", {array_oop});
-    _jvm->ipush(call);
+  llvm::CallInst* call = call_java_op("jeandle.arraylength", {array_oop});
+  _jvm->ipush(call);
+}
+
+// Jeandle counterpart of C2 GraphKit::load_object_klass().
+llvm::Value* JeandleAbstractInterpreter::load_object_klass(llvm::Value* obj) {
+  llvm::CallBase* allocation = llvm::dyn_cast<llvm::CallBase>(obj);
+  llvm::Function* new_array = _module.getFunction("jeandle.new_array");
+  llvm::Function* new_instance = _module.getFunction("jeandle.new_instance");
+  if (allocation != nullptr &&
+      ((new_array != nullptr &&
+        allocation->getCalledFunction() == new_array) ||
+       (new_instance != nullptr &&
+        allocation->getCalledFunction() == new_instance))) {
+    // Keep the allocation invoke and its exceptional edge; only reuse its
+    // Klass input on the successful path.
+    llvm::Value* klass = allocation->getArgOperand(0);
+    assert(klass->getType()->isPointerTy(), "allocation klass must be a pointer");
+    return klass;
+  }
+
+  llvm::CallInst* loaded_klass = call_java_op("jeandle.load_klass", {obj});
+  loaded_klass->setName("arraycopy_klass");
+  return loaded_klass;
+}
+
+// Jeandle counterpart of C2 GraphKit::get_layout_helper(). If Klass is a
+// compile-time constant with a non-neutral layout helper, return the value via
+// constant_value. Otherwise emit the unordered runtime load.
+llvm::Value* JeandleAbstractInterpreter::get_layout_helper(
+    llvm::Value* klass, jint& constant_value) {
+  uintptr_t klass_constant = llvm::jeandle::extractKlassConstant(klass);
+  if (klass_constant != 0) {
+    Klass* constant_klass = reinterpret_cast<Klass*>(klass_constant);
+    jint layout_helper = constant_klass->layout_helper();
+    if (layout_helper != Klass::_lh_neutral_value) {
+      constant_value = layout_helper;
+      return nullptr;
+    }
+  }
+
+  constant_value = Klass::_lh_neutral_value;
+  return call_java_op("jeandle.layout_helper", {klass});
 }
 
 llvm::Value* JeandleAbstractInterpreter::compute_array_element_address(BasicType basic_type, llvm::Type* type) {
@@ -2848,28 +2957,8 @@ void JeandleAbstractInterpreter::do_array_load(BasicType basic_type) {
           : llvm::PointerType::get(*_context, llvm::jeandle::AddrSpace::JavaHeapAddrSpace);
       llvm::Value* load_value = do_array_load_inner(T_OBJECT, load_type);
 
-      // Attach element type metadata if the array's type is known.
-      // TODO: maybe we can do this in LLVM side, then we can use context-sensitive type information of array.
-      if (llvm::Instruction* load_inst = llvm::dyn_cast<llvm::Instruction>(load_value)) {
-        llvm::jeandle::JavaType array_type = llvm::jeandle::getJavaType(array_ref);
-        if (array_type.isKnown()) {
-          Klass* array_klass = (Klass*)array_type.Klass;
-          if (array_klass->is_objArray_klass()) {
-            Klass* elem_klass = ObjArrayKlass::cast(array_klass)->element_klass();
-            if (!is_unverified_interface(elem_klass)) {
-              llvm::MDNode* klass_md = llvm::MDNode::get(*_context, {
-                  llvm::ConstantAsMetadata::get(
-                      _ir_builder.getInt64((intptr_t)elem_klass))
-              });
-              load_inst->setMetadata(llvm::jeandle::Metadata::JavaKlass, klass_md);
-              if (is_effectively_final(elem_klass)) {
-                load_inst->setMetadata(llvm::jeandle::Metadata::JavaKlassExact,
-                                       llvm::MDNode::get(*_context, {}));
-              }
-            }
-          }
-        }
-      }
+      // Element type metadata is attached on the LLVM side by RecoverTypeInfo,
+      // which can use context-sensitive type information of the array.
 
       if (UseCompressedOops) {
         llvm::Type* oop_type = JeandleType::java2llvm(T_OBJECT, *_context);
@@ -2898,11 +2987,10 @@ void JeandleAbstractInterpreter::do_array_load(BasicType basic_type) {
   }
 }
 
-llvm::Value* JeandleAbstractInterpreter::do_array_store_inner(BasicType basic_type, llvm::Type* store_type, llvm::Value* value) {
+void JeandleAbstractInterpreter::do_array_store_inner(BasicType basic_type, llvm::Type* store_type, llvm::Value* value) {
   llvm::Value* element_address = compute_array_element_address(basic_type, store_type);
   llvm::StoreInst* store_inst = _ir_builder.CreateStore(value, element_address);
   store_inst->setAtomic(llvm::AtomicOrdering::Unordered);
-  return element_address;
 }
 
 void JeandleAbstractInterpreter::do_array_store(BasicType basic_type) {
@@ -2948,18 +3036,13 @@ void JeandleAbstractInterpreter::do_array_store(BasicType basic_type) {
     }
     case T_OBJECT: {
       value = _jvm->apop();
-      llvm::Value* element_address;
+      llvm::Type* store_type = llvm::PointerType::get(*_context, UseCompressedOops
+          ? llvm::jeandle::AddrSpace::NarrowOopAddrSpace
+          : llvm::jeandle::AddrSpace::JavaHeapAddrSpace);
       if (UseCompressedOops) {
-        llvm::Type* store_type = llvm::PointerType::get(*_context, llvm::jeandle::AddrSpace::NarrowOopAddrSpace);
-        element_address = do_array_store_inner(T_OBJECT, store_type, _ir_builder.CreateAddrSpaceCast(value, store_type));
-      } else {
-        llvm::Type* store_type = llvm::PointerType::get(*_context, llvm::jeandle::AddrSpace::JavaHeapAddrSpace);
-        element_address = do_array_store_inner(T_OBJECT, store_type, value);
+        value = _ir_builder.CreateAddrSpaceCast(value, store_type);
       }
-      // TODO: A workaround for card table barrier of array element, not to block the development progress.
-      // Currently, we can't get array type in LLVM pass. Once a clearer design is available, the barrier
-      // insertion operation will be moved to the LLVM pass.
-      call_java_op("jeandle.post_barrier", {element_address, value});
+      do_array_store_inner(T_OBJECT, store_type, value);
       break;
     }
     case T_BYTE: {
@@ -3047,7 +3130,9 @@ void JeandleAbstractInterpreter::do_new() {
   } else {
     llvm::Value* size_in_bytes = _ir_builder.getInt32(Klass::layout_helper_size_in_bytes(layout_helper));
     new_inst = llvm::cast<llvm::InvokeInst>(
-        call_java_op_ex("jeandle.new_instance", {klass_ptr, size_in_bytes}, {create_current_deopt_bundle()}));
+        call_java_op_ex("jeandle.new_instance",
+                        {klass_ptr, size_in_bytes, _ir_builder.getFalse()},
+                        {create_current_deopt_bundle()}));
   }
 
   // new always produces an exact type.
@@ -3567,68 +3652,69 @@ void JeandleAbstractInterpreter::shared_lock(LockValue lock) {
 
   int cur_bci = _bytecodes.cur_bcp() == nullptr ? -1 : _bytecodes.cur_bci();
 
-  llvm::BasicBlock* monitorenter_slow_path = llvm::BasicBlock::Create(*_context, "bci_" + std::to_string(cur_bci) + "_monitorenter_slow_path", _llvm_func);
-  llvm::BasicBlock* monitor_entered = llvm::BasicBlock::Create(*_context, "bci_" + std::to_string(cur_bci) + "_monitor_entered", _llvm_func);
-
+  // The monitor op is a single complete JavaOp whose body contains both the
+  // fast path and the slow path (a call to SharedRuntime_complete_monitor_locking_C).
+  // It is emitted lower-phase=1 (see templatemodule/template.ll), so
+  // JavaOperationLower(0) — which runs before PEA — leaves this one opaque call
+  // intact for PEA, which can then fold it atomically; the slow-path runtime
+  // call inside the unexpanded body is invisible to PEA.
   if (DiagnoseSyncOnValueBasedClasses != 0) {
+    // Off-by-default diagnostic: keep the value-based check and its own slow
+    // path in user IR. PEA already materializes on jeandle.check_if_value_based,
+    // so atomicity on this rare path is not expected; the value-based warning
+    // is triggered by routing directly to the SharedRuntime slow routine.
+    llvm::BasicBlock* monitorenter_slow_path = llvm::BasicBlock::Create(*_context, "bci_" + std::to_string(cur_bci) + "_monitorenter_slow_path", _llvm_func);
+    llvm::BasicBlock* monitor_entered = llvm::BasicBlock::Create(*_context, "bci_" + std::to_string(cur_bci) + "_monitor_entered", _llvm_func);
     llvm::BasicBlock* not_value_based = llvm::BasicBlock::Create(*_context, "bci_" + std::to_string(cur_bci) + "_not_value_based", _llvm_func);
     llvm::CallInst* check = call_java_op("jeandle.check_if_value_based", {lock.object().value()});
     _ir_builder.CreateCondBr(check, monitorenter_slow_path, not_value_based);
 
     _ir_builder.SetInsertPoint(not_value_based);
-  }
+    emit_monitorenter_java_op(lock);
+    _ir_builder.CreateBr(monitor_entered);
 
-  llvm::CallInst* call;
+    _ir_builder.SetInsertPoint(monitorenter_slow_path);
+    llvm::FunctionCallee monitorenter_callee = JeandleRuntimeRoutine::SharedRuntime_complete_monitor_locking_C_callee(_module);
+    llvm::CallInst* current_thread = call_java_op("jeandle.current_thread", {});
+    llvm::CallInst* call_monitorenter = _ir_builder.CreateCall(monitorenter_callee, {lock.object().value(), lock.lock(), current_thread});
+    call_monitorenter->setCallingConv(llvm::CallingConv::Hotspot_JIT);
+    _ir_builder.CreateBr(monitor_entered);
+
+    _ir_builder.SetInsertPoint(monitor_entered);
+    _block->set_tail_llvm_block(monitor_entered);
+  } else {
+    // Common case: just the JavaOp. No cond_br, no slow-path block, no
+    // current_thread fetch — all of that now lives inside the JavaOp body.
+    emit_monitorenter_java_op(lock);
+  }
+}
+
+void JeandleAbstractInterpreter::emit_monitorenter_java_op(LockValue lock) {
   if (LockingMode == LM_MONITOR) {
-    call = call_java_op("jeandle.monitorenter_with_monitor_lock", {lock.object().value(), lock.lock()});
+    call_java_op("jeandle.monitorenter_with_monitor_lock", {lock.object().value(), lock.lock()});
   } else if (LockingMode == LM_LEGACY) {
-    call = call_java_op("jeandle.monitorenter_with_thin_lock", {lock.object().value(), lock.lock()});
+    call_java_op("jeandle.monitorenter_with_thin_lock", {lock.object().value(), lock.lock()});
   } else {
     assert(LockingMode == LM_LIGHTWEIGHT, "");
-    call = call_java_op("jeandle.monitorenter_with_lightweight_lock", {lock.object().value(), lock.lock()});
+    call_java_op("jeandle.monitorenter_with_lightweight_lock", {lock.object().value(), lock.lock()});
   }
-  _ir_builder.CreateCondBr(call, monitor_entered, monitorenter_slow_path);
-
-  _ir_builder.SetInsertPoint(monitorenter_slow_path);
-
-  llvm::FunctionCallee monitorenter_callee = JeandleRuntimeRoutine::SharedRuntime_complete_monitor_locking_C_callee(_module);
-  llvm::CallInst* current_thread = call_java_op("jeandle.current_thread", {});
-  llvm::CallInst* call_monitorenter = _ir_builder.CreateCall(monitorenter_callee, {lock.object().value(), lock.lock(), current_thread});
-  call_monitorenter->setCallingConv(llvm::CallingConv::Hotspot_JIT);
-  _ir_builder.CreateBr(monitor_entered);
-
-  _ir_builder.SetInsertPoint(monitor_entered);
-  _block->set_tail_llvm_block(monitor_entered);
 }
 
 void JeandleAbstractInterpreter::shared_unlock(LockValue lock) {
   assert(!lock.is_null(), "sanity");
 
-  int cur_bci = _bytecodes.cur_bci();
-
-  llvm::BasicBlock* monitorexit_slow_path = llvm::BasicBlock::Create(*_context, "bci_" + std::to_string(cur_bci) + "_monitorexit_slow_path", _llvm_func);
-  llvm::BasicBlock* monitor_exited = llvm::BasicBlock::Create(*_context, "bci_" + std::to_string(cur_bci) + "_monitor_exited", _llvm_func);
-
-  llvm::CallInst* call;
+  // The monitor op is a single complete JavaOp whose body contains both the
+  // fast path and the slow path (a call to SharedRuntime_complete_monitor_unlocking_C).
+  // PEA sees only this one opaque call and can fold it atomically. No cond_br,
+  // slow-path block, or current_thread fetch is emitted here.
   if (LockingMode == LM_MONITOR) {
-    call = call_java_op("jeandle.monitorexit_with_monitor_lock", {lock.object().value(), lock.lock()});
+    call_java_op("jeandle.monitorexit_with_monitor_lock", {lock.object().value(), lock.lock()});
   } else if (LockingMode == LM_LEGACY) {
-    call = call_java_op("jeandle.monitorexit_with_thin_lock", {lock.object().value(), lock.lock()});
+    call_java_op("jeandle.monitorexit_with_thin_lock", {lock.object().value(), lock.lock()});
   } else {
     assert(LockingMode == LM_LIGHTWEIGHT, "");
-    call = call_java_op("jeandle.monitorexit_with_lightweight_lock", {lock.object().value(), lock.lock()});
+    call_java_op("jeandle.monitorexit_with_lightweight_lock", {lock.object().value(), lock.lock()});
   }
-  _ir_builder.CreateCondBr(call, monitor_exited, monitorexit_slow_path);
-
-  _ir_builder.SetInsertPoint(monitorexit_slow_path);
-  llvm::FunctionCallee monitorexit_callee = JeandleRuntimeRoutine::SharedRuntime_complete_monitor_unlocking_C_callee(_module);
-  llvm::CallInst* current_thread = call_java_op("jeandle.current_thread", {});
-  llvm::CallInst* call_monitorexit = _ir_builder.CreateCall(monitorexit_callee, {lock.object().value(), lock.lock(), current_thread});
-  call_monitorexit->setCallingConv(llvm::CallingConv::C);
-  _ir_builder.CreateBr(monitor_exited);
-
-  _ir_builder.SetInsertPoint(monitor_exited);
-  _block->set_tail_llvm_block(monitor_exited);
 }
 
 void JeandleAbstractInterpreter::monitorenter() {
@@ -3668,12 +3754,33 @@ void JeandleAbstractInterpreter::null_check(llvm::Value* obj) {
   llvm::MDNode* make_implicit = llvm::MDNode::get(*_context, {});
   null_check_br->setMetadata(llvm::LLVMContext::MD_make_implicit, make_implicit);
 
-  llvm::jeandle::JavaType obj_type = llvm::jeandle::getJavaType(obj);
-
   builtin_throw(Deoptimization::Reason_null_check, null_check_fail);
 
   _ir_builder.SetInsertPoint(null_check_pass);
   _block->set_tail_llvm_block(null_check_pass);
+}
+
+void JeandleAbstractInterpreter::null_assert(llvm::Value* obj) {
+  assert(obj->getType() == llvm::PointerType::get(*_context, llvm::jeandle::AddrSpace::JavaHeapAddrSpace), "must be a java object");
+
+  int cur_bci = _bytecodes.cur_bci();
+  llvm::BasicBlock* null_assert_pass = llvm::BasicBlock::Create(*_context,
+                                                                 "bci_" + std::to_string(cur_bci) + "_null_assert_pass",
+                                                                 _llvm_func);
+  llvm::BasicBlock* null_assert_fail = llvm::BasicBlock::Create(*_context,
+                                                                 "bci_" + std::to_string(cur_bci) + "_null_assert_fail",
+                                                                 _llvm_func);
+  llvm::Value* is_null = _ir_builder.CreateIsNull(obj);
+  _ir_builder.CreateCondBr(is_null, null_assert_pass, null_assert_fail);
+
+  // The type-flow path says the operand must be null, so only an unexpected
+  // non-null value deoptimizes and makes this compilation not entrant.
+  uncommon_trap(Deoptimization::Reason_null_assert,
+                Deoptimization::Action_make_not_entrant,
+                null_assert_fail);
+
+  _ir_builder.SetInsertPoint(null_assert_pass);
+  _block->set_tail_llvm_block(null_assert_pass);
 }
 
 void JeandleAbstractInterpreter::zero_check(llvm::Value* divisor) {
@@ -3722,30 +3829,7 @@ void JeandleAbstractInterpreter::boundary_check(llvm::Value* array_oop, llvm::Va
 void JeandleAbstractInterpreter::call_register_finalizer() {
   llvm::Value* receiver = _jvm->locals_at(0);
   assert(receiver != nullptr, "must have a receiver");
-
-  // TODO: know statically that registration isn't required
-
-  // dynamic test for whether the instance needs finalization
-  llvm::Value* klass = call_java_op("jeandle.load_klass", {receiver});
-
-  llvm::Value* access_flags_offset = llvm::ConstantInt::get(_ir_builder.getInt32Ty(), (uint64_t)in_bytes(Klass::access_flags_offset()));
-  llvm::Value* access_flags_addr = _ir_builder.CreateInBoundsGEP(llvm::Type::getInt8Ty(*_context), klass, access_flags_offset);
-  llvm::Value* access_flags = _ir_builder.CreateLoad(_ir_builder.getInt32Ty(), access_flags_addr);
-
-  llvm::Value* mask = _ir_builder.CreateAnd(access_flags, llvm::ConstantInt::get(_ir_builder.getInt32Ty(), JVM_ACC_HAS_FINALIZER));
-  llvm::Value* check = _ir_builder.CreateICmpNE(mask, llvm::ConstantInt::get(_ir_builder.getInt32Ty(), 0));
-
-  llvm::BasicBlock* register_block = llvm::BasicBlock::Create(*_context, "register_finalizer", _llvm_func);
-  llvm::BasicBlock* skip_block = llvm::BasicBlock::Create(*_context, "skip_register_finalizer", _llvm_func);
-  _ir_builder.CreateCondBr(check, register_block, skip_block);
-
-  _ir_builder.SetInsertPoint(register_block);
-  llvm::CallInst* current_thread = call_java_op("jeandle.current_thread", {});
-  create_call(JeandleRuntimeRoutine::SharedRuntime_register_finalizer_callee(_module), {current_thread, receiver}, llvm::CallingConv::Hotspot_JIT);
-  _ir_builder.CreateBr(skip_block);
-
-  _ir_builder.SetInsertPoint(skip_block);
-  _block->set_tail_llvm_block(skip_block);
+  call_java_op("jeandle.register_finalizer_if_needed", {receiver});
 }
 
 void JeandleAbstractInterpreter::return_current(llvm::Value* value) {
@@ -3868,4 +3952,5 @@ void JeandleAbstractInterpreter::accumulate_trap_counts_from_mdo(ciMethod* metho
       set_trap_count(reason, total_count);
     }
   }
+  JeandleCompilation::current()->add_decompile_count(md->decompile_count());
 }

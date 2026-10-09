@@ -84,8 +84,10 @@ public class TestDeoptUnload {
         ));
 
         runTestHelper(commandPrefix, "testInvoke");
-        runTestHelper(commandPrefix, "testCheckCast");
-        runTestHelper(commandPrefix, "testInstanceof");
+        runTestHelper(commandPrefix, "testCheckCast", "testCheckCast",
+                "null_assert_or_unreached\\d+ make_not_entrant");
+        runTestHelper(commandPrefix, "testInstanceof", "testInstanceof",
+                "null_assert_or_unreached\\d+ make_not_entrant");
         runTestHelper(commandPrefix, "testLoadField");
         runTestHelper(commandPrefix, "testStoreField");
         runTestHelper(commandPrefix, "testNewInstance");
@@ -102,10 +104,15 @@ public class TestDeoptUnload {
     }
 
     public static void runTestHelper(ArrayList<String> commandPrefix, String testMethod) throws Exception {
-        runTestHelper(commandPrefix, testMethod, testMethod);
+        runTestHelper(commandPrefix, testMethod, testMethod, "unloaded reinterpret");
     }
 
     public static void runTestHelper(ArrayList<String> commandPrefix, String testMethod, String deoptMethod) throws Exception {
+        runTestHelper(commandPrefix, testMethod, deoptMethod, "unloaded reinterpret");
+    }
+
+    public static void runTestHelper(ArrayList<String> commandPrefix, String testMethod,
+                                     String deoptMethod, String deoptReasonAndAction) throws Exception {
         ArrayList<String> commandArgs = new ArrayList<>(commandPrefix);
         commandArgs.add(testMethod);
 
@@ -113,7 +120,7 @@ public class TestDeoptUnload {
         OutputAnalyzer output = ProcessTools.executeCommand(pb);
 
         output.shouldHaveExitValue(0);
-        output.shouldMatch("\\[debug\\]\\[deoptimization\\].*" + deoptMethod + ".*unloaded reinterpret");
+        output.shouldMatch("\\[debug\\]\\[deoptimization\\].*" + deoptMethod + ".*" + deoptReasonAndAction);
     }
 
     private static void testInvoke() {

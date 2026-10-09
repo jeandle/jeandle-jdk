@@ -37,6 +37,9 @@
 
 #include "jeandle/__hotspotHeadersBegin__.hpp"
 #include "runtime/arguments.hpp"
+#include "runtime/globals_extension.hpp"
+
+void compiler_stubs_init(bool in_compiler_thread);
 
 namespace {
 
@@ -117,6 +120,10 @@ void JeandleCompiler::initialize() {
       set_state(failed);
       return;
     }
+    // Jeandle can be the only compiler in a VM configured with delayed
+    // compiler-stub generation. Generate the platform StubRoutines before
+    // registering direct runtime entries (including SHA compression stubs).
+    compiler_stubs_init(true /* in_compiler_thread */);
     if (!JeandleRuntimeRoutine::generate(target_machine(), data_layout())) {
       set_state(failed);
       return;
@@ -134,7 +141,7 @@ void JeandleCompiler::initialize() {
       assert(DynamicLibrary::SearchForAddressOfSymbol(routine_entry.first().data()) == nullptr, "overlapping symbol");
     }
 #endif
-    register_jeandle_vm_callbacks();
+    JeandleVMCallback::register_callbacks();
     set_state(initialized);
   }
 }
@@ -187,8 +194,26 @@ bool JeandleCompiler::initialize_commandline_options() {
     std::vector<std::string> argv_string = {
       "placeholder",
       "-enable-implicit-null-checks",
-      "-imp-null-check-page-size=" + std::to_string(os::vm_page_size())
+      "-imp-null-check-page-size=" + std::to_string(os::vm_page_size()),
+      // Drive both short-loop poll elimination and strip mining from the
+      // Jeandle-specific iteration budget.
+      "-jeandle-loop-strip-mining-iter=" + std::to_string(JeandleLoopStripMiningIter)
     };
+
+    // Forward the relevant JVM flags to Jeandle-LLVM cl::opts. Their values
+    // are fixed for the lifetime of the VM, so they are passed once here
+    // rather than per compilation. An option repeated in JeandleLLVMOptions
+    // overrides the forwarded value (llvm::cl takes the last occurrence).
+    argv_string.push_back(JeandleDoPEA ? "-jeandle-pea=true" : "-jeandle-pea=false");
+    argv_string.push_back(JeandleEliminateLocks ? "-jeandle-pea-eliminate-locks=true"
+                                                : "-jeandle-pea-eliminate-locks=false");
+    if (Inline) {
+      argv_string.push_back("-jeandle-inline=default");
+    } else if (InlineAccessors) {
+      argv_string.push_back("-jeandle-inline=accessors-only");
+    } else {
+      argv_string.push_back("-jeandle-inline=off");
+    }
 
     if (JeandleLLVMOptions != nullptr) {
       // Tokenize the user-provided LLVM options string.

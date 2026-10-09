@@ -405,15 +405,6 @@ ciInstanceKlass* ciEnv::get_box_klass_for_primitive_type(BasicType type) {
   }
 }
 
-ciInstanceKlass* ciEnv::get_instance_klass_for_klass(Klass* klass) {
-  if (klass == nullptr) {
-    return nullptr;
-  }
-  assert(klass->is_instance_klass(), "must be instance klass");
-  VM_ENTRY_MARK;
-  return get_instance_klass(klass);
-}
-
 ciInstance* ciEnv::ArrayIndexOutOfBoundsException_instance() {
   if (_ArrayIndexOutOfBoundsException_instance == nullptr) {
     _ArrayIndexOutOfBoundsException_instance

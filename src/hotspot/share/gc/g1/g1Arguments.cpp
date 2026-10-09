@@ -242,6 +242,13 @@ void G1Arguments::initialize() {
   }
 #endif
 
+#ifdef JEANDLE
+  // Enable loop strip mining to offer better pause time guarantees
+  if (FLAG_IS_DEFAULT(JeandleLoopStripMiningIter)) {
+    FLAG_SET_DEFAULT(JeandleLoopStripMiningIter, 1000);
+  }
+#endif
+
   initialize_mark_stack_size();
   initialize_verification_types();
 
@@ -265,4 +272,3 @@ CollectedHeap* G1Arguments::create_heap() {
 size_t G1Arguments::heap_reserved_size_bytes() {
   return MaxHeapSize;
 }
-

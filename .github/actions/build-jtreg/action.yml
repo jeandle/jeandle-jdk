@@ -48,6 +48,7 @@ runs:
         repository: openjdk/jtreg
         ref: jtreg-${{ steps.version.outputs.value }}
         path: jtreg/src
+        allow-unsafe-pr-checkout: true
       if: (steps.get-cached.outputs.cache-hit != 'true')
 
     - name: 'Build JTReg'

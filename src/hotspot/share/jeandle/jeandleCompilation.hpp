@@ -284,6 +284,18 @@ class JeandleCompilation : public StackObj {
   JeandleCompiledCode* compiled_code() { return &_code; }
 
   uint* trap_hist() { return _trap_hist; }
+  uint trap_count(uint reason) const {
+    assert(reason < MethodData::_trap_hist_limit, "trap reason overflow");
+    return _trap_hist[reason];
+  }
+  uint decompile_count() const { return _decompile_count; }
+  void add_decompile_count(uint count) {
+    uint old_count = _decompile_count;
+    _decompile_count += count;
+    if (_decompile_count < old_count || _decompile_count < count) {
+      _decompile_count = uint(-1);
+    }
+  }
 
   Arena* arena() { return _arena; }
 
@@ -309,6 +321,7 @@ class JeandleCompilation : public StackObj {
   std::unique_ptr<llvm::Module> _llvm_module;
   std::string _comp_start_time;
   uint _trap_hist[MethodData::_trap_hist_limit];
+  uint _decompile_count;
   void* _replay_inline_data;
 
   // LLVM uses -1 for the root Java method scope. Non-negative scope ids are

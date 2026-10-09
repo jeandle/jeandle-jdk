@@ -320,6 +320,10 @@ public class TestRepeatedConstantFolding {
 
     // =========================================================================
     // IR dump extraction helpers (mirrored from TestTypeCheckElimination).
+    //
+    // The pipeline runs RepeatedConstantFolding both before and after
+    // inlining. This test targets the pre-inline invocation, where the field
+    // loads are still present and the effect of RCF can be observed directly.
     // =========================================================================
 
     static String extractBeforeIR(String stderr, String methodPattern) {
@@ -327,6 +331,7 @@ public class TestRepeatedConstantFolding {
         StringBuilder sb = new StringBuilder();
         boolean inSection = false;
         for (String line : lines) {
+            // Pick the first IR dump for this method.
             if (line.contains("IR Dump Before RepeatedConstantFolding") &&
                 line.contains(methodPattern)) {
                 inSection = true;
@@ -343,6 +348,7 @@ public class TestRepeatedConstantFolding {
         StringBuilder sb = new StringBuilder();
         boolean inSection = false;
         for (String line : lines) {
+            // Pick the first IR dump for this method.
             if (line.contains("IR Dump After RepeatedConstantFolding") &&
                 line.contains(methodPattern)) {
                 inSection = true;

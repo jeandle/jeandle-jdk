@@ -52,6 +52,11 @@ bool JeandleIntrinsicLowering::cpu_supports_spin_wait() {
   return VM_Version::spin_wait_desc().inst() == SpinWait::YIELD;
 }
 
+bool JeandleIntrinsicLowering::supports_vectorized_mismatch_medium_path() {
+  // NEON (128-bit Advanced SIMD) is ARMv8-A baseline, always available.
+  return true;
+}
+
 // =============================================================================
 // Arch-specific intrinsic lowering (AArch64)
 // =============================================================================

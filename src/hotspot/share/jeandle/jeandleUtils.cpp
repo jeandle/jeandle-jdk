@@ -30,6 +30,7 @@
 
 #include "jeandle/__hotspotHeadersBegin__.hpp"
 #include "ci/ciInstanceKlass.hpp"
+#include "ci/ciKlass.hpp"
 #include "ci/ciObjArrayKlass.hpp"
 #include "ci/ciType.hpp"
 #include "compiler/abstractCompiler.hpp"
@@ -82,6 +83,18 @@ bool is_effectively_final(Klass* klass) {
   return false;
 }
 
+bool is_valid_instance_receiver(ciKlass* receiver, ciInstanceKlass* holder) {
+  if (receiver == nullptr || holder == nullptr ||
+      !receiver->is_instance_klass()) {
+    return false;
+  }
+
+  ciInstanceKlass* receiver_klass = receiver->as_instance_klass();
+  return receiver_klass->is_loaded() && receiver_klass->is_initialized() &&
+         !receiver_klass->is_interface() &&
+         receiver_klass->is_subtype_of(holder);
+}
+
 void attach_java_klass_ret_attr(llvm::CallBase* call,
                                 ciType* ret_type,
                                 llvm::LLVMContext& ctx) {
@@ -102,8 +115,9 @@ void attach_java_klass_ret_attr(llvm::CallBase* call,
   }
 }
 
-llvm::Function* JeandleFuncSig::create_llvm_func(ciMethod* method, llvm::Module& target_module, bool is_osr_entry) {
-  std::string func_name = method_name_with_signature(method, is_osr_entry);
+llvm::Function* JeandleFuncSig::create_llvm_func(ciMethod* method, llvm::Module& target_module, bool is_root, bool is_osr_entry) {
+  std::string func_name = is_root ? root_method_name(method, is_osr_entry)
+                                  : method_name_with_signature(method);
 
   llvm::Function* existing = target_module.getFunction(func_name);
   if (existing != nullptr) {
@@ -138,6 +152,9 @@ llvm::Function* JeandleFuncSig::create_llvm_func(ciMethod* method, llvm::Module&
                                                 llvm::Function::ExternalLinkage,
                                                 func_name,
                                                 target_module);
+  if (PreserveFramePointer) {
+    func->addFnAttr("frame-pointer", "all");
+  }
   func->addFnAttr(llvm::Attribute::get(context,
       llvm::jeandle::Attribute::JavaMethod,
       std::to_string(reinterpret_cast<uintptr_t>(method))));
@@ -214,9 +231,17 @@ std::string JeandleFuncSig::method_name(ciMethod* method) {
   return class_name + "_" + method_name;
 }
 
-std::string JeandleFuncSig::method_name_with_signature(ciMethod* method, bool is_osr_entry) {
-  std::string signature = std::string(method->signature()->as_symbol()->as_utf8());
-  signature = method_name(method) + signature;
+std::string JeandleFuncSig::method_name_with_signature(ciMethod* method) {
+  std::string signature =
+      std::string(method->signature()->as_symbol()->as_utf8());
+  // The binary name does not distinguish classes defined by different class
+  // loaders. Append the ciMethod identity so their LLVM symbols stay distinct.
+  return method_name(method) + signature + "." +
+         std::to_string(reinterpret_cast<uintptr_t>(method));
+}
+
+std::string JeandleFuncSig::root_method_name(ciMethod* method, bool is_osr_entry) {
+  std::string signature = method_name_with_signature(method) + ".root";
   if (is_osr_entry) {
     signature = "__jeandle_osr." + signature;
   }

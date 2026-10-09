@@ -80,6 +80,7 @@ public class TestAllocFastSlowPath {
             "-XX:-TieredCompilation",
             "-XX:+UseJeandleCompiler",
             "-Xlog:jeandle+alloc=debug",
+            "-XX:-JeandleDoPEA",
             "-XX:CompileCommand=compileonly,compiler.jeandle.bytecodeTranslate.alloc.TestAllocFastSlowPath::allocate_java_instance",
             TestAllocFastSlowPath.class.getName(),
             "normal"
@@ -99,6 +100,7 @@ public class TestAllocFastSlowPath {
             "-XX:-TieredCompilation",
             "-XX:+UseJeandleCompiler",
             "-Xlog:jeandle+alloc=debug",
+            "-XX:-JeandleDoPEA",
             "-XX:CompileCommand=compileonly,compiler.jeandle.bytecodeTranslate.alloc.TestAllocFastSlowPath::*",
             TestAllocFastSlowPath.class.getName(),
             "stress"
@@ -116,6 +118,7 @@ public class TestAllocFastSlowPath {
             "-XX:-TieredCompilation",
             "-XX:-UseTLAB",
             "-XX:+UseJeandleCompiler",
+            "-XX:-JeandleDoPEA",
             "-Xlog:jeandle+alloc=debug",
             "-XX:CompileCommand=compileonly,compiler.jeandle.bytecodeTranslate.alloc.TestAllocFastSlowPath::allocate_java_instance",
             TestAllocFastSlowPath.class.getName(),

@@ -19,8 +19,10 @@ cd jeandle-llvm
 mkdir build
 cd build
 cmake -G "Unix Makefiles" -DLLVM_TARGETS_TO_BUILD=X86 -DCMAKE_BUILD_TYPE="Release" -DCMAKE_INSTALL_PREFIX="/home/jeandle-llvm-install" -DLLVM_BUILD_LLVM_DYLIB=On -DLLVM_DYLIB_COMPONENTS=all ../llvm
-cmake --build . --target install --parallel
+cmake --build . --target install --parallel $(nproc)
 ```
+
+> Note: `$(nproc)` limits the build to the CPUs actually available to your process (it honors the CPU-affinity mask). A bare `--parallel` uses every online CPU on the whole machine, which on NUMA/cgroup-restricted hosts can spawn more compiler/linker jobs than your account's memory allows, causing OOM kills or even freezing the machine.
 
 3. Clone jeandle-jdk:
 ```
@@ -74,7 +76,7 @@ Jeandle-jdk ships with a Dockerfile so you can build inside a reproducible conta
          -DLLVM_BUILD_LLVM_DYLIB=On \
          -DLLVM_DYLIB_COMPONENTS=all \
          ../llvm
-   cmake --build . --target install --parallel
+   cmake --build . --target install --parallel $(nproc)
    ```
 5. Clone jeandle-jdk in the container and build it against the freshly installed LLVM:
    ```
@@ -145,7 +147,7 @@ cd jeandle-llvm-x86
 mkdir build
 cd build
 cmake -G "Unix Makefiles" -DLLVM_TARGETS_TO_BUILD=X86 -DCMAKE_BUILD_TYPE="Release" -DCMAKE_INSTALL_PREFIX="/home/jeandle-llvm-x86-install" -DLLVM_BUILD_LLVM_DYLIB=On -DLLVM_DYLIB_COMPONENTS=all ../llvm
-cmake --build . --target install --parallel
+cmake --build . --target install --parallel $(nproc)
 ```
 
 4. (Cross-compiling) Configure and build jeandle-llvm of the target environment:
@@ -156,7 +158,7 @@ cd jeandle-llvm-aarch64
 mkdir build
 cd build
 cmake -G "Unix Makefiles" -DLLVM_TARGETS_TO_BUILD=AArch64 -DCMAKE_BUILD_TYPE="Release" -DCMAKE_INSTALL_PREFIX="/home/jeandle-llvm-aarch64-install" -DLLVM_BUILD_LLVM_DYLIB=On -DLLVM_DYLIB_COMPONENTS=all ../llvm
-cmake --build . --target install --parallel
+cmake --build . --target install --parallel $(nproc)
 ```
 
 5. (Cross-compiling) Configure and build jeandle-jdk of the target environment:

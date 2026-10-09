@@ -30,6 +30,7 @@
 #include "runtime/frame.hpp"
 #include "runtime/interfaceSupport.inline.hpp"
 #include "runtime/safepoint.hpp"
+#include "runtime/synchronizer.hpp"
 #include "runtime/vframeArray.hpp"
 
 #define GEN_ROUTINE_STUB(name, ruotine_address, return_type, ...)                                    \
@@ -108,6 +109,32 @@ JRT_ENTRY(void, JeandleRuntimeRoutine::safepoint_handler(JavaThread* current))
   SafepointMechanism::process_if_requested_with_exit_check(current, false /* check asyncs */);
 
   state->set_at_poll_safepoint(false);
+JRT_END
+
+JRT_BLOCK_ENTRY(void, JeandleRuntimeRoutine::monitor_notify(oopDesc* obj,
+                                                             JavaThread* current))
+  assert(check_jeandle_compiled_frame(current), "incorrect caller");
+  if (!SafepointSynchronize::is_synchronizing() &&
+      ObjectSynchronizer::quick_notify(obj, current, false)) {
+    return;
+  }
+  JRT_BLOCK;
+  Handle h_obj(current, obj);
+  ObjectSynchronizer::notify(h_obj, CHECK);
+  JRT_BLOCK_END;
+JRT_END
+
+JRT_BLOCK_ENTRY(void, JeandleRuntimeRoutine::monitor_notify_all(oopDesc* obj,
+                                                                 JavaThread* current))
+  assert(check_jeandle_compiled_frame(current), "incorrect caller");
+  if (!SafepointSynchronize::is_synchronizing() &&
+      ObjectSynchronizer::quick_notify(obj, current, true)) {
+    return;
+  }
+  JRT_BLOCK;
+  Handle h_obj(current, obj);
+  ObjectSynchronizer::notifyall(h_obj, CHECK);
+  JRT_BLOCK_END;
 JRT_END
 
 JRT_LEAF(address, JeandleRuntimeRoutine::get_exception_handler(JavaThread* current))
@@ -209,7 +236,7 @@ JRT_BLOCK_ENTRY(void, JeandleRuntimeRoutine::new_array_from_mirror(oopDesc* mirr
 JRT_END
 
 // It's a copy of OptoRuntime::new_instance_C
-JRT_BLOCK_ENTRY(void, JeandleRuntimeRoutine::new_instance(InstanceKlass* klass, JavaThread* current))
+JRT_BLOCK_ENTRY(void, JeandleRuntimeRoutine::new_instance(Klass* klass, JavaThread* current))
   JRT_BLOCK;
 #ifndef PRODUCT
     SharedRuntime::_new_instance_ctr++;         // new instance requires GC
@@ -223,7 +250,11 @@ JRT_BLOCK_ENTRY(void, JeandleRuntimeRoutine::new_instance(InstanceKlass* klass, 
 
     // These checks are cheap to make and support reflective allocation.
     int lh = klass->layout_helper();
-    if (Klass::layout_helper_needs_slow_path(lh) || !InstanceKlass::cast(klass)->is_initialized()) {
+    // This entry can receive an ArrayKlass, so do not assume that the Klass is
+    // an InstanceKlass before querying instance-only fields or casting it.
+    if (!Klass::layout_helper_is_instance(lh) ||
+        Klass::layout_helper_needs_slow_path(lh) ||
+        !InstanceKlass::cast(klass)->is_initialized()) {
       Handle holder(current, klass->klass_holder()); // keep the klass alive
       klass->check_valid_for_instantiation(false, THREAD);
       if (!HAS_PENDING_EXCEPTION) {

@@ -50,6 +50,8 @@ class ciEnv : StackObj {
   friend class Dependencies;  // for get_object, during logging
   friend class RecordLocation;
   friend class PrepareExtraDataClosure;
+  friend class JeandleVMCallback;
+  friend class JeandleCompiledCode;
 
 private:
   Arena*           _arena;       // Alias for _ciEnv_arena except in init_shared_objects()
@@ -423,7 +425,6 @@ public:
   ciInstance* unloaded_ciinstance();
 
   ciInstanceKlass* get_box_klass_for_primitive_type(BasicType type);
-  ciInstanceKlass* get_instance_klass_for_klass(Klass* klass);
 
   ciKlass*  find_system_klass(ciSymbol* klass_name);
 
