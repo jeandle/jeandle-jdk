@@ -20,20 +20,25 @@
 
 /**
  * @test
- * @summary https://github.com/jeandle/jeandle-jdk/issues/634
+ * @summary RISC-V static call site patch address stays 4-byte aligned.
+ *          https://github.com/jeandle/jeandle-jdk/issues/634
  * @requires vm.debug == true & os.arch == "riscv64"
- * @run main/othervm -Xcomp -XX:-TieredCompilation -XX:+UseJeandleCompiler
- *      -XX:CompileCommand=compileonly,TestIssue634::* TestIssue634
- * @run main/othervm -Xcomp -XX:-TieredCompilation -XX:+UseJeandleCompiler -XX:-UseRVC
- *      -XX:CompileCommand=compileonly,TestIssue634::* TestIssue634
+ * @modules java.base/jdk.internal.vm.annotation
+ * @run main/bootclasspath/othervm -Xcomp -XX:-TieredCompilation -XX:+UseJeandleCompiler
+ *      -XX:CompileCommand=compileonly,TestStaticCallSiteAlignment::* TestStaticCallSiteAlignment
+ * @run main/bootclasspath/othervm -Xcomp -XX:-TieredCompilation -XX:+UseJeandleCompiler -XX:-UseRVC
+ *      -XX:CompileCommand=compileonly,TestStaticCallSiteAlignment::* TestStaticCallSiteAlignment
  */
+
+import jdk.internal.vm.annotation.DontInline;
 
 // Jeandle methods are always compiled without compressed instructions, so
 // -XX:-UseRVC does not change the code LLVM emits. The two @run legs differ
 // only in HotSpot's own prolog and stub compression, which is what moves the
 // copied blob start off a 4-byte boundary. They do not cover compressed code
-// inside Jeandle methods.
-public class TestIssue634 {
+// inside Jeandle methods. The class is loaded from the boot classpath so
+// @DontInline is honored and the static call stays out of line.
+public class TestStaticCallSiteAlignment {
     static class Base {
         int mix(int a, int b) {
             int sum = a + b + 1;
@@ -51,7 +56,7 @@ public class TestIssue634 {
         }
     }
 
-    // Larger than MaxTrivialSize so -Xcomp does not inline the call away.
+    @DontInline
     static int staticCallee(int a, int b) {
         int sum = a + b;
         sum = sum ^ (b + 3);
