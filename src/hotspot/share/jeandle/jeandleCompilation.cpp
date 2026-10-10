@@ -407,9 +407,13 @@ llvm::Value* JeandleCompilation::find_or_insert_oop(ciObject* oop) {
   return global_oop_handle;
 }
 
-bool JeandleCompilation::over_inlining_cutoff() const {
+bool JeandleCompilation::over_inlining_cutoff(bool is_late_inline) const {
   assert(_llvm_module != nullptr, "llvm module must exist");
-  if (JeandleNodeCountInliningCutoff == 0) {
+  intx cutoff = JeandleNodeCountInliningCutoff;
+  if (is_late_inline) {
+    cutoff = cutoff * 11 / 10;
+  }
+  if (cutoff == 0) {
     return true;
   }
 
@@ -421,7 +425,7 @@ bool JeandleCompilation::over_inlining_cutoff() const {
   intx instruction_count = 0;
   for (llvm::Instruction& inst : llvm::instructions(root)) {
     (void)inst;
-    if (++instruction_count > JeandleNodeCountInliningCutoff) {
+    if (++instruction_count > cutoff) {
       return true;
     }
   }
@@ -440,6 +444,7 @@ JeandleInlineTree::JeandleInlineTree(JeandleInlineTree* caller_tree,
                                      _max_inline_level(max_inline_level),
                                      _count_inline_bcs(method == nullptr ? 0 : method->code_size_for_inlining()),
                                      _reason(JeandleInlineReason::InlineHot),
+                                     _late_inline(false),
                                      _subtrees(arena, 2, 0, nullptr) {
 }
 
@@ -451,16 +456,77 @@ static bool jeandle_is_unboxing_method(ciMethod* callee) {
   return EliminateAutoBox && callee->is_unboxing_method();
 }
 
-static bool jeandle_exceeds_desired_method_limit(ciMethod* callee, int inline_bcs) {
+static bool jeandle_reject_or_delay_desired_method_limit(ciMethod* callee,
+                                                         int inline_bcs,
+                                                         bool is_late_inline,
+                                                         bool& should_delay) {
   if (!ClipInlining || inline_bcs < DesiredMethodLimit) {
     return false;
   }
 
-  // Match C2's DesiredMethodLimit gate: an annotated @ForceInline method may
-  // cross this limit only when IncrementalInline is enabled. C2 may then delay
-  // the inline; Jeandle currently has no late inline queue, so there is no
-  // should_delay state to record here.
-  return !callee->force_inline() || !IncrementalInline;
+  if (!callee->force_inline() || !JeandleIncrementalInline) {
+    return true;
+  }
+  if (!is_late_inline) {
+    should_delay = true;
+  }
+  return false;
+}
+
+static bool jeandle_should_delay_string_inline(ciMethod* callee,
+                                               ciMethod* caller) {
+  if (!OptimizeStringConcat) {
+    return false;
+  }
+
+  ciEnv* env = ciEnv::current();
+  bool callee_is_builder =
+      callee->holder() == env->StringBuilder_klass() ||
+      callee->holder() == env->StringBuffer_klass();
+  bool caller_is_builder =
+      caller->holder() == env->StringBuilder_klass() ||
+      caller->holder() == env->StringBuffer_klass();
+  if (callee_is_builder && caller_is_builder) {
+    return false;
+  }
+
+  switch (callee->intrinsic_id()) {
+    case vmIntrinsics::_StringBuilder_void:
+    case vmIntrinsics::_StringBuilder_int:
+    case vmIntrinsics::_StringBuilder_String:
+    case vmIntrinsics::_StringBuilder_append_char:
+    case vmIntrinsics::_StringBuilder_append_int:
+    case vmIntrinsics::_StringBuilder_append_String:
+    case vmIntrinsics::_StringBuilder_toString:
+    case vmIntrinsics::_StringBuffer_void:
+    case vmIntrinsics::_StringBuffer_int:
+    case vmIntrinsics::_StringBuffer_String:
+    case vmIntrinsics::_StringBuffer_append_char:
+    case vmIntrinsics::_StringBuffer_append_int:
+    case vmIntrinsics::_StringBuffer_append_String:
+    case vmIntrinsics::_StringBuffer_toString:
+    case vmIntrinsics::_Integer_toString:
+    case vmIntrinsics::_String_String:
+      return true;
+    default:
+      return false;
+  }
+}
+
+static bool jeandle_should_delay_special_inline(ciMethod* callee,
+                                                ciMethod* caller) {
+  if (IncrementalInlineMH && callee->is_method_handle_intrinsic()) {
+    return true;
+  }
+  if (EliminateAutoBox && AggressiveUnboxing && callee->is_boxing_method()) {
+    return true;
+  }
+  if (EnableVectorSupport &&
+      (callee->is_vector_method() ||
+       callee->intrinsic_id() == vmIntrinsics::_VectorRebox)) {
+    return true;
+  }
+  return jeandle_should_delay_string_inline(callee, caller);
 }
 
 static bool jeandle_is_init_with_ea(ciMethod* callee,
@@ -610,6 +676,7 @@ bool JeandleInlineTree::should_inline(JeandleCompilation* comp,
                                       ciMethod* caller,
                                       int caller_bci,
                                       bool& forced_inline,
+                                      bool& should_delay,
                                       ciCallProfile& profile,
                                       JeandleInlineReason& reason) {
   if (CompilerOracle::should_inline(jeandle_method_handle(callee))) {
@@ -623,16 +690,12 @@ bool JeandleInlineTree::should_inline(JeandleCompilation* comp,
     return true;
   }
 
-  bool should_delay = false;
   int replay_inline_depth = inline_depth() + 1;
   if (ciReplay::should_inline(comp->replay_inline_data(),
                               callee,
                               caller_bci,
                               replay_inline_depth,
                               should_delay)) {
-    // TODO: Replay records can mark an inline as late/incremental. Jeandle has
-    // no late inline queue yet, so replay-forced inlines are performed
-    // immediately even when should_delay is true.
     forced_inline = true;
     reason = should_delay ? JeandleInlineReason::ForceIncrementalInlineByCiReplay :
                             JeandleInlineReason::ForceInlineByCiReplay;
@@ -675,6 +738,7 @@ bool JeandleInlineTree::should_not_inline(JeandleCompilation* comp,
                                           ciMethod* callee,
                                           ciMethod* caller,
                                           int caller_bci,
+                                          bool& should_delay,
                                           ciCallProfile& profile,
                                           JeandleInlineReason& reason) {
   if (callee->is_abstract()) {
@@ -717,15 +781,12 @@ bool JeandleInlineTree::should_not_inline(JeandleCompilation* comp,
     return true;
   }
 
-  bool should_delay = false;
   int replay_inline_depth = inline_depth() + 1;
   if (ciReplay::should_inline(comp->replay_inline_data(),
                               callee,
                               caller_bci,
                               replay_inline_depth,
                               should_delay)) {
-    // TODO: Jeandle currently ignores replay late-inline timing and treats this
-    // as an immediate replay-forced inline.
     reason = should_delay ? JeandleInlineReason::ForceIncrementalInlineByCiReplay :
                             JeandleInlineReason::ForceInlineByCiReplay;
     return false;
@@ -825,19 +886,34 @@ bool JeandleInlineTree::try_to_inline(JeandleCompilation* comp,
                                       ciMethod* callee,
                                       ciMethod* caller,
                                       int caller_bci,
+                                      bool is_late_inline,
+                                      bool& should_delay,
                                       ciCallProfile& profile,
                                       JeandleInlineReason& reason) {
   bool forced_inline = false;
-  if (jeandle_exceeds_desired_method_limit(callee, (int)count_inline_bcs())) {
+  if (jeandle_reject_or_delay_desired_method_limit(
+          callee, (int)count_inline_bcs(), is_late_inline, should_delay)) {
     reason = JeandleInlineReason::SizeGreaterThanDesiredMethodLimit;
     return false;
   }
 
-  if (!should_inline(comp, callee, caller, caller_bci, forced_inline, profile, reason)) {
+  if (!should_inline(comp, callee, caller, caller_bci, forced_inline,
+                     should_delay, profile, reason)) {
     return false;
   }
-  if (should_not_inline(comp, callee, caller, caller_bci, profile, reason)) {
+  if (should_not_inline(comp, callee, caller, caller_bci, should_delay,
+                        profile, reason)) {
     return false;
+  }
+  if (is_late_inline) {
+    // A call whose late-inline marker survived a pre-late boundary must either
+    // inline now or be rejected. Unmarked calls newly exposed during the late
+    // phase use is_late_inline=false and may be delayed to the next round.
+    should_delay = false;
+  }
+
+  if (!is_late_inline && jeandle_should_delay_special_inline(callee, caller)) {
+    should_delay = true;
   }
 
   if (InlineAccessors && callee->is_accessor()) {
@@ -846,14 +922,6 @@ bool JeandleInlineTree::try_to_inline(JeandleCompilation* comp,
   }
 
   if (callee->code_size() > MaxTrivialSize) {
-    // Match C2's parse-time node budget check with an LLVM IR instruction
-    // budget for the root Java method. Jeandle has no late inline queue yet,
-    // so non-forced inline candidates are rejected instead of delayed.
-    if (comp->over_inlining_cutoff() &&
-        (!callee->force_inline() || !IncrementalInline)) {
-      reason = JeandleInlineReason::NodeCountInliningCutoff;
-      return false;
-    }
     if (!forced_inline &&
         !(!UseInterpreter && jeandle_is_init_with_ea(callee, caller, comp->method())) &&
         is_not_reached(callee, caller, caller_bci, profile)) {
@@ -874,12 +942,13 @@ bool JeandleInlineTree::try_to_inline(JeandleCompilation* comp,
     return false;
   }
   if (inline_depth() > max_inline_level()) {
-    if (!callee->force_inline() || !IncrementalInline) {
+    if (!callee->force_inline() || !JeandleIncrementalInline) {
       reason = JeandleInlineReason::InliningTooDeep;
       return false;
     }
-    // TODO: C2 delays this inline when not already in incremental inlining.
-    // Jeandle currently has no late inline queue, so forced inline continues.
+    if (!is_late_inline) {
+      should_delay = true;
+    }
   }
 
   int recursive_inline_level = 0;
@@ -897,21 +966,36 @@ bool JeandleInlineTree::try_to_inline(JeandleCompilation* comp,
   // map, so recursion is counted conservatively by method identity.
 
   int size = callee->code_size_for_inlining();
-  if (jeandle_exceeds_desired_method_limit(callee, (int)count_inline_bcs() + size)) {
+  if (jeandle_reject_or_delay_desired_method_limit(
+          callee, (int)count_inline_bcs() + size, is_late_inline,
+          should_delay)) {
     reason = JeandleInlineReason::SizeGreaterThanDesiredMethodLimit;
     return false;
   }
 
+  assert(!is_late_inline || !should_delay,
+         "a late inline decision must not be delayed again");
   return true;
 }
 
 bool JeandleInlineTree::ok_to_inline(JeandleCompilation* comp,
                                      ciMethod* callee,
                                      int caller_bci,
+                                     bool is_late_inline,
+                                     bool& should_delay,
+                                     bool& hit_node_count_cutoff,
                                      JeandleInlineReason& reason) {
   ciMethod* caller = method();
   assert(caller != nullptr, "caller method must exist");
   reason = JeandleInlineReason::InlineHot;
+  should_delay = false;
+  hit_node_count_cutoff = false;
+
+  if (comp->over_inlining_cutoff(is_late_inline)) {
+    reason = JeandleInlineReason::NodeCountInliningCutoff;
+    hit_node_count_cutoff = true;
+    return false;
+  }
 
   // Jeandle gets here only after LLVM has selected a monomorphic Java call
   // site. CHA/PGO monomorphization is represented in IR before this policy;
@@ -929,7 +1013,8 @@ bool JeandleInlineTree::ok_to_inline(JeandleCompilation* comp,
   }
 
   ciCallProfile profile = caller->call_profile_at_bci(caller_bci);
-  return try_to_inline(comp, callee, caller, caller_bci, profile, reason);
+  return try_to_inline(comp, callee, caller, caller_bci, is_late_inline,
+                       should_delay, profile, reason);
 }
 
 JeandleInlineTree* JeandleInlineTree::callee_at(int caller_bci, ciMethod* callee) const {
@@ -984,9 +1069,7 @@ int JeandleInlineTree::count() const {
 void JeandleInlineTree::dump_replay_data(outputStream* out, int depth_adjust) const {
   // Keep the replay inline record format identical to C2:
   //   <inline_depth> <caller_bci> <inline_late> <method>
-  // Jeandle currently lets LLVM perform inlining immediately, so there is no
-  // late inline queue equivalent to C2's late inlining CallGenerator.
-  const int inline_late = 0;
+  const int inline_late = is_late_inline() ? 1 : 0;
   out->print(" %d %d %d ", inline_depth() + depth_adjust, caller_bci(), inline_late);
   method()->dump_name_as_ascii(out);
   for (int i = 0; i < _subtrees.length(); i++) {
