@@ -132,12 +132,13 @@ public class TestPEAMultipleBackedgesAndNestedLoops {
         PEATestUtils.IRBody before = report.round0Before();
         PEATestUtils.IRBody after = report.finalAfter();
         // Acc is allocated before the nest and stays virtual (eliminated); the
-        // per-outer-iteration Inner is allocated inside the nest and, with a
-        // depth-1 cutoff, is refused (retained as a real allocation).
-        Asserts.assertEquals(before.peaAllocCount(), 2,
-                target + ": Acc plus Inner source allocations");
-        Asserts.assertEquals(after.allocationBCIs().size(), 1,
-                target + ": only the in-nest Inner allocation is retained");
+        // Strip mining clones the per-outer-iteration Inner allocation before
+        // PEA. Acc stays virtual and is eliminated; both depth-1 Inner copies
+        // are conservatively retained as real allocations.
+        Asserts.assertEquals(before.peaAllocCount(), 3,
+                target + ": Acc plus two strip-mined Inner allocation copies");
+        Asserts.assertEquals(after.allocationBCIs().size(), 2,
+                target + ": only the two in-nest Inner allocations are retained");
         after.assertAbsent("poison");
         report.assertFinalTransformIdle();
         assertVerifierShape(run, report, target);

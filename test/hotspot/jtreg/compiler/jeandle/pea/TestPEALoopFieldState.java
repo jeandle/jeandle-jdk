@@ -101,14 +101,14 @@ public class TestPEALoopFieldState {
         report.assertFinalTransformIdle();
         PEATestUtils.IRBody finalIR = run.finalIR(target);
         finalIR.assertAbsent("jeandle.new_instance");
-        finalIR.assertAbsent("poison");
+        PEATestUtils.assertStructuralSoundness(finalIR,
+                target + ": final lowered IR");
         Asserts.assertEquals(finalIR.loweredAllocCount(), 0,
                 target + ": allocation fully lowered away");
         for (PEATestUtils.PEARound round : report.rounds()) {
             round.after().assertAbsent("poison");
             PEATestUtils.assertCompletePhis(round.after(), target.toString());
         }
-        PEATestUtils.assertCompletePhis(finalIR, target.toString());
     }
 
     public static class TestWrapper {

@@ -94,8 +94,8 @@ public class TestPEAInstanceFieldScalarReplacement {
                 target + ": allocation effects");
         Asserts.assertEquals(report.effects("EliminateStore").size(), stores,
                 target + ": store effects");
-        Asserts.assertEquals(report.effects("ReplaceLoad").size(), loads + 1,
-                target + ": field loads plus allocation-null guard");
+        Asserts.assertEquals(report.effects("ReplaceLoad").size(), loads,
+                target + ": field loads; pre-PEA cleanup already folds the allocation-null guard");
         Asserts.assertEquals(report.finalAfter().peaAllocCount(), 0,
                 target + ": final PEA allocation");
         report.finalAfter().assertAbsent("store atomic");

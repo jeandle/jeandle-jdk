@@ -181,16 +181,16 @@ declare hotspotcc ptr addrspace(1) @jeandle.decode_heap_oop(ptr addrspace(3))
 declare hotspotcc ptr addrspace(3) @jeandle.encode_heap_oop(ptr addrspace(1))
 
 ; Load klass pointer from oop
-; lower-phase=1: survive JavaOperationLower(0) so the call reaches PEA, which
+; lower-phase=2: survive JavaOperationLower(0) so the call reaches PEA, which
 ; folds it via foldLoadKlass (a virtual object's klass is a compile-time
 ; constant). At lower-phase=0 the body is expanded before PEA, exposing a raw
 ; load of the object's klass header; resolveAccess returns nullopt for header
 ; offsets and processLoad marks the object ineligible — defeating
 ; virtualization for any virtual receiver whose klass is inspected (e.g. the
 ; load_klass inside instanceof's expansion on a virtual receiver). Non-virtual
-; receivers are unaffected: the call survives to JavaOperationLower(1) and the
+; receivers are unaffected: the call survives to JavaOperationLower(2) and the
 ; same body is inlined there.
-define hotspotcc ptr addrspace(0) @jeandle.load_klass(ptr addrspace(1) nocapture %oop) noinline "lower-phase"="1" #0 {
+define hotspotcc ptr addrspace(0) @jeandle.load_klass(ptr addrspace(1) nocapture %oop) noinline "lower-phase"="2" #0 {
   %klass_offset = load i32, ptr @oopDesc.klass_offset_in_bytes
   %klass_addr = getelementptr inbounds i8, ptr addrspace(1) %oop, i32 %klass_offset
 
@@ -217,10 +217,10 @@ define hotspotcc i1 @jeandle.check_exact_klass(ptr addrspace(0) nocapture %expec
 }
 
 ; Load the reference Klass represented by a java.lang.Class mirror. Primitive
-; mirrors contain a null Klass*. Keeping this as a phase-1 JavaOp lets
+; mirrors contain a null Klass*. Keeping this as a phase-2 JavaOp lets
 ; ConstantFieldFolding answer the query from a constant mirror before exposing
 ; the VM-injected field load.
-define hotspotcc ptr addrspace(0) @jeandle.load_mirror_klass(ptr addrspace(1) nocapture readonly %mirror) noinline "lower-phase"="1" #0 {
+define hotspotcc ptr addrspace(0) @jeandle.load_mirror_klass(ptr addrspace(1) nocapture readonly %mirror) noinline "lower-phase"="2" #0 {
 entry:
   %klass_offset = load i32, ptr @java_lang_Class.klass_offset
   %klass_addr = getelementptr inbounds i8, ptr addrspace(1) %mirror, i32 %klass_offset
@@ -228,22 +228,22 @@ entry:
   ret ptr addrspace(0) %klass
 }
 
-; Load Klass::layout_helper from a Klass pointer. Keeping this as a phase-1
+; Load Klass::layout_helper from a Klass pointer. Keeping this as a phase-2
 ; JavaOp lets ConstantFieldFolding answer the query while the Klass is still a
 ; compile-time constant; unresolved queries lower to the ordinary VM load.
-define hotspotcc i32 @jeandle.layout_helper(ptr addrspace(0) nocapture readonly %klass) noinline "lower-phase"="1" #0 {
+define hotspotcc i32 @jeandle.layout_helper(ptr addrspace(0) nocapture readonly %klass) noinline "lower-phase"="2" #0 {
 entry:
   %layout_helper_offset = load i32, ptr @Klass.layout_helper_offset
   %layout_helper_addr = getelementptr inbounds i8, ptr addrspace(0) %klass, i32 %layout_helper_offset
-  %layout_helper = load atomic i32, ptr addrspace(0) %layout_helper_addr unordered, align 4
+  %layout_helper = load atomic i32, ptr addrspace(0) %layout_helper_addr unordered, align 4, !invariant.load !{}
   ret i32 %layout_helper
 }
 
 ; Query a Klass' current initialization state. Keeping this opaque through
 ; phase 0 lets ConstantFieldFolding replace the query with true for a constant
-; Klass already known by the VM to be initialized. Otherwise phase 1 lowers it
+; Klass already known by the VM to be initialized. Otherwise phase 2 lowers it
 ; to the runtime state load, preserving later class initialization.
-define hotspotcc i1 @jeandle.klass_is_initialized(ptr addrspace(0) nocapture readonly %klass) noinline "lower-phase"="1" #0 {
+define hotspotcc i1 @jeandle.klass_is_initialized(ptr addrspace(0) nocapture readonly %klass) noinline "lower-phase"="2" #0 {
 entry:
   %init_state_offset = load i32, ptr @InstanceKlass.init_state_offset
   %init_state_addr = getelementptr inbounds i8, ptr addrspace(0) %klass, i32 %init_state_offset
@@ -254,7 +254,7 @@ entry:
 }
 
 ; Load the element Klass from an ObjArrayKlass.
-define hotspotcc ptr addrspace(0) @jeandle.load_array_element_klass(ptr addrspace(0) nocapture %array_klass) noinline "lower-phase"="1" #0 {
+define hotspotcc ptr addrspace(0) @jeandle.load_array_element_klass(ptr addrspace(0) nocapture %array_klass) noinline "lower-phase"="2" #0 {
   %element_klass_offset = load i32, ptr @ObjArrayKlass.element_klass_offset
   %element_klass_addr = getelementptr inbounds i8, ptr addrspace(0) %array_klass, i32 %element_klass_offset
   %element_klass = load atomic ptr addrspace(0), ptr addrspace(0) %element_klass_addr unordered, align 8
@@ -312,7 +312,7 @@ return_false:
 ; Check if the sub_klass extends from the super_klass using both primary and secondary supers.
 ; Fast path: checks primary super chain.
 ; Slow path: scans secondary supers array if needed.
-define hotspotcc i1 @jeandle.check_klass_subtype(ptr addrspace(0) nocapture %sub_klass, ptr addrspace(0) nocapture %super_klass) "lower-phase"="1" #0 {
+define hotspotcc i1 @jeandle.check_klass_subtype(ptr addrspace(0) nocapture %sub_klass, ptr addrspace(0) nocapture %super_klass) "lower-phase"="2" #0 {
 entry:
   %is_same_klass = icmp eq ptr addrspace(0) %sub_klass, %super_klass
   br i1 %is_same_klass, label %return_true, label %check_primary_supers
@@ -346,7 +346,7 @@ return_false:
   ret i1 false
 }
 
-define hotspotcc i1 @jeandle.check_instanceof(ptr addrspace(0) nocapture %super_klass, ptr addrspace(1) nocapture nonnull %oop) noinline "lower-phase"="1" #0 {
+define hotspotcc i1 @jeandle.check_instanceof(ptr addrspace(0) nocapture %super_klass, ptr addrspace(1) nocapture nonnull %oop) noinline "lower-phase"="2" #0 {
 entry:
   %sub_klass = call hotspotcc ptr addrspace(0) @jeandle.load_klass(ptr addrspace(1) nonnull %oop)
   %is_subtype = call hotspotcc i1 @jeandle.check_klass_subtype(ptr addrspace(0) %sub_klass, ptr addrspace(0) %super_klass)
@@ -372,7 +372,7 @@ declare hotspotcc ptr addrspace(1) @new_instance(ptr, ptr)
 
 ; Implementation of Java new object
 ; TODO: Support prefetch instructions for next allocations.
-define private hotspotcc ptr addrspace(1) @jeandle.new_instance(ptr %klass, i32 %size_in_bytes, i1 %initial_slow_test) noinline "lower-phase"="1" "jeandle.not-guaranteed-safepoint" {
+define private hotspotcc nonnull ptr addrspace(1) @jeandle.new_instance(ptr %klass, i32 %size_in_bytes, i1 %initial_slow_test) noinline "lower-phase"="2" "jeandle.not-guaranteed-safepoint" {
 entry:
   ; The caller may already know that this allocation requires the runtime.
   ; Share that path with a TLAB exhaustion instead of creating another call.
@@ -463,7 +463,10 @@ define hotspotcc i32 @jeandle.arraylength(ptr addrspace(1) nocapture readonly %a
 entry:
   %length_offset = load i32, ptr @arrayOopDesc.length_offset_in_bytes
   %length_addr = getelementptr inbounds i8, ptr addrspace(1) %array_oop, i32 %length_offset
-  %length = load atomic i32, ptr addrspace(1) %length_addr unordered, align 4
+  ; A Java array's length is defined, non-negative and immutable during the
+  ; array's lifetime. Expose those facts to SCEV, LICM and LoopPredication.
+  %length = load atomic i32, ptr addrspace(1) %length_addr unordered, align 4,
+      !range !{i32 0, i32 2147483647}, !invariant.load !{}, !noundef !{}
   ret i32 %length
 }
 
@@ -472,11 +475,10 @@ declare hotspotcc ptr addrspace(1) @new_array(ptr, i32, ptr)
 declare hotspotcc void @SharedRuntime_register_finalizer(ptr, ptr addrspace(1))
 
 ; ArrayCopyNode-like pseudo operation. Keep it opaque through phase 0 so
-; ArrayCopySpecialization can expand every call before phase 1 lowering.
 declare hotspotcc void @jeandle.arraycopy(
     ptr addrspace(1), i32, ptr addrspace(1), i32, i32,
     ptr addrspace(0), ptr addrspace(0), i32, i32
-) "lower-phase"="1"
+)
 
 ; Slow-path runtime routines for monitor JavaOps. The LOCKING routine is an
 ; indirect routine called via a JIT stub (hotspotcc); declared here and
@@ -526,7 +528,7 @@ declare i32 @StubRoutines_checkcast_arraycopy(ptr addrspace(1), ptr addrspace(1)
 ; Unified array allocation JavaOp.  Both bytecode (newarray/anewarray) and intrinsic
 ; (_newArray / Array.newInstance) paths call this function.
 ; LLVM passes identify array allocation by matching on this function name.
-define private hotspotcc ptr addrspace(1) @jeandle.new_array(ptr %array_klass, i32 %length, i32 %size_in_bytes, i32 %base_offset, i32 %length_limit) noinline "lower-phase"="1" "jeandle.not-guaranteed-safepoint" {
+define private hotspotcc nonnull ptr addrspace(1) @jeandle.new_array(ptr %array_klass, i32 %length, i32 %size_in_bytes, i32 %base_offset, i32 %length_limit) noinline "lower-phase"="2" "jeandle.not-guaranteed-safepoint" {
 entry:
   ; Fast-path length cap. %length_limit is a size-derived bound (FastAllocateSizeLimit, scaled
   ; by element size on the caller side) chosen so %size_in_bytes cannot overflow i32 -- it is
@@ -660,7 +662,7 @@ array_return:
 ; raw derived addresses across safepoints.
 declare hotspotcc void @jeandle.card_table_barrier(ptr addrspace(1) %addr)
 
-define private hotspotcc void @jeandle.g1_satb_enqueue(ptr addrspace(1) %pre_val) "lower-phase"="1" #0 {
+define private hotspotcc void @jeandle.g1_satb_enqueue(ptr addrspace(1) %pre_val) "lower-phase"="2" #0 {
 entry:
   %index_offset = load i32, ptr @G1ThreadLocalData.satb_mark_queue_index_offset
   %buffer_offset = load i32, ptr @G1ThreadLocalData.satb_mark_queue_buffer_offset
@@ -821,7 +823,7 @@ declare hotspotcc void @jeandle.post_barrier(ptr addrspace(1) %addr, ptr addrspa
 ; Identity marker for Java type narrowing.
 ; Semantically returns the same oop. The java-klass return attribute is attached
 ; at call sites, not here.
-define hotspotcc ptr addrspace(1) @jeandle.assume_java_type(ptr addrspace(1) %oop) noinline "lower-phase"="1" #0 {
+define hotspotcc ptr addrspace(1) @jeandle.assume_java_type(ptr addrspace(1) %oop) noinline "lower-phase"="2" #0 {
 entry:
   ret ptr addrspace(1) %oop
 }
@@ -842,14 +844,15 @@ check_subtype:
 }
 
 ; Implementation of array store check operation
-; lower-phase=1: survive JavaOperationLower(0) so the call reaches PEA, which
-; folds it via foldArrayStoreCheck (eliding it for provably-compatible values
-; and for primitive arrays). At lower-phase=0 the body is expanded before PEA,
+; lower-phase=2: survive JavaOperationLower(0) so the call reaches both PEA
+; and the post-PEA TypeCheckElimination pass. PEA folds checks on virtual arrays;
+; TypeCheckElimination also folds compatible stores to exact concrete arrays
+; when PEA is disabled. Expanding it earlier means
 ; exposing a raw load of the array's klass header; resolveAccess returns
 ; nullopt for header offsets and processLoad marks the array ineligible —
 ; defeating array virtualization for EVERY aastore into an Object[] (the
 ; frontend emits this check for every reference array store).
-define hotspotcc i1 @jeandle.array_store_check(ptr addrspace(1) nocapture %oop, ptr addrspace(1) nocapture %array_oop) noinline "lower-phase"="1" #0 {
+define hotspotcc i1 @jeandle.array_store_check(ptr addrspace(1) nocapture %oop, ptr addrspace(1) nocapture %array_oop) noinline "lower-phase"="2" #0 {
 entry:
   %is_null = icmp eq ptr addrspace(1) %oop, null
   br i1 %is_null, label %return_true, label %check_subtype
@@ -942,13 +945,13 @@ normal_lrem:
 }
 
 ; Check if the object is value based
-; lower-phase=1: survive JavaOperationLower(0) so the call reaches PEA, which
+; lower-phase=2: survive JavaOperationLower(0) so the call reaches PEA, which
 ; folds it via foldCheckIfValueBased (collapsing it to a constant when the
 ; receiver's exact klass is known — always the case for a virtual object).
 ; At lower-phase=0 the body's raw klass-header load marks the receiver
 ; ineligible, defeating monitor elision for every value-based-candidate
 ; receiver.
-define hotspotcc i1 @jeandle.check_if_value_based(ptr addrspace(1) nocapture %obj) "lower-phase"="1" #0 {
+define hotspotcc i1 @jeandle.check_if_value_based(ptr addrspace(1) nocapture %obj) "lower-phase"="2" #0 {
 entry:
   %obj_klass = call hotspotcc ptr addrspace(0) @jeandle.load_klass(ptr addrspace(1) %obj)
   %access_flags_offset = load i32, ptr @Klass.access_flags_offset
@@ -961,13 +964,13 @@ entry:
 }
 
 ; Register finalizer for an object only when its exact klass requires it.
-; lower-phase=1: survive JavaOperationLower(0) so the call reaches PEA, which
+; lower-phase=2: survive JavaOperationLower(0) so the call reaches PEA, which
 ; folds it via foldRegisterFinalizerIfNeeded (eliding it for non-finalizer
 ; klasses). At lower-phase=0 the body is expanded before PEA, exposing a raw
 ; load of the object's klass header; resolveAccess returns nullopt for header
 ; offsets and processLoad markIneligible's the object — defeating virtualization
 ; for EVERY allocation (every alloc has this finalizer check).
-define hotspotcc void @jeandle.register_finalizer_if_needed(ptr addrspace(1) %obj) noinline "lower-phase"="1" {
+define hotspotcc void @jeandle.register_finalizer_if_needed(ptr addrspace(1) %obj) noinline "lower-phase"="2" {
 entry:
   %obj_klass = call hotspotcc ptr addrspace(0) @jeandle.load_klass(ptr addrspace(1) %obj)
   %access_flags_offset = load i32, ptr @Klass.access_flags_offset
@@ -1072,7 +1075,7 @@ release_path:
   ret void
 }
 
-; Monitor enter/exit JavaOps are lower-phase=1 so they survive
+; Monitor enter/exit JavaOps are lower-phase=2 so they survive
 ; JavaOperationLower(0) (which runs before PEA) and reach PEA as a single
 ; opaque call each. PEA then folds balanced monitorenter/monitorexit pairs on
 ; virtual receivers (foldMonitorEnter/foldMonitorExit) and, on a deopt,
@@ -1088,7 +1091,7 @@ release_path:
 ; increments held_monitor_count on success; the slow path does NOT (the runtime
 ; routine manages its own counter), preserving the pre-refactor semantics.
 ; Fast path implementation of monitorenter when LockingMode == 0
-define hotspotcc void @jeandle.monitorenter_with_monitor_lock(ptr addrspace(1) nocapture %obj, ptr addrspace(0) nocapture %lock) "lower-phase"="1" #0 {
+define hotspotcc void @jeandle.monitorenter_with_monitor_lock(ptr addrspace(1) nocapture %obj, ptr addrspace(0) nocapture %lock) "lower-phase"="2" #0 {
 entry:
   %mark_offset = load i32, ptr @oopDesc.mark_offset_in_bytes
   %mark_word_addr = getelementptr inbounds i8, ptr addrspace(1) %obj, i32 %mark_offset
@@ -1113,7 +1116,7 @@ slow_path:
 ; Implementation of monitorenter when LockingMode == 1. Complete JavaOp:
 ; thin-lock fast path (with recursive-owner check); all failures go to slow_path.
 ; Fast path implementation of monitorenter when LockingMode == 1
-define hotspotcc void @jeandle.monitorenter_with_thin_lock(ptr addrspace(1) nocapture %obj, ptr addrspace(0) nocapture %lock) "lower-phase"="1" #0 {
+define hotspotcc void @jeandle.monitorenter_with_thin_lock(ptr addrspace(1) nocapture %obj, ptr addrspace(0) nocapture %lock) "lower-phase"="2" #0 {
 entry:
   %mark_offset = load i32, ptr @oopDesc.mark_offset_in_bytes
   %mark_word_addr = getelementptr inbounds i8, ptr addrspace(1) %obj, i32 %mark_offset
@@ -1158,7 +1161,7 @@ slow_path:
 ; lightweight-lock fast path (CAS + lock-stack push); all failures (stack full,
 ; CAS lost, inflated-monitor acquire fail) go to slow_path.
 ; Fast path implementation of monitorenter when LockingMode == 2
-define hotspotcc void @jeandle.monitorenter_with_lightweight_lock(ptr addrspace(1) nocapture %obj, ptr addrspace(0) nocapture %lock) "lower-phase"="1" #0 {
+define hotspotcc void @jeandle.monitorenter_with_lightweight_lock(ptr addrspace(1) nocapture %obj, ptr addrspace(0) nocapture %lock) "lower-phase"="2" #0 {
 entry:
   %mark_offset = load i32, ptr @oopDesc.mark_offset_in_bytes
   %mark_word_addr = getelementptr inbounds i8, ptr addrspace(1) %obj, i32 %mark_offset
@@ -1213,7 +1216,7 @@ slow_path:
 ; decrement_lock_count (the pre-refactor user-IR slow path did not either);
 ; the runtime routine handles release on its own.
 ; Fast path implementation of monitorexit when LockingMode == 0
-define hotspotcc void @jeandle.monitorexit_with_monitor_lock(ptr addrspace(1) nocapture %obj, ptr addrspace(0) nocapture %lock) "lower-phase"="1" #0 {
+define hotspotcc void @jeandle.monitorexit_with_monitor_lock(ptr addrspace(1) nocapture %obj, ptr addrspace(0) nocapture %lock) "lower-phase"="2" #0 {
 entry:
   %mark_offset = load i32, ptr @oopDesc.mark_offset_in_bytes
   %mark_word_addr = getelementptr inbounds i8, ptr addrspace(1) %obj, i32 %mark_offset
@@ -1237,7 +1240,7 @@ slow_path:
 ; recursive-unlock fast path, else inflated release, else thin-unlock CAS;
 ; all failures fall through to slow_path.
 ; Fast path implementation of monitorexit when LockingMode == 1
-define hotspotcc void @jeandle.monitorexit_with_thin_lock(ptr addrspace(1) nocapture %obj, ptr addrspace(0) nocapture %lock) "lower-phase"="1" #0 {
+define hotspotcc void @jeandle.monitorexit_with_thin_lock(ptr addrspace(1) nocapture %obj, ptr addrspace(0) nocapture %lock) "lower-phase"="2" #0 {
 entry:
   %displaced_header_offset = load i32, ptr @BasicLock.displaced_header_offset_in_bytes
   %displaced_header_addr = getelementptr inbounds i8, ptr %lock, i32 %displaced_header_offset
@@ -1278,7 +1281,7 @@ slow_path:
 ; lightweight-unlock fast path (CAS + lock-stack pop); inflated release with an
 ; anonymous-owner guard. All failures fall through to slow_path.
 ; Fast path implementation of monitorexit when LockingMode == 2
-define hotspotcc void @jeandle.monitorexit_with_lightweight_lock(ptr addrspace(1) nocapture %obj, ptr addrspace(0) nocapture %lock) "lower-phase"="1" #0 {
+define hotspotcc void @jeandle.monitorexit_with_lightweight_lock(ptr addrspace(1) nocapture %obj, ptr addrspace(0) nocapture %lock) "lower-phase"="2" #0 {
 entry:
   %mark_offset = load i32, ptr @oopDesc.mark_offset_in_bytes
   %mark_word_addr = getelementptr inbounds i8, ptr addrspace(1) %obj, i32 %mark_offset
@@ -1331,3 +1334,4 @@ slow_path:
 }
 
 attributes #0 = { nounwind "gc-leaf-function" }
+attributes #1 = { noinline mustprogress nounwind willreturn memory(read) "gc-leaf-function" }
