@@ -216,6 +216,21 @@ define hotspotcc i1 @jeandle.check_exact_klass(ptr addrspace(0) nocapture %expec
   ret i1 %is_exact
 }
 
+; Compile-time materialization barrier used by
+; Thread.ensureMaterializedForStackWalk.  The call must survive the phase-0
+; lowering and pre-PEA cleanup so PEA can force a virtual argument to become a
+; real heap object at this point.  Phase-1 inlining removes the JavaOp call;
+; llvm.sideeffect keeps the marker from being deleted prematurely and lowers
+; to no machine instruction, matching the native method's no-runtime-action
+; contract.
+declare void @llvm.sideeffect()
+
+define hotspotcc void @jeandle.ensure_materialized_for_stack_walk(ptr addrspace(1) nocapture %obj) noinline "lower-phase"="1" #0 {
+entry:
+  call void @llvm.sideeffect()
+  ret void
+}
+
 ; Load the reference Klass represented by a java.lang.Class mirror. Primitive
 ; mirrors contain a null Klass*. Keeping this as a phase-1 JavaOp lets
 ; ConstantFieldFolding answer the query from a constant mirror before exposing
