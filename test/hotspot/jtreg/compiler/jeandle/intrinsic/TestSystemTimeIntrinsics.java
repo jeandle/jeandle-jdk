@@ -103,8 +103,15 @@ public class TestSystemTimeIntrinsics {
         while (groups.find()) {
             attributes.put(groups.group(1), groups.group(2));
         }
-        Pattern target = Pattern.compile("\\bcall\\b[^\\r\\n]*@" + Pattern.quote(callee)
-                + "\\(\\)([^\\r\\n]*)");
+        // Direct routines are called through their address embedded as an
+        // inttoptr constant. The module-level alias keeps the routine identity
+        // in the dumped IR, so calls are matched through the alias address.
+        Matcher alias = Pattern.compile("@" + Pattern.quote(callee)
+                + " = alias ptr, inttoptr \\(i64 (\\d+) to ptr\\)").matcher(text);
+        // A disabled intrinsic never creates the alias; "-1" then matches nothing.
+        String address = alias.find() ? alias.group(1) : "-1";
+        Pattern target = Pattern.compile("\\bcall\\b[^\\r\\n]*inttoptr \\(i64 "
+                + address + " to ptr\\)\\(\\)([^\\r\\n]*)");
         Matcher calls = target.matcher(text);
         int count = 0;
         while (calls.find()) {

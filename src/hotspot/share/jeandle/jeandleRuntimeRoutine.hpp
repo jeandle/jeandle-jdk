@@ -181,13 +181,13 @@
 #define ALL_JEANDLE_DIRECT_ROUTINES(def)                                            \
   def(os_javaTimeMillis,                                                            \
       os::javaTimeMillis,                                                           \
-      true,                                                                         \
+      false,                                                                        \
       true,                                                                         \
       llvm::Type::getInt64Ty(context))                                              \
                                                                                     \
   def(os_javaTimeNanos,                                                             \
       os::javaTimeNanos,                                                            \
-      true,                                                                         \
+      false,                                                                        \
       true,                                                                         \
       llvm::Type::getInt64Ty(context))                                              \
                                                                                     \
