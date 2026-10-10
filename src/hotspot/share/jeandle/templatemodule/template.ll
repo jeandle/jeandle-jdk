@@ -474,7 +474,7 @@ declare hotspotcc void @SharedRuntime_register_finalizer(ptr, ptr addrspace(1))
 ; ArrayCopyNode-like pseudo operation. Keep it opaque through phase 0 so
 ; ArrayCopySpecialization can expand every call before phase 1 lowering.
 declare hotspotcc void @jeandle.arraycopy(
-    ptr addrspace(1), i32, ptr addrspace(1), i32, i32,
+    ptr addrspace(1) captures(none), i32, ptr addrspace(1) captures(none), i32, i32,
     ptr addrspace(0), ptr addrspace(0), i32, i32
 ) "lower-phase"="1"
 
