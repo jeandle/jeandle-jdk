@@ -52,9 +52,11 @@
 #include "runtime/handles.inline.hpp"
 #include "utilities/bitMap.inline.hpp"
 #include "utilities/xmlstream.hpp"
+#if defined(COMPILER2) || defined(JEANDLE)
+#include "ci/ciTypeFlow.hpp"
+#endif
 #ifdef COMPILER2
 #include "ci/bcEscapeAnalyzer.hpp"
-#include "ci/ciTypeFlow.hpp"
 #include "oops/method.hpp"
 #endif
 
@@ -96,8 +98,10 @@ ciMethod::ciMethod(const methodHandle& h_m, ciInstanceKlass* holder) :
   _exception_handlers = nullptr;
   _liveness           = nullptr;
   _method_blocks = nullptr;
-#if defined(COMPILER2)
+#if defined(COMPILER2) || defined(JEANDLE)
   _flow               = nullptr;
+#endif // COMPILER2 || JEANDLE
+#ifdef COMPILER2
   _bcea               = nullptr;
 #endif // COMPILER2
 
@@ -178,9 +182,12 @@ ciMethod::ciMethod(ciInstanceKlass* holder,
   _can_be_statically_bound(false),
   _can_omit_stack_trace(true),
   _liveness(               nullptr)
-#if defined(COMPILER2)
+#if defined(COMPILER2) || defined(JEANDLE)
   ,
-  _flow(                   nullptr),
+  _flow(                   nullptr)
+#endif // COMPILER2 || JEANDLE
+#ifdef COMPILER2
+  ,
   _bcea(                   nullptr)
 #endif // COMPILER2
 {
@@ -321,34 +328,34 @@ bool ciMethod::has_balanced_monitors() {
 // ------------------------------------------------------------------
 // ciMethod::get_flow_analysis
 ciTypeFlow* ciMethod::get_flow_analysis() {
-#if defined(COMPILER2)
+#if defined(COMPILER2) || defined(JEANDLE)
   if (_flow == nullptr) {
     ciEnv* env = CURRENT_ENV;
     _flow = new (env->arena()) ciTypeFlow(env, this);
     _flow->do_flow();
   }
   return _flow;
-#else // COMPILER2
+#else // COMPILER2 || JEANDLE
   ShouldNotReachHere();
   return nullptr;
-#endif // COMPILER2
+#endif // COMPILER2 || JEANDLE
 }
 
 
 // ------------------------------------------------------------------
 // ciMethod::get_osr_flow_analysis
 ciTypeFlow* ciMethod::get_osr_flow_analysis(int osr_bci) {
-#if defined(COMPILER2)
+#if defined(COMPILER2) || defined(JEANDLE)
   // OSR entry points are always place after a call bytecode of some sort
   assert(osr_bci >= 0, "must supply valid OSR entry point");
   ciEnv* env = CURRENT_ENV;
   ciTypeFlow* flow = new (env->arena()) ciTypeFlow(env, this, osr_bci);
   flow->do_flow();
   return flow;
-#else // COMPILER2
+#else // COMPILER2 || JEANDLE
   ShouldNotReachHere();
   return nullptr;
-#endif // COMPILER2
+#endif // COMPILER2 || JEANDLE
 }
 
 // ------------------------------------------------------------------

@@ -95,16 +95,16 @@ int Abstract_VM_Version::_vm_build_number = VERSION_BUILD;
 #endif
 
 #ifndef VMTYPE
-  #if COMPILER1_AND_COMPILER2
+  #if COMPILER1_AND_COMPILER2 || defined(JEANDLE)
     #define VMTYPE "Server"
-  #else // COMPILER1_AND_COMPILER2
+  #else // COMPILER1_AND_COMPILER2 || JEANDLE
   #ifdef ZERO
     #define VMTYPE "Zero"
   #else // ZERO
      #define VMTYPE COMPILER1_PRESENT("Client")   \
                     COMPILER2_PRESENT("Server")
   #endif // ZERO
-  #endif // COMPILER1_AND_COMPILER2
+  #endif // COMPILER1_AND_COMPILER2 || JEANDLE
 #endif
 
 #ifndef HOTSPOT_VM_DISTRO

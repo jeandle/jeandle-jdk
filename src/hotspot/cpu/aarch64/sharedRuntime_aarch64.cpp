@@ -2572,7 +2572,7 @@ uint SharedRuntime::out_preserve_stack_slots() {
   return 0;
 }
 
-#ifdef COMPILER2
+#if COMPILER2_OR_JEANDLE
 //------------------------------generate_uncommon_trap_blob--------------------
 void SharedRuntime::generate_uncommon_trap_blob() {
   // Allocate space for the code
@@ -2761,7 +2761,7 @@ void SharedRuntime::generate_uncommon_trap_blob() {
   _uncommon_trap_blob =  UncommonTrapBlob::create(&buffer, oop_maps,
                                                  SimpleRuntimeFrame::framesize >> 1);
 }
-#endif // COMPILER2
+#endif // COMPILER2_OR_JEANDLE
 
 
 //------------------------------generate_handler_blob------

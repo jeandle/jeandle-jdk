@@ -35,16 +35,17 @@
 #ifdef COMPILER1
 #include "c1/c1_globals_pd.hpp"
 #endif // COMPILER1
-#ifdef COMPILER2
+#if defined(COMPILER2) || defined(JEANDLE)
+// Jeandle uses the server compiler defaults for shared compiler flags.
 #include "opto/c2_globals_pd.hpp"
-#endif // COMPILER2
+#endif // COMPILER2 || JEANDLE
 
 // JVMCI has no platform-specific global definitions
 //#if INCLUDE_JVMCI
 //#include "jvmci/jvmci_globals_pd.hpp"
 //#endif
 
-#if !defined(COMPILER1) && !defined(COMPILER2) && !INCLUDE_JVMCI
+#if !defined(COMPILER1) && !defined(COMPILER2) && !INCLUDE_JVMCI && !defined(JEANDLE)
 define_pd_global(bool, BackgroundCompilation,        false);
 define_pd_global(bool, CICompileOSR,                 false);
 define_pd_global(bool, UseTypeProfile,               false);
@@ -82,11 +83,11 @@ define_pd_global(uint64_t,MaxRAM,                    128ULL*G);
 #define CI_COMPILER_COUNT 0
 #else
 
-#if COMPILER2_OR_JVMCI
+#if COMPILER2_OR_JVMCI_OR_JEANDLE
 #define CI_COMPILER_COUNT 2
 #else
 #define CI_COMPILER_COUNT 1
-#endif // COMPILER2_OR_JVMCI
+#endif // COMPILER2_OR_JVMCI_OR_JEANDLE
 
 #endif // no compilers
 

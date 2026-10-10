@@ -83,7 +83,7 @@ class G1GCPhaseTimes : public CHeapObj<mtGC> {
     RemoveSelfForwards,
     ClearCardTable,
     RecalculateUsed,
-#if COMPILER2_OR_JVMCI
+#if COMPILER2_OR_JVMCI_OR_JEANDLE
     UpdateDerivedPointers,
 #endif
     EagerlyReclaimHumongousObjects,
