@@ -242,9 +242,16 @@ void JeandleCompiledCode::finalize() {
   }
 
   assert(align > 1, "invalid alignment");
+  // ELF section alignment can be 2, and with UseRVC the HotSpot prolog above
+  // can end 2 (mod 4). Force the copied blob onto a 4-byte boundary so every
+  // statepoint return PC stays aligned for the jal patch. _prolog_length is
+  // taken after this align so stackmap fixups still point at the blob.
+  RISCV_ONLY(align = MAX2(align, static_cast<uint64_t>(NativeInstruction::instruction_size));)
   masm->align(static_cast<int>(align));
 
   _prolog_length = masm->offset();
+  RISCV_ONLY(assert(is_aligned(_prolog_length, NativeInstruction::instruction_size),
+                    "Jeandle blob start must be 4-byte aligned for call patching: %d", _prolog_length);)
 
   assembler.emit_insts(((address) _obj->getBufferStart()) + offset, code_size);
 
