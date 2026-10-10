@@ -54,6 +54,7 @@
 #include "runtime/vm_version.hpp"
 #include "utilities/globalDefinitions.hpp"
 
+#include <cstddef>
 #include <cstring>
 
 // =============================================================================
@@ -288,6 +289,10 @@ bool JeandleIntrinsicLowering::is_supported(vmIntrinsics::ID id) {
     // hash code
     case vmIntrinsics::_hashCode:
     case vmIntrinsics::_identityHashCode:
+
+    // arrayequals
+    case vmIntrinsics::_equalsB:
+    case vmIntrinsics::_equalsC:
       return true;
 
     // Single-block SHA compression. Availability is checked again by the
@@ -567,6 +572,12 @@ bool JeandleIntrinsicLowering::lower(vmIntrinsics::ID id, const ciMethod* target
     // arraycopy
     case vmIntrinsics::_arraycopy:
       return lower_arraycopy();
+
+    // arraycopy
+    case vmIntrinsics::_equalsB:
+      return lower_arrayequals(T_BYTE);
+    case vmIntrinsics::_equalsC:
+      return lower_arrayequals(T_CHAR);
 
     case vmIntrinsics::_sha_implCompress:
     case vmIntrinsics::_sha2_implCompress:
@@ -2325,7 +2336,6 @@ bool JeandleIntrinsicLowering::lower_arraycopy() {
 
 // StringUTF16 trusted single-code-unit access. Its byte[] backing stores
 // UTF-16 code units in native-endian order, matching the target data layout.
-// Keep the element access as i16 so LLVM can fold the two-byte element scale
 // into the target load/store addressing mode (for example, AArch64's
 // ldrh/strh [base, index, sxtw #1]).
 bool JeandleIntrinsicLowering::lower_string_char_access(bool is_store) {
@@ -2371,5 +2381,86 @@ bool JeandleIntrinsicLowering::lower_string_char_access(bool is_store) {
     _interp->_jvm->apop(); // value
     _interp->_jvm->ipush(result);
   }
+    return true;
+}
+
+// ---- lower_arrayequals ----
+bool JeandleIntrinsicLowering::lower_arrayequals(BasicType element_type) {
+  llvm::LLVMContext& ctx = *_interp->_context;
+  llvm::IRBuilder<>& b = _interp->_ir_builder;
+  llvm::Module& m = _interp->_module;
+  llvm::Function* f = _interp->_llvm_func;
+
+  llvm::Value* left = _interp->_jvm->peek_value(1).value();
+  llvm::Value* right = _interp->_jvm->peek_value(0).value();
+
+  llvm::BasicBlock* current_bb = b.GetInsertBlock();
+  llvm::BasicBlock* null_bb = llvm::BasicBlock::Create(ctx, "null_check", current_bb->getParent());
+  llvm::BasicBlock* slow_bb = llvm::BasicBlock::Create(ctx, "slow_branch", current_bb->getParent());
+  llvm::BasicBlock* result_bb = llvm::BasicBlock::Create(ctx, "result", current_bb->getParent());
+
+  // ---------- if left == right ----------
+  llvm::Value* ptr_eq = b.CreateICmpEQ(left, right);
+  b.CreateCondBr(ptr_eq, result_bb, null_bb);
+
+  // ---------- if left == null || right == null ----------
+  b.SetInsertPoint(null_bb);
+
+  llvm::Value* null_const = llvm::ConstantPointerNull::get(llvm::cast<llvm::PointerType>(left->getType()));
+  llvm::Value* is_null_left = b.CreateICmpEQ(left, null_const);
+  llvm::Value* is_null_right = b.CreateICmpEQ(right, null_const);
+
+  llvm::Value* any_null = b.CreateOr(is_null_left, is_null_right);
+  b.CreateCondBr(any_null, result_bb, slow_bb);
+
+  // ---------- check array length ----------
+  b.SetInsertPoint(slow_bb);
+
+  llvm::Value* left_length = _interp->call_java_op("jeandle.arraylength", {left});
+  llvm::Value* right_length = _interp->call_java_op("jeandle.arraylength", {right});
+
+  llvm::Value* len_equals = b.CreateICmpEQ(left_length, right_length);
+  
+  llvm::BasicBlock* memcmp_bb = llvm::BasicBlock::Create(ctx, "memcmp", 
+                                            current_bb->getParent());
+
+  b.CreateCondBr(len_equals, memcmp_bb, result_bb);
+
+  // ---------- if len(left) == len(right) ----------
+  b.SetInsertPoint(memcmp_bb);
+
+  llvm::Value* array_base_offset = b.getInt32(arrayOopDesc::base_offset_in_bytes(element_type));
+  llvm::Value* left_array_base = b.CreatePtrAdd(left, array_base_offset, "left_array_element_base");
+  llvm::Value* right_array_base = b.CreatePtrAdd(right, array_base_offset, "right_array_element_base");
+  llvm::PointerType* c_heap_ptr_ty =
+      llvm::PointerType::get(ctx, llvm::jeandle::AddrSpace::CHeapAddrSpace);
+
+  llvm::Value* element_byte_size = llvm::ConstantInt::get(left_length->getType(),type2aelembytes(element_type));
+  llvm::Value* left_byte_length = b.CreateMul(element_byte_size, left_length);
+  if (left_byte_length->getType() != b.getInt64Ty()) left_byte_length = b.CreateIntCast(left_byte_length, b.getInt64Ty(), false);
+
+
+  llvm::Value* memcmp_result = _interp->call_java_op("jeandle.memcmp", {left_array_base, right_array_base, left_byte_length});
+  llvm::Value* is_equal = b.CreateICmpEQ(memcmp_result, 
+                                        llvm::ConstantInt::get(memcmp_result->getType(), 0));  
+
+  b.CreateBr(result_bb);
+  
+  b.SetInsertPoint(result_bb);
+  _interp->_block->set_tail_llvm_block(result_bb);
+  llvm::PHINode* phi = b.CreatePHI(b.getInt1Ty(), 4);
+  phi->addIncoming(llvm::ConstantInt::getTrue(ctx), current_bb);  // left == right -> true
+  phi->addIncoming(llvm::ConstantInt::getFalse(ctx), null_bb);    // any null -> false
+  phi->addIncoming(llvm::ConstantInt::getFalse(ctx), slow_bb);    // len(left) != len(right) -> false
+  phi->addIncoming(is_equal, memcmp_bb);                          // memcmp(left_base, right_base) == 0 -> true
+
+  llvm::Value* result = b.CreateIntCast(phi, b.getInt32Ty(), false);
+
+  _interp->_jvm->apop(); // right
+  _interp->_jvm->apop(); // left
+
+
+  _interp->_jvm->push(T_BOOLEAN, result);
+  
   return true;
 }
