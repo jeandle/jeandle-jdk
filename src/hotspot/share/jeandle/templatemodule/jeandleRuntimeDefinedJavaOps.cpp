@@ -21,6 +21,11 @@
 #include "jeandle/__llvmHeadersBegin__.hpp"
 #include "llvm/IR/BasicBlock.h"
 #include "llvm/IR/IRBuilder.h"
+#include "llvm/IR/InlineAsm.h"
+#include "llvm/IR/Intrinsics.h"
+#if defined(RISCV64)
+#include "llvm/IR/IntrinsicsRISCV.h"
+#endif
 
 #include "jeandle/templatemodule/jeandleRuntimeDefinedJavaOps.hpp"
 #include "jeandle/jeandleRuntimeRoutine.hpp"
@@ -106,6 +111,376 @@ DEF_JAVA_OP(current_thread, 0, llvm::PointerType::get(context, llvm::jeandle::Ad
   llvm::Value* current_thread_ptr = ir_builder.CreateIntToPtr(current_thread_value,
                                                               llvm::PointerType::get(context, llvm::jeandle::AddrSpace::CHeapAddrSpace));
   ir_builder.CreateRet(current_thread_ptr);
+JAVA_OP_END
+
+DEF_JAVA_OP(membar_cpuorder, 1, llvm::Type::getVoidTy(context))
+  // C2's MemBarCPUOrder only prevents compiler movement; it has no hardware
+  // encoding on the supported platforms.
+  llvm::FunctionType* barrier_type =
+      llvm::FunctionType::get(ir_builder.getVoidTy(), false);
+  llvm::InlineAsm* barrier = llvm::InlineAsm::get(
+      barrier_type, "", "~{memory}", /*hasSideEffects=*/true);
+  ir_builder.CreateCall(barrier_type, barrier);
+  ir_builder.CreateRetVoid();
+JAVA_OP_END
+
+static void emit_allocation_prefetch_loop(llvm::IRBuilder<>& builder,
+                                          llvm::Function* function,
+                                          llvm::Value* start,
+                                          llvm::Value* lines,
+                                          int64_t first_offset,
+                                          int64_t step_size,
+                                          int32_t rw,
+                                          int32_t locality,
+                                          llvm::BasicBlock* return_block) {
+  llvm::LLVMContext& context = function->getContext();
+  llvm::BasicBlock* entry_block = builder.GetInsertBlock();
+  llvm::BasicBlock* loop_block =
+      llvm::BasicBlock::Create(context, "allocation_prefetch_loop", function);
+  builder.CreateBr(loop_block);
+  builder.SetInsertPoint(loop_block);
+
+  llvm::PHINode* index = builder.CreatePHI(builder.getInt32Ty(), 2, "prefetch_index");
+  index->addIncoming(builder.getInt32(0), entry_block);
+  llvm::Value* index64 = builder.CreateZExt(index, builder.getInt64Ty());
+  llvm::Value* step = builder.CreateMul(index64, builder.getInt64(step_size));
+  llvm::Value* offset = builder.CreateAdd(step, builder.getInt64(first_offset));
+  llvm::Value* address = builder.CreateInBoundsGEP(
+      builder.getInt8Ty(), start, offset, "prefetch_address");
+  builder.CreateIntrinsic(
+      llvm::Intrinsic::prefetch, start->getType(),
+      {address, builder.getInt32(rw), builder.getInt32(locality), builder.getInt32(1)});
+
+  llvm::Value* next_index = builder.CreateAdd(index, builder.getInt32(1));
+  llvm::Value* done = builder.CreateICmpUGE(next_index, lines);
+  llvm::BasicBlock* next_block =
+      llvm::BasicBlock::Create(context, "allocation_prefetch_next", function);
+  builder.CreateCondBr(done, return_block, next_block);
+  builder.SetInsertPoint(next_block);
+  builder.CreateBr(loop_block);
+  index->addIncoming(next_index, next_block);
+}
+
+DEF_JAVA_OP(allocation_prefetch, 1, llvm::Type::getVoidTy(context),
+            llvm::PointerType::get(context, llvm::jeandle::AddrSpace::JavaHeapAddrSpace),
+            llvm::PointerType::get(context, llvm::jeandle::AddrSpace::JavaHeapAddrSpace),
+            llvm::Type::getInt32Ty(context))
+  llvm::Value* old_top = func->getArg(0);
+  llvm::Value* new_top = func->getArg(1);
+  llvm::Value* lines = func->getArg(2);
+  llvm::BasicBlock* return_block = llvm::BasicBlock::Create(context, "return", func);
+  llvm::Value* has_lines = ir_builder.CreateICmpNE(lines, ir_builder.getInt32(0));
+
+  // Keep all allocation policy in this reusable JavaOp. The allocation sites
+  // only provide the old/new TLAB tops and the allocation-specific line count.
+  if (AllocatePrefetchStyle <= 0 || AllocatePrefetchDistance == 0) {
+    ir_builder.CreateBr(return_block);
+  } else {
+    int32_t rw = 1;
+    int32_t locality = 3;
+#if defined(AMD64)
+    // LLVM's x86 patterns use rw=1 for PREFETCHW. Other HotSpot allocation
+    // choices are ordinary read prefetches selected by locality.
+    rw = AllocatePrefetchInstr == 3 ? 1 : 0;
+    switch (AllocatePrefetchInstr) {
+      case 0: locality = 0; break; // PREFETCHNTA
+      case 1: locality = 3; break; // PREFETCHT0
+      case 2: locality = 1; break; // PREFETCHT2
+      default: locality = 3; break; // PREFETCHW
+    }
+#endif
+
+    if (AllocatePrefetchStyle == 2) {
+      llvm::GlobalVariable* pf_top_offset_global =
+          template_module.getGlobalVariable("JavaThread.tlab_pf_top_offset");
+      llvm::Value* pf_top_offset = ir_builder.CreateLoad(
+          ir_builder.getInt64Ty(), pf_top_offset_global);
+      llvm::PointerType* tls_pointer_type =
+          llvm::PointerType::get(context, llvm::jeandle::AddrSpace::TLSAddrSpace);
+      llvm::Value* pf_top_ptr = ir_builder.CreateIntToPtr(pf_top_offset, tls_pointer_type);
+      llvm::Value* old_pf_top = ir_builder.CreateLoad(old_top->getType(), pf_top_ptr);
+      llvm::Value* needs_prefetch = ir_builder.CreateICmpUGE(new_top, old_pf_top);
+      llvm::BasicBlock* prefetch_block =
+          llvm::BasicBlock::Create(context, "allocation_prefetch_watermark", func);
+      llvm::BasicBlock* has_lines_block =
+          llvm::BasicBlock::Create(context, "allocation_prefetch_has_lines", func);
+      ir_builder.CreateCondBr(needs_prefetch, has_lines_block, return_block);
+      ir_builder.SetInsertPoint(has_lines_block);
+      ir_builder.CreateCondBr(has_lines, prefetch_block, return_block);
+      ir_builder.SetInsertPoint(prefetch_block);
+      llvm::Value* new_pf_top = ir_builder.CreateInBoundsGEP(
+          ir_builder.getInt8Ty(), old_pf_top,
+          ir_builder.getInt64(AllocatePrefetchDistance));
+      ir_builder.CreateStore(new_pf_top, pf_top_ptr);
+      emit_allocation_prefetch_loop(ir_builder, func, old_pf_top, lines,
+                                    AllocatePrefetchDistance, AllocatePrefetchStepSize,
+                                    rw, locality, return_block);
+    } else if (AllocatePrefetchStyle == 3) {
+      llvm::Type* intptr_type = ir_builder.getIntPtrTy(template_module.getDataLayout());
+      llvm::Value* old_top_int = ir_builder.CreatePtrToInt(old_top, intptr_type);
+      llvm::Value* first = ir_builder.CreateAdd(
+          old_top_int, ir_builder.getInt64(AllocatePrefetchStepSize + AllocatePrefetchDistance));
+      llvm::Value* mask = ir_builder.getInt64(
+          ~(uint64_t)(AllocatePrefetchStepSize - 1));
+      llvm::Value* aligned = ir_builder.CreateAnd(first, mask);
+      llvm::Value* cache_address = ir_builder.CreateIntToPtr(aligned, old_top->getType());
+      llvm::BasicBlock* prefetch_block =
+          llvm::BasicBlock::Create(context, "allocation_prefetch_has_lines", func);
+      ir_builder.CreateCondBr(has_lines, prefetch_block, return_block);
+      ir_builder.SetInsertPoint(prefetch_block);
+      emit_allocation_prefetch_loop(ir_builder, func, cache_address, lines, 0,
+                                    AllocatePrefetchStepSize, rw, locality,
+                                    return_block);
+    } else {
+      // Style 1 starts at new_top + distance and advances by step_size.
+      llvm::BasicBlock* prefetch_block =
+          llvm::BasicBlock::Create(context, "allocation_prefetch_has_lines", func);
+      ir_builder.CreateCondBr(has_lines, prefetch_block, return_block);
+      ir_builder.SetInsertPoint(prefetch_block);
+      emit_allocation_prefetch_loop(ir_builder, func, new_top, lines,
+                                    AllocatePrefetchDistance, AllocatePrefetchStepSize,
+                                    rw, locality, return_block);
+    }
+  }
+
+  ir_builder.SetInsertPoint(return_block);
+  ir_builder.CreateRetVoid();
+JAVA_OP_END
+
+static void emit_variable_zero_heap_words(llvm::IRBuilder<>& builder,
+                                          llvm::Function* function,
+                                          llvm::Value* base,
+                                          llvm::Value* word_count,
+                                          llvm::BasicBlock* stub_block,
+                                          llvm::BasicBlock* return_block) {
+  llvm::LLVMContext& context = function->getContext();
+
+#if defined(AARCH64)
+  // AArch64 keeps the 0..7 HeapWord tail inline and delegates larger clears
+  // to the block-zeroing stub, matching MacroAssembler::zero_words.
+  llvm::BasicBlock* tail_4_block =
+      llvm::BasicBlock::Create(context, "variable_tail_4", function);
+  llvm::BasicBlock* tail_2_block =
+      llvm::BasicBlock::Create(context, "variable_tail_2", function);
+  llvm::BasicBlock* tail_1_block =
+      llvm::BasicBlock::Create(context, "variable_tail_1", function);
+  llvm::BasicBlock* tail_return_block =
+      llvm::BasicBlock::Create(context, "variable_tail_return", function);
+
+  llvm::Value* use_stub = builder.CreateICmpUGE(word_count, builder.getInt32(8));
+  builder.CreateCondBr(use_stub, stub_block, tail_4_block);
+
+  // Clear the 0..7 HeapWord tail by testing the 4/2/1 count bits. This is the
+  // same compact shape used by C2 after its zero_blocks call.
+  builder.SetInsertPoint(tail_4_block);
+  llvm::Value* has_4_words = builder.CreateICmpNE(
+      builder.CreateAnd(word_count, builder.getInt32(4)), builder.getInt32(0));
+  llvm::BasicBlock* clear_4_words_block =
+      llvm::BasicBlock::Create(context, "clear_4_words", function);
+  builder.CreateCondBr(has_4_words, clear_4_words_block, tail_2_block);
+
+  builder.SetInsertPoint(clear_4_words_block);
+  llvm::Value* zero_pair = llvm::ConstantInt::get(builder.getInt128Ty(), 0);
+  llvm::StoreInst* clear_first_pair = builder.CreateStore(zero_pair, base, true);
+  clear_first_pair->setAlignment(llvm::Align(HeapWordSize));
+  llvm::Value* second_pair_addr = builder.CreateInBoundsGEP(
+      builder.getInt64Ty(), base, builder.getInt32(2));
+  llvm::StoreInst* clear_second_pair =
+      builder.CreateStore(zero_pair, second_pair_addr, true);
+  clear_second_pair->setAlignment(llvm::Align(HeapWordSize));
+  llvm::Value* base_after_4 = builder.CreateInBoundsGEP(
+      builder.getInt64Ty(), base, builder.getInt32(4));
+  builder.CreateBr(tail_2_block);
+
+  builder.SetInsertPoint(tail_2_block);
+  llvm::PHINode* tail_2_base = builder.CreatePHI(base->getType(), 2, "tail_2_base");
+  tail_2_base->addIncoming(base, tail_4_block);
+  tail_2_base->addIncoming(base_after_4, clear_4_words_block);
+  llvm::Value* has_2_words = builder.CreateICmpNE(
+      builder.CreateAnd(word_count, builder.getInt32(2)), builder.getInt32(0));
+  llvm::BasicBlock* clear_2_words_block =
+      llvm::BasicBlock::Create(context, "clear_2_words", function);
+  builder.CreateCondBr(has_2_words, clear_2_words_block, tail_1_block);
+
+  builder.SetInsertPoint(clear_2_words_block);
+  llvm::StoreInst* clear_2_words = builder.CreateStore(
+      llvm::ConstantInt::get(builder.getInt128Ty(), 0), tail_2_base, true);
+  clear_2_words->setAlignment(llvm::Align(HeapWordSize));
+  llvm::Value* base_after_2 = builder.CreateInBoundsGEP(
+      builder.getInt64Ty(), tail_2_base, builder.getInt32(2));
+  builder.CreateBr(tail_1_block);
+
+  builder.SetInsertPoint(tail_1_block);
+  llvm::PHINode* tail_1_base = builder.CreatePHI(base->getType(), 2, "tail_1_base");
+  tail_1_base->addIncoming(tail_2_base, tail_2_block);
+  tail_1_base->addIncoming(base_after_2, clear_2_words_block);
+  llvm::Value* has_1_word = builder.CreateICmpNE(
+      builder.CreateAnd(word_count, builder.getInt32(1)), builder.getInt32(0));
+  builder.CreateCondBr(has_1_word, tail_return_block, return_block);
+
+  builder.SetInsertPoint(tail_return_block);
+  llvm::StoreInst* clear_1_word = builder.CreateStore(builder.getInt64(0), tail_1_base, true);
+  clear_1_word->setAlignment(llvm::Align(HeapWordSize));
+  builder.CreateBr(return_block);
+#elif defined(RISCV64)
+  if (UseRVV && !UseBlockZeroing) {
+    // Match C2's clear_array_v with an e64,m4 strip-mined RVV loop.
+    llvm::BasicBlock* variable_block = builder.GetInsertBlock();
+    llvm::BasicBlock* loop_block =
+        llvm::BasicBlock::Create(context, "rvv_loop", function);
+    llvm::Value* initial_remaining = builder.CreateZExt(
+        word_count, builder.getInt64Ty(), "rvv_remaining");
+    llvm::CallInst* initial_vl = builder.CreateIntrinsic(
+        llvm::Intrinsic::riscv_vsetvli, {builder.getInt64Ty()},
+        {initial_remaining, builder.getInt64(3), builder.getInt64(2)});
+    llvm::VectorType* vector_type = llvm::VectorType::get(
+        builder.getInt64Ty(), llvm::ElementCount::getScalable(4));
+    llvm::Value* zero_vector = builder.CreateIntrinsic(
+        llvm::Intrinsic::riscv_vmv_v_x,
+        {vector_type, builder.getInt64Ty()},
+        {llvm::PoisonValue::get(vector_type), builder.getInt64(0), initial_vl},
+        {}, "rvv_zero");
+    builder.CreateBr(loop_block);
+
+    builder.SetInsertPoint(loop_block);
+    llvm::PHINode* current_base = builder.CreatePHI(base->getType(), 2, "rvv_base");
+    llvm::PHINode* remaining = builder.CreatePHI(builder.getInt64Ty(), 2, "rvv_remaining");
+    current_base->addIncoming(base, variable_block);
+    remaining->addIncoming(initial_remaining, variable_block);
+
+    llvm::CallInst* vl = builder.CreateIntrinsic(
+        llvm::Intrinsic::riscv_vsetvli, {builder.getInt64Ty()},
+        {remaining, builder.getInt64(3), builder.getInt64(2)}, {}, "rvv_vl");
+    builder.CreateIntrinsic(
+        llvm::Intrinsic::riscv_vse,
+        {vector_type, current_base->getType(), builder.getInt64Ty()},
+        {zero_vector, current_base, vl});
+
+    llvm::Value* next_remaining = builder.CreateSub(remaining, vl, "rvv_next_remaining");
+    llvm::Value* next_base = builder.CreateInBoundsGEP(
+        builder.getInt64Ty(), current_base, vl, "rvv_next_base");
+    llvm::Value* has_remaining = builder.CreateICmpNE(
+        next_remaining, builder.getInt64(0));
+    builder.CreateCondBr(has_remaining, loop_block, return_block);
+    current_base->addIncoming(next_base, loop_block);
+    remaining->addIncoming(next_remaining, loop_block);
+  } else {
+    builder.CreateBr(stub_block);
+  }
+#else
+  // The x86 stub owns the complete variable-count strategy.
+  builder.CreateBr(stub_block);
+#endif
+}
+
+DEF_JAVA_OP(zero_heap_words, 1, llvm::Type::getVoidTy(context),
+            llvm::PointerType::get(context, llvm::jeandle::AddrSpace::JavaHeapAddrSpace),
+            llvm::Type::getInt32Ty(context))
+  llvm::Value* base = func->getArg(0);
+  llvm::Value* word_count = func->getArg(1);
+  func->addParamAttr(0, llvm::Attribute::getWithAlignment(context, llvm::Align(HeapWordSize)));
+
+  llvm::BasicBlock* constant_dispatch_block = llvm::BasicBlock::Create(context, "constant_dispatch", func);
+  llvm::BasicBlock* constant_odd_word_block = llvm::BasicBlock::Create(context, "constant_odd_word", func);
+  llvm::BasicBlock* constant_pair_dispatch_block = llvm::BasicBlock::Create(context, "constant_pair_dispatch", func);
+  llvm::BasicBlock* constant_pair_loop_block = llvm::BasicBlock::Create(context, "constant_pair_loop", func);
+  llvm::BasicBlock* variable_block = llvm::BasicBlock::Create(context, "variable", func);
+  llvm::BasicBlock* variable_stub_block = llvm::BasicBlock::Create(context, "variable_stub", func);
+  llvm::BasicBlock* return_block = llvm::BasicBlock::Create(context, "return", func);
+
+  // JavaOperationLower(1) inlines this JavaOp before llvm.is.constant is
+  // lowered. Constant propagation can therefore expose a constant word count
+  // at the allocation site. Keep only short constants inline, matching C2's
+  // platform thresholds; larger constants use the platform zeroing stub.
+  llvm::Value* is_constant = ir_builder.CreateIntrinsic(
+      llvm::Intrinsic::is_constant, llvm::Type::getInt32Ty(context), {word_count});
+  llvm::Value* inline_constant = is_constant;
+#if defined(AARCH64)
+  llvm::Value* below_block_zeroing_limit = ir_builder.CreateICmpULT(
+      word_count, ir_builder.getInt32(BlockZeroingLowLimit / HeapWordSize));
+  inline_constant = ir_builder.CreateAnd(is_constant, below_block_zeroing_limit);
+#elif defined(RISCV64)
+  if (UseRVV) {
+    // C2 prefers its RVV ClearArray rule even when the count is constant.
+    inline_constant = ir_builder.getFalse();
+  } else {
+    llvm::Value* below_block_zeroing_limit = ir_builder.CreateICmpULT(
+        word_count, ir_builder.getInt32(BlockZeroingLowLimit / HeapWordSize));
+    inline_constant = ir_builder.CreateAnd(is_constant, below_block_zeroing_limit);
+  }
+#elif defined(AMD64)
+  llvm::Value* is_short_clear = ir_builder.CreateICmpULE(
+      word_count, ir_builder.getInt32(InitArrayShortSize / HeapWordSize));
+  inline_constant = ir_builder.CreateAnd(is_constant, is_short_clear);
+#endif
+  ir_builder.CreateCondBr(inline_constant, constant_dispatch_block, variable_block);
+
+  // Follow C2's constant-count shape: clear an odd leading HeapWord, then clear
+  // pairs of HeapWords. A volatile i128 zero store lowers to one STP on AArch64,
+  // while volatility prevents LoopIdiomRecognize from recreating memset. The
+  // constant-trip pair loop can still be fully unrolled.
+  ir_builder.SetInsertPoint(constant_dispatch_block);
+  llvm::Value* odd_word = ir_builder.CreateAnd(word_count, ir_builder.getInt32(1));
+  llvm::Value* has_odd_word = ir_builder.CreateICmpNE(odd_word, ir_builder.getInt32(0));
+  ir_builder.CreateCondBr(has_odd_word, constant_odd_word_block, constant_pair_dispatch_block);
+
+  ir_builder.SetInsertPoint(constant_odd_word_block);
+  llvm::StoreInst* odd_store = ir_builder.CreateStore(ir_builder.getInt64(0), base, true);
+  odd_store->setAlignment(llvm::Align(8));
+  llvm::Value* base_after_odd = ir_builder.CreateInBoundsGEP(ir_builder.getInt64Ty(), base, ir_builder.getInt32(1));
+  ir_builder.CreateBr(constant_pair_dispatch_block);
+
+  ir_builder.SetInsertPoint(constant_pair_dispatch_block);
+  llvm::PHINode* pair_base = ir_builder.CreatePHI(base->getType(), 2, "pair_base");
+  pair_base->addIncoming(base, constant_dispatch_block);
+  pair_base->addIncoming(base_after_odd, constant_odd_word_block);
+  llvm::Value* pair_count = ir_builder.CreateLShr(word_count, ir_builder.getInt32(1));
+  llvm::Value* has_pairs = ir_builder.CreateICmpNE(pair_count, ir_builder.getInt32(0));
+  ir_builder.CreateCondBr(has_pairs, constant_pair_loop_block, return_block);
+
+  ir_builder.SetInsertPoint(constant_pair_loop_block);
+  llvm::PHINode* pair_index = ir_builder.CreatePHI(ir_builder.getInt32Ty(), 2, "pair_index");
+  pair_index->addIncoming(ir_builder.getInt32(0), constant_pair_dispatch_block);
+  llvm::Value* pair_addr = ir_builder.CreateInBoundsGEP(ir_builder.getInt128Ty(), pair_base, pair_index);
+  llvm::Value* zero_pair = llvm::ConstantInt::get(ir_builder.getInt128Ty(), 0);
+  llvm::StoreInst* pair_store = ir_builder.CreateStore(zero_pair, pair_addr, true);
+  pair_store->setAlignment(llvm::Align(8));
+  llvm::Value* next_pair = ir_builder.CreateAdd(pair_index, ir_builder.getInt32(1), "next_pair");
+  llvm::Value* constant_done = ir_builder.CreateICmpEQ(next_pair, pair_count);
+  ir_builder.CreateCondBr(constant_done, return_block, constant_pair_loop_block);
+  pair_index->addIncoming(next_pair, constant_pair_loop_block);
+
+  ir_builder.SetInsertPoint(variable_block);
+  emit_variable_zero_heap_words(
+      ir_builder, func, base, word_count, variable_stub_block, return_block);
+
+  ir_builder.SetInsertPoint(variable_stub_block);
+  llvm::FunctionType* stub_type = llvm::FunctionType::get(
+      llvm::Type::getVoidTy(context), {base->getType(), word_count->getType()}, false);
+  llvm::FunctionCallee stub_callee =
+      template_module.getOrInsertFunction("zero_heap_words_stub", stub_type);
+  llvm::Function* stub = llvm::cast<llvm::Function>(stub_callee.getCallee());
+  stub->setCallingConv(llvm::CallingConv::C);
+  stub->addFnAttr(llvm::Attribute::NoUnwind);
+  stub->addFnAttr("gc-leaf-function");
+  llvm::CallInst* stub_call = ir_builder.CreateCall(stub_callee, {base, word_count});
+  stub_call->setCallingConv(llvm::CallingConv::C);
+  ir_builder.CreateBr(return_block);
+
+  ir_builder.SetInsertPoint(return_block);
+  ir_builder.CreateRetVoid();
+JAVA_OP_END
+
+// Clear one half HeapWord (4 bytes on supported 64-bit platforms). Keeping
+// this as a phase-1 JavaOp lets allocation optimization passes identify small
+// zero-filled gaps before lowering.
+DEF_JAVA_OP(zero_half_heap_word, 1, llvm::Type::getVoidTy(context),
+            llvm::PointerType::get(context, llvm::jeandle::AddrSpace::JavaHeapAddrSpace))
+  llvm::Value* address = func->getArg(0);
+  func->addParamAttr(0, llvm::Attribute::getWithAlignment(context, llvm::Align(HeapWordSize / 2)));
+  llvm::StoreInst* zero_store = ir_builder.CreateStore(ir_builder.getInt32(0), address);
+  zero_store->setAlignment(llvm::Align(HeapWordSize / 2));
+  ir_builder.CreateRetVoid();
 JAVA_OP_END
 
 DEF_JAVA_OP(safepoint_poll, 1, llvm::Type::getVoidTy(context))
@@ -562,6 +937,10 @@ bool RuntimeDefinedJavaOps::define_all(llvm::Module& template_module) {
 
   // Define all runtime defined JavaOps:
   define_current_thread(template_module);
+  define_membar_cpuorder(template_module);
+  define_allocation_prefetch(template_module);
+  define_zero_half_heap_word(template_module);
+  define_zero_heap_words(template_module);
   define_safepoint_poll(template_module);
   define_card_table_barrier(template_module);
   define_pre_barrier(template_module);
@@ -698,6 +1077,7 @@ void RuntimeDefinedJavaOps::define_global_variables(llvm::Module& template_modul
   define_global("ObjectMonitor.ANONYMOUS_OWNER",                    int64_type, static_cast<uint64_t>(ObjectMonitor::ANONYMOUS_OWNER));
   define_global("JavaThread.tlab_end_offset",                       int64_type, static_cast<uint64_t>(JavaThread::tlab_end_offset()));
   define_global("JavaThread.tlab_top_offset",                       int64_type, static_cast<uint64_t>(JavaThread::tlab_top_offset()));
+  define_global("JavaThread.tlab_pf_top_offset",                    int64_type, static_cast<uint64_t>(JavaThread::tlab_pf_top_offset()));
   define_global("markWord.prototype_value",                         int64_type, static_cast<uint64_t>(markWord::prototype().value()));
 
   define_global("JVM_ACC_IS_VALUE_BASED_CLASS",                     int32_type, static_cast<uint64_t>(JVM_ACC_IS_VALUE_BASED_CLASS));
@@ -725,6 +1105,8 @@ void RuntimeDefinedJavaOps::define_global_variables(llvm::Module& template_modul
 
   define_global("VMOptions.UseTLAB",                                int1_type, static_cast<uint64_t>(UseTLAB));
   define_global("VMOptions.ZeroTLAB",                               int1_type, static_cast<uint64_t>(ZeroTLAB));
-  define_global("VMOptions.UseCompressedClassPointers",             int1_type, static_cast<uint64_t>(UseCompressedClassPointers));
+  define_global("VMOptions.AllocateInstancePrefetchLines",          int32_type, static_cast<uint64_t>(AllocateInstancePrefetchLines));
+  define_global("VMOptions.AllocatePrefetchLines",                  int32_type, static_cast<uint64_t>(AllocatePrefetchLines));
+  define_global("VMOptions.UseCompressedClassPointers",             int1_type,  static_cast<uint64_t>(UseCompressedClassPointers));
   define_global("VMOptions.UseCompressedOops",                      int1_type, static_cast<uint64_t>(UseCompressedOops));
 }
