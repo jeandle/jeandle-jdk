@@ -165,6 +165,20 @@ public class FileCheck {
         Asserts.assertTrue(found, "File check: " + content);
     }
 
+    // Check whether the pattern occurs anywhere, without imposing IR order.
+    public void checkPatternAnywhere(String content) {
+        boolean found = false;
+        content = content.trim();
+        Pattern pattern = Pattern.compile(content);
+        for (String str : lines) {
+            if (pattern.matcher(str).find()) {
+                found = true;
+                break;
+            }
+        }
+        Asserts.assertTrue(found, "File check anywhere: " + content);
+    }
+
     // Check whether the pattern is in the next line.
     public void checkNextPattern(String content) {
         boolean found = false;

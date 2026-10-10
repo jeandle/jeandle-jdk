@@ -760,7 +760,7 @@ static void post_thread_park_event(EventThreadPark* event, const oop obj, jlong 
   event->commit();
 }
 
-UNSAFE_ENTRY(void, Unsafe_Park(JNIEnv *env, jobject unsafe, jboolean isAbsolute, jlong time)) {
+void Unsafe_park(JavaThread* thread, jboolean isAbsolute, jlong time) {
   HOTSPOT_THREAD_PARK_BEGIN((uintptr_t) thread->parker(), (int) isAbsolute, time);
   EventThreadPark event;
 
@@ -779,11 +779,14 @@ UNSAFE_ENTRY(void, Unsafe_Park(JNIEnv *env, jobject unsafe, jboolean isAbsolute,
     }
   }
   HOTSPOT_THREAD_PARK_END((uintptr_t) thread->parker());
+}
+
+UNSAFE_ENTRY(void, Unsafe_Park(JNIEnv *env, jobject unsafe, jboolean isAbsolute, jlong time)) {
+  Unsafe_park(thread, isAbsolute, time);
 } UNSAFE_END
 
-UNSAFE_ENTRY(void, Unsafe_Unpark(JNIEnv *env, jobject unsafe, jobject jthread)) {
-  if (jthread != nullptr) {
-    oop thread_oop = JNIHandles::resolve_non_null(jthread);
+void Unsafe_unpark(oopDesc* thread_oop) {
+  if (thread_oop != nullptr) {
     // Get the JavaThread* stored in the java.lang.Thread object _before_
     // the embedded ThreadsListHandle is constructed so we know if the
     // early life stage of the JavaThread* is protected. We use acquire
@@ -799,6 +802,10 @@ UNSAFE_ENTRY(void, Unsafe_Unpark(JNIEnv *env, jobject unsafe, jobject jthread)) 
       p->unpark();
     }
   } // FastThreadsListHandle is destroyed here.
+}
+
+UNSAFE_ENTRY(void, Unsafe_Unpark(JNIEnv *env, jobject unsafe, jobject jthread)) {
+  Unsafe_unpark(JNIHandles::resolve(jthread));
 } UNSAFE_END
 
 UNSAFE_ENTRY(jint, Unsafe_GetLoadAverage0(JNIEnv *env, jobject unsafe, jdoubleArray loadavg, jint nelem)) {

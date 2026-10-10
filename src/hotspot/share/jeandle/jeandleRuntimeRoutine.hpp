@@ -86,6 +86,19 @@
       llvm::Type::getInt32Ty(context),                                              \
       llvm::PointerType::get(context, llvm::jeandle::AddrSpace::CHeapAddrSpace))    \
                                                                                     \
+  def(unsafe_park,                                                                  \
+      JeandleRuntimeRoutine::unsafe_park,                                           \
+      llvm::Type::getVoidTy(context),                                               \
+      llvm::Type::getInt32Ty(context),                                              \
+      llvm::Type::getInt64Ty(context),                                              \
+      llvm::PointerType::get(context, llvm::jeandle::AddrSpace::CHeapAddrSpace))    \
+                                                                                    \
+  def(unsafe_unpark,                                                                \
+      JeandleRuntimeRoutine::unsafe_unpark,                                         \
+      llvm::Type::getVoidTy(context),                                               \
+      llvm::PointerType::get(context, llvm::jeandle::AddrSpace::JavaHeapAddrSpace), \
+      llvm::PointerType::get(context, llvm::jeandle::AddrSpace::CHeapAddrSpace))    \
+                                                                                    \
   def(multianewarray2,                                                              \
       JeandleRuntimeRoutine::multianewarray2,                                       \
       llvm::PointerType::get(context, llvm::jeandle::AddrSpace::JavaHeapAddrSpace), \
@@ -671,6 +684,9 @@ class JeandleRuntimeRoutine : public AllStatic {
   // (java.lang.Class) and allocates via Reflection::reflect_new_array.  Used when the
   // cached array_klass field in the mirror has not been populated yet.
   static void new_array_from_mirror(oopDesc* mirror, int length, JavaThread* current);
+
+  static void unsafe_park(jint is_absolute, jlong time, JavaThread* current);
+  static void unsafe_unpark(oopDesc* thread_oop, JavaThread* current);
 
   // Multi-dimensional array allocation routines
   static void multianewarray2(Klass* elem_type, int len1, int len2, JavaThread* current);

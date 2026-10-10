@@ -70,3 +70,12 @@ bool JeandleIntrinsicLowering::lower_spin_wait_hint() {
   // void return: nothing to push on the JVM operand stack
   return true;
 }
+
+bool JeandleIntrinsicLowering::lower_store_store_fence() {
+  llvm::IRBuilder<> &builder = _interp->_ir_builder;
+  _interp->_jvm->apop();
+  builder.CreateFence(
+      llvm::AtomicOrdering::Release,
+      builder.getContext().getOrInsertSyncScopeID("singlethread"));
+  return true;
+}
