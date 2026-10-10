@@ -70,7 +70,8 @@ void annotate_call(llvm::CallBase* call,
 }
 
 void apply_memory_attr(llvm::CallBase* call, const CallSiteAttributeMetadata& attrs) {
-  if (attrs.needs_gc_state() || attrs.may_deopt() || attrs.needs_exception_edge()) {
+  if (attrs.needs_gc_state() || attrs.may_deopt() || attrs.needs_exception_edge() ||
+      attrs.observes_external_state()) {
     return;
   }
   const bool reads = attrs.reads_memory();
@@ -177,6 +178,10 @@ bool JeandleIntrinsicLowering::is_supported(vmIntrinsics::ID id) {
 
     // getClass
     case vmIntrinsics::_getClass:
+
+    // System time queries
+    case vmIntrinsics::_currentTimeMillis:
+    case vmIntrinsics::_nanoTime:
 
     // currentThread
     case vmIntrinsics::_currentThread:
@@ -453,6 +458,13 @@ bool JeandleIntrinsicLowering::lower(vmIntrinsics::ID id, const ciMethod* target
       return lower_java_op("jeandle.get_class",
                            {CTRL_NONE, MEM_READ});
 
+    case vmIntrinsics::_currentTimeMillis:
+      return lower_native_time_func(
+          JeandleRuntimeRoutine::os_javaTimeMillis_callee(_interp->_module));
+    case vmIntrinsics::_nanoTime:
+      return lower_native_time_func(
+          JeandleRuntimeRoutine::os_javaTimeNanos_callee(_interp->_module));
+
     // Thread.currentThread()
     case vmIntrinsics::_currentThread:
       return lower_java_op("jeandle.current_thread_obj",
@@ -592,6 +604,15 @@ bool JeandleIntrinsicLowering::lower(vmIntrinsics::ID id, const ciMethod* target
 // =============================================================================
 // Shared emit helpers
 // =============================================================================
+
+bool JeandleIntrinsicLowering::lower_native_time_func(llvm::FunctionCallee callee) {
+  static constexpr CallSiteAttributeMetadata attrs = {
+      CTRL_NONE, MEM_OBSERVES_EXTERNAL_STATE};
+  llvm::CallBase* result = emit_callsite(
+      callee, llvm::CallingConv::C, {}, attrs, /*is_gc_leaf_entry=*/true);
+  _interp->_jvm->lpush(result);
+  return true;
+}
 
 llvm::CallBase* JeandleIntrinsicLowering::emit_callsite(llvm::FunctionCallee callee,
                                                         llvm::CallingConv::ID cc,

@@ -61,6 +61,8 @@ enum JeandleMemoryFlag : uint16_t {
   MEM_READ              = 1u << 0,
   MEM_WRITE             = 1u << 1,
   MEM_NEEDS_GC_STATE    = 1u << 2,
+  // Retain unknown memory effects for calls that observe changing external state.
+  MEM_OBSERVES_EXTERNAL_STATE = 1u << 3,
 };
 
 // =============================================================================
@@ -77,6 +79,9 @@ struct CallSiteAttributeMetadata {
   bool reads_memory()         const { return (memory_flags  & MEM_READ) != 0; }
   bool writes_memory()        const { return (memory_flags  & MEM_WRITE) != 0; }
   bool needs_gc_state()       const { return (memory_flags  & MEM_NEEDS_GC_STATE) != 0; }
+  bool observes_external_state() const {
+    return (memory_flags & MEM_OBSERVES_EXTERNAL_STATE) != 0;
+  }
   bool attach_deopt_bundle()  const {
     return may_deopt() || needs_gc_state() || needs_exception_edge();
   }
@@ -132,6 +137,8 @@ class JeandleIntrinsicLowering : public StackObj {
   // ========================================================================
   // Shared emit helpers
   // ========================================================================
+
+  bool lower_native_time_func(llvm::FunctionCallee callee);
 
   // Central call-site emission: builds deopt bundle, emits call or invoke,
   // applies GC-leaf and memory annotations.
