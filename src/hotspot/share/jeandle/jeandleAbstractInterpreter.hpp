@@ -307,6 +307,7 @@ class JeandleAbstractInterpreter : public StackObj {
 
  private:
   friend class JeandleIntrinsicLowering;
+  friend class JeandlePreserveReexecuteState;
 
   JeandleParseContext _parse_context;
   ciMethod* _method;
@@ -319,6 +320,9 @@ class JeandleAbstractInterpreter : public StackObj {
   JeandleCompiledCode& _compiled_code;
   BasicBlockBuilder* _block_builder;
   llvm::IRBuilder<> _ir_builder;
+
+  /* C2 JVMState::should_reexecute equivalent for the current intrinsic scope. */
+  bool _should_reexecute = false;
 
   // The JeandleBasicBlock and its JeandleVMState currently being interpreted.
   JeandleBasicBlock* _block;
@@ -397,14 +401,18 @@ class JeandleAbstractInterpreter : public StackObj {
   bool try_lower_intrinsic(const ciMethod* target);
 
   // Emit a Java call with pre-built argument values. Does NOT touch the JVM
-  // stack — the caller manages stack discipline.
+  // stack — the caller manages stack discipline. call_does_dispatch is the
+  // result of call-site target analysis and may differ from the bytecode kind.
   llvm::InvokeInst* emit_java_call(ciMethod* target,
                                    ciKlass* declared_holder,
                                    const ciSignature* method_signature,
                                    llvm::ArrayRef<llvm::Value*> args,
                                    bool has_receiver,
                                    bool is_method_handle_invoke,
-                                   Bytecodes::Code bc);
+                                   Bytecodes::Code bc,
+                                   bool call_does_dispatch,
+                                   bool deoptimize_on_exception = false,
+                                   bool result_is_non_null = false);
   void stack_op(Bytecodes::Code code);
   void shift_op(BasicType type, Bytecodes::Code code);
   void checkcast();
@@ -415,7 +423,8 @@ class JeandleAbstractInterpreter : public StackObj {
                                  llvm::ArrayRef<llvm::Value*> args,
                                  llvm::ArrayRef<llvm::OperandBundleDef> deopt_bundle = {});
   llvm::InvokeInst* call_java_op_ex(llvm::StringRef java_op, llvm::ArrayRef<llvm::Value*> args,
-                                    llvm::ArrayRef<llvm::OperandBundleDef> deopt_bundle = {});
+                                    llvm::ArrayRef<llvm::OperandBundleDef> deopt_bundle = {},
+                                    bool deoptimize_on_exception = false);
   llvm::CallInst*   create_call(llvm::FunctionCallee callee,
                                 llvm::ArrayRef<llvm::Value*> arg,
                                 llvm::CallingConv::ID calling_conv,
@@ -423,9 +432,10 @@ class JeandleAbstractInterpreter : public StackObj {
   llvm::InvokeInst* create_call_ex(llvm::FunctionCallee callee,
                                    llvm::ArrayRef<llvm::Value*> arg,
                                    llvm::CallingConv::ID calling_conv,
-                                   llvm::ArrayRef<llvm::OperandBundleDef> deopt_bundle = {});
+                                   llvm::ArrayRef<llvm::OperandBundleDef> deopt_bundle = {},
+                                   bool deoptimize_on_exception = false);
 
-  llvm::OperandBundleDef create_current_deopt_bundle(bool should_reexecute = false);
+  llvm::OperandBundleDef create_current_deopt_bundle();
 
   void add_safepoint_poll();
   void add_return_safepoint_poll();
@@ -469,7 +479,8 @@ class JeandleAbstractInterpreter : public StackObj {
     llvm::BasicBlock* _normal_dest;
   } DispatchedDest;
 
-  DispatchedDest dispatch_exception_for_invoke(); // Dispatch exceptions raised by invoke.
+  DispatchedDest dispatch_exception_for_invoke(
+      bool deoptimize_on_exception = false); // Dispatch exceptions raised by invoke.
   // Generate a series of IR to dispatch an exception to its handler.
   void dispatch_exception_to_handler(llvm::Value* exception_oop, llvm::LandingPadInst* landingpad = nullptr);
   void throw_exception(llvm::Value* exception_oop, llvm::LandingPadInst* landingpad = nullptr);
@@ -487,12 +498,21 @@ class JeandleAbstractInterpreter : public StackObj {
   // in template.ll collapses tight. Used by do_unified_newarray and multianewarray's
   // dimensions-array allocation. The reflection path (JeandleIntrinsicLowering::lower_new_array)
   // decodes layout_helper at runtime instead and shares emit_array_size_in_bytes.
-  llvm::InvokeInst* emit_jeandle_newarray(Klass* array_klass, llvm::Value* length);
+  llvm::Value* emit_array_length(llvm::Value* array_oop);
+  llvm::InvokeInst* emit_jeandle_newarray(
+      llvm::Value* array_klass, llvm::Value* length, int nargs,
+      llvm::Value** return_size_val = nullptr,
+      bool deoptimize_on_exception = false);
 
   // Builds the array size_in_bytes expression shared by the bytecode and reflection
   // allocation paths. Mirrors C2's GraphKit::new_array size computation.
   llvm::Value* emit_array_size_in_bytes(llvm::Value* length, llvm::Value* log2_element_size,
-                                        llvm::Value* base_offset);
+                                        llvm::Value* header_size, jint round_mask);
+
+  llvm::InvokeInst* new_instance(
+      llvm::Value* klass, llvm::Value* extra_slow_test,
+      llvm::Value** return_size_val = nullptr,
+      bool deoptimize_on_exception = false);
 
   // Implementation of _new
   void do_new();
@@ -540,6 +560,19 @@ class JeandleAbstractInterpreter : public StackObj {
   }
   bool too_many_traps(ciMethod *method, int bci, Deoptimization::DeoptReason reason);
   bool too_many_traps(Deoptimization::DeoptReason reason);
+};
+
+// C2 PreserveReexecuteState equivalent. Keep the reexecute marker scoped so
+// every deopt bundle emitted while lowering an intrinsic observes one state.
+// The Jeandle prefix avoids colliding with C2's global helper of the same name.
+class JeandlePreserveReexecuteState : public StackObj {
+ public:
+  explicit JeandlePreserveReexecuteState(JeandleAbstractInterpreter* interp);
+  ~JeandlePreserveReexecuteState();
+
+ private:
+  JeandleAbstractInterpreter* _interp;
+  bool _saved;
 };
 
 #endif // SHARE_JEANDLE_ABSTRACT_INTERPRETER_HPP
