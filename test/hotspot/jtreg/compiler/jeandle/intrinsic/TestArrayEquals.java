@@ -22,7 +22,7 @@
  * @test
  * @library /test/lib /
  * @build jdk.test.lib.Asserts
- * @run main/othervm compiler.jeandle.intrinsic.TestStringEquals
+ * @run main/othervm compiler.jeandle.intrinsic.TestArrayEquals
  */
 
 package compiler.jeandle.intrinsic;
@@ -38,7 +38,7 @@ import jdk.test.lib.process.OutputAnalyzer;
 import jdk.test.lib.process.ProcessTools;
 
 
-public class TestStringEquals {
+public class TestArrayEquals {
     public static void main(String[] args) throws Exception {
         String dump_path = Files.createTempDirectory("jeandle_test_string_equals").toString();
         ArrayList<String> command_args = new ArrayList<String>(List.of(

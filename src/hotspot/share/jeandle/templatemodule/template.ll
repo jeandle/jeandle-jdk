@@ -1336,10 +1336,7 @@ slow_path:
 ;
 ; Purpose:
 ;   Provides an always-present, local definition for the memcmp symbol used
-;   by the array-equals intrinsics (via call_java_op) and for any memcmp call
-;   that LLVM passes keep or introduce after JavaOperationLower ran (e.g.
-;   libcall simplification). If such a call is left undefined at JIT link
-;   time, linking fails (an "unknown call").
+;   by the array-equals intrinsics (via call_java_op).
 ;
 ; Semantics (bcmp, not memcmp):
 ;   Returns 0 when the two ranges are equal, 1 when they are not. Every
@@ -1349,19 +1346,6 @@ slow_path:
 ;   version. LLVM itself makes the same simplification (memcmp -> bcmp)
 ;   whenever a result is only compared with zero, so any pass-introduced
 ;   memcmp call that could resolve here also only tests equality.
-;
-; Why hand-vectorized:
-;   - "lower-phase"="1": JavaOperationLower(1) inlines this body into every
-;     direct call site, so constant lengths fold per call site; noinline only
-;     keeps the cost-based inliner from copying it around before that.
-;   - Variable-length calls that survive to codegen resolve back to this
-;     definition, so the body itself must be fast. LLVM will not vectorize
-;     the byte-loop idiom for us: LoopIdiomRecognize only knows
-;     memset/memcpy/memmove (a memcmp idiom is still on the upstream TODO),
-;     ExpandMemCmp only expands constant-size memcmp -- a variable size
-;     becomes a libcall, i.e. a call right back here -- and the loop
-;     vectorizer does not vectorize early-exit loops. Same situation as the
-;     hand-written zero loop in @jeandle.new_array above.
 ;
 ; Structure (never reads outside [0, n); every load is align 1):
 ;   n >= 32 : 32-byte vector loop over [0, n-32), then one overlapping

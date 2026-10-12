@@ -2357,6 +2357,7 @@ bool JeandleIntrinsicLowering::lower_arraycopy() {
 
 // StringUTF16 trusted single-code-unit access. Its byte[] backing stores
 // UTF-16 code units in native-endian order, matching the target data layout.
+// Keep the element access as i16 so LLVM can fold the two-byte element scale
 // into the target load/store addressing mode (for example, AArch64's
 // ldrh/strh [base, index, sxtw #1]).
 bool JeandleIntrinsicLowering::lower_string_char_access(bool is_store) {
@@ -2402,7 +2403,7 @@ bool JeandleIntrinsicLowering::lower_string_char_access(bool is_store) {
     _interp->_jvm->apop(); // value
     _interp->_jvm->ipush(result);
   }
-    return true;
+  return true;
 }
 
 // ---- lower_arrayequals ----
@@ -2410,7 +2411,6 @@ bool JeandleIntrinsicLowering::lower_arrayequals(BasicType element_type) {
   llvm::LLVMContext& ctx = *_interp->_context;
   llvm::IRBuilder<>& b = _interp->_ir_builder;
   llvm::Module& m = _interp->_module;
-  llvm::Function* f = _interp->_llvm_func;
 
   llvm::Value* left = _interp->_jvm->peek_value(1).value();
   llvm::Value* right = _interp->_jvm->peek_value(0).value();
@@ -2453,8 +2453,6 @@ bool JeandleIntrinsicLowering::lower_arrayequals(BasicType element_type) {
   llvm::Value* array_base_offset = b.getInt32(arrayOopDesc::base_offset_in_bytes(element_type));
   llvm::Value* left_array_base = b.CreatePtrAdd(left, array_base_offset, "left_array_element_base");
   llvm::Value* right_array_base = b.CreatePtrAdd(right, array_base_offset, "right_array_element_base");
-  llvm::PointerType* c_heap_ptr_ty =
-      llvm::PointerType::get(ctx, llvm::jeandle::AddrSpace::CHeapAddrSpace);
 
   llvm::Value* element_byte_size = llvm::ConstantInt::get(left_length->getType(),type2aelembytes(element_type));
   llvm::Value* left_byte_length = b.CreateMul(element_byte_size, left_length);
