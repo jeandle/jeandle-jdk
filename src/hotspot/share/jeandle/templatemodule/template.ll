@@ -164,14 +164,31 @@
 @SharedRuntime.complete_monitor_unlocking_C = external global i64
 
 ; Keep use to lately-used java operations, until it is lowered.
-@llvm.used = appending addrspace(1) global [7 x ptr] [
+@llvm.used = appending addrspace(1) global [24 x ptr] [
   ptr @jeandle.card_table_barrier,
   ptr @jeandle.g1_pre_barrier,
   ptr @jeandle.g1_post_barrier,
   ptr @jeandle.pre_barrier,
   ptr @jeandle.post_barrier,
   ptr @jeandle.encode_heap_oop,
-  ptr @jeandle.decode_heap_oop
+  ptr @jeandle.decode_heap_oop,
+  ptr @jeandle.unsafe_get_reference,
+  ptr @jeandle.unsafe_put_reference,
+  ptr @jeandle.unsafe_get_reference_volatile,
+  ptr @jeandle.unsafe_put_reference_volatile,
+  ptr @jeandle.unsafe_get_reference_acquire,
+  ptr @jeandle.unsafe_put_reference_release,
+  ptr @jeandle.unsafe_get_reference_opaque,
+  ptr @jeandle.unsafe_put_reference_opaque,
+  ptr @jeandle.unsafe_compare_and_set_reference,
+  ptr @jeandle.unsafe_weak_compare_and_set_reference_plain,
+  ptr @jeandle.unsafe_weak_compare_and_set_reference_acquire,
+  ptr @jeandle.unsafe_weak_compare_and_set_reference_release,
+  ptr @jeandle.unsafe_weak_compare_and_set_reference,
+  ptr @jeandle.unsafe_compare_and_exchange_reference,
+  ptr @jeandle.unsafe_compare_and_exchange_reference_acquire,
+  ptr @jeandle.unsafe_compare_and_exchange_reference_release,
+  ptr @jeandle.unsafe_get_and_set_reference
 ], section "llvm.metadata"
 
 declare hotspotcc ptr addrspace(0) @jeandle.decode_klass(i32)
@@ -179,6 +196,14 @@ declare hotspotcc i32 @jeandle.encode_klass(ptr addrspace(0))
 
 declare hotspotcc ptr addrspace(1) @jeandle.decode_heap_oop(ptr addrspace(3))
 declare hotspotcc ptr addrspace(3) @jeandle.encode_heap_oop(ptr addrspace(1))
+declare hotspotcc ptr addrspace(1) @jeandle.unsafe_get_reference(ptr addrspace(1), i64)
+declare hotspotcc void @jeandle.unsafe_put_reference(ptr addrspace(1), i64, ptr addrspace(1))
+declare hotspotcc ptr addrspace(1) @jeandle.unsafe_get_reference_volatile(ptr addrspace(1), i64)
+declare hotspotcc void @jeandle.unsafe_put_reference_volatile(ptr addrspace(1), i64, ptr addrspace(1))
+declare hotspotcc ptr addrspace(1) @jeandle.unsafe_get_reference_acquire(ptr addrspace(1), i64)
+declare hotspotcc void @jeandle.unsafe_put_reference_release(ptr addrspace(1), i64, ptr addrspace(1))
+declare hotspotcc ptr addrspace(1) @jeandle.unsafe_get_reference_opaque(ptr addrspace(1), i64)
+declare hotspotcc void @jeandle.unsafe_put_reference_opaque(ptr addrspace(1), i64, ptr addrspace(1))
 
 ; Load klass pointer from oop
 ; lower-phase=1: survive JavaOperationLower(0) so the call reaches PEA, which
@@ -714,7 +739,7 @@ compressed:
 decode_narrow:
   %pre_val_c = addrspacecast ptr addrspace(3) %narrow_val to ptr addrspace(1)
   br label %enqueue
-  
+
 uncompressed:
   %pre_val_u = load atomic ptr addrspace(1), ptr addrspace(1) %addr unordered, align 8
   %wide_is_null = icmp eq ptr addrspace(1) %pre_val_u, null
@@ -817,6 +842,16 @@ declare hotspotcc void @jeandle.pre_barrier(ptr addrspace(1) %addr)
 
 ; Declaration of Java post barrier.
 declare hotspotcc void @jeandle.post_barrier(ptr addrspace(1) %addr, ptr addrspace(1) nocapture %oop)
+
+declare hotspotcc i32 @jeandle.unsafe_compare_and_set_reference(ptr addrspace(1), i64, ptr addrspace(1), ptr addrspace(1))
+declare hotspotcc i32 @jeandle.unsafe_weak_compare_and_set_reference_plain(ptr addrspace(1), i64, ptr addrspace(1), ptr addrspace(1))
+declare hotspotcc i32 @jeandle.unsafe_weak_compare_and_set_reference_acquire(ptr addrspace(1), i64, ptr addrspace(1), ptr addrspace(1))
+declare hotspotcc i32 @jeandle.unsafe_weak_compare_and_set_reference_release(ptr addrspace(1), i64, ptr addrspace(1), ptr addrspace(1))
+declare hotspotcc i32 @jeandle.unsafe_weak_compare_and_set_reference(ptr addrspace(1), i64, ptr addrspace(1), ptr addrspace(1))
+declare hotspotcc ptr addrspace(1) @jeandle.unsafe_compare_and_exchange_reference(ptr addrspace(1), i64, ptr addrspace(1), ptr addrspace(1))
+declare hotspotcc ptr addrspace(1) @jeandle.unsafe_compare_and_exchange_reference_acquire(ptr addrspace(1), i64, ptr addrspace(1), ptr addrspace(1))
+declare hotspotcc ptr addrspace(1) @jeandle.unsafe_compare_and_exchange_reference_release(ptr addrspace(1), i64, ptr addrspace(1), ptr addrspace(1))
+declare hotspotcc ptr addrspace(1) @jeandle.unsafe_get_and_set_reference(ptr addrspace(1), i64, ptr addrspace(1))
 
 ; Identity marker for Java type narrowing.
 ; Semantically returns the same oop. The java-klass return attribute is attached

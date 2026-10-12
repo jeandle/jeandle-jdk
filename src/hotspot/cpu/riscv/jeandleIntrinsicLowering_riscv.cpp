@@ -72,3 +72,8 @@ bool JeandleIntrinsicLowering::lower_spin_wait_hint() {
   // void return: nothing to push on the JVM operand stack
   return true;
 }
+
+bool JeandleIntrinsicLowering::lower_store_store_fence() {
+  ShouldNotReachHere();
+  return false;
+}
