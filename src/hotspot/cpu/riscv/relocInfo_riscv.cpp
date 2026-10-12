@@ -185,12 +185,7 @@ void trampoline_stub_Relocation::pd_fix_owner_after_move() {
 }
 #endif // JEANDLE
 
-void jeandle_oop_addr_Relocation::fix_relocation_after_move(const CodeBuffer* src, CodeBuffer* dest) {
-  assert(addr_in_const(), "must in const section");
-  address old_addr = *(address*)addr();
-  int delta = dest - src;
-  address new_addr = old_addr + delta;
-  set_value(new_addr);
+void jeandle_oop_addr_Relocation::fix_relocation_after_move(const CodeBuffer*, CodeBuffer*) {
 }
 
 // TODO Pack(compress) the fields of jeandle_oop_Relocation

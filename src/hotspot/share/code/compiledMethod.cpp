@@ -291,6 +291,9 @@ void CompiledMethod::verify_oop_relocations() {
     } else if (iter.type() == relocInfo::jeandle_oop_type) {
       jeandle_oop_Relocation* reloc = iter.jeandle_oop_reloc();
       reloc->verify_oop_relocation();
+    } else if (iter.type() == relocInfo::jeandle_oop_addr_type) {
+      jeandle_oop_addr_Relocation* reloc = iter.jeandle_oop_addr_reloc();
+      reloc->verify_oop_relocation();
     }
   }
 }
