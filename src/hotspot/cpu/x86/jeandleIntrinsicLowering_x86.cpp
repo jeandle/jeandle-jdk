@@ -80,7 +80,6 @@ bool JeandleIntrinsicLowering::lower_spin_wait_hint() {
 
 bool JeandleIntrinsicLowering::lower_writeback0() {
   llvm::IRBuilder<>& builder = _interp->_ir_builder;
-  _interp->null_check(_interp->_jvm->peek_value(1).value());
   llvm::Value* address = _interp->_jvm->lpop();
   _interp->_jvm->apop();
 
@@ -99,7 +98,6 @@ bool JeandleIntrinsicLowering::lower_writeback0() {
 
 bool JeandleIntrinsicLowering::lower_writeback_sync(vmIntrinsics::ID id) {
   llvm::IRBuilder<>& builder = _interp->_ir_builder;
-  _interp->null_check(_interp->_jvm->peek_value(0).value());
   _interp->_jvm->apop();
 
   if (id == vmIntrinsics::_writebackPostSync0 &&
