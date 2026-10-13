@@ -100,6 +100,10 @@ public class TestClassQueries {
                 compileOnly("phiMixedIsArray"),
                 compileOnly("phiIsInterface"),
                 compileOnly("phiMixedIsInterface"),
+                compileOnly("phiIsPrimitive"),
+                compileOnly("phiIsHidden"),
+                compileOnly("phiGetModifiers"),
+                compileOnly("phiGetClassAccessFlags"),
                 compileOnly("constantIsPrimitive"),
                 compileOnly("constantIsInterface"),
                 compileOnly("constantIsHidden"),
@@ -128,6 +132,8 @@ public class TestClassQueries {
                 compileOnly("constantAssignableFalse"),
                 compileOnly("constantPrimitiveAssignableTrue"),
                 compileOnly("constantPrimitiveAssignableFalse"),
+                compileOnly("phiPrimitiveAssignableFalse"),
+                compileOnly("phiPrimitiveAssignableMixed"),
                 compileOnly("constantReceiverAssignable"),
                 compileOnly("queryGetSuperclass"),
                 compileOnly("queryGetClassAccessFlags"),
@@ -174,24 +180,15 @@ public class TestClassQueries {
                                 + "%class\\.is_instance\\.klass, null",
                         "ret i32"));
         checkMethodIR(dumpPath, enabled, "queryGetModifiers", "java_lang_Class", "getModifiers",
-                new Class<?>[] {Class.class}, List.of(
-                        "%class\\.flags\\.is_primitive = icmp eq ptr %class\\.flags\\.klass, null",
-                        "%class\\.modifiers\\.value = load i32",
-                        "%class\\.flags\\.result = phi i32"));
+                new Class<?>[] {Class.class}, List.of());
         checkMethodIR(dumpPath, enabled, "queryIsArray", "java_lang_Class", "isArray",
                 new Class<?>[] {Class.class}, List.of());
         checkMethodIR(dumpPath, enabled, "queryIsPrimitive", "java_lang_Class", "isPrimitive",
-                new Class<?>[] {Class.class}, List.of(
-                        "%class\\.query\\.is_primitive = icmp eq ptr %class\\.query\\.klass, null",
-                        "%class\\.query\\.result = zext i1 %class\\.query\\.is_primitive to i32"));
+                new Class<?>[] {Class.class}, List.of());
         checkMethodIR(dumpPath, enabled, "queryIsInterface", "java_lang_Class", "isInterface",
                 new Class<?>[] {Class.class}, List.of());
         checkMethodIR(dumpPath, enabled, "queryIsHidden", "java_lang_Class", "isHidden",
-                new Class<?>[] {Class.class}, List.of(
-                        "%class\\.query\\.is_primitive = icmp eq ptr %class\\.query\\.klass, null",
-                        "and i32 %class\\.query\\.access_flags, 67108864",
-                        "%class\\.query\\.non_primitive_result = zext i1 "
-                                + "%class\\.query\\.flag_set to i32"));
+                new Class<?>[] {Class.class}, List.of());
         checkMethodIR(dumpPath, enabled, "queryGetSuperclass", "java_lang_Class", "getSuperclass",
                 new Class<?>[] {Class.class}, List.of(
                         "%class\\.super\\.is_primitive = icmp eq ptr "
@@ -202,15 +199,16 @@ public class TestClassQueries {
         checkMethodIR(dumpPath, enabled, "queryGetClassAccessFlags",
                 "jdk_internal_reflect_Reflection", "getClassAccessFlags",
                 new Class<?>[] {Class.class}, List.of(
-                        "%class\\.flags\\.is_primitive = icmp eq ptr %class\\.flags\\.klass, null",
                         "call hotspotcc i32 \\(\\.\\.\\.\\) "
-                                + "@llvm\\.experimental\\.deoptimize\\.i32\\(i32 -10\\)",
-                        "%class\\.access_flags\\.value = load i32",
-                        "%class\\.flags\\.result = phi i32"));
+                                + "@llvm\\.experimental\\.deoptimize\\.i32\\(i32 -10\\)"));
         if (enabled) {
             checkConstantIR(dumpPath, "constantIsArray", "ret i32 1");
             checkConstantIR(dumpPath, "phiIsArray", "ret i32 1", boolean.class);
             checkConstantIR(dumpPath, "phiIsInterface", "ret i32 1", boolean.class);
+            checkConstantIR(dumpPath, "phiIsPrimitive", "ret i32 1", boolean.class);
+            checkConstantIR(dumpPath, "phiIsHidden", "ret i32 0", boolean.class);
+            checkConstantIR(dumpPath, "phiGetModifiers", "ret i32 17", boolean.class);
+            checkConstantIR(dumpPath, "phiGetClassAccessFlags", "ret i32 49", boolean.class);
             checkConstantIR(dumpPath, "constantIsPrimitive", "ret i32 1");
             checkConstantIR(dumpPath, "constantIsInterface", "ret i32 1");
             checkConstantIR(dumpPath, "constantIsHidden", "ret i32 0");
@@ -232,6 +230,8 @@ public class TestClassQueries {
             checkConstantIR(dumpPath, "constantAssignableFalse", "ret i32 0");
             checkConstantIR(dumpPath, "constantPrimitiveAssignableTrue", "ret i32 1");
             checkConstantIR(dumpPath, "constantPrimitiveAssignableFalse", "ret i32 0");
+            checkConstantIR(dumpPath, "phiPrimitiveAssignableFalse", "ret i32 0",
+                    boolean.class);
             checkKnownMirrorAssignableIR(dumpPath);
             checkConstantSuperclassIR(dumpPath, "constantStringGetSuperclass", false);
             checkConstantSuperclassIR(dumpPath, "constantObjectGetSuperclass", true);
@@ -271,6 +271,7 @@ public class TestClassQueries {
         FileCheck optimized = new FileCheck(dumpPath, method, true);
         optimized.checkPattern(resultPattern);
         optimized.checkNotPattern("java_lang_Class_(isArray|isPrimitive|isInterface|isHidden|getModifiers)");
+        optimized.checkNotPattern("jeandle\\.class_(is_|get_)");
         optimized.checkNotPattern("jeandle\\.load_mirror_klass");
         optimized.checkNotPattern("(layout_helper|access_flags|modifier_flags)");
     }
@@ -332,17 +333,17 @@ public class TestClassQueries {
         String nativeCall = "(call|invoke) hotspotcc [^\\r\\n]*" + targetOwner + "_"
                 + targetName;
         if (enabled) {
-            if (wrapperName.equals("queryIsArray") || wrapperName.equals("queryIsInterface")) {
-                String query = wrapperName.equals("queryIsArray") ? "array" : "interface";
-                checker.checkPattern("call hotspotcc i32 @jeandle\\.class_is_" + query);
-            } else if (isDirectClassQuery(wrapperName)) {
-                checker.checkPattern("call hotspotcc ptr @jeandle\\.load_mirror_klass"
-                        + "\\(ptr addrspace\\(1\\) %[-A-Za-z$._0-9]+\\)");
-                checker.checkNotPattern("call hotspotcc [^\\r\\n]*"
-                        + "@jeandle\\.load_mirror_klass[^\\r\\n]*"
-                        + "\\[ \"deopt\"");
-                checker.checkNotPattern("call hotspotcc [^\\r\\n]*\"java-klass\""
-                        + "[^\\r\\n]*@jeandle\\.load_mirror_klass");
+            if (isDirectClassQuery(wrapperName)) {
+                String operation = switch (wrapperName) {
+                    case "queryIsArray" -> "class_is_array";
+                    case "queryIsPrimitive" -> "class_is_primitive";
+                    case "queryIsInterface" -> "class_is_interface";
+                    case "queryIsHidden" -> "class_is_hidden";
+                    case "queryGetModifiers" -> "class_get_modifiers";
+                    case "queryGetClassAccessFlags" -> "class_get_access_flags";
+                    default -> throw new AssertionError(wrapperName);
+                };
+                checker.checkPattern("call hotspotcc i32 @jeandle\\." + operation);
             } else {
                 if (wrapperName.equals("queryGetSuperclass")) {
                     checker.checkNotPattern("call hotspotcc [^\\r\\n]*@jeandle\\.load_mirror_from_klass");
@@ -416,6 +417,14 @@ public class TestClassQueries {
             Asserts.assertTrue(phiIsInterface(false), "phi isInterface false branch");
             Asserts.assertTrue(phiMixedIsInterface(true), "mixed phi interface branch");
             Asserts.assertFalse(phiMixedIsInterface(false), "mixed phi class branch");
+            Asserts.assertTrue(phiIsPrimitive(true), "phi primitive int branch");
+            Asserts.assertTrue(phiIsPrimitive(false), "phi primitive void branch");
+            Asserts.assertFalse(phiIsHidden(true), "phi hidden String branch");
+            Asserts.assertFalse(phiIsHidden(false), "phi hidden Integer branch");
+            Asserts.assertEquals(17, phiGetModifiers(true), "phi modifiers String branch");
+            Asserts.assertEquals(17, phiGetModifiers(false), "phi modifiers Integer branch");
+            Asserts.assertEquals(49, phiGetClassAccessFlags(true), "phi flags String branch");
+            Asserts.assertEquals(49, phiGetClassAccessFlags(false), "phi flags Integer branch");
             Asserts.assertTrue(constantIsPrimitive(), "constant isPrimitive");
             Asserts.assertTrue(constantIsInterface(), "constant isInterface");
             Asserts.assertFalse(constantIsHidden(), "constant isHidden");
@@ -453,6 +462,10 @@ public class TestClassQueries {
             Asserts.assertFalse(constantAssignableFalse());
             Asserts.assertTrue(constantPrimitiveAssignableTrue());
             Asserts.assertFalse(constantPrimitiveAssignableFalse());
+            Asserts.assertFalse(phiPrimitiveAssignableFalse(true));
+            Asserts.assertFalse(phiPrimitiveAssignableFalse(false));
+            Asserts.assertTrue(phiPrimitiveAssignableMixed(true));
+            Asserts.assertFalse(phiPrimitiveAssignableMixed(false));
             Asserts.assertTrue(constantReceiverAssignable(String.class));
             Asserts.assertFalse(constantReceiverAssignable(int.class));
 
@@ -514,6 +527,10 @@ public class TestClassQueries {
             Asserts.assertTrue(queryIsAssignableFrom(int.class, int.class));
             Asserts.assertFalse(queryIsAssignableFrom(int.class, long.class));
             Asserts.assertFalse(queryIsAssignableFrom(String.class, Object.class));
+            expectNPE(() -> queryIsAssignableFrom(null, int.class),
+                    "isAssignableFrom null receiver");
+            expectNPE(() -> queryIsAssignableFrom(int.class, null),
+                    "isAssignableFrom null argument");
         }
 
         private static void warmup() {
@@ -529,6 +546,10 @@ public class TestClassQueries {
                 phiMixedIsArray((i & 1) == 0);
                 phiIsInterface((i & 1) == 0);
                 phiMixedIsInterface((i & 1) == 0);
+                phiIsPrimitive((i & 1) == 0);
+                phiIsHidden((i & 1) == 0);
+                phiGetModifiers((i & 1) == 0);
+                phiGetClassAccessFlags((i & 1) == 0);
                 constantIsPrimitive();
                 constantIsInterface();
                 constantIsHidden();
@@ -557,6 +578,8 @@ public class TestClassQueries {
                 constantAssignableFalse();
                 constantPrimitiveAssignableTrue();
                 constantPrimitiveAssignableFalse();
+                phiPrimitiveAssignableFalse((i & 1) == 0);
+                phiPrimitiveAssignableMixed((i & 1) == 0);
                 constantReceiverAssignable(String.class);
                 queryGetSuperclass(String.class);
                 queryGetClassAccessFlags(String.class);
@@ -694,6 +717,46 @@ public class TestClassQueries {
             return klass.isInterface();
         }
 
+        public static boolean phiIsPrimitive(boolean chooseInt) {
+            Class<?> klass;
+            if (chooseInt) {
+                klass = int.class;
+            } else {
+                klass = void.class;
+            }
+            return klass.isPrimitive();
+        }
+
+        public static boolean phiIsHidden(boolean chooseString) {
+            Class<?> klass;
+            if (chooseString) {
+                klass = String.class;
+            } else {
+                klass = Integer.class;
+            }
+            return klass.isHidden();
+        }
+
+        public static int phiGetModifiers(boolean chooseString) {
+            Class<?> klass;
+            if (chooseString) {
+                klass = String.class;
+            } else {
+                klass = Integer.class;
+            }
+            return klass.getModifiers();
+        }
+
+        public static int phiGetClassAccessFlags(boolean chooseString) {
+            Class<?> klass;
+            if (chooseString) {
+                klass = String.class;
+            } else {
+                klass = Integer.class;
+            }
+            return Reflection.getClassAccessFlags(klass);
+        }
+
         public static boolean constantIsPrimitive() {
             return int.class.isPrimitive();
         }
@@ -804,6 +867,16 @@ public class TestClassQueries {
 
         public static boolean constantPrimitiveAssignableFalse() {
             return int.class.isAssignableFrom(long.class);
+        }
+
+        public static boolean phiPrimitiveAssignableFalse(boolean chooseInt) {
+            Class<?> receiver = chooseInt ? int.class : long.class;
+            return receiver.isAssignableFrom(float.class);
+        }
+
+        public static boolean phiPrimitiveAssignableMixed(boolean chooseInt) {
+            Class<?> receiver = chooseInt ? int.class : long.class;
+            return receiver.isAssignableFrom(int.class);
         }
 
         public static boolean constantReceiverAssignable(Class<?> other) {

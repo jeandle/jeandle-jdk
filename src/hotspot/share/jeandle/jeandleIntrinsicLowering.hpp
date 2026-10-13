@@ -233,12 +233,7 @@ class JeandleIntrinsicLowering : public StackObj {
                                              const char* name_prefix);
   ciObject* constant_oop(llvm::Value* value) const;
   ciType* constant_class_type(llvm::Value* mirror) const;
-  llvm::Value* klass_value_for_mirror(llvm::Value* mirror,
-                                      ciType* mirror_type) const;
-  bool try_fold_constant_class_query(vmIntrinsics::ID id,
-                                     llvm::Value* mirror,
-                                     jint* result) const;
-  bool lower_class_query(vmIntrinsics::ID id);
+  llvm::Value* klass_value_for_mirror(llvm::Value* mirror) const;
   bool lower_class_cast();
   bool lower_class_is_assignable_from();
   bool lower_class_boolean_query(vmIntrinsics::ID id);

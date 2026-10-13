@@ -362,6 +362,29 @@ public class ClassQueries {
         return result;
     }
 
+    @Benchmark
+    @CompilerControl(CompilerControl.Mode.DONT_INLINE)
+    @OperationsPerInvocation(LOOP_COUNT)
+    public boolean constantPrimitiveAssignableFrom() {
+        boolean result = false;
+        for (int i = 0; i < LOOP_COUNT; i++) {
+            result ^= int.class.isAssignableFrom(long.class);
+        }
+        return result;
+    }
+
+    @Benchmark
+    @CompilerControl(CompilerControl.Mode.DONT_INLINE)
+    @OperationsPerInvocation(LOOP_COUNT)
+    public boolean phiPrimitiveAssignableFrom() {
+        boolean result = false;
+        for (int i = 0; i < LOOP_COUNT; i++) {
+            Class<?> receiver = (i & 1) == 0 ? int.class : long.class;
+            result ^= receiver.isAssignableFrom(float.class);
+        }
+        return result;
+    }
+
     static class Parent {}
 
     static class Child extends Parent {}
