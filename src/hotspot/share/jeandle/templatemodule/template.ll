@@ -1330,4 +1330,140 @@ slow_path:
   ret void
 }
 
+; =============================================================================
+; jeandle.memcmp - Vectorized bcmp-Style Equality Check
+; =============================================================================
+;
+; Purpose:
+;   Provides an always-present, local definition for the memcmp symbol used
+;   by the array-equals intrinsics (via call_java_op).
+;
+; Semantics (bcmp, not memcmp):
+;   Returns 0 when the two ranges are equal, 1 when they are not. Every
+;   in-tree call site only tests the result against zero (array-equals), so
+;   libc memcmp's first-difference index and sign are dead values; computing
+;   them cost a cttz plus two re-loads on every mismatch in the previous
+;   version. LLVM itself makes the same simplification (memcmp -> bcmp)
+;   whenever a result is only compared with zero, so any pass-introduced
+;   memcmp call that could resolve here also only tests equality.
+;
+; Structure (never reads outside [0, n); every load is align 1):
+;   n >= 32 : 32-byte vector loop over [0, n-32), then one overlapping
+;             <32 x i8> comparison anchored at n-32, so every length is
+;             covered by whole vector comparisons with no scalar tail.
+;   n >= 8  : i64 loop over [0, n-8), then one overlapping i64 comparison
+;             anchored at n-8 (at most 3 loop iterations in this range).
+;   n <  8  : byte loop (at most 7 iterations; unrolls for constant lengths).
+;   A mismatch returns immediately; no first-difference index is recovered,
+;   so the implementation is endianness-independent.
+;   32 bytes exploits AVX2-class hosts directly; on SSE2/NEON baselines LLVM
+;   legalizes <32 x i8> into two <16 x i8> comparisons per iteration, which
+;   is never worse than the previous 16-byte loop.
+; =============================================================================
+define hotspotcc i32 @jeandle.memcmp(ptr addrspace(1) nocapture readonly %a, ptr addrspace(1) nocapture readonly %b, i64 noundef %n) "lower-phase"="1" #0 noinline {
+entry:
+  %n_is_zero = icmp eq i64 %n, 0
+  br i1 %n_is_zero, label %return_zero, label %size_dispatch
+
+size_dispatch:
+  %is_vector_sized = icmp ugt i64 %n, 31
+  br i1 %is_vector_sized, label %vec_preheader, label %qword_dispatch
+
+qword_dispatch:
+  %is_qword_sized = icmp ugt i64 %n, 7
+  br i1 %is_qword_sized, label %qword_preheader, label %byte_loop
+
+; ---------------------------------------------------------------------------
+; 32-byte vector path (n >= 32). The loop drains [0, n-32); the final
+; overlapping comparison at n-32 covers the last 32 bytes, so a length that
+; is a multiple of 32 compares the last chunk exactly once, and any other
+; length overlaps already-compared bytes instead of needing a scalar tail.
+; ---------------------------------------------------------------------------
+vec_preheader:
+  %vec_limit = sub nuw i64 %n, 32
+  %has_vec_body = icmp ne i64 %vec_limit, 0
+  br i1 %has_vec_body, label %vec_loop, label %vec_final
+
+vec_loop:
+  %vec_i = phi i64 [ 0, %vec_preheader ], [ %vec_i_next, %vec_loop_continue ]
+  %vec_a_ptr = getelementptr inbounds nuw i8, ptr addrspace(1) %a, i64 %vec_i
+  %vec_b_ptr = getelementptr inbounds nuw i8, ptr addrspace(1) %b, i64 %vec_i
+  %vec_a = load <32 x i8>, ptr addrspace(1) %vec_a_ptr, align 1
+  %vec_b = load <32 x i8>, ptr addrspace(1) %vec_b_ptr, align 1
+  %vec_ne = icmp ne <32 x i8> %vec_a, %vec_b
+  %vec_ne_mask = bitcast <32 x i1> %vec_ne to i32
+  %vec_any_ne = icmp ne i32 %vec_ne_mask, 0
+  br i1 %vec_any_ne, label %return_one, label %vec_loop_continue
+
+vec_loop_continue:
+  %vec_i_next = add i64 %vec_i, 32
+  %vec_more = icmp ult i64 %vec_i_next, %vec_limit
+  br i1 %vec_more, label %vec_loop, label %vec_final
+
+vec_final:
+  %final_a_ptr = getelementptr inbounds nuw i8, ptr addrspace(1) %a, i64 %vec_limit
+  %final_b_ptr = getelementptr inbounds nuw i8, ptr addrspace(1) %b, i64 %vec_limit
+  %final_a = load <32 x i8>, ptr addrspace(1) %final_a_ptr, align 1
+  %final_b = load <32 x i8>, ptr addrspace(1) %final_b_ptr, align 1
+  %final_ne = icmp ne <32 x i8> %final_a, %final_b
+  %final_ne_mask = bitcast <32 x i1> %final_ne to i32
+  %final_any_ne = icmp ne i32 %final_ne_mask, 0
+  br i1 %final_any_ne, label %return_one, label %return_zero
+
+; ---------------------------------------------------------------------------
+; Overlapping qword path (8 <= n < 32). The loop drains [0, n-8); the final
+; comparison at n-8 covers the last 8 bytes, overlapping bytes the loop
+; already compared when n is not a multiple of 8.
+; ---------------------------------------------------------------------------
+qword_preheader:
+  %qword_limit = sub nuw i64 %n, 8
+  %has_qword_body = icmp ne i64 %qword_limit, 0
+  br i1 %has_qword_body, label %qword_loop, label %qword_final
+
+qword_loop:
+  %qword_i = phi i64 [ 0, %qword_preheader ], [ %qword_i_next, %qword_loop_continue ]
+  %qword_a_ptr = getelementptr inbounds nuw i8, ptr addrspace(1) %a, i64 %qword_i
+  %qword_b_ptr = getelementptr inbounds nuw i8, ptr addrspace(1) %b, i64 %qword_i
+  %qword_a = load i64, ptr addrspace(1) %qword_a_ptr, align 1
+  %qword_b = load i64, ptr addrspace(1) %qword_b_ptr, align 1
+  %qword_ne = icmp ne i64 %qword_a, %qword_b
+  br i1 %qword_ne, label %return_one, label %qword_loop_continue
+
+qword_loop_continue:
+  %qword_i_next = add i64 %qword_i, 8
+  %qword_more = icmp ult i64 %qword_i_next, %qword_limit
+  br i1 %qword_more, label %qword_loop, label %qword_final
+
+qword_final:
+  %qword_fa_ptr = getelementptr inbounds nuw i8, ptr addrspace(1) %a, i64 %qword_limit
+  %qword_fb_ptr = getelementptr inbounds nuw i8, ptr addrspace(1) %b, i64 %qword_limit
+  %qword_fa = load i64, ptr addrspace(1) %qword_fa_ptr, align 1
+  %qword_fb = load i64, ptr addrspace(1) %qword_fb_ptr, align 1
+  %qword_fne = icmp ne i64 %qword_fa, %qword_fb
+  br i1 %qword_fne, label %return_one, label %return_zero
+
+; ---------------------------------------------------------------------------
+; Byte path (1 <= n <= 7).
+; ---------------------------------------------------------------------------
+byte_loop:
+  %byte_j = phi i64 [ 0, %qword_dispatch ], [ %byte_j_next, %byte_loop_continue ]
+  %byte_a_ptr = getelementptr inbounds nuw i8, ptr addrspace(1) %a, i64 %byte_j
+  %byte_b_ptr = getelementptr inbounds nuw i8, ptr addrspace(1) %b, i64 %byte_j
+  %byte_a = load i8, ptr addrspace(1) %byte_a_ptr, align 1
+  %byte_b = load i8, ptr addrspace(1) %byte_b_ptr, align 1
+  %byte_eq = icmp eq i8 %byte_a, %byte_b
+  br i1 %byte_eq, label %byte_loop_continue, label %return_one
+
+byte_loop_continue:
+  %byte_j_next = add nuw i64 %byte_j, 1
+  %byte_done = icmp eq i64 %byte_j_next, %n
+  br i1 %byte_done, label %return_zero, label %byte_loop
+
+return_zero:
+  ret i32 0
+
+return_one:
+  ret i32 1
+}
+
 attributes #0 = { nounwind "gc-leaf-function" }
