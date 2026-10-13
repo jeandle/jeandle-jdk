@@ -83,7 +83,7 @@ bool JeandleIntrinsicLowering::lower_writeback0() {
   llvm::Value* address = _interp->_jvm->lpop();
   _interp->_jvm->apop();
 
-  llvm::PointerType* ptr_type = llvm::PointerType::get(builder.getContext(), 0);
+  llvm::PointerType* ptr_type = llvm::PointerType::getUnqual(builder.getContext());
   llvm::Value* address_ptr = builder.CreateIntToPtr(address, ptr_type);
   if (VM_Version::supports_clflushopt()) {
     llvm::Intrinsic::ID id = VM_Version::supports_clwb()
