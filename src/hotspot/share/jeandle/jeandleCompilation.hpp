@@ -148,6 +148,7 @@ class JeandleInlineTree : public AnyObj {
   int _max_inline_level;
   uint _count_inline_bcs;
   JeandleInlineReason _reason;
+  bool _late_inline;
   GrowableArray<JeandleInlineTree*> _subtrees;
 
   bool pass_initial_checks(JeandleCompilation* comp,
@@ -161,12 +162,14 @@ class JeandleInlineTree : public AnyObj {
                      ciMethod* caller,
                      int caller_bci,
                      bool& forced_inline,
+                     bool& should_delay,
                      ciCallProfile& profile,
                      JeandleInlineReason& reason);
   bool should_not_inline(JeandleCompilation* comp,
                          ciMethod* callee,
                          ciMethod* caller,
                          int caller_bci,
+                         bool& should_delay,
                          ciCallProfile& profile,
                          JeandleInlineReason& reason);
   bool is_not_reached(ciMethod* callee,
@@ -177,6 +180,8 @@ class JeandleInlineTree : public AnyObj {
                      ciMethod* callee,
                      ciMethod* caller,
                      int caller_bci,
+                     bool is_late_inline,
+                     bool& should_delay,
                      ciCallProfile& profile,
                      JeandleInlineReason& reason);
 
@@ -195,11 +200,16 @@ class JeandleInlineTree : public AnyObj {
   uint count_inline_bcs() const { return _count_inline_bcs; }
   JeandleInlineReason reason() const { return _reason; }
   void set_reason(JeandleInlineReason reason) { _reason = reason; }
+  bool is_late_inline() const { return _late_inline; }
+  void set_late_inline(bool late_inline) { _late_inline = late_inline; }
   const GrowableArray<JeandleInlineTree*>& subtrees() const { return _subtrees; }
 
   bool ok_to_inline(JeandleCompilation* comp,
                     ciMethod* callee,
                     int caller_bci,
+                    bool is_late_inline,
+                    bool& should_delay,
+                    bool& hit_node_count_cutoff,
                     JeandleInlineReason& reason);
   JeandleInlineTree* callee_at(int caller_bci, ciMethod* callee) const;
   // Inline tree allocation is separated from commit so allocation happens before
@@ -302,7 +312,7 @@ class JeandleCompilation : public StackObj {
   const std::string name() { return _name; }
 
   bool is_osr_compilation() const { return _entry_bci != InvocationEntryBci; }
-  bool over_inlining_cutoff() const;
+  bool over_inlining_cutoff(bool is_late_inline) const;
   void* replay_inline_data() const { return _replay_inline_data; }
 
   void dump_inline_data(outputStream* out);
