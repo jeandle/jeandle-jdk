@@ -177,6 +177,7 @@ llvm::Function* JeandleFuncSig::create_llvm_func(ciMethod* method, llvm::Module&
               llvm::jeandle::Attribute::JavaKlassExact));
         }
       }
+      func->addParamAttr(arg_idx, llvm::Attribute::getWithAlignment(context, llvm::Align(HeapWordSize)));
       arg_idx++;
     }
 
@@ -193,6 +194,12 @@ llvm::Function* JeandleFuncSig::create_llvm_func(ciMethod* method, llvm::Module&
           if (is_effectively_final(klass)) {
             func->addParamAttr(arg_idx, llvm::Attribute::get(context,
                 llvm::jeandle::Attribute::JavaKlassExact));
+          }
+          func->addParamAttr(arg_idx, llvm::Attribute::getWithAlignment(context, llvm::Align(HeapWordSize)));
+
+          if (klass->is_array_klass()) {
+            int min_array_size = align_up(arrayOopDesc::length_offset_in_bytes() + sizeof(jint), HeapWordSize);
+            func->addParamAttr(arg_idx, llvm::Attribute::getWithDereferenceableOrNullBytes(context, min_array_size));
           }
         }
       }

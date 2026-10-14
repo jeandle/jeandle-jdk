@@ -249,12 +249,12 @@ public class TestPEAComplexPredecessorMerge {
                                             PEATestUtils.PEAReport report,
                                             Method target) throws Exception {
         for (PEATestUtils.PEARound round : report.rounds()) {
-            round.after().assertAbsent("poison");
-            assertCompletePhis(round.after(), target);
+            PEATestUtils.assertStructuralSoundness(round.after(),
+                    target + ": round " + round.iteration() + " result");
         }
         PEATestUtils.IRBody finalIR = run.finalIR(target);
-        finalIR.assertAbsent("poison");
-        assertCompletePhis(finalIR, target);
+        PEATestUtils.assertStructuralSoundness(finalIR,
+                target + ": final lowered IR");
     }
 
     private static void assertCompletePhis(PEATestUtils.IRBody body, Method target) {
