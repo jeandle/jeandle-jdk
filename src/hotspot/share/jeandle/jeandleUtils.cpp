@@ -35,6 +35,7 @@
 #include "ci/ciType.hpp"
 #include "compiler/abstractCompiler.hpp"
 #include "compiler/compilerThread.hpp"
+#include "gc/shared/gc_globals.hpp"
 #include "oops/instanceKlass.hpp"
 #include "oops/objArrayKlass.hpp"
 #include "runtime/thread.hpp"
@@ -255,4 +256,34 @@ bool is_jeandle_compiler_thread(Thread* t) {
   CompilerThread* ct = CompilerThread::cast(t);
   AbstractCompiler* compiler = ct->compiler();
   return compiler != nullptr && compiler->is_jeandle();
+}
+
+bool array_copy_requires_gc_barriers(bool tightly_coupled_alloc,
+                                     BasicType type) {
+  assert(UseG1GC || UseSerialGC, "only Serial and G1 GC are supported");
+  bool is_oop = is_reference_type(type);
+  return is_oop && (!tightly_coupled_alloc || !ReduceInitialCardMarks);
+}
+
+int arraycopy_payload_base_offset(bool is_array) {
+  // Exclude the header but include array length to copy by 8 bytes words.
+  // Can't use base_offset_in_bytes(bt) since basic type is unknown.
+  int base_off = is_array ? arrayOopDesc::length_offset_in_bytes() :
+                            instanceOopDesc::base_offset_in_bytes();
+  // base_off:
+  // 8  - 32-bit VM
+  // 12 - 64-bit VM, compressed klass
+  // 16 - 64-bit VM, normal klass
+  if (base_off % BytesPerLong != 0) {
+    assert(UseCompressedClassPointers, "");
+    if (is_array) {
+      // Exclude length to copy by 8 bytes words.
+      base_off += sizeof(int);
+    } else {
+      // Include klass to copy by 8 bytes words.
+      base_off = instanceOopDesc::klass_offset_in_bytes();
+    }
+    assert(base_off % BytesPerLong == 0, "expect 8 bytes alignment");
+  }
+  return base_off;
 }

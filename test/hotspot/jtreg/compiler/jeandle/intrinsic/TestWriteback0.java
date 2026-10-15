@@ -130,19 +130,19 @@ public class TestWriteback0 {
             boolean hasClflushopt = cpuSupports("clflushopt");
             boolean hasClwb = cpuSupports("clwb");
             if (hasClflushopt || hasClwb) {
-                checkPatternAnywhere(dumpPath, method, optimized,
+                checker.checkPatternAnywhere(
                         "call void @llvm\\.x86\\.sse\\.sfence");
             } else {
                 checker.checkNotPattern("call void @llvm\\.x86\\.sse\\.sfence");
             }
             if (hasClflushopt && hasClwb) {
-                checkPatternAnywhere(dumpPath, method, optimized,
+                checker.checkPatternAnywhere(
                         "call void @llvm\\.x86\\.clwb");
             } else if (hasClflushopt) {
-                checkPatternAnywhere(dumpPath, method, optimized,
+                checker.checkPatternAnywhere(
                         "call void @llvm\\.x86\\.clflushopt");
             } else {
-                checkPatternAnywhere(dumpPath, method, optimized,
+                checker.checkPatternAnywhere(
                         "call void @llvm\\.x86\\.sse2\\.clflush");
             }
         } else {
@@ -150,20 +150,13 @@ public class TestWriteback0 {
             // (post-sync DMB) before the loop body (cache-writeback call).
             // Check presence here; the straight-line ordering probe below
             // verifies the executable order precisely.
-            checkPatternAnywhere(dumpPath, method, optimized,
+            checker.checkPatternAnywhere(
                     "call void @StubRoutines_data_cache_writeback");
-            checkPatternAnywhere(dumpPath, method, optimized,
+            checker.checkPatternAnywhere(
                     "call void @llvm\\.aarch64\\.dmb\\(i32 11\\)$");
             checkAArch64MemoryContract(dumpPath, method, optimized);
         }
         checker.checkNotPattern(FALLBACK_SYMBOL);
-    }
-
-    private static void checkPatternAnywhere(String dumpPath,
-                                             java.lang.reflect.Method method,
-                                             boolean optimized,
-                                             String pattern) throws Exception {
-        new FileCheck(dumpPath, method, optimized).checkPattern(pattern);
     }
 
     private static void checkAArch64MemoryContract(String dumpPath,

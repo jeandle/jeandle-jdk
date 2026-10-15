@@ -24,6 +24,7 @@
 #include "jeandle/__hotspotHeadersBegin__.hpp"
 #include "classfile/javaClasses.hpp"
 #include "memory/oopFactory.hpp"
+#include "oops/access.hpp"
 #include "runtime/reflection.hpp"
 #include "runtime/sharedRuntime.hpp"
 #include "runtime/stubRoutines.hpp"
@@ -390,4 +391,8 @@ JRT_ENTRY(jint, JeandleRuntimeRoutine::instanceof_unloaded_or_null(Method* metho
     return 1;
   }
   return 0;
+JRT_END
+
+JRT_LEAF(void, JeandleRuntimeRoutine::clone(oopDesc* src, oopDesc* dst, size_t size))
+  HeapAccess<>::clone(src, dst, size);
 JRT_END

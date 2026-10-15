@@ -165,6 +165,13 @@ public class FileCheck {
         Asserts.assertTrue(found, "File check: " + content);
     }
 
+    // Search the whole file without changing the ordered-check cursor.
+    public void checkPatternAnywhere(String content) {
+        Pattern pattern = Pattern.compile(content.trim());
+        Asserts.assertTrue(lines.stream().anyMatch(line -> pattern.matcher(line).find()),
+                "File check anywhere: " + content);
+    }
+
     // Check whether the pattern is in the next line.
     public void checkNextPattern(String content) {
         boolean found = false;
