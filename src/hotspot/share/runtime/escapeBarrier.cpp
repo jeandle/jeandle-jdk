@@ -47,7 +47,7 @@
 #include "utilities/globalDefinitions.hpp"
 #include "utilities/macros.hpp"
 
-#if COMPILER2_OR_JVMCI
+#if COMPILER2_OR_JVMCI_OR_JEANDLE
 
 // Returns true iff objects were reallocated and relocked because of access through JVMTI
 bool EscapeBarrier::objs_are_deoptimized(JavaThread* thread, intptr_t* fr_id) {
@@ -373,4 +373,4 @@ bool EscapeBarrier::deoptimize_objects_internal(JavaThread* deoptee, intptr_t* f
   return !realloc_failures;
 }
 
-#endif // COMPILER2_OR_JVMCI
+#endif // COMPILER2_OR_JVMCI_OR_JEANDLE

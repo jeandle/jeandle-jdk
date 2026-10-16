@@ -113,7 +113,7 @@ static inline CompLevel adjust_level_for_compilability_query(CompLevel comp_leve
   if (comp_level == CompLevel_any) {
      if (CompilerConfig::is_c1_only()) {
        comp_level = CompLevel_simple;
-     } else if (CompilerConfig::is_c2_or_jvmci_compiler_only()) {
+     } else if (CompilerConfig::is_high_tier_compiler_only()) {
        comp_level = CompLevel_full_optimization;
      }
   }
@@ -433,11 +433,12 @@ void CompilationPolicy::initialize() {
   if (!CompilerConfig::is_interpreter_only()) {
     int count = CICompilerCount;
     bool c1_only = CompilerConfig::is_c1_only();
-    bool c2_only = CompilerConfig::is_c2_or_jvmci_compiler_only();
+    bool c2_only = CompilerConfig::is_high_tier_compiler_only();
 
 #ifdef _LP64
     // Turn on ergonomic compiler count selection
-    if (FLAG_IS_DEFAULT(CICompilerCountPerCPU) && FLAG_IS_DEFAULT(CICompilerCount)) {
+    if (FLAG_IS_DEFAULT(CICompilerCountPerCPU) && FLAG_IS_DEFAULT(CICompilerCount) &&
+        (!CompilerConfig::has_jeandle() || CompilerConfig::has_c2())) {
       FLAG_SET_DEFAULT(CICompilerCountPerCPU, true);
     }
     if (CICompilerCountPerCPU) {
@@ -455,10 +456,12 @@ void CompilationPolicy::initialize() {
       c2_size = C2Compiler::initial_code_buffer_size();
 #endif
       size_t buffer_size = c1_only ? c1_size : (c1_size/3 + 2*c2_size/3);
-      int max_count = (ReservedCodeCacheSize - (CodeCacheMinimumUseSpace DEBUG_ONLY(* 3))) / (int)buffer_size;
-      if (count > max_count) {
-        // Lower the compiler count such that all buffers fit into the code cache
-        count = MAX2(max_count, c1_only ? 1 : 2);
+      if (buffer_size > 0) {
+        int max_count = (ReservedCodeCacheSize - (CodeCacheMinimumUseSpace DEBUG_ONLY(* 3))) / (int)buffer_size;
+        if (count > max_count) {
+          // Lower the compiler count such that all buffers fit into the code cache
+          count = MAX2(max_count, c1_only ? 1 : 2);
+        }
       }
       FLAG_SET_ERGO(CICompilerCount, count);
     }
@@ -511,7 +514,7 @@ bool CompilationPolicy::verify_level(CompLevel level) {
   if (!CompilerConfig::is_c1_enabled() && is_c1_compile(level)) {
     return false;
   }
-  if (!CompilerConfig::is_c2_or_jvmci_compiler_enabled() && is_c2_compile(level)) {
+  if (!CompilerConfig::is_high_tier_compiler_enabled() && is_c2_compile(level)) {
     return false;
   }
 
@@ -537,7 +540,7 @@ CompLevel CompilationPolicy::highest_compile_level() {
   CompLevel level = CompLevel_none;
   // Setup the maximum level available for the current compiler configuration.
   if (!CompilerConfig::is_interpreter_only()) {
-    if (CompilerConfig::is_c2_or_jvmci_compiler_enabled()) {
+    if (CompilerConfig::is_high_tier_compiler_enabled()) {
       level = CompLevel_full_optimization;
     } else if (CompilerConfig::is_c1_enabled()) {
       if (CompilerConfig::is_c1_simple_only()) {
@@ -1221,4 +1224,3 @@ void CompilationPolicy::method_back_branch_event(const methodHandle& mh, const m
     }
   }
 }
-

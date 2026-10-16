@@ -25,11 +25,11 @@
 #ifndef SHARE_CI_CITYPEFLOW_HPP
 #define SHARE_CI_CITYPEFLOW_HPP
 
-#ifdef COMPILER2
+#if defined(COMPILER2) || defined(JEANDLE)
 #include "ci/ciEnv.hpp"
 #include "ci/ciKlass.hpp"
 #include "ci/ciMethodBlocks.hpp"
-#endif
+#endif // COMPILER2 || JEANDLE
 
 
 class ciTypeFlow : public ArenaObj {

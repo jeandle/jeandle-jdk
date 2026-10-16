@@ -67,9 +67,9 @@ class SharedRuntime: AllStatic {
   static SafepointBlob*      _polling_page_safepoint_handler_blob;
   static SafepointBlob*      _polling_page_return_handler_blob;
 
-#ifdef COMPILER2
+#if COMPILER2_OR_JEANDLE
   static UncommonTrapBlob*   _uncommon_trap_blob;
-#endif // COMPILER2
+#endif // COMPILER2_OR_JEANDLE
 
   static nmethod*            _cont_doYield_stub;
 
@@ -228,10 +228,10 @@ class SharedRuntime: AllStatic {
     return _wrong_method_abstract_blob->entry_point();
   }
 
-#ifdef COMPILER2
+#if COMPILER2_OR_JEANDLE
   static void generate_uncommon_trap_blob(void);
   static UncommonTrapBlob* uncommon_trap_blob()                  { return _uncommon_trap_blob; }
-#endif // COMPILER2
+#endif // COMPILER2_OR_JEANDLE
 
   static address get_resolve_opt_virtual_call_stub() {
     assert(_resolve_opt_virtual_call_blob != nullptr, "oops");
