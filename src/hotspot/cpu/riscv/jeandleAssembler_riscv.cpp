@@ -460,3 +460,21 @@ bool JeandleAssembler::shares_runtime_call_trampolines() {
 bool JeandleAssembler::runtime_call_needs_trampoline(address target) {
   return true;
 }
+
+int JeandleAssembler::reloc_record_data_halfwords(relocInfo::relocType type) {
+  switch (type) {
+    case relocInfo::jeandle_oop_type:
+      // _oop_index, _offset, and _rel_offset as hi/lo: 4 jints.
+      return 8;
+    case relocInfo::jeandle_oop_addr_type:
+      // Same shape as jeandle_oop_Relocation.
+      return 8;
+    case relocInfo::jeandle_section_word_type:
+      // section offset hi/lo, _section, _offset and _rel_offset hi/lo: 6 jints, which is
+      // also why RelocationHolder gives RISC-V 6 instead of 5 pointer-sized slots.
+      return 12;
+    default:
+      ShouldNotReachHere();
+      return 0;
+  }
+}

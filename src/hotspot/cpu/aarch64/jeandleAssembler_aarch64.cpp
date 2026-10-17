@@ -419,3 +419,15 @@ bool JeandleAssembler::shares_runtime_call_trampolines() {
 bool JeandleAssembler::runtime_call_needs_trampoline(address target) {
   return true;
 }
+
+int JeandleAssembler::reloc_record_data_halfwords(relocInfo::relocType type) {
+  switch (type) {
+    case relocInfo::jeandle_oop_type:        // oop_Relocation: index + offset
+    case relocInfo::jeandle_oop_addr_type:   // oop_Relocation: index + offset
+    case relocInfo::jeandle_section_word_type: // compressed target + addend
+      return 4;
+    default:
+      ShouldNotReachHere();
+      return 0;
+  }
+}

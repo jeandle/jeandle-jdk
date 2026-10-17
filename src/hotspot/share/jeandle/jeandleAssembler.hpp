@@ -112,6 +112,12 @@ class JeandleAssembler : public StackObj {
   static int static_call_stub_upper_bound();
   static int trampoline_call_stub_upper_bound();
 
+  // Halfwords that <type>_Relocation::pack_data_to() writes for Jeandle's own
+  // relocation types, i.e. how much payload one record of that type costs in the locs
+  // array. The encodings live in relocInfo_<cpu>.cpp, so this count belongs next to them
+  // and is asked from the architecture rather than guessed centrally.
+  static int reloc_record_data_halfwords(relocInfo::relocType type);
+
   // Whether this build routes calls through trampoline stubs, and whether runtime
   // routine calls share them. Both decide how many records the stubs section receives.
   static bool needs_trampoline_branches();
