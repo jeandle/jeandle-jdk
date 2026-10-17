@@ -84,3 +84,52 @@ bool ReadELF::findSection(ELFObject& elf, SectionInfo& section_info) {
   }
   return false;
 }
+
+void ReadELF::collect_const_sections(ELFObject& elf,
+                                     llvm::SmallVectorImpl<SectionInfo>& const_sections) {
+  for (auto sec = elf.section_begin(); sec != elf.section_end(); ++sec) {
+    llvm::Expected<llvm::StringRef> cur_name = sec->getName();
+    if (!cur_name) {
+      continue;
+    }
+
+    if (is_jeandle_const_section(*cur_name)) {
+      SectionInfo info(*cur_name);
+      info._offset = elf.getSection(sec->getRawDataRefImpl())->sh_offset;
+      info._size = sec->getSize();
+      // NOTE: in this LLVM version getAlignment() returns llvm::Align, not
+      // llvm::Expected, so this .value() is Align::value(). Alignment validity
+      // (non-zero, power of two, within contract) is enforced by
+      // ConstSectionPlan::calculate_layout().
+      info._alignment = sec->getAlignment().value();
+      const_sections.push_back(info);
+    }
+  }
+}
+
+bool ReadELF::build_const_section_plan(ELFObject& elf, ConstSectionPlan& plan,
+                                       uint64_t consts_base_alignment) {
+  plan.clear();
+  uint32_t sec_idx = 0;
+  for (auto sec = elf.section_begin(); sec != elf.section_end(); ++sec, ++sec_idx) {
+    llvm::Expected<llvm::StringRef> name = sec->getName();
+    if (!name) {
+      // A section we cannot name cannot be classified, so it cannot be a const
+      // section we care about. Skipping is safe because the runtime fallback
+      // still covers anything the resolver later asks for unexpectedly.
+      continue;
+    }
+
+    if (is_jeandle_const_section(*name)) {
+      // See the note in collect_const_sections(): getAlignment() is llvm::Align
+      // here, so .value() is Align::value().
+      uint64_t align = sec->getAlignment().value();
+      uint64_t size = sec->getSize();
+      uint64_t offset = elf.getSection(sec->getRawDataRefImpl())->sh_offset;
+
+      plan.add_entry(ConstSectionPlanEntry(sec_idx, name->str(), offset, size, align));
+    }
+  }
+
+  return plan.calculate_layout(consts_base_alignment);
+}
