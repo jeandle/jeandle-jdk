@@ -23,6 +23,7 @@
  */
 
 #include "precompiled.hpp"
+#include "asm/codeBufferInstrumentation.hpp"
 #include "cds/cds_globals.hpp"
 #include "cds/dynamicArchive.hpp"
 #include "classfile/classLoaderDataGraph.hpp"
@@ -391,6 +392,7 @@ void print_statistics() {
 //       are trying to shutdown the VM at the same time, only one thread
 //       can run before_exit() and all other threads must wait.
 void before_exit(JavaThread* thread, bool halt) {
+  CodeBufferInstrumentation::output_and_shutdown();
   #define BEFORE_EXIT_NOT_RUN 0
   #define BEFORE_EXIT_RUNNING 1
   #define BEFORE_EXIT_DONE    2

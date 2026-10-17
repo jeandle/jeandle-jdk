@@ -34,6 +34,7 @@
 #include "utilities/linkedlist.hpp"
 #include "utilities/resizeableResourceHash.hpp"
 #include "utilities/macros.hpp"
+#include "asm/codeBufferInstrumentation.hpp"
 
 template <typename T>
 static inline void put_native(address p, T x) {
@@ -444,7 +445,63 @@ class CodeBuffer: public StackObj DEBUG_ONLY(COMMA private Scrubber) {
 
   int          _const_section_alignment;
 
+
 #ifndef PRODUCT
+  // Relocation record census.
+  //
+  // This census is separate from the instrumentation of CodeBuffer::expand(),
+  // i.e. growth of the whole blob in the CodeCache. The relocation array grows through
+  // a second, completely separate path - CodeSection::expand_locs(), which reallocs a
+  // ResourceArray while the compile is still running. These
+  // counters are the ground truth the locs model is validated against: how many records
+  // of each relocInfo type each section received, how many relocInfo elements they
+  // consumed (payload + prefix + gap fillers), and how often the array had to be
+  // reallocated to hold them.
+  //
+  // They are plain arrays inside CodeBuffer rather than a side table because relocate()
+  // runs several times per call site on the install hot path: bookkeeping must stay a
+  // couple of increments and must not take a lock. A CodeBuffer is thread-confined, and
+  // its identity survives CodeBuffer::expand() (expand() hands the new blob to the same
+  // object), so counts accumulated before an expansion are not lost.
+  enum {
+    reloc_kind_limit = relocInfo::type_mask + 1
+  };
+  int _reloc_records[SECT_LIMIT][reloc_kind_limit];      // records by section and type
+  int _reloc_elements[SECT_LIMIT][reloc_kind_limit];     // relocInfo elements by section and type
+  int _locs_gap_fillers[SECT_LIMIT];                     // filler records spanning large gaps
+  int _locs_unstored_relocs[SECT_LIMIT];                 // relocate() calls with no locs storage
+  int _locs_expand_count[SECT_LIMIT];                    // expand_locs() reallocations
+  int _locs_expand_bytes[SECT_LIMIT];                    // capacity added by those reallocs
+  int _locs_initial_capacity[SECT_LIMIT];                // capacity handed out by initialize_locs
+
+  // Census writers. Only CodeSection (a friend) and CodeBuffer's own setup code may
+  // call them: they are correct only when invoked from the code that really touched the
+  // buffer, which is exactly what must not drift for the planned/actual comparison.
+  void note_reloc_record(int section, int kind, int elements, int fillers) {
+    assert(section >= (int)SECT_FIRST && section < (int)SECT_LIMIT, "must be a section");
+    assert(kind >= 0 && kind < (int)reloc_kind_limit, "must be a relocInfo type");
+    _reloc_records[section][kind]  += 1;
+    _reloc_elements[section][kind] += elements;
+    _locs_gap_fillers[section]     += fillers;
+  }
+  void note_unstored_reloc(int section, int kind) {
+    assert(section >= (int)SECT_FIRST && section < (int)SECT_LIMIT, "must be a section");
+    assert(kind >= 0 && kind < (int)reloc_kind_limit, "must be a relocInfo type");
+    _reloc_records[section][kind]  += 1;
+    _locs_unstored_relocs[section] += 1;
+  }
+  void note_locs_expand(int section, int old_capacity, int new_capacity) {
+    assert(section >= (int)SECT_FIRST && section < (int)SECT_LIMIT, "must be a section");
+    _locs_expand_count[section] += 1;
+    if (new_capacity > old_capacity) {
+      _locs_expand_bytes[section] += (new_capacity - old_capacity) * (int)sizeof(relocInfo);
+    }
+  }
+  void note_locs_initial_capacity(int section, int capacity) {
+    assert(section >= (int)SECT_FIRST && section < (int)SECT_LIMIT, "must be a section");
+    _locs_initial_capacity[section] = capacity;
+  }
+
   AsmRemarks   _asm_remarks;
   DbgStrings   _dbg_strings;
   bool         _collect_comments; // Indicate if we need to collect block comments at all.
@@ -491,6 +548,17 @@ class CodeBuffer: public StackObj DEBUG_ONLY(COMMA private Scrubber) {
                        || PrintSignatureHandlers
                        || UnlockDiagnosticVMOptions
                         );
+    for (int s = 0; s < (int)SECT_LIMIT; s++) {
+      for (int k = 0; k < (int)reloc_kind_limit; k++) {
+        _reloc_records[s][k] = 0;
+        _reloc_elements[s][k] = 0;
+      }
+      _locs_gap_fillers[s]      = 0;
+      _locs_unstored_relocs[s]  = 0;
+      _locs_expand_count[s]     = 0;
+      _locs_expand_bytes[s]     = 0;
+      _locs_initial_capacity[s] = 0;
+    }
 #endif
   }
 
@@ -747,6 +815,34 @@ class CodeBuffer: public StackObj DEBUG_ONLY(COMMA private Scrubber) {
   }
 
 #ifndef PRODUCT
+  // Census readers, used by the instrumentation when a compilation is reported.
+  int reloc_records(int section, int kind) const {
+    return (section >= (int)SECT_FIRST && section < (int)SECT_LIMIT &&
+            kind >= 0 && kind < (int)reloc_kind_limit) ? _reloc_records[section][kind] : 0;
+  }
+  int reloc_elements(int section, int kind) const {
+    return (section >= (int)SECT_FIRST && section < (int)SECT_LIMIT &&
+            kind >= 0 && kind < (int)reloc_kind_limit) ? _reloc_elements[section][kind] : 0;
+  }
+  int locs_gap_fillers(int section) const {
+    return (section >= (int)SECT_FIRST && section < (int)SECT_LIMIT) ? _locs_gap_fillers[section] : 0;
+  }
+  int locs_unstored_relocs(int section) const {
+    return (section >= (int)SECT_FIRST && section < (int)SECT_LIMIT) ? _locs_unstored_relocs[section] : 0;
+  }
+  int locs_expand_count(int section) const {
+    return (section >= (int)SECT_FIRST && section < (int)SECT_LIMIT) ? _locs_expand_count[section] : 0;
+  }
+  int locs_expand_bytes(int section) const {
+    return (section >= (int)SECT_FIRST && section < (int)SECT_LIMIT) ? _locs_expand_bytes[section] : 0;
+  }
+  int locs_initial_capacity(int section) const {
+    return (section >= (int)SECT_FIRST && section < (int)SECT_LIMIT) ? _locs_initial_capacity[section] : 0;
+  }
+  static int reloc_kind_count() { return (int)reloc_kind_limit; }
+#endif // PRODUCT
+
+#ifndef PRODUCT
  public:
   // Printing / Decoding
   // decodes from decode_begin() to code_end() and sets decode_begin to end
@@ -782,5 +878,6 @@ inline bool CodeSection::maybe_expand_to_ensure_remaining(csize_t amount) {
   if (remaining() < amount) { _outer->expand(this, amount); return true; }
   return false;
 }
+
 
 #endif // SHARE_ASM_CODEBUFFER_HPP
