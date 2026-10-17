@@ -451,6 +451,10 @@ class JeandleCompiledCode : public StackObj {
   // happen before initialize().
   void decide_install_layout(uint64_t elf_text_size, uint64_t func_align, InstallLayoutCore& layout);
 
+  // Exact upper bound estimators for insts section
+  size_t prolog_upper_bound(uint64_t func_align);
+  size_t post_insts_stubs_upper_bound();
+
   // Records allocate/expand/finalize telemetry for this compilation.
   // `layout` is the decision that produced the buffer being reported, so that the planned
   // and the actual columns of every section are recorded from one source.

@@ -307,6 +307,17 @@ void JeandleCompiledCode::finalize() {
   RISCV_ONLY(assert(is_aligned(_prolog_length, NativeInstruction::instruction_size),
                     "Jeandle blob start must be 4-byte aligned for call patching: %d", _prolog_length);)
 
+  assert(!_used_exact_allocation || (size_t)_prolog_length <= layout.planned_prolog,
+         "prolog length %d must not exceed planned upper bound %zu", _prolog_length, layout.planned_prolog);
+
+  if (CodeBufferInstrumentation::enabled()) {
+    size_t legacy_insts = (size_t)code_size + INSTS_PROLOG_RESERVE;
+    size_t saved = (legacy_insts > layout.insts_payload) ? (legacy_insts - layout.insts_payload) : 0;
+    tty->print_cr("[JeandleInstsPlan] method=%s planned_prolog=%zu actual_prolog=%d text_size=%llu insts_payload=%zu legacy_insts=%zu saved=%zu",
+                  _func_name.c_str(), layout.planned_prolog, _prolog_length,
+                  (unsigned long long)code_size, layout.insts_payload, legacy_insts, saved);
+  }
+
   assembler.emit_insts(((address) _obj->getBufferStart()) + offset, code_size);
 
   // Emit planned const sections in canonical order before resolving relocations
@@ -528,6 +539,66 @@ void JeandleCompiledCode::resolve_reloc_info(JeandleAssembler& assembler) {
 // ever be aligned to sizeof(jdouble). A 16-byte-aligned .rodata can be
 // emitted at 0x...c98c2578, which is not 16-byte aligned.
 //
+size_t JeandleCompiledCode::prolog_upper_bound(uint64_t func_align) {
+  bool is_osr_compilation = JeandleCompilation::current()->is_osr_compilation();
+
+  size_t entry_bound = 0;
+  if (is_osr_compilation) {
+    if (PoisonOSREntry) {
+      entry_bound = (size_t)JeandleAssembler::poisoned_osr_entry_upper_bound();
+    }
+  } else if (_method && !_method->is_static()) {
+    entry_bound = (size_t)JeandleAssembler::ic_check_upper_bound();
+  }
+
+  size_t offset_after_interior = align_up(entry_bound, (size_t)JeandleAssembler::interior_entry_alignment());
+  size_t subtotal = offset_after_interior;
+
+  // Verified entry point
+  subtotal += (size_t)JeandleAssembler::verified_entry_upper_bound();
+
+  // Class initialization barrier on entry
+  if (needs_clinit_barrier_on_entry()) {
+    subtotal += (size_t)JeandleAssembler::clinit_barrier_upper_bound();
+  }
+
+  // Stack overflow check
+  int frame_size_in_bytes = _frame_size * BytesPerWord;
+  bool is_method_compilation = _method != nullptr;
+  bool has_java_calls = !_non_routine_call_sites.empty();
+  int bang_size_in_bytes = MAX2(frame_size_in_bytes + os::extra_bang_size_in_bytes(), interpreter_frame_size_in_bytes());
+  if (need_stack_overflow_check(is_method_compilation, has_java_calls, bang_size_in_bytes)) {
+    int page_size = (int)os::vm_page_size();
+    if (page_size <= 0) {
+      page_size = 4096;
+    }
+    int num_bangs = 1;
+    if (bang_size_in_bytes > page_size) {
+      num_bangs += (bang_size_in_bytes / page_size) + 1;
+    }
+    subtotal += (size_t)(num_bangs * JeandleAssembler::stack_bang_instruction_size());
+  }
+
+  // NMethod entry barrier
+  if (needs_nmethod_entry_barrier()) {
+    subtotal += (size_t)JeandleAssembler::nmethod_entry_barrier_upper_bound();
+  }
+
+  // Final alignment to ELF function alignment
+  if (func_align > 1) {
+    subtotal = align_up(subtotal, (size_t)func_align);
+  }
+
+  return subtotal;
+}
+
+size_t JeandleCompiledCode::post_insts_stubs_upper_bound() {
+  if (needs_nmethod_entry_barrier()) {
+    return (size_t)JeandleAssembler::entry_barrier_stub_upper_bound();
+  }
+  return 0;
+}
+
 void JeandleCompiledCode::decide_install_layout(uint64_t elf_text_size,
                                                 uint64_t func_align,
                                                 InstallLayoutCore& layout) {
@@ -618,6 +689,19 @@ void JeandleCompiledCode::decide_install_layout(uint64_t elf_text_size,
     _planned_entries       = layout.planned_entries;
     _plan_status           = layout.plan_status;
     _used_exact_allocation = plan_ok;
+
+    // Tightened insts capacity model using exact mathematical upper bound
+    if (JeandleExactInsts) {
+      size_t exact_prolog = prolog_upper_bound(func_align);
+      size_t exact_post_stubs = post_insts_stubs_upper_bound();
+      layout.planned_prolog = exact_prolog;
+      layout.planned_post_stubs = exact_post_stubs;
+      layout.insts_payload = (size_t)elf_text_size + exact_prolog + exact_post_stubs;
+    } else {
+      layout.planned_prolog = INSTS_PROLOG_RESERVE;
+      layout.planned_post_stubs = 0;
+      layout.insts_payload = (size_t)elf_text_size + INSTS_PROLOG_RESERVE;
+    }
 
     ConstLayoutStats::record_exact(layout.consts_payload);
 

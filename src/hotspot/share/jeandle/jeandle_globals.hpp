@@ -102,6 +102,10 @@
           "Start the stubs section of every Jeandle CodeBuffer empty so "   \
           "that the first emitted stub expands the buffer (testing only).") \
                                                                             \
+  product(bool, JeandleExactInsts, true,                                    \
+          "Size CodeBuffer insts section from exact prolog and machine "    \
+          "code upper bound instead of legacy 2048-byte prolog reserve.")   \
+                                                                            \
                                                                             // end of JEANDLE_FLAGS
 
 DECLARE_FLAGS(JEANDLE_FLAGS)

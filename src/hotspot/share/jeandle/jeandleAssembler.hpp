@@ -95,7 +95,16 @@ class JeandleAssembler : public StackObj {
   static bool is_section_word_reloc(LinkSymbol& target, LinkKind kind);
 
   // Mirrors C2's InteriorEntryAlignment flag.
-  int interior_entry_alignment() const;
+  static int interior_entry_alignment();
+
+  // Upper bounds for prolog components and post-insts stubs (in bytes).
+  static int ic_check_upper_bound();
+  static int poisoned_osr_entry_upper_bound();
+  static int verified_entry_upper_bound();
+  static int clinit_barrier_upper_bound();
+  static int stack_bang_instruction_size();
+  static int nmethod_entry_barrier_upper_bound();
+  static int entry_barrier_stub_upper_bound();
 
  private:
   MacroAssembler* _masm;

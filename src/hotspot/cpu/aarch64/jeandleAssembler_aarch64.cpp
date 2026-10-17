@@ -221,7 +221,7 @@ void JeandleAssembler::emit_clinit_barrier_on_entry(Klass* klass) {
   __ bind(fallthrough);
 }
 
-int JeandleAssembler::interior_entry_alignment() const {
+int JeandleAssembler::interior_entry_alignment() {
   // Keep interior entry 16-byte aligned (matches default HotSpot interior entry alignment).
   return 16;
 }
@@ -339,4 +339,39 @@ void JeandleEntryBarrierStub::emit(MacroAssembler* _masm) {
   __ bind(guard());
   __ relocate(entry_guard_Relocation::spec());
   __ emit_int32(0);   // nmethod guard value
+}
+
+int JeandleAssembler::ic_check_upper_bound() {
+  // cmp_klass + br + far_jump + align(CodeEntryAlignment)
+  return 64;
+}
+
+int JeandleAssembler::poisoned_osr_entry_upper_bound() {
+  // brk #0
+  return 4;
+}
+
+int JeandleAssembler::verified_entry_upper_bound() {
+  // nop
+  return 4;
+}
+
+int JeandleAssembler::clinit_barrier_upper_bound() {
+  // mov_metadata + clinit_barrier + far_jump
+  return 64;
+}
+
+int JeandleAssembler::stack_bang_instruction_size() {
+  // sub + str (up to 3 instructions)
+  return 12;
+}
+
+int JeandleAssembler::nmethod_entry_barrier_upper_bound() {
+  // ldrw + cmp + b.ne / fences (up to 9 instructions)
+  return 36;
+}
+
+int JeandleAssembler::entry_barrier_stub_upper_bound() {
+  // str + movptr + blr + ldr + b + guard word
+  return 36;
 }

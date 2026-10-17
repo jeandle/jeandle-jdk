@@ -186,7 +186,7 @@ void JeandleAssembler::emit_clinit_barrier_on_entry(Klass* klass) {
   __ bind(fallthrough);
 }
 
-int JeandleAssembler::interior_entry_alignment() const {
+int JeandleAssembler::interior_entry_alignment() {
   // Keep interior entry 16-byte aligned (matches default HotSpot interior entry alignment).
   return 16;
 }
@@ -320,4 +320,39 @@ void JeandleEntryBarrierStub::emit(MacroAssembler* _masm) {
   __ call(RuntimeAddress(StubRoutines::x86::method_entry_barrier()));
   __ jmp(continuation(), false /* maybe_short */);
 #endif
+}
+
+int JeandleAssembler::ic_check_upper_bound() {
+  // load_klass / cmpptr + jump_cc + 8-byte align nop padding
+  return 32;
+}
+
+int JeandleAssembler::poisoned_osr_entry_upper_bound() {
+  // int3
+  return 1;
+}
+
+int JeandleAssembler::verified_entry_upper_bound() {
+  // addr_nop_5
+  return 5;
+}
+
+int JeandleAssembler::clinit_barrier_upper_bound() {
+  // mov_metadata + clinit_barrier + jump handle_wrong_method
+  return 48;
+}
+
+int JeandleAssembler::stack_bang_instruction_size() {
+  // movl [rsp - offset], rax (up to 7 bytes with 32-bit disp, bounded by 8)
+  return 8;
+}
+
+int JeandleAssembler::nmethod_entry_barrier_upper_bound() {
+  // align(4) + cmpl_imm32 (8B) + jcc (6B) + alignment margin
+  return 20;
+}
+
+int JeandleAssembler::entry_barrier_stub_upper_bound() {
+  // call RuntimeAddress + jmp continuation
+  return 24;
 }
