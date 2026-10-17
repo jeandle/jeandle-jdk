@@ -30,6 +30,7 @@
 #include "jeandle/__hotspotHeadersBegin__.hpp"
 #include "memory/allStatic.hpp"
 #include "runtime/javaThread.hpp"
+#include "runtime/os.hpp"
 #include "runtime/sharedRuntime.hpp"
 #include "runtime/stubRoutines.hpp"
 #include "utilities/globalDefinitions.hpp"
@@ -178,6 +179,18 @@
 // exceptional control flow. It is emitted with both gc-leaf-function and
 // nounwind so LLVM can skip statepoint rewriting and EH edges for the call.
 #define ALL_JEANDLE_DIRECT_ROUTINES(def)                                            \
+  def(os_javaTimeMillis,                                                            \
+      os::javaTimeMillis,                                                           \
+      false,                                                                        \
+      true,                                                                         \
+      llvm::Type::getInt64Ty(context))                                              \
+                                                                                    \
+  def(os_javaTimeNanos,                                                             \
+      os::javaTimeNanos,                                                            \
+      false,                                                                        \
+      true,                                                                         \
+      llvm::Type::getInt64Ty(context))                                              \
+                                                                                    \
   def(StubRoutines_dsin,                                                            \
       StubRoutines::dsin(),                                                         \
       true,                                                                         \
@@ -349,6 +362,13 @@
       true,                                                                         \
       llvm::Type::getVoidTy(context),                                               \
       llvm::PointerType::get(context, llvm::jeandle::AddrSpace::CHeapAddrSpace))    \
+                                                                                    \
+  AARCH64_ONLY(def(StubRoutines_data_cache_writeback,                               \
+      StubRoutines::data_cache_writeback(),                                         \
+      true,                                                                         \
+      true,                                                                         \
+      llvm::Type::getVoidTy(context),                                               \
+      llvm::PointerType::getUnqual(context)))                                       \
                                                                                     \
 def(StubRoutines_generic_arraycopy,                                                 \
       StubRoutines::generic_arraycopy(),                                            \
@@ -556,7 +576,8 @@ def(StubRoutines_generic_arraycopy,                                             
 #define ALL_JEANDLE_ASSEMBLY_ROUTINES(def) \
   def(exceptional_return)                  \
   def(exception_handler)                   \
-  def(deopt_blob)
+  def(deopt_blob)                          \
+  def(zero_heap_words_stub)
 
 
 // JeandleRuntimeRoutine contains C/C++/Assembly routines and Hotspot routines that can be called from Jeandle compiled code.

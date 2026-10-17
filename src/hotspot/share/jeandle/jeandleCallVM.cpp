@@ -84,6 +84,13 @@ void JeandleCallVM::generate_call_VM(const char* name, address routine_address, 
   call_routine_address->addFnAttr(patch_bytes_attr);
 
   // Check exceptions.
+  // Note: last_Java_sp/last_Java_pc are cleared in both the exception and
+  // no-exception paths below, after any code that depends on last_Java_frame.
+  // This mirrors C2's call_VM_base, which calls reset_last_Java_frame before
+  // check_exceptions — but C2's forward_exception stub does not rely on
+  // last_Java_sp, whereas Jeandle's install_exceptional_return_for_call_vm
+  // does (via JavaThread::last_frame). So we delay the clearing until after
+  // that call in the exception path.
   llvm::Value* pending_exception_addr = ir_builder.CreateIntToPtr(ir_builder.getInt64((uint64_t)Thread::pending_exception_offset()),
                                                                   llvm::PointerType::get(context, llvm::jeandle::AddrSpace::TLSAddrSpace));
   llvm::Value* pending_exception = ir_builder.CreateLoad(JeandleType::java2llvm(T_OBJECT, context), pending_exception_addr);
@@ -101,6 +108,13 @@ void JeandleCallVM::generate_call_VM(const char* name, address routine_address, 
   install_exceptional_return_call_inst->addFnAttr(llvm::Attribute::get(install_exceptional_return_call_inst->getContext(), "gc-leaf-function"));
   install_exceptional_return_call_inst->setCallingConv(llvm::CallingConv::C);
 
+  // Clear the last_Java_sp and last_Java_pc after install_exceptional_return_for_call_vm,
+  // which relies on last_Java_frame via JavaThread::last_frame().
+  ir_builder.CreateStore(ir_builder.getInt64((intptr_t)nullptr), last_Java_sp_ptr);
+  llvm::Value* last_Java_pc_ptr = ir_builder.CreateIntToPtr(ir_builder.getInt64((uint64_t)JavaThread::last_Java_pc_offset()),
+                                                            llvm::PointerType::get(context, llvm::jeandle::AddrSpace::TLSAddrSpace));
+  ir_builder.CreateStore(ir_builder.getInt64((intptr_t)nullptr), last_Java_pc_ptr);
+
   // Return
   llvm::Type* ret_type = func_type->getReturnType();
   if (ret_type->isVoidTy()) {
@@ -117,11 +131,9 @@ void JeandleCallVM::generate_call_VM(const char* name, address routine_address, 
 
   ir_builder.SetInsertPoint(no_exception_block);
 
-  // Clear the last_Java_sp.
+  // Clear the last_Java_sp and last_Java_pc.
   ir_builder.CreateStore(ir_builder.getInt64((intptr_t)nullptr), last_Java_sp_ptr);
-
-  // Clear the last_Java_pc.
-  llvm::Value* last_Java_pc_ptr = ir_builder.CreateIntToPtr(ir_builder.getInt64((uint64_t)JavaThread::last_Java_pc_offset()),
+  last_Java_pc_ptr = ir_builder.CreateIntToPtr(ir_builder.getInt64((uint64_t)JavaThread::last_Java_pc_offset()),
                                                             llvm::PointerType::get(context, llvm::jeandle::AddrSpace::TLSAddrSpace));
   ir_builder.CreateStore(ir_builder.getInt64((intptr_t)nullptr), last_Java_pc_ptr);
 

@@ -208,3 +208,92 @@ void JeandleRuntimeRoutine::generate_exception_handler() {
 void JeandleRuntimeRoutine::generate_deopt_blob() {
   _routine_entry[_deopt_blob] = SharedRuntime::deopt_blob()->unpack();
 }
+
+// Clear a variable number of HeapWords using the C calling convention:
+//   x0: HeapWord-aligned base
+//   w1: HeapWord count
+//
+// This follows C2's zero_blocks strategy, but owns the tail clearing as well
+// because an LLVM call cannot consume the adjusted x0/x1 values on return.
+void JeandleRuntimeRoutine::generate_zero_heap_words_stub() {
+  ResourceMark rm;
+  CodeBuffer buffer(_zero_heap_words_stub, 1024, 64);
+  MacroAssembler* masm = new MacroAssembler(&buffer);
+
+  const Register base = c_rarg0;
+  const Register cnt = c_rarg1;
+  Label done;
+  Label base_aligned;
+
+  address start = __ pc();
+
+  // The C ABI supplies the i32 count in w1. Zero-extend it before using x1
+  // for address arithmetic and loop control.
+  __ uxtw(cnt, cnt);
+
+  if (UseBlockZeroing) {
+    int zva_length = VM_Version::zva_length();
+
+    // Ensure ZVA length can be divided by 16. This is required by
+    // the subsequent operations.
+    assert (zva_length % 16 == 0, "Unexpected ZVA Length");
+
+    __ tbz(base, 3, base_aligned);
+    __ str(zr, Address(__ post(base, 8)));
+    __ sub(cnt, cnt, 1);
+    __ bind(base_aligned);
+
+    // Ensure count >= zva_length * 2 so that it still deserves a zva after
+    // alignment.
+    Label small;
+    int low_limit = MAX2(zva_length * 2, (int)BlockZeroingLowLimit);
+    __ subs(rscratch1, cnt, low_limit >> 3);
+    __ br(Assembler::LT, small);
+    __ zero_dcache_blocks(base, cnt);
+    __ bind(small);
+  }
+
+  {
+    // Number of stp instructions we'll unroll
+    const int unroll =
+      MacroAssembler::zero_words_block_size / 2;
+    // Clear the remaining blocks.
+    Label loop;
+    __ subs(cnt, cnt, unroll * 2);
+    __ br(Assembler::LT, done);
+    __ bind(loop);
+    for (int i = 0; i < unroll; i++)
+      __ stp(zr, zr, __ post(base, 16));
+    __ subs(cnt, cnt, unroll * 2);
+    __ br(Assembler::GE, loop);
+    __ bind(done);
+    __ add(cnt, cnt, unroll * 2);
+  }
+
+  // Unlike C2's zero_blocks stub, clear the tail here as well because the C
+  // ABI call cannot return the adjusted base and count in its arguments.
+  for (int i = MacroAssembler::zero_words_block_size >> 1; i > 1; i >>= 1) {
+    Label l;
+    __ tbz(cnt, exact_log2(i), l);
+    for (int j = 0; j < i; j += 2) {
+      __ stp(zr, zr, __ post(base, 2 * BytesPerWord));
+    }
+    __ bind(l);
+  }
+  {
+    Label l;
+    __ tbz(cnt, 0, l);
+    __ str(zr, Address(base));
+    __ bind(l);
+  }
+
+  __ ret(lr);
+  masm->flush();
+
+  RuntimeStub* stub = RuntimeStub::new_runtime_stub(
+      _zero_heap_words_stub, &buffer, (int)(__ pc() - start),
+      0 /* frame size */, nullptr /* oop maps */, false);
+  address entry = stub->entry_point();
+  _routine_entry[_zero_heap_words_stub] = entry;
+  _gc_leaf_routines.insert(entry);
+}

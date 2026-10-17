@@ -61,6 +61,8 @@ enum JeandleMemoryFlag : uint16_t {
   MEM_READ              = 1u << 0,
   MEM_WRITE             = 1u << 1,
   MEM_NEEDS_GC_STATE    = 1u << 2,
+  // Retain unknown memory effects for calls that observe changing external state.
+  MEM_OBSERVES_EXTERNAL_STATE = 1u << 3,
 };
 
 // =============================================================================
@@ -77,6 +79,9 @@ struct CallSiteAttributeMetadata {
   bool reads_memory()         const { return (memory_flags  & MEM_READ) != 0; }
   bool writes_memory()        const { return (memory_flags  & MEM_WRITE) != 0; }
   bool needs_gc_state()       const { return (memory_flags  & MEM_NEEDS_GC_STATE) != 0; }
+  bool observes_external_state() const {
+    return (memory_flags & MEM_OBSERVES_EXTERNAL_STATE) != 0;
+  }
   bool attach_deopt_bundle()  const {
     return may_deopt() || needs_gc_state() || needs_exception_edge();
   }
@@ -127,11 +132,18 @@ class JeandleIntrinsicLowering : public StackObj {
   static bool cpu_supports_rounding();          // floor/ceil/rint
   static bool cpu_supports_popcount();          // bitCount_i/bitCount_l
   static bool cpu_supports_spin_wait();         // onSpinWait
-  static bool supports_vectorized_mismatch_medium_path();
+  // Byte limit of the inline 128-bit vector tier for vectorizedMismatch.
+  // A value of 0 disables the tier (values below the 16-byte scalar tier
+  // limit also fall back to the stub); see the per-cpu definitions for the
+  // platform rationale.
+  static uint64_t vectorized_mismatch_medium_path_limit();
+  static bool cpu_supports_cache_writeback();   // Unsafe writeback family
 
   // ========================================================================
   // Shared emit helpers
   // ========================================================================
+
+  bool lower_native_time_func(llvm::FunctionCallee callee);
 
   // Central call-site emission: builds deopt bundle, emits call or invoke,
   // applies GC-leaf and memory annotations.
@@ -188,6 +200,8 @@ class JeandleIntrinsicLowering : public StackObj {
   bool lower_llvm_fence(vmIntrinsics::ID id);
   bool lower_preconditions_check_index(BasicType bt);
   bool lower_spin_wait_hint();       // arch-specific
+  bool lower_writeback0();           // arch-specific
+  bool lower_writeback_sync(vmIntrinsics::ID id); // arch-specific
   bool lower_compare_unsigned(vmIntrinsics::ID id);
   bool lower_exact_arith(vmIntrinsics::ID id, llvm::Intrinsic::ID overflow_id);
   bool lower_divide_unsigned(vmIntrinsics::ID id);
@@ -202,6 +216,7 @@ class JeandleIntrinsicLowering : public StackObj {
   // StringUTF16 trusted single-code-unit access. The byte[] backing stores
   // UTF16 values in the platform's native byte order.
   bool lower_string_char_access(bool is_store);
+  bool lower_arrayequals(BasicType element_type);
   llvm::Value* emit_vectorized_mismatch_small(llvm::Value* a_addr,
                                               llvm::Value* b_addr,
                                               llvm::Value* byte_length,

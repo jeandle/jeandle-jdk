@@ -86,6 +86,7 @@
 ; Byte offsets for JavaThread structure fields.
 @JavaThread.tlab_end_offset = external global i64
 @JavaThread.tlab_top_offset = external global i64
+@JavaThread.tlab_pf_top_offset = external global i64
 
 ; Byte offsets for markWord structure fields.
 @markWord.prototype_value = external global i64
@@ -93,6 +94,8 @@
 ; Global vm options
 @VMOptions.UseTLAB = external global i1
 @VMOptions.ZeroTLAB = external global i1
+@VMOptions.AllocateInstancePrefetchLines = external global i32
+@VMOptions.AllocatePrefetchLines = external global i32
 ; Heap layout switches consumed by VMConstants::fromModule on the LLVM side.
 @VMOptions.UseCompressedClassPointers = external global i1
 @VMOptions.UseCompressedOops = external global i1
@@ -369,9 +372,11 @@ check_subtype:
 }
 
 declare hotspotcc ptr addrspace(1) @new_instance(ptr, ptr)
+declare hotspotcc void @jeandle.zero_half_heap_word(ptr addrspace(1) align 4)
+declare hotspotcc void @jeandle.zero_heap_words(ptr addrspace(1) align 8, i32)
+declare hotspotcc void @jeandle.allocation_prefetch(ptr addrspace(1), ptr addrspace(1), i32)
 
 ; Implementation of Java new object
-; TODO: Support prefetch instructions for next allocations.
 define private hotspotcc ptr addrspace(1) @jeandle.new_instance(ptr %klass, i32 %size_in_bytes, i1 %initial_slow_test) noinline "lower-phase"="1" "jeandle.not-guaranteed-safepoint" {
 entry:
   ; The caller may already know that this allocation requires the runtime.
@@ -402,6 +407,10 @@ alloc_slow_path:
   br label %return_block
 
 alloc_fast_path:
+  %instance_prefetch_lines = load i32, ptr @VMOptions.AllocateInstancePrefetchLines
+  call hotspotcc void @jeandle.allocation_prefetch(ptr addrspace(1) %tlab_old_top,
+                                                    ptr addrspace(1) %tlab_new_top,
+                                                    i32 %instance_prefetch_lines)
   store ptr addrspace(1) %tlab_new_top, ptr addrspace(2) %tlab_top_ptr, align 8
   %mark_word_offset = load i32, ptr @oopDesc.mark_offset_in_bytes
   %mark_word_addr = getelementptr i8, ptr addrspace(1) %tlab_old_top, i32 %mark_word_offset
@@ -411,18 +420,18 @@ alloc_fast_path:
 
   %prototype_value = load i64, ptr @markWord.prototype_value
 
-  store atomic i64 %prototype_value, ptr addrspace(1) %mark_word_addr unordered, align 8
+  store i64 %prototype_value, ptr addrspace(1) %mark_word_addr, align 8
 
   %use_compressed_klass = load i1, ptr @VMOptions.UseCompressedClassPointers
   br i1 %use_compressed_klass, label %store_narrow_klass, label %store_wide_klass
 
 store_narrow_klass:
   %narrow_klass = call hotspotcc i32 @jeandle.encode_klass(ptr %klass)
-  store atomic i32 %narrow_klass, ptr addrspace(1) %klass_addr unordered, align 4
+  store i32 %narrow_klass, ptr addrspace(1) %klass_addr, align 4
   br label %post_klass_store
 
 store_wide_klass:
-  store atomic ptr %klass, ptr addrspace(1) %klass_addr unordered, align 8
+  store ptr %klass, ptr addrspace(1) %klass_addr, align 8
   br label %post_klass_store
 
 post_klass_store:
@@ -434,15 +443,27 @@ clear_memory:
   %base_offset = load i32, ptr @instanceOopDesc.base_offset_in_bytes
   %base_addr = getelementptr i8, ptr addrspace(1) %tlab_old_top, i32 %base_offset
   %payload_size = sub i32 %size_in_bytes, %base_offset
-  call void @llvm.memset.p1.i32(ptr addrspace(1) align 8 %base_addr, i8 0, i32 %payload_size, i1 false)
+  %base_low_bits = and i32 %base_offset, 7
+  %needs_4_byte_head = icmp eq i32 %base_low_bits, 4
+  br i1 %needs_4_byte_head, label %clear_4_byte_head, label %clear_words
+
+clear_4_byte_head:
+  call hotspotcc void @jeandle.zero_half_heap_word(ptr addrspace(1) %base_addr)
+  %aligned_base_addr = getelementptr i8, ptr addrspace(1) %base_addr, i32 4
+  %aligned_payload_size = sub i32 %payload_size, 4
+  br label %clear_words
+
+clear_words:
+  %clear_base_addr = phi ptr addrspace(1) [ %base_addr, %clear_memory ], [ %aligned_base_addr, %clear_4_byte_head ]
+  %clear_payload_size = phi i32 [ %payload_size, %clear_memory ], [ %aligned_payload_size, %clear_4_byte_head ]
+  %payload_words = lshr exact i32 %clear_payload_size, 3
+  call hotspotcc void @jeandle.zero_heap_words(ptr addrspace(1) %clear_base_addr, i32 %payload_words)
   br label %initialization_membar
 
 initialization_membar:
-  ; TODO: The current approach uses atomic stores for mark word and klass initialization,
-  ; and relies on this fence release as a temporary solution to ensure publication semantics.
-  ; The goal is to replace the atomic stores with plain stores and implement a custom lightweight
-  ; membar instead of this fence.
-  fence release
+  ; Publish object initialization with a StoreStore barrier. This orders the
+  ; header and zeroing stores without imposing the LoadStore part of release.
+  call hotspotcc void @jeandle.membar_storestore()
   br label %return_block
 
 return_block:
@@ -560,10 +581,14 @@ array_slow_path:
   br label %array_return
 
 array_fast_path:
+  %array_prefetch_lines = load i32, ptr @VMOptions.AllocatePrefetchLines
+  call hotspotcc void @jeandle.allocation_prefetch(ptr addrspace(1) %tlab_old_top,
+                                                    ptr addrspace(1) %tlab_new_top,
+                                                    i32 %array_prefetch_lines)
   store ptr addrspace(1) %tlab_new_top, ptr addrspace(2) %tlab_top_ptr, align 8
 
   ; Header: mark word, klass pointer, length. No inter-field barriers; the
-  ; trailing release fence publishes the whole object as a unit.
+  ; trailing StoreStore barrier publishes the whole object as a unit.
   %mark_word_offset = load i32, ptr @oopDesc.mark_offset_in_bytes
   %mark_word_addr = getelementptr i8, ptr addrspace(1) %tlab_old_top, i32 %mark_word_offset
 
@@ -575,77 +600,42 @@ array_fast_path:
 
   %prototype_value = load i64, ptr @markWord.prototype_value
 
-  store atomic i64 %prototype_value, ptr addrspace(1) %mark_word_addr unordered, align 8
+  store i64 %prototype_value, ptr addrspace(1) %mark_word_addr, align 8
   %array_use_compressed_klass = load i1, ptr @VMOptions.UseCompressedClassPointers
   br i1 %array_use_compressed_klass, label %array_store_narrow_klass, label %array_store_wide_klass
 
 array_store_narrow_klass:
   %array_narrow_klass = call hotspotcc i32 @jeandle.encode_klass(ptr %array_klass)
-  store atomic i32 %array_narrow_klass, ptr addrspace(1) %klass_addr unordered, align 4
+  store i32 %array_narrow_klass, ptr addrspace(1) %klass_addr, align 4
   br label %array_post_klass_store
 
 array_store_wide_klass:
-  store atomic ptr %array_klass, ptr addrspace(1) %klass_addr unordered, align 8
+  store ptr %array_klass, ptr addrspace(1) %klass_addr, align 8
   br label %array_post_klass_store
 
 array_post_klass_store:
-  store atomic i32 %length, ptr addrspace(1) %length_addr unordered, align 4
+  ; Length is always a 4-byte signed int regardless of UseCompressedClassPointers, but the
+  ; length offset itself is CCP-aware on the C++ side (arrayOopDesc::length_offset_in_bytes
+  ; shifts when narrow klass is stored), so this single store covers both layouts.
+  store i32 %length, ptr addrspace(1) %length_addr, align 4
 
   %zero_tlab = load i1, ptr @VMOptions.ZeroTLAB
   %skip_clear = and i1 %use_tlab, %zero_tlab
   br i1 %skip_clear, label %array_init_membar, label %array_clear_memory
 
 array_clear_memory:
-  ; Explicit 8-byte-stride zero loop. We do NOT use @llvm.memset because LLVM's
-  ; default lowering produces poor code for both target backends we care about:
-  ;   - AArch64 (without MOPS): every memset, constant size or not, falls back
-  ;     to a per-byte strb loop -- the target hook in AArch64SelectionDAGInfo
-  ;     just `return SDValue()` and lets the generic SelectionDAG byte expansion
-  ;     take over. That's ~10x slower than the str xzr / stp xzr,xzr sequence
-  ;     HotSpot C1 emits.
-  ;   - x86: constant-size memset gets the rep stosq fast path, but variable
-  ;     size is bailed out by X86SelectionDAGInfo (`if (!ConstantSize) return
-  ;     SDValue();`) and ends up in the same generic per-byte loop. So variable-
-  ;     length arrays (the common `new T[N]` case in real workloads) regress on
-  ;     x86 too, not just AArch64.
-  ;
-  ; The stores must be `volatile` -- otherwise LLVM's LoopIdiomRecognize pass
-  ; folds an idiomatic "for(i=0;i<n;i++) p[i]=0" loop right back into
-  ; @llvm.memset, which round-trips through the same broken lowering. Volatile
-  ; stores are exempt from idiom recognition, so they survive into codegen as
-  ; plain str xzr (AArch64) / `mov qword ptr [...], 0` (x86) 8-byte stores.
-  ; LoopFullUnroll still applies for constant trip counts, so `new T[N]` with
-  ; N a compile-time constant becomes a fully unrolled sequence.
-  ;
-  ; TODO: For payloads larger than ~256 bytes (HotSpot AArch64
-  ; BlockZeroingLowLimit default), HotSpot's MacroAssembler::zero_words calls
-  ; the zero_blocks stub, which uses `dc zva` (64-byte cache-line zero). The
-  ; single-str loop here is ~4x slower than `dc zva` for large arrays; emitting
-  ; platform-specific inline asm or an LLVM target intrinsic for that tier is a
-  ; follow-up. The current loop already closes the biggest gap (per-byte ->
-  ; per-word).
-  ;
-  ; size_in_bytes is aligned to MinObjAlignmentInBytes (8) on the caller side,
-  ; and base_offset is always a multiple of 8, so payload_size is exactly
-  ; divisible by 8.
+  ; Array payloads are HeapWord-aligned. Reuse the platform-aware zeroing
+  ; JavaOp used by new_instance for constant and variable word counts.
   %base_addr = getelementptr i8, ptr addrspace(1) %tlab_old_top, i32 %base_offset
   %payload_size = sub i32 %size_in_bytes, %base_offset
   %payload_words = lshr exact i32 %payload_size, 3
-  %has_payload = icmp ne i32 %payload_words, 0
-  br i1 %has_payload, label %array_zero_loop, label %array_init_membar
-
-array_zero_loop:
-  %zi = phi i32 [ 0, %array_clear_memory ], [ %zi_next, %array_zero_loop ]
-  %zaddr = getelementptr i64, ptr addrspace(1) %base_addr, i32 %zi
-  store volatile i64 0, ptr addrspace(1) %zaddr, align 8
-  %zi_next = add nuw nsw i32 %zi, 1
-  %zero_done = icmp eq i32 %zi_next, %payload_words
-  br i1 %zero_done, label %array_init_membar, label %array_zero_loop
+  call hotspotcc void @jeandle.zero_heap_words(
+      ptr addrspace(1) %base_addr, i32 %payload_words)
+  br label %array_init_membar
 
 array_init_membar:
-  ; TODO: Same plan as new_instance -- replace atomic stores + fence release with plain
-  ; stores plus a lightweight publish barrier once the supporting LLVM pass lands.
-  fence release
+  ; Publish array initialization with a StoreStore barrier.
+  call hotspotcc void @jeandle.membar_storestore()
   br label %array_return
 
 array_return:
@@ -1328,6 +1318,142 @@ slow_path:
   %callee = inttoptr i64 %callee_addr to ptr
   call void %callee(ptr addrspace(1) %obj, ptr addrspace(0) %lock, ptr %current_thread) #0
   ret void
+}
+
+; =============================================================================
+; jeandle.memcmp - Vectorized bcmp-Style Equality Check
+; =============================================================================
+;
+; Purpose:
+;   Provides an always-present, local definition for the memcmp symbol used
+;   by the array-equals intrinsics (via call_java_op).
+;
+; Semantics (bcmp, not memcmp):
+;   Returns 0 when the two ranges are equal, 1 when they are not. Every
+;   in-tree call site only tests the result against zero (array-equals), so
+;   libc memcmp's first-difference index and sign are dead values; computing
+;   them cost a cttz plus two re-loads on every mismatch in the previous
+;   version. LLVM itself makes the same simplification (memcmp -> bcmp)
+;   whenever a result is only compared with zero, so any pass-introduced
+;   memcmp call that could resolve here also only tests equality.
+;
+; Structure (never reads outside [0, n); every load is align 1):
+;   n >= 32 : 32-byte vector loop over [0, n-32), then one overlapping
+;             <32 x i8> comparison anchored at n-32, so every length is
+;             covered by whole vector comparisons with no scalar tail.
+;   n >= 8  : i64 loop over [0, n-8), then one overlapping i64 comparison
+;             anchored at n-8 (at most 3 loop iterations in this range).
+;   n <  8  : byte loop (at most 7 iterations; unrolls for constant lengths).
+;   A mismatch returns immediately; no first-difference index is recovered,
+;   so the implementation is endianness-independent.
+;   32 bytes exploits AVX2-class hosts directly; on SSE2/NEON baselines LLVM
+;   legalizes <32 x i8> into two <16 x i8> comparisons per iteration, which
+;   is never worse than the previous 16-byte loop.
+; =============================================================================
+define hotspotcc i32 @jeandle.memcmp(ptr addrspace(1) nocapture readonly %a, ptr addrspace(1) nocapture readonly %b, i64 noundef %n) "lower-phase"="1" #0 noinline {
+entry:
+  %n_is_zero = icmp eq i64 %n, 0
+  br i1 %n_is_zero, label %return_zero, label %size_dispatch
+
+size_dispatch:
+  %is_vector_sized = icmp ugt i64 %n, 31
+  br i1 %is_vector_sized, label %vec_preheader, label %qword_dispatch
+
+qword_dispatch:
+  %is_qword_sized = icmp ugt i64 %n, 7
+  br i1 %is_qword_sized, label %qword_preheader, label %byte_loop
+
+; ---------------------------------------------------------------------------
+; 32-byte vector path (n >= 32). The loop drains [0, n-32); the final
+; overlapping comparison at n-32 covers the last 32 bytes, so a length that
+; is a multiple of 32 compares the last chunk exactly once, and any other
+; length overlaps already-compared bytes instead of needing a scalar tail.
+; ---------------------------------------------------------------------------
+vec_preheader:
+  %vec_limit = sub nuw i64 %n, 32
+  %has_vec_body = icmp ne i64 %vec_limit, 0
+  br i1 %has_vec_body, label %vec_loop, label %vec_final
+
+vec_loop:
+  %vec_i = phi i64 [ 0, %vec_preheader ], [ %vec_i_next, %vec_loop_continue ]
+  %vec_a_ptr = getelementptr inbounds nuw i8, ptr addrspace(1) %a, i64 %vec_i
+  %vec_b_ptr = getelementptr inbounds nuw i8, ptr addrspace(1) %b, i64 %vec_i
+  %vec_a = load <32 x i8>, ptr addrspace(1) %vec_a_ptr, align 1
+  %vec_b = load <32 x i8>, ptr addrspace(1) %vec_b_ptr, align 1
+  %vec_ne = icmp ne <32 x i8> %vec_a, %vec_b
+  %vec_ne_mask = bitcast <32 x i1> %vec_ne to i32
+  %vec_any_ne = icmp ne i32 %vec_ne_mask, 0
+  br i1 %vec_any_ne, label %return_one, label %vec_loop_continue
+
+vec_loop_continue:
+  %vec_i_next = add i64 %vec_i, 32
+  %vec_more = icmp ult i64 %vec_i_next, %vec_limit
+  br i1 %vec_more, label %vec_loop, label %vec_final
+
+vec_final:
+  %final_a_ptr = getelementptr inbounds nuw i8, ptr addrspace(1) %a, i64 %vec_limit
+  %final_b_ptr = getelementptr inbounds nuw i8, ptr addrspace(1) %b, i64 %vec_limit
+  %final_a = load <32 x i8>, ptr addrspace(1) %final_a_ptr, align 1
+  %final_b = load <32 x i8>, ptr addrspace(1) %final_b_ptr, align 1
+  %final_ne = icmp ne <32 x i8> %final_a, %final_b
+  %final_ne_mask = bitcast <32 x i1> %final_ne to i32
+  %final_any_ne = icmp ne i32 %final_ne_mask, 0
+  br i1 %final_any_ne, label %return_one, label %return_zero
+
+; ---------------------------------------------------------------------------
+; Overlapping qword path (8 <= n < 32). The loop drains [0, n-8); the final
+; comparison at n-8 covers the last 8 bytes, overlapping bytes the loop
+; already compared when n is not a multiple of 8.
+; ---------------------------------------------------------------------------
+qword_preheader:
+  %qword_limit = sub nuw i64 %n, 8
+  %has_qword_body = icmp ne i64 %qword_limit, 0
+  br i1 %has_qword_body, label %qword_loop, label %qword_final
+
+qword_loop:
+  %qword_i = phi i64 [ 0, %qword_preheader ], [ %qword_i_next, %qword_loop_continue ]
+  %qword_a_ptr = getelementptr inbounds nuw i8, ptr addrspace(1) %a, i64 %qword_i
+  %qword_b_ptr = getelementptr inbounds nuw i8, ptr addrspace(1) %b, i64 %qword_i
+  %qword_a = load i64, ptr addrspace(1) %qword_a_ptr, align 1
+  %qword_b = load i64, ptr addrspace(1) %qword_b_ptr, align 1
+  %qword_ne = icmp ne i64 %qword_a, %qword_b
+  br i1 %qword_ne, label %return_one, label %qword_loop_continue
+
+qword_loop_continue:
+  %qword_i_next = add i64 %qword_i, 8
+  %qword_more = icmp ult i64 %qword_i_next, %qword_limit
+  br i1 %qword_more, label %qword_loop, label %qword_final
+
+qword_final:
+  %qword_fa_ptr = getelementptr inbounds nuw i8, ptr addrspace(1) %a, i64 %qword_limit
+  %qword_fb_ptr = getelementptr inbounds nuw i8, ptr addrspace(1) %b, i64 %qword_limit
+  %qword_fa = load i64, ptr addrspace(1) %qword_fa_ptr, align 1
+  %qword_fb = load i64, ptr addrspace(1) %qword_fb_ptr, align 1
+  %qword_fne = icmp ne i64 %qword_fa, %qword_fb
+  br i1 %qword_fne, label %return_one, label %return_zero
+
+; ---------------------------------------------------------------------------
+; Byte path (1 <= n <= 7).
+; ---------------------------------------------------------------------------
+byte_loop:
+  %byte_j = phi i64 [ 0, %qword_dispatch ], [ %byte_j_next, %byte_loop_continue ]
+  %byte_a_ptr = getelementptr inbounds nuw i8, ptr addrspace(1) %a, i64 %byte_j
+  %byte_b_ptr = getelementptr inbounds nuw i8, ptr addrspace(1) %b, i64 %byte_j
+  %byte_a = load i8, ptr addrspace(1) %byte_a_ptr, align 1
+  %byte_b = load i8, ptr addrspace(1) %byte_b_ptr, align 1
+  %byte_eq = icmp eq i8 %byte_a, %byte_b
+  br i1 %byte_eq, label %byte_loop_continue, label %return_one
+
+byte_loop_continue:
+  %byte_j_next = add nuw i64 %byte_j, 1
+  %byte_done = icmp eq i64 %byte_j_next, %n
+  br i1 %byte_done, label %return_zero, label %byte_loop
+
+return_zero:
+  ret i32 0
+
+return_one:
+  ret i32 1
 }
 
 attributes #0 = { nounwind "gc-leaf-function" }

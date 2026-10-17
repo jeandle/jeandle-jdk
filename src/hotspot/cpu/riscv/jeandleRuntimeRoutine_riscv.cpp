@@ -213,3 +213,84 @@ void JeandleRuntimeRoutine::generate_exception_handler() {
 void JeandleRuntimeRoutine::generate_deopt_blob() {
   _routine_entry[_deopt_blob] = SharedRuntime::deopt_blob()->unpack();
 }
+
+// Clear a variable number of HeapWords using the C calling convention:
+//   x10: HeapWord-aligned base
+//   x11: i32 HeapWord count
+//
+// Unlike C2's zero_blocks stub, this routine also clears the tail because an
+// LLVM call cannot consume adjusted argument registers after returning.
+void JeandleRuntimeRoutine::generate_zero_heap_words_stub() {
+  ResourceMark rm;
+  CodeBuffer buffer(_zero_heap_words_stub, 1024, 64);
+  MacroAssembler* masm = new MacroAssembler(&buffer);
+
+  const Register base = c_rarg0;
+  const Register cnt = c_rarg1;
+  const Register tmp1 = t0;
+  const Register tmp2 = t1;
+
+  address start = __ pc();
+
+  // The C ABI argument is i32. Clear the unspecified upper bits before using
+  // the count in 64-bit address arithmetic and loop control.
+  __ zero_extend(cnt, cnt, 32);
+
+  Label done;
+
+  if (UseBlockZeroing) {
+    // Ensure count >= 2*CacheLineSize so that it still deserves a cbo.zero
+    // after alignment.
+    Label small;
+    int low_limit = MAX2(2 * CacheLineSize, BlockZeroingLowLimit) / wordSize;
+    __ mv(tmp1, low_limit);
+    __ blt(cnt, tmp1, small);
+    __ zero_dcache_blocks(base, cnt, tmp1, tmp2);
+    __ bind(small);
+  }
+
+  {
+    // Clear the remaining blocks.
+    Label loop;
+    __ mv(tmp1, MacroAssembler::zero_words_block_size);
+    __ blt(cnt, tmp1, done);
+    __ bind(loop);
+    for (int i = 0; i < MacroAssembler::zero_words_block_size; i++) {
+      __ sd(zr, Address(base, i * wordSize));
+    }
+    __ add(base, base, MacroAssembler::zero_words_block_size * wordSize);
+    __ sub(cnt, cnt, MacroAssembler::zero_words_block_size);
+    __ bge(cnt, tmp1, loop);
+    __ bind(done);
+  }
+
+  // Unlike C2's zero_blocks stub, clear the tail here as well because the C
+  // ABI call cannot return the adjusted base and count in its arguments.
+  for (int i = MacroAssembler::zero_words_block_size >> 1; i > 1; i >>= 1) {
+    Label l;
+    __ test_bit(tmp1, cnt, exact_log2(i));
+    __ beqz(tmp1, l);
+    for (int j = 0; j < i; j++) {
+      __ sd(zr, Address(base, j * wordSize));
+    }
+    __ addi(base, base, i * wordSize);
+    __ bind(l);
+  }
+  {
+    Label l;
+    __ test_bit(tmp1, cnt, 0);
+    __ beqz(tmp1, l);
+    __ sd(zr, Address(base, 0));
+    __ bind(l);
+  }
+
+  __ ret();
+  masm->flush();
+
+  RuntimeStub* stub = RuntimeStub::new_runtime_stub(
+      _zero_heap_words_stub, &buffer, (int)(__ pc() - start),
+      0 /* frame size */, nullptr /* oop maps */, false);
+  address entry = stub->entry_point();
+  _routine_entry[_zero_heap_words_stub] = entry;
+  _gc_leaf_routines.insert(entry);
+}

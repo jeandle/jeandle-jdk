@@ -92,4 +92,52 @@ return_false:
   ret i1 false
 }
 
+
+
+; Platform-specific memory barriers expressed with LLVM fence semantics.
+; TSO lowers acquire/release fences to compiler ordering and seq_cst to the
+; target's full hardware fence.
+define hotspotcc void @jeandle.membar_loadload() noinline "lower-phase"="1" #0 {
+entry:
+  fence acquire
+  ret void
+}
+
+define hotspotcc void @jeandle.membar_loadstore() noinline "lower-phase"="1" #0 {
+entry:
+  fence acquire
+  ret void
+}
+
+define hotspotcc void @jeandle.membar_acquire() noinline "lower-phase"="1" #0 {
+entry:
+  fence acquire
+  ret void
+}
+
+define hotspotcc void @jeandle.membar_storestore() noinline "lower-phase"="1" #0 {
+entry:
+  fence release
+  ret void
+}
+
+define hotspotcc void @jeandle.membar_release() noinline "lower-phase"="1" #0 {
+entry:
+  fence release
+  ret void
+}
+
+define hotspotcc void @jeandle.membar_storeload() noinline "lower-phase"="1" #0 {
+entry:
+  fence seq_cst
+  ret void
+}
+
+define hotspotcc void @jeandle.membar_full() noinline "lower-phase"="1" #0 {
+entry:
+  fence seq_cst
+  ret void
+}
+
+
 attributes #0 = { nounwind "gc-leaf-function" }

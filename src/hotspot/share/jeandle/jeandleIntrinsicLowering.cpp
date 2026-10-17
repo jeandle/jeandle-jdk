@@ -54,6 +54,7 @@
 #include "runtime/vm_version.hpp"
 #include "utilities/globalDefinitions.hpp"
 
+#include <cstddef>
 #include <cstring>
 
 // =============================================================================
@@ -70,7 +71,8 @@ void annotate_call(llvm::CallBase* call,
 }
 
 void apply_memory_attr(llvm::CallBase* call, const CallSiteAttributeMetadata& attrs) {
-  if (attrs.needs_gc_state() || attrs.may_deopt() || attrs.needs_exception_edge()) {
+  if (attrs.needs_gc_state() || attrs.may_deopt() || attrs.needs_exception_edge() ||
+      attrs.observes_external_state()) {
     return;
   }
   const bool reads = attrs.reads_memory();
@@ -125,6 +127,11 @@ bool JeandleIntrinsicLowering::is_supported(vmIntrinsics::ID id) {
     case vmIntrinsics::_float16ToFloat:
       return VM_Version::supports_float16();
 
+    case vmIntrinsics::_writeback0:
+    case vmIntrinsics::_writebackPreSync0:
+    case vmIntrinsics::_writebackPostSync0:
+      return cpu_supports_cache_writeback();
+
     default: break;
   }
 
@@ -177,6 +184,10 @@ bool JeandleIntrinsicLowering::is_supported(vmIntrinsics::ID id) {
 
     // getClass
     case vmIntrinsics::_getClass:
+
+    // System time queries
+    case vmIntrinsics::_currentTimeMillis:
+    case vmIntrinsics::_nanoTime:
 
     // currentThread
     case vmIntrinsics::_currentThread:
@@ -288,6 +299,10 @@ bool JeandleIntrinsicLowering::is_supported(vmIntrinsics::ID id) {
     // hash code
     case vmIntrinsics::_hashCode:
     case vmIntrinsics::_identityHashCode:
+
+    // arrayequals
+    case vmIntrinsics::_equalsB:
+    case vmIntrinsics::_equalsC:
       return true;
 
     // Single-block SHA compression. Availability is checked again by the
@@ -453,6 +468,13 @@ bool JeandleIntrinsicLowering::lower(vmIntrinsics::ID id, const ciMethod* target
       return lower_java_op("jeandle.get_class",
                            {CTRL_NONE, MEM_READ});
 
+    case vmIntrinsics::_currentTimeMillis:
+      return lower_native_time_func(
+          JeandleRuntimeRoutine::os_javaTimeMillis_callee(_interp->_module));
+    case vmIntrinsics::_nanoTime:
+      return lower_native_time_func(
+          JeandleRuntimeRoutine::os_javaTimeNanos_callee(_interp->_module));
+
     // Thread.currentThread()
     case vmIntrinsics::_currentThread:
       return lower_java_op("jeandle.current_thread_obj",
@@ -516,6 +538,15 @@ bool JeandleIntrinsicLowering::lower(vmIntrinsics::ID id, const ciMethod* target
     case vmIntrinsics::_onSpinWait:
       return lower_spin_wait_hint();
 
+    // writeback0
+    case vmIntrinsics::_writeback0:
+      return lower_writeback0();
+
+    // writebackPreSync0 / writebackPostSync0
+    case vmIntrinsics::_writebackPreSync0:
+    case vmIntrinsics::_writebackPostSync0:
+      return lower_writeback_sync(id);
+
     // Preconditions
     case vmIntrinsics::_Preconditions_checkIndex:
       return lower_preconditions_check_index(T_INT);
@@ -568,6 +599,12 @@ bool JeandleIntrinsicLowering::lower(vmIntrinsics::ID id, const ciMethod* target
     case vmIntrinsics::_arraycopy:
       return lower_arraycopy();
 
+    // arraycopy
+    case vmIntrinsics::_equalsB:
+      return lower_arrayequals(T_BYTE);
+    case vmIntrinsics::_equalsC:
+      return lower_arrayequals(T_CHAR);
+
     case vmIntrinsics::_sha_implCompress:
     case vmIntrinsics::_sha2_implCompress:
     case vmIntrinsics::_sha5_implCompress:
@@ -592,6 +629,15 @@ bool JeandleIntrinsicLowering::lower(vmIntrinsics::ID id, const ciMethod* target
 // =============================================================================
 // Shared emit helpers
 // =============================================================================
+
+bool JeandleIntrinsicLowering::lower_native_time_func(llvm::FunctionCallee callee) {
+  static constexpr CallSiteAttributeMetadata attrs = {
+      CTRL_NONE, MEM_OBSERVES_EXTERNAL_STATE};
+  llvm::CallBase* result = emit_callsite(
+      callee, llvm::CallingConv::C, {}, attrs, /*is_gc_leaf_entry=*/true);
+  _interp->_jvm->lpush(result);
+  return true;
+}
 
 llvm::CallBase* JeandleIntrinsicLowering::emit_callsite(llvm::FunctionCallee callee,
                                                         llvm::CallingConv::ID cc,
@@ -1657,17 +1703,17 @@ bool JeandleIntrinsicLowering::lower_vectorized_mismatch() {
       byte_length, llvm::ConstantInt::get(i64, small_path_limit),
       "mismatch_inline_small");
 
-  const uint64_t medium_path_limit =
-      static_cast<uint64_t>(ArrayOperationPartialInlineSize);
-  const bool use_medium_path = supports_vectorized_mismatch_medium_path() &&
-                               medium_path_limit >= small_path_limit;
+  const uint64_t medium_path_limit = vectorized_mismatch_medium_path_limit();
+  const bool use_medium_path = medium_path_limit >= small_path_limit;
   llvm::BasicBlock* small_bb = llvm::BasicBlock::Create(ctx, "mismatch_inline_small", f);
   llvm::BasicBlock* dispatch_bb = llvm::BasicBlock::Create(ctx, "mismatch_dispatch_medium", f);
   llvm::BasicBlock* medium_bb = use_medium_path
       ? llvm::BasicBlock::Create(ctx, "mismatch_inline_medium", f) : nullptr;
   llvm::BasicBlock* stub_bb = llvm::BasicBlock::Create(ctx, "mismatch_stub", f);
   llvm::BasicBlock* done_bb = llvm::BasicBlock::Create(ctx, "mismatch_done", f);
-  b.CreateCondBr(is_small, small_bb, dispatch_bb);
+  // Weighted: small ranges dominate real call sites.
+  b.CreateCondBr(is_small, small_bb, dispatch_bb,
+                 llvm::MDBuilder(ctx).createBranchWeights(3, 1));
 
   // Tier 1: inline scalar IR for ranges shorter than 16 bytes.
   b.SetInsertPoint(small_bb);
@@ -1685,9 +1731,11 @@ bool JeandleIntrinsicLowering::lower_vectorized_mismatch() {
     llvm::Value* is_medium = b.CreateICmpULE(
         byte_length, llvm::ConstantInt::get(i64, medium_path_limit),
         "mismatch_inline_medium");
-    b.CreateCondBr(is_medium, medium_bb, stub_bb);
+    // Weighted: the stub is the cold fallback, like C2's PROB_MIN guard.
+    b.CreateCondBr(is_medium, medium_bb, stub_bb,
+                   llvm::MDBuilder(ctx).createBranchWeights(1023, 1));
 
-    // Tier 2: inline 128-bit vector IR up to ArrayOperationPartialInlineSize.
+    // Tier 2: inline 128-bit vector IR up to the platform medium limit.
     b.SetInsertPoint(medium_bb);
     medium_result = emit_vectorized_mismatch_medium(a_addr, b_addr, byte_length, scale64);
     medium_done_bb = b.GetInsertBlock();
@@ -2371,5 +2419,83 @@ bool JeandleIntrinsicLowering::lower_string_char_access(bool is_store) {
     _interp->_jvm->apop(); // value
     _interp->_jvm->ipush(result);
   }
+  return true;
+}
+
+// ---- lower_arrayequals ----
+bool JeandleIntrinsicLowering::lower_arrayequals(BasicType element_type) {
+  llvm::LLVMContext& ctx = *_interp->_context;
+  llvm::IRBuilder<>& b = _interp->_ir_builder;
+  llvm::Module& m = _interp->_module;
+
+  llvm::Value* left = _interp->_jvm->peek_value(1).value();
+  llvm::Value* right = _interp->_jvm->peek_value(0).value();
+
+  llvm::BasicBlock* current_bb = b.GetInsertBlock();
+  llvm::BasicBlock* null_bb = llvm::BasicBlock::Create(ctx, "null_check", current_bb->getParent());
+  llvm::BasicBlock* slow_bb = llvm::BasicBlock::Create(ctx, "slow_branch", current_bb->getParent());
+  llvm::BasicBlock* result_bb = llvm::BasicBlock::Create(ctx, "result", current_bb->getParent());
+
+  // ---------- if left == right ----------
+  llvm::Value* ptr_eq = b.CreateICmpEQ(left, right);
+  b.CreateCondBr(ptr_eq, result_bb, null_bb);
+
+  // ---------- if left == null || right == null ----------
+  b.SetInsertPoint(null_bb);
+
+  llvm::Value* null_const = llvm::ConstantPointerNull::get(llvm::cast<llvm::PointerType>(left->getType()));
+  llvm::Value* is_null_left = b.CreateICmpEQ(left, null_const);
+  llvm::Value* is_null_right = b.CreateICmpEQ(right, null_const);
+
+  llvm::Value* any_null = b.CreateOr(is_null_left, is_null_right);
+  b.CreateCondBr(any_null, result_bb, slow_bb);
+
+  // ---------- check array length ----------
+  b.SetInsertPoint(slow_bb);
+
+  llvm::Value* left_length = _interp->call_java_op("jeandle.arraylength", {left});
+  llvm::Value* right_length = _interp->call_java_op("jeandle.arraylength", {right});
+
+  llvm::Value* len_equals = b.CreateICmpEQ(left_length, right_length);
+  
+  llvm::BasicBlock* memcmp_bb = llvm::BasicBlock::Create(ctx, "memcmp", 
+                                            current_bb->getParent());
+
+  b.CreateCondBr(len_equals, memcmp_bb, result_bb);
+
+  // ---------- if len(left) == len(right) ----------
+  b.SetInsertPoint(memcmp_bb);
+
+  llvm::Value* array_base_offset = b.getInt32(arrayOopDesc::base_offset_in_bytes(element_type));
+  llvm::Value* left_array_base = b.CreatePtrAdd(left, array_base_offset, "left_array_element_base");
+  llvm::Value* right_array_base = b.CreatePtrAdd(right, array_base_offset, "right_array_element_base");
+
+  llvm::Value* element_byte_size = llvm::ConstantInt::get(left_length->getType(),type2aelembytes(element_type));
+  llvm::Value* left_byte_length = b.CreateMul(element_byte_size, left_length);
+  if (left_byte_length->getType() != b.getInt64Ty()) left_byte_length = b.CreateIntCast(left_byte_length, b.getInt64Ty(), false);
+
+
+  llvm::Value* memcmp_result = _interp->call_java_op("jeandle.memcmp", {left_array_base, right_array_base, left_byte_length});
+  llvm::Value* is_equal = b.CreateICmpEQ(memcmp_result, 
+                                        llvm::ConstantInt::get(memcmp_result->getType(), 0));  
+
+  b.CreateBr(result_bb);
+  
+  b.SetInsertPoint(result_bb);
+  _interp->_block->set_tail_llvm_block(result_bb);
+  llvm::PHINode* phi = b.CreatePHI(b.getInt1Ty(), 4);
+  phi->addIncoming(llvm::ConstantInt::getTrue(ctx), current_bb);  // left == right -> true
+  phi->addIncoming(llvm::ConstantInt::getFalse(ctx), null_bb);    // any null -> false
+  phi->addIncoming(llvm::ConstantInt::getFalse(ctx), slow_bb);    // len(left) != len(right) -> false
+  phi->addIncoming(is_equal, memcmp_bb);                          // memcmp(left_base, right_base) == 0 -> true
+
+  llvm::Value* result = b.CreateIntCast(phi, b.getInt32Ty(), false);
+
+  _interp->_jvm->apop(); // right
+  _interp->_jvm->apop(); // left
+
+
+  _interp->_jvm->push(T_BOOLEAN, result);
+  
   return true;
 }

@@ -47,15 +47,19 @@ bool JeandleIntrinsicLowering::cpu_supports_popcount() {
   return false;
 }
 
+bool JeandleIntrinsicLowering::cpu_supports_cache_writeback() {
+  return false;
+}
+
 bool JeandleIntrinsicLowering::cpu_supports_spin_wait() {
   // RISC-V PAUSE instruction requires the Zihintpause extension.
   // UseZihintpause is set by VM_Version when the hardware supports it.
   return UseZihintpause;
 }
 
-bool JeandleIntrinsicLowering::supports_vectorized_mismatch_medium_path() {
+uint64_t JeandleIntrinsicLowering::vectorized_mismatch_medium_path_limit() {
   // The RVV vector extension is optional and not yet wired up here.
-  return false;
+  return 0;
 }
 
 // =============================================================================
@@ -71,4 +75,12 @@ bool JeandleIntrinsicLowering::lower_spin_wait_hint() {
       llvm::Intrinsic::riscv_pause, llvm::ArrayRef<llvm::Type*>{}, {});
   // void return: nothing to push on the JVM operand stack
   return true;
+}
+
+bool JeandleIntrinsicLowering::lower_writeback0() {
+  return false;
+}
+
+bool JeandleIntrinsicLowering::lower_writeback_sync(vmIntrinsics::ID) {
+  return false;
 }

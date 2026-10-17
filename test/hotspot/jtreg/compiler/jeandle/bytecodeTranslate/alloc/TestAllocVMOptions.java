@@ -54,8 +54,14 @@ public class TestAllocVMOptions {
         public static void main(String[] args) {
             for (int i = 0; i < 10_000; i++) {
                 Obj obj = new Obj(i);
+                int[] array = new int[16 + (i & 15)];
+                array[0] = i;
+                array[array.length - 1] = ~i;
                 if (obj.a != i || obj.b != i * 2L || obj.c != i * 3.0 || !obj.d.equals("v" + i)) {
                     throw new RuntimeException("Field mismatch at iteration " + i);
+                }
+                if (array[0] != i || array[array.length - 1] != ~i) {
+                    throw new RuntimeException("Array mismatch at iteration " + i);
                 }
             }
             System.out.println("AllocWorker passed.");
@@ -82,6 +88,14 @@ public class TestAllocVMOptions {
         runWithOptions("large TLAB (SerialGC)", List.of("-XX:+UseSerialGC", "-XX:TLABSize=4m", "-XX:-ResizeTLAB"));
         runWithOptions("large TLAB (G1GC)", List.of("-XX:+UseG1GC", "-XX:TLABSize=512k", "-XX:-ResizeTLAB"));
 
+        // Test 7: Exercise every allocation prefetch policy for both objects and arrays
+        for (int style = 0; style <= 3; style++) {
+            runWithOptions("AllocatePrefetchStyle=" + style, List.of(
+                    "-XX:AllocatePrefetchStyle=" + style,
+                    "-XX:AllocatePrefetchDistance=192",
+                    "-XX:AllocatePrefetchStepSize=64"));
+        }
+
         System.out.println("All TestAllocVMOptions tests passed.");
     }
 
@@ -90,6 +104,7 @@ public class TestAllocVMOptions {
             "-Xcomp",
             "-XX:-TieredCompilation",
             "-XX:+UseJeandleCompiler",
+            "-XX:-JeandleDoPEA",
             "-XX:CompileCommand=compileonly,compiler.jeandle.bytecodeTranslate.alloc.TestAllocVMOptions$AllocWorker::*"
         ));
         cmdArgs.addAll(extraOpts);

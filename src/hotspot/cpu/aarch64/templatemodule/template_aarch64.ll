@@ -71,4 +71,52 @@ return_false:
   ret i1 false
 }
 
+
+declare void @llvm.aarch64.dmb(i32)
+
+; Platform-specific memory barriers. These named JavaOps mirror the C2
+; MemBar types and avoid carrying a numeric barrier mask through the IR.
+define hotspotcc void @jeandle.membar_loadload() noinline "lower-phase"="1" #0 {
+entry:
+  call void @llvm.aarch64.dmb(i32 9)
+  ret void
+}
+
+define hotspotcc void @jeandle.membar_loadstore() noinline "lower-phase"="1" #0 {
+entry:
+  call void @llvm.aarch64.dmb(i32 9)
+  ret void
+}
+
+define hotspotcc void @jeandle.membar_acquire() noinline "lower-phase"="1" #0 {
+entry:
+  call void @llvm.aarch64.dmb(i32 9)
+  ret void
+}
+
+define hotspotcc void @jeandle.membar_storestore() noinline "lower-phase"="1" #0 {
+entry:
+  call void @llvm.aarch64.dmb(i32 10)
+  ret void
+}
+
+define hotspotcc void @jeandle.membar_storeload() noinline "lower-phase"="1" #0 {
+entry:
+  call void @llvm.aarch64.dmb(i32 11)
+  ret void
+}
+
+define hotspotcc void @jeandle.membar_release() noinline "lower-phase"="1" #0 {
+entry:
+  call void @llvm.aarch64.dmb(i32 11)
+  ret void
+}
+
+define hotspotcc void @jeandle.membar_full() noinline "lower-phase"="1" #0 {
+entry:
+  call void @llvm.aarch64.dmb(i32 11)
+  ret void
+}
+
+
 attributes #0 = { nounwind "gc-leaf-function" }
