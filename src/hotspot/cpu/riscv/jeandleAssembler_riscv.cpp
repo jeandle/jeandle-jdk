@@ -452,6 +452,23 @@ bool JeandleAssembler::shares_runtime_call_trampolines() {
   return CodeBuffer::supports_shared_stubs();
 }
 
+bool JeandleAssembler::entry_barrier_calls_runtime_stub() {
+  // JeandleEntryBarrierStub::emit() above loads the barrier routine with movptr + jalr,
+  // which relocates nothing; the guard word below it is the record.
+  return false;
+}
+
+bool JeandleAssembler::static_call_stub_has_metadata_record() {
+  // MacroAssembler::emit_static_call_stub() starts with mov_metadata(xmethod, nullptr),
+  // which relocates with metadata_type (macroAssembler_riscv.cpp).
+  return true;
+}
+
+bool JeandleAssembler::static_call_stub_has_runtime_call_record() {
+  // The rest of that stub is movptr + jalr over a plain address: no relocation record.
+  return false;
+}
+
 // Unlike x86_64 and AArch64, RISC-V does not fall back to the generic packing:
 // pd_pack_data_to() writes the record's own fields (relocInfo_riscv.cpp), including the
 // `_rel_offset` that a R_RISCV_PCREL_LO12_I edge carries relative to its HI20 partner -

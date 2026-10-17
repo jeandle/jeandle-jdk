@@ -413,6 +413,24 @@ bool JeandleAssembler::shares_runtime_call_trampolines() {
   return CodeBuffer::supports_shared_stubs();
 }
 
+bool JeandleAssembler::entry_barrier_calls_runtime_stub() {
+  // JeandleEntryBarrierStub::emit() above reaches the barrier routine with
+  // movptr + blr, which relocates nothing; the guard word is the record.
+  return false;
+}
+
+bool JeandleAssembler::static_call_stub_has_metadata_record() {
+  // emit_static_call_stub() above calls __ mov_metadata(rmethod, nullptr), which
+  // relocates with metadata_type (macroAssembler_aarch64.cpp).
+  return true;
+}
+
+bool JeandleAssembler::static_call_stub_has_runtime_call_record() {
+  // The stub then does movptr(rscratch1, 0) + br(rscratch1) over a plain address: no
+  // relocation record, unlike x86_64's jump through a RuntimeAddress.
+  return false;
+}
+
 // As on x86_64, relocInfo_aarch64.cpp's pd_pack_data_to() returns false for all three
 // jeandle types, so their payload is written by the base classes - pack_2_ints_to(), at
 // most 4 halfwords per record.

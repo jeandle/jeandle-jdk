@@ -110,6 +110,16 @@
           "Size CodeBuffer stubs section from exact stackmap and LinkGraph "\
           "call site model instead of legacy fixed stubs reserve.")         \
                                                                             \
+  product(bool, JeandleExactLocs, true,                                     \
+          "Size each CodeBuffer relocation array (locs) from the Jeandle "  \
+          "relocation record model instead of HotSpot's fixed heuristic. "  \
+          "Turn off to A/B the legacy provisioning, which grows the array " \
+          "by repeated CodeSection::expand_locs() reallocations.")          \
+                                                                            \
+  develop(bool, JeandleTraceRelocRecords, false,                            \
+          "Print one line per compiled method with its relocation record "  \
+          "census by relocInfo type and section.")                          \
+                                                                            \
                                                                             // end of JEANDLE_FLAGS
 
 DECLARE_FLAGS(JEANDLE_FLAGS)

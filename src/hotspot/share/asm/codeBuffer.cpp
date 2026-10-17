@@ -119,6 +119,11 @@ void CodeBuffer::initialize(csize_t code_size, csize_t locs_size) {
 
   if (locs_size != 0) {
     _insts.initialize_locs(locs_size / sizeof(relocInfo));
+  } else if (_locs_capacity[SECT_INSTS] != 0) {
+    // Jeandle asks for the relocation capacity per section instead of mixing it into
+    // the code size argument; a request for insts only takes effect when the legacy
+    // locs_size argument was not given, so no existing caller changes behaviour.
+    _insts.initialize_locs(_locs_capacity[SECT_INSTS] / sizeof(relocInfo));
   }
 
   if (CodeBufferInstrumentation::enabled()) {
@@ -193,7 +198,20 @@ void CodeBuffer::initialize_section_size(CodeSection* cs, csize_t size) {
   assert(cs->start() == middle, "sanity");
   assert(cs->limit() == limit,  "sanity");
   // give it some relocations to start with, if the main section has them
-  if (_insts.has_locs())  cs->initialize_locs(1);
+  if (_insts.has_locs()) {
+    // A secondary section starts with one record slot, which initialize_locs
+    // floors to four (the insts section gets eight). relocate() demands relocInfo::length_
+    // limit (15) free slots before it writes anything, so 4 or 8 slots are not
+    // enough: the first record reallocates the array in any compilation whose
+    // section receives a record. A compiler that knows how many records it will emit can ask
+    // for that many up front.
+    // The request array is in BYTES (see set_locs_capacity); initialize_locs() takes
+    // ELEMENTS - it allocates NEW_RESOURCE_ARRAY(relocInfo, n) and sets
+    // _locs_limit = _locs_start + n. The insts path in CodeBuffer::initialize()
+    // divides for exactly that reason; the same division here keeps the secondary
+    // sections at the relocation array size the record model asks for.
+    cs->initialize_locs(_locs_capacity[cs->index()] / sizeof(relocInfo));
+  }
 }
 
 void CodeBuffer::set_blob(BufferBlob* blob) {

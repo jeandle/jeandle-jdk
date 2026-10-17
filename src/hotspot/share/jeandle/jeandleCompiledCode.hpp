@@ -179,12 +179,6 @@ struct JeandleDeferredVORefField {
   int voref_id;
 };
 
-// Every capacity decision for one CodeBuffer installation.
-//
-// This struct has six core fields, plus the
-// fields needed to make each allocation decision *explainable* afterwards:
-// if we allocated exactly, we must also be able to say which plan produced
-// the size and what its padding was.
 // What one compilation will relocate, counted once and read by two reservations.
 //
 // The stubs section and the locs section are both sized from the same
@@ -231,6 +225,12 @@ struct JeandleCallSiteCensus {
   }
 };
 
+// Every capacity decision for one CodeBuffer installation.
+//
+// This struct has six core fields, plus the
+// fields needed to make each allocation decision *explainable* afterwards:
+// if we allocated exactly, we must also be able to say which plan produced
+// the size and what its padding was.
 struct InstallLayoutCore {
   size_t insts_payload;      // ELF text size plus the runtime prolog reserve
   size_t consts_payload;     // exact size from ConstSectionPlan, or legacy 48 KiB
@@ -317,6 +317,13 @@ class JeandleCompiledCode : public StackObj {
                       _planned_consts_size(-1),
                       _planned_stubs_size(-1),
                       _plan_status("Unplanned"),
+                      _planned_locs_records{ -1, -1, -1 },
+                      _planned_locs_kinds{ { 0 } },
+                      _planned_locs_elements{ 0, 0, 0 },
+                      _planned_locs_bytes{ -1, -1, -1 },
+                      _locs_plan_status("NotComputed"),
+                      _used_exact_locs(false),
+                      _locs_planned(false),
                       _oop_handles(),
                       _oop_handle_ids(),
                       _oop_handle_info(),
@@ -357,6 +364,13 @@ class JeandleCompiledCode : public StackObj {
                       _planned_consts_size(-1),
                       _planned_stubs_size(-1),
                       _plan_status("Unplanned"),
+                      _planned_locs_records{ -1, -1, -1 },
+                      _planned_locs_kinds{ { 0 } },
+                      _planned_locs_elements{ 0, 0, 0 },
+                      _planned_locs_bytes{ -1, -1, -1 },
+                      _locs_plan_status("NotComputed"),
+                      _used_exact_locs(false),
+                      _locs_planned(false),
                       _oop_handles(),
                       _oop_handle_ids(),
                       _oop_handle_info(),
@@ -479,6 +493,20 @@ class JeandleCompiledCode : public StackObj {
   int64_t _planned_consts_size; // -1 when the planner was not used
   int64_t _planned_stubs_size;  // -1 when the planner was not used
   const char* _plan_status;
+  // Locs telemetry for one finalize() invocation. `_planned_locs_bytes[n] < 0`
+  // means the record model did not size that section and HotSpot's heuristic was used.
+  int    _planned_locs_records[CodeBuffer::SECT_LIMIT];
+  // Per-kind detail of the same plan, kept so that a planned/actual mismatch can name the
+  // relocInfo type it missed instead of only the size of the gap.
+  int    _planned_locs_kinds[CodeBuffer::SECT_LIMIT][relocInfo::type_mask + 1];
+  size_t _planned_locs_elements[CodeBuffer::SECT_LIMIT];
+  int64_t _planned_locs_bytes[CodeBuffer::SECT_LIMIT];
+  const char* _locs_plan_status;
+  bool _used_exact_locs;
+  // True when a relocation plan was computed at all, whether or not it was applied: the
+  // A/B arm applies nothing but still reports what the model would have asked for, which
+  // is what keeps the two arms doing the same work and printing the same lines.
+  bool _locs_planned;
   // Oop handles maintainer:
   llvm::StringMap<jobject> _oop_handles;                // name -> jobject
   llvm::DenseMap<jobject, int> _oop_handle_ids;         // jobject -> id
@@ -532,6 +560,11 @@ class JeandleCompiledCode : public StackObj {
   // resolve the same edges and records; returns false when the object cannot be inspected
   // at all, which puts the whole layout decision on the legacy path.
   bool collect_call_site_census(JeandleCallSiteCensus& census);
+
+  // Exact upper bound estimator for the locs section of each CodeBuffer section.
+  void plan_locs_capacity(const JeandleCallSiteCensus& census,
+                          InstallLayoutCore& layout,
+                          size_t insts_size, size_t consts_size, size_t stubs_size);
 
   // Records allocate/expand/finalize telemetry for this compilation.
   // `layout` is the decision that produced the buffer being reported, so that the planned

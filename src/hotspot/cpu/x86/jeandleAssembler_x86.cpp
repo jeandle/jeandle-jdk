@@ -401,6 +401,23 @@ bool JeandleAssembler::shares_runtime_call_trampolines() {
   return false;
 }
 
+bool JeandleAssembler::entry_barrier_calls_runtime_stub() {
+  // JeandleEntryBarrierStub::emit() above: `call(RuntimeAddress(method_entry_barrier))`,
+  // which relocates the call site with runtime_call_type.
+  return true;
+}
+
+bool JeandleAssembler::static_call_stub_has_metadata_record() {
+  // emit_static_call_stub() above ends with __ mov_metadata(rbx, nullptr), which
+  // relocates the immediate with metadata_type (macroAssembler_x86.cpp).
+  return true;
+}
+
+bool JeandleAssembler::static_call_stub_has_runtime_call_record() {
+  // ... and with __ jump(RuntimeAddress(__ pc())), whose RuntimeAddress rspec relocates too.
+  return true;
+}
+
 // The three jeandle relocation types are packed by the generic implementations here:
 // relocInfo_x86.cpp's pd_pack_data_to() returns false for all of them, so the record
 // payload is what the base class writes - pack_2_ints_to(), at most 4 halfwords.

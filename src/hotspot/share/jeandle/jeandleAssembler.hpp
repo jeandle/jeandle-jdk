@@ -124,6 +124,19 @@ class JeandleAssembler : public StackObj {
   static bool shares_runtime_call_trampolines();
   static bool runtime_call_needs_trampoline(address target);
 
+  // Whether the deferred nmethod entry barrier stub reaches its runtime routine
+  // through a pc-relative call (which relocates) or by loading an address into a register
+  // (which does not).
+  static bool entry_barrier_calls_runtime_stub();
+
+  // Which relocation records the body of one static-call stub emits, on top of the
+  // static_stub record that JeandleAssembler::emit_static_call_stub() writes explicitly.
+  // Every architecture loads a method oop into a register there (a metadata record); x86_64
+  // additionally ends the stub with a jump through a RuntimeAddress (a runtime_call record),
+  // while RISC-V and AArch64 build the target address without relocating.
+  static bool static_call_stub_has_metadata_record();
+  static bool static_call_stub_has_runtime_call_record();
+
  private:
   MacroAssembler* _masm;
 

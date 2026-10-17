@@ -445,6 +445,12 @@ class CodeBuffer: public StackObj DEBUG_ONLY(COMMA private Scrubber) {
 
   int          _const_section_alignment;
 
+  // Relocation-array capacity requested for each section, in bytes; 0 means "use the
+  // built-in heuristic", which is what every non-Jeandle compiler does. HotSpot sizes
+  // the consts/stubs locs arrays with a hardcoded `initialize_locs(1)` (floored to four
+  // records), so a section that carries more than one relocation always reallocates.
+  // See CodeBuffer::initialize() and CodeBuffer::initialize_section_size().
+  csize_t      _locs_capacity[SECT_LIMIT];
 
 #ifndef PRODUCT
   // Relocation record census.
@@ -521,6 +527,9 @@ class CodeBuffer: public StackObj DEBUG_ONLY(COMMA private Scrubber) {
     _finalize_stubs  = false;
     _shared_stub_to_interp_requests = nullptr;
     _shared_trampoline_requests = nullptr;
+    for (int n = 0; n < (int)SECT_LIMIT; n++) {
+      _locs_capacity[n] = 0;
+    }
 
     _consts.initialize_outer(this, SECT_CONSTS);
     _insts.initialize_outer(this,  SECT_INSTS);
@@ -812,6 +821,19 @@ class CodeBuffer: public StackObj DEBUG_ONLY(COMMA private Scrubber) {
 
   void set_const_section_alignment(int align) {
     _const_section_alignment = align_up(align, HeapWordSize);
+  }
+
+  // Request the relocation-array capacity of one section, in bytes. Must run before
+  // initialize(): the arrays are allocated once, from the requested sizes. A section
+  // that gets no request keeps HotSpot's built-in heuristic, so this is purely additive
+  // for every other compiler.
+  void set_locs_capacity(int section, csize_t bytes) {
+    assert(section >= (int)SECT_FIRST && section < (int)SECT_LIMIT, "must be a section");
+    _locs_capacity[section] = bytes;
+  }
+  csize_t locs_capacity_request(int section) const {
+    assert(section >= (int)SECT_FIRST && section < (int)SECT_LIMIT, "must be a section");
+    return _locs_capacity[section];
   }
 
 #ifndef PRODUCT
