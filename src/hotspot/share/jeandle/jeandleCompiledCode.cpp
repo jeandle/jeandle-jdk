@@ -359,6 +359,19 @@ void JeandleCompiledCode::finalize() {
     }
   }
 
+  assert(!_used_exact_allocation || (size_t)_code_buffer.stubs()->size() <= layout.planned_stubs,
+         "stubs size %d must not exceed planned stubs payload %zu",
+         _code_buffer.stubs()->size(), layout.planned_stubs);
+
+  if (CodeBufferInstrumentation::enabled()) {
+    size_t actual_stubs = (size_t)_code_buffer.stubs()->size();
+    size_t saved_stubs = (LEGACY_STUBS_SIZE > layout.stubs_payload) ? (LEGACY_STUBS_SIZE - layout.stubs_payload) : 0;
+    tty->print_cr("[JeandleStubsPlan] method=%s planned_stubs=%zu actual_stubs=%zu legacy_stubs=%zu static_calls=%zu external_calls=%zu has_mh=%d saved_stubs=%zu",
+                  _func_name.c_str(), layout.planned_stubs, actual_stubs,
+                  LEGACY_STUBS_SIZE, layout.planned_static_calls, layout.planned_external_calls,
+                  layout.has_mh_invoke ? 1 : 0, saved_stubs);
+  }
+
   finalize_telemetry.record();
 }
 
@@ -366,14 +379,10 @@ void JeandleCompiledCode::resolve_reloc_info(JeandleAssembler& assembler) {
   llvm::SmallVector<JeandleReloc*> relocs;
 
   // Step 1: Resolve LinkGraph.
-  auto ssp = std::make_shared<llvm::orc::SymbolStringPool>();
+  llvm::jitlink::LinkGraph* link_graph = shared_link_graph();
+  JEANDLE_ERROR_ASSERT_AND_RET_VOID_ON_FAIL(link_graph != nullptr, "failed to create LinkGraph");
 
-  auto graph_or_err = llvm::jitlink::createLinkGraphFromObject(_elf->getMemoryBufferRef(), ssp);
-  JEANDLE_ERROR_ASSERT_AND_RET_VOID_ON_FAIL(graph_or_err, "failed to create LinkGraph");
-
-  auto link_graph = std::move(*graph_or_err);
-
-  if (!pd_resolve_reloc(assembler, relocs, link_graph.get())) {
+  if (!pd_resolve_reloc(assembler, relocs, link_graph)) {
     for (auto *block : link_graph->blocks()) {
       // Resolve relocations in the compiled code and constant pool.
       if (block->getSection().getName().compare(".text") != 0 &&
@@ -456,7 +465,7 @@ void JeandleCompiledCode::resolve_reloc_info(JeandleAssembler& assembler) {
 
   // Step 2: Resolve stackmaps.
   SectionInfo section_info(".llvm_stackmaps");
-  if (ReadELF::findSection(*_elf, section_info)) {
+  if (find_section_cached(".llvm_stackmaps", section_info)) {
     StackMapParser stackmaps(llvm::ArrayRef(((uint8_t*)object_start()) + section_info._offset, section_info._size));
     for (auto record = stackmaps.records_begin(); record != stackmaps.records_end(); ++record) {
       assert(_prolog_length != -1, "prolog length must be initialized");
@@ -599,6 +608,322 @@ size_t JeandleCompiledCode::post_insts_stubs_upper_bound() {
   return 0;
 }
 
+// ---------------------------------------------------------------------------
+// One LinkGraph per compilation & section cache
+// ---------------------------------------------------------------------------
+llvm::jitlink::LinkGraph* JeandleCompiledCode::shared_link_graph() {
+  if (_link_graph != nullptr) {
+    return _link_graph.get();
+  }
+  if (_elf == nullptr) {
+    return nullptr;
+  }
+  if (!_link_graph_ssp) {
+    _link_graph_ssp = std::make_shared<llvm::orc::SymbolStringPool>();
+  }
+  auto graph_or_err = llvm::jitlink::createLinkGraphFromObject(_elf->getMemoryBufferRef(), _link_graph_ssp);
+  if (!graph_or_err) {
+    llvm::consumeError(graph_or_err.takeError());
+    return nullptr;
+  }
+  _link_graph = std::move(*graph_or_err);
+  return _link_graph.get();
+}
+
+bool JeandleCompiledCode::find_section_cached(llvm::StringRef name, SectionInfo& section_info) {
+  if (!_section_cache_built) {
+    if (_elf == nullptr) {
+      return false;
+    }
+    for (auto sec = _elf->section_begin(); sec != _elf->section_end(); ++sec) {
+      llvm::Expected<llvm::StringRef> cur_name = sec->getName();
+      if (!cur_name) {
+        llvm::consumeError(cur_name.takeError());
+        continue;
+      }
+      if (llvm::any_of(_section_cache, [&](const SectionInfo& info) {
+            return info._name == *cur_name;
+          })) {
+        continue;
+      }
+      SectionInfo info(*cur_name);
+      info._offset = _elf->getSection(sec->getRawDataRefImpl())->sh_offset;
+      info._size = sec->getSize();
+      info._alignment = sec->getAlignment().value();
+      _section_cache.push_back(info);
+    }
+    _section_cache_built = true;
+  }
+  for (const SectionInfo& info : _section_cache) {
+    if (info._name == name) {
+      section_info = info;
+      return true;
+    }
+  }
+  return false;
+}
+
+// ---------------------------------------------------------------------------
+// One census, two reservations
+// ---------------------------------------------------------------------------
+//
+// Walks the object's LinkGraph edges and its LLVM stackmap records and counts what the
+// installation is going to relocate. The classification is written to mirror
+// resolve_reloc_info() step for step - same block filter, same predicate order, same
+// fall-through rules - because the census is only useful as an upper bound if it cannot
+// miss a record the resolver will later emit. Where the two could drift, the census
+// over-counts and says so: unexplained edges and unmapped stackmap records are recorded
+// separately and make the locs plan refuse.
+//
+// This pass includes the LinkGraph build, so there is no separate
+// count_external_calls() walk building its own LinkGraph to ask one
+// question of it.
+bool JeandleCompiledCode::collect_call_site_census(JeandleCallSiteCensus& census) {
+  if (_elf == nullptr) {
+    return false;
+  }
+
+  llvm::jitlink::LinkGraph* link_graph = shared_link_graph();
+  if (link_graph == nullptr) {
+    return false;
+  }
+
+  // Edge census. RISC-V classifies its edges through pd_resolve_reloc(), which pairs every
+  // R_RISCV_PCREL_LO12_I edge with the HI20 edge it refers to before deciding what the
+  // pair means; x86_64 and AArch64 classify each edge on its own. The two walks therefore
+  // live next to the two resolvers and are selected the same way resolve_reloc_info()
+  // selects them, so a drift between resolver and census is a compile-time mismatch, not
+  // an under-provisioned array.
+  if (!pd_collect_call_site_census(link_graph, census)) {
+    for (auto* block : link_graph->blocks()) {
+      const llvm::StringRef block_name = block->getSection().getName();
+      if (block_name.compare(".text") != 0 &&
+          !block_name.starts_with(".data.rel.ro") &&
+          !block_name.starts_with(".rodata")) {
+        continue;
+      }
+      for (auto& edge : block->edges()) {
+        auto& target = edge.getTarget();
+        if (JeandleAssembler::is_routine_call_reloc(target, edge.getKind())) {
+          census._routine_call_sites++;
+        } else if (JeandleAssembler::is_external_call_reloc(target, edge.getKind())) {
+          census._external_call_sites++;
+        } else if (JeandleAssembler::is_section_word_reloc(target, edge.getKind())) {
+          // Which section the record lands in follows the resolver: a reference from code
+          // to a constant is relocated in insts, a constant pointing back at code in consts.
+          if (block_name.compare(".text") == 0) {
+            census._section_word_insts++;
+          } else {
+            census._section_word_consts++;
+          }
+        } else if (JeandleAssembler::is_oop_reloc(target, edge.getKind())) {
+          census._oop_relocs++;
+        } else if (JeandleAssembler::is_oop_addr_reloc(target, edge.getKind())) {
+          census._oop_addr_relocs++;
+        } else {
+          // The resolver would reach ShouldNotReachHere() on this edge. Counting it as
+          // unexplained keeps the census honest instead of optimistically silent.
+          census._unclassified_edges++;
+        }
+      }
+    }
+  }
+
+  // Distinct shared-trampoline targets on the LinkGraph path.
+  // Restricted to platforms that branch far (e.g. RISC-V): only there does
+  // trampoline_call() emit (and share) runtime trampolines.
+  const bool count_shared_targets = JeandleAssembler::needs_trampoline_branches() &&
+                                    JeandleAssembler::shares_runtime_call_trampolines();
+  if (count_shared_targets) {
+    llvm::SmallVector<llvm::StringRef, 8> tramp_names;
+    llvm::SmallVector<address, 8> routine_seen;
+    auto note_name = [&](llvm::StringRef n) {
+      if (std::find(tramp_names.begin(), tramp_names.end(), n) == tramp_names.end()) {
+        tramp_names.push_back(n);
+      }
+    };
+    for (auto* block : link_graph->blocks()) {
+      if (block->getSection().getName().compare(".text") != 0) {
+        continue;
+      }
+      for (auto& edge : block->edges()) {
+        auto& target = edge.getTarget();
+        if (!target.hasName()) {
+          continue;
+        }
+        const llvm::StringRef name = *(target.getName());
+        if (JeandleAssembler::is_routine_call_reloc(target, edge.getKind())) {
+          address entry = JeandleRuntimeRoutine::get_routine_entry(name);
+          if (std::find(routine_seen.begin(), routine_seen.end(), entry) == routine_seen.end()) {
+            routine_seen.push_back(entry);
+            if (JeandleAssembler::runtime_call_needs_trampoline(entry)) {
+              note_name(name);
+            }
+          }
+        } else if (JeandleAssembler::is_external_call_reloc(target, edge.getKind())) {
+          note_name(name);
+        }
+      }
+    }
+    census._shared_trampoline_targets = (int)tramp_names.size();
+  }
+
+  // Stackmap records: one record per physically emitted statepoint call. This is the
+  // The bytecode-level count is not the machine-code count, because LLVM
+  // unrolls loops, duplicates tail calls and inlines, and every copy gets its own record.
+  SectionInfo section_info(".llvm_stackmaps");
+  if (find_section_cached(".llvm_stackmaps", section_info)) {
+    StackMapParser stackmaps(llvm::ArrayRef(((uint8_t*)object_start()) + section_info._offset,
+                                            section_info._size));
+    for (auto record = stackmaps.records_begin(); record != stackmaps.records_end(); ++record) {
+      const int inst_end_offset = static_cast<int>(record->getInstructionOffset());
+      CallSiteInfo* call_info = nullptr;
+      if (record->getID() < _non_routine_call_sites.size()) {
+        call_info = _non_routine_call_sites[record->getID()];
+      } else if (record->getID() != llvm::StatepointDirectives::DefaultStatepointID) {
+        // A record this compilation cannot attribute to a call site. Treat those
+        // as potential static calls for the stubs bound; the locs plan refuses outright,
+        // because an unattributable record has no size it could be counted against.
+        census._unmapped_records++;
+        continue;
+      } else {
+        call_info = _routine_call_sites[inst_end_offset];
+      }
+      if (call_info == nullptr) {
+        continue;
+      }
+      if (call_info->is_method_handle_invoke()) {
+        census._has_method_handle_invoke = true;
+      }
+      switch (call_info->type()) {
+        case JeandleCompiledCall::STATIC_CALL:
+          // patch_static_call_site() picks the reloc type from the resolver stub, and the
+          // site is known here: a call of the opt-virtual resolver becomes an
+          // opt_virtual_call_Relocation instead of a static_call_Relocation.
+          if (call_info->target() == SharedRuntime::get_resolve_opt_virtual_call_stub()) {
+            census._opt_virtual_call_sites++;
+          } else {
+            census._static_call_sites++;
+          }
+          break;
+        case JeandleCompiledCall::DYNAMIC_CALL:
+          census._virtual_call_sites++;
+          break;
+        case JeandleCompiledCall::ROUTINE_CALL:
+          // Already counted from the edges: every routine call site produces exactly one
+          // record whether the reloc is created during the edge walk or here.
+          break;
+        case JeandleCompiledCall::EXTERNAL_CALL:
+          census._external_call_sites++;
+          break;
+        case JeandleCompiledCall::STUB_C_CALL:
+          census._stub_c_call_sites++;
+          break;
+        default:
+          census._unmapped_records++;
+          break;
+      }
+    }
+  } else if (!_non_routine_call_sites.empty()) {
+    // No stackmap section but call sites exist: fall back to the bytecode-level count,
+    // and refuse to plan locs from it.
+    for (const CallSiteInfo* call : _non_routine_call_sites) {
+      if (call == nullptr) {
+        continue;
+      }
+      if (call->is_method_handle_invoke()) {
+        census._has_method_handle_invoke = true;
+      }
+      switch (call->type()) {
+        case JeandleCompiledCall::STATIC_CALL:
+          census._static_call_sites++;
+          break;
+        case JeandleCompiledCall::DYNAMIC_CALL:
+          census._virtual_call_sites++;
+          break;
+        default:
+          break;
+      }
+    }
+    census._unmapped_records++;
+  }
+
+  if (_has_method_handle_invoke) {
+    census._has_method_handle_invoke = true;
+  }
+  return true;
+}
+
+size_t JeandleCompiledCode::stubs_upper_bound(const JeandleCallSiteCensus& census,
+                                              size_t& static_calls, size_t& external_calls,
+                                              bool& has_mh) {
+  // These numbers come from collect_call_site_census(), because the locs
+  // reservation needs exactly the same counts from the LLVM stackmap section
+  // and the LinkGraph edges; one compilation walks the object once
+  // instead of twice, and the two reservations cannot drift apart on a counting rule.
+  //
+  // Unmapped stackmap records are folded into static_calls: an
+  // unattributable statepoint may still be a static call, and a stub is cheap.
+  static_calls  = (size_t)census._static_call_sites + (size_t)census._opt_virtual_call_sites +
+                  (size_t)census._unmapped_records;
+  external_calls = (size_t)census._external_call_sites;
+  has_mh = census._has_method_handle_invoke;
+
+  // If this is a non-method compilation (_method == nullptr), protect against under-reservation
+  if (_method == nullptr) {
+    size_t unmodeled = (size_t)LEGACY_STUBS_SIZE;
+    size_t computed = static_calls * (size_t)JeandleAssembler::static_call_stub_upper_bound() +
+                      external_calls * (size_t)JeandleAssembler::trampoline_call_stub_upper_bound();
+    return align_up(MAX2(unmodeled, computed), (size_t)CodeEntryAlignment);
+  }
+
+  size_t total = 0;
+  total += (size_t)JeandleAssembler::exception_handler_upper_bound();
+  total += (size_t)JeandleAssembler::deopt_handler_upper_bound();
+  if (has_mh) {
+    total += (size_t)JeandleAssembler::deopt_handler_upper_bound();
+  }
+
+  total += static_calls * (size_t)JeandleAssembler::static_call_stub_upper_bound();
+  total += external_calls * (size_t)JeandleAssembler::trampoline_call_stub_upper_bound();
+
+  // Note (statically derived, not yet measured on target): on the
+  // architectures that branch far, patching a call site is not only a stub-to-interpreter
+  // entry but also a trampoline - MacroAssembler::trampoline_call() emits one stub per call
+  // whenever far_branches() holds, for static, virtual, runtime and external calls alike.
+  // Reserving that space only for external calls would be right on x86_64 (no far
+  // branches there, so needs_trampoline_branches() is false and this term vanishes) and too
+  // small on RISC-V and AArch64. Routine calls share one trampoline per target, so this is
+  // deliberately an over-estimate for them: the census counts callers, not targets.
+  if (JeandleAssembler::needs_trampoline_branches()) {
+    size_t trampolines;
+    if (census._shared_trampoline_targets >= 0 && JeandleAssembler::shares_runtime_call_trampolines()) {
+      trampolines = static_calls +
+                    (size_t)census._virtual_call_sites +
+                    (size_t)census._shared_trampoline_targets;
+    } else {
+      trampolines = static_calls +
+                    (size_t)census._virtual_call_sites +
+                    (size_t)census._routine_call_sites +
+                    external_calls;
+    }
+    total += trampolines * (size_t)JeandleAssembler::trampoline_call_stub_upper_bound();
+  }
+
+  if (census._unmapped_records > 0) {
+    total = MAX2(total, (size_t)LEGACY_STUBS_SIZE);
+    if (JeandleCodeBufferInstrument) {
+      tty->print_cr("[JeandleStubsPlan] Warning: method=%s has %d unmapped stackmap records, applied legacy fallback",
+                    _func_name.c_str(), census._unmapped_records);
+    }
+  }
+
+  if (total > 0) {
+    total = align_up(total, (size_t)CodeEntryAlignment);
+  }
+  return total;
+}
+
 void JeandleCompiledCode::decide_install_layout(uint64_t elf_text_size,
                                                 uint64_t func_align,
                                                 InstallLayoutCore& layout) {
@@ -615,6 +940,14 @@ void JeandleCompiledCode::decide_install_layout(uint64_t elf_text_size,
   layout.plan_status          = "legacy";
 
   ConstLayoutStats::record_method();
+
+  // One walk over the object's edges and stackmap records, shared by the stubs
+  // reservation below. Computed only when stubs exact planning is active.
+  JeandleCallSiteCensus census;
+  bool census_ok = false;
+  if (JeandleExactStubs) {
+    census_ok = collect_call_site_census(census);
+  }
 
   // Consts base alignment the planner may assume.
   //
@@ -688,7 +1021,7 @@ void JeandleCompiledCode::decide_install_layout(uint64_t elf_text_size,
     _planned_alignment     = layout.planned_alignment;
     _planned_entries       = layout.planned_entries;
     _plan_status           = layout.plan_status;
-    _used_exact_allocation = plan_ok;
+    _used_exact_allocation = plan_ok && JeandleExactInsts && JeandleExactStubs;
 
     // Tightened insts capacity model using exact mathematical upper bound
     if (JeandleExactInsts) {
@@ -701,6 +1034,27 @@ void JeandleCompiledCode::decide_install_layout(uint64_t elf_text_size,
       layout.planned_prolog = INSTS_PROLOG_RESERVE;
       layout.planned_post_stubs = 0;
       layout.insts_payload = (size_t)elf_text_size + INSTS_PROLOG_RESERVE;
+    }
+
+    // Tightened stubs capacity model using exact mathematical upper bound
+    if (JeandleExactStubs) {
+      size_t static_calls = 0;
+      size_t external_calls = 0;
+      bool has_mh = false;
+      size_t exact_stubs = stubs_upper_bound(census, static_calls, external_calls, has_mh);
+      layout.planned_stubs = exact_stubs;
+      layout.stubs_payload = exact_stubs;
+      layout.planned_static_calls = static_calls;
+      layout.planned_external_calls = external_calls;
+      layout.has_mh_invoke = has_mh;
+      _planned_stubs_size = (int64_t)exact_stubs;
+    } else {
+      layout.planned_stubs = LEGACY_STUBS_SIZE;
+      layout.stubs_payload = LEGACY_STUBS_SIZE;
+      layout.planned_static_calls = 0;
+      layout.planned_external_calls = 0;
+      layout.has_mh_invoke = false;
+      _planned_stubs_size = (int64_t)LEGACY_STUBS_SIZE;
     }
 
     ConstLayoutStats::record_exact(layout.consts_payload);
@@ -951,7 +1305,7 @@ address JeandleCompiledCode::lookup_const_section_fallback(llvm::StringRef name,
   }
 
   SectionInfo section_info(name);
-  bool found = ReadELF::findSection(*_elf, section_info);
+  bool found = find_section_cached(name, section_info);
   JEANDLE_ERROR_ASSERT_AND_RET_ON_FAIL(found, "const section not found, bad ELF file", nullptr);
 
   address target_base = _code_buffer.consts()->end();
@@ -1671,7 +2025,7 @@ JeandleStackMap* JeandleCompiledCode::parse_stackmap(StackMapParser& stackmaps,
 
 void JeandleCompiledCode::build_exception_handler_table() {
   SectionInfo except_table_section(".gcc_except_table");
-  if (ReadELF::findSection(*_elf, except_table_section)) {
+  if (find_section_cached(".gcc_except_table", except_table_section)) {
     // Start of the exception handler table.
     const char* except_table_pointer = object_start() + except_table_section._offset;
 
@@ -1719,7 +2073,7 @@ void JeandleCompiledCode::build_exception_handler_table() {
 
 void JeandleCompiledCode::build_implicit_exception_table() {
   SectionInfo section_info(".llvm_faultmaps");
-  if (!ReadELF::findSection(*_elf, section_info)) {
+  if (!find_section_cached(".llvm_faultmaps", section_info)) {
       // No implicit exception table.
       return;
   }

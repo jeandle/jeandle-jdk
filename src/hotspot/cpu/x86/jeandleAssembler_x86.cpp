@@ -356,3 +356,54 @@ int JeandleAssembler::entry_barrier_stub_upper_bound() {
   // call RuntimeAddress + jmp continuation
   return 24;
 }
+
+int JeandleAssembler::exception_handler_upper_bound() {
+  // start_a_stub(NativeJump::instruction_size), jmp RuntimeAddress (5 bytes, bounded by 8)
+  return 8;
+}
+
+int JeandleAssembler::deopt_handler_upper_bound() {
+  // deopt_handler_size() = 17 bytes, bounded by 24 (word-aligned)
+  return 24;
+}
+
+int JeandleAssembler::static_call_stub_upper_bound() {
+  // start_a_stub requested space for static call stub (28 bytes)
+  return 28;
+}
+
+int JeandleAssembler::trampoline_call_stub_upper_bound() {
+  // max_trampoline_stub_size() = NativeFarJump::instruction_size (13 bytes, bounded by 16)
+  return 16;
+}
+
+// ---------------------------------------------------------------------------
+// Relocation record census for this architecture.
+// ---------------------------------------------------------------------------
+//
+// x86_64 has no `far_branches()`: a pc-relative call or jump reaches the whole code cache
+// as long as the cache stays inside the 2 GiB displacement of a rel32, which the assert in
+// MacroAssembler::call(const AddressLiteral&) checks. So Jeandle routes a call through a
+// trampoline stub only where it has to - the external call sites, which use
+// MacroAssembler::trampoline_call(AddressLiteral) unconditionally (see
+// patch_external_call_site() above). That trampoline records its owning call site, hence
+// one trampoline_stub record per external call and, because the call site itself is
+// patched with `relocInfo::none`, no record in insts for it.
+bool JeandleAssembler::needs_trampoline_branches() {
+  return false;
+}
+
+bool JeandleAssembler::shares_runtime_call_trampolines() {
+  // Not about CodeBuffer::supports_shared_stubs() (which is true on x86_64 as well): this
+  // is about Jeandle's own patching path. patch_routine_call_site() emits
+  // `call(AddressLiteral(target, relocInfo::runtime_call_type))` directly, so a runtime
+  // call never asks for a trampoline here and none is shared.
+  return false;
+}
+
+// The three jeandle relocation types are packed by the generic implementations here:
+// relocInfo_x86.cpp's pd_pack_data_to() returns false for all of them, so the record
+// payload is what the base class writes - pack_2_ints_to(), at most 4 halfwords.
+bool JeandleAssembler::runtime_call_needs_trampoline(address target) {
+  return false;
+}

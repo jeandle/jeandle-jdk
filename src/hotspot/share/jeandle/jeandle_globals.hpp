@@ -106,6 +106,10 @@
           "Size CodeBuffer insts section from exact prolog and machine "    \
           "code upper bound instead of legacy 2048-byte prolog reserve.")   \
                                                                             \
+  product(bool, JeandleExactStubs, true,                                    \
+          "Size CodeBuffer stubs section from exact stackmap and LinkGraph "\
+          "call site model instead of legacy fixed stubs reserve.")         \
+                                                                            \
                                                                             // end of JEANDLE_FLAGS
 
 DECLARE_FLAGS(JEANDLE_FLAGS)

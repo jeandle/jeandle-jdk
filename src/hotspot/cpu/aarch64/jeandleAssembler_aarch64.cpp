@@ -375,3 +375,47 @@ int JeandleAssembler::entry_barrier_stub_upper_bound() {
   // str + movptr + blr + ldr + b + guard word
   return 36;
 }
+
+int JeandleAssembler::exception_handler_upper_bound() {
+  // far_codestub_branch_size (6 instructions = 24 bytes)
+  return 24;
+}
+
+int JeandleAssembler::deopt_handler_upper_bound() {
+  // deopt_handler_size() = 7 * NativeInstruction::instruction_size = 28 bytes
+  return 28;
+}
+
+int JeandleAssembler::static_call_stub_upper_bound() {
+  // 13 * NativeInstruction::instruction_size = 52 bytes
+  return 52;
+}
+
+int JeandleAssembler::trampoline_call_stub_upper_bound() {
+  // max_trampoline_stub_size() = NativeInstruction::instruction_size + NativeCallTrampolineStub::instruction_size (32 bytes)
+  return 32;
+}
+
+// ---------------------------------------------------------------------------
+// Relocation record census for this architecture.
+// ---------------------------------------------------------------------------
+//
+// AArch64 patches every Jeandle call through MacroAssembler::trampoline_call(), which
+// emits a trampoline stub whenever the target is not always within branch range; runtime
+// calls hand their target to CodeBuffer::share_trampoline_for() instead. As on RISC-V,
+// sharing changes the number of stubs and not the number of records: each caller still
+// gets a trampoline_stub record relating it to the shared stub.
+bool JeandleAssembler::needs_trampoline_branches() {
+  return MacroAssembler::far_branches();
+}
+
+bool JeandleAssembler::shares_runtime_call_trampolines() {
+  return CodeBuffer::supports_shared_stubs();
+}
+
+// As on x86_64, relocInfo_aarch64.cpp's pd_pack_data_to() returns false for all three
+// jeandle types, so their payload is written by the base classes - pack_2_ints_to(), at
+// most 4 halfwords per record.
+bool JeandleAssembler::runtime_call_needs_trampoline(address target) {
+  return true;
+}

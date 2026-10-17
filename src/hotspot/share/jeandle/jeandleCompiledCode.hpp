@@ -185,6 +185,52 @@ struct JeandleDeferredVORefField {
 // fields needed to make each allocation decision *explainable* afterwards:
 // if we allocated exactly, we must also be able to say which plan produced
 // the size and what its padding was.
+// What one compilation will relocate, counted once and read by two reservations.
+//
+// The stubs section and the locs section are both sized from the same
+// facts: the LinkGraph edges of the object and its LLVM stackmap records.
+// Sizing them from two independent passes would build a second LinkGraph
+// and scan the stackmap section twice. `collect_call_site_census()`
+// walks them once, in exactly the order and with the same classifications that
+// resolve_reloc_info() will use, so the counts below are the record inventory rather than
+// an estimate of it.
+struct JeandleCallSiteCensus {
+  // Call sites, classified the way the resolver will resolve them.
+  int _static_call_sites;        // STATIC_CALL, resolved through the static-call stub
+  int _opt_virtual_call_sites;   // STATIC_CALL bound to the opt-virtual resolver stub
+  int _virtual_call_sites;       // DYNAMIC_CALL, inline-cache site
+  int _routine_call_sites;      // calls of HotSpot runtime routines
+  int _external_call_sites;     // calls of symbols outside HotSpot
+  int _stub_c_call_sites;       // STUB_C_CALL sites
+
+  // Cross-section references, one relocation record each.
+  int _section_word_insts;       // code refers to a constant: relocated in insts
+  int _section_word_consts;      // a constant refers to code: relocated in consts
+  int _oop_relocs;               // oop handled from code
+  int _oop_addr_relocs;          // oop address stored in a constant
+
+  // Refusal inputs. Anything that cannot be attributed to a known emitter makes the locs
+  // plan fall back, because an unexplained record is an under-provisioned array.
+  int _unclassified_edges;
+  int _unmapped_records;
+
+  bool _has_method_handle_invoke;
+  int _shared_trampoline_targets;
+
+  JeandleCallSiteCensus()
+    : _static_call_sites(0), _opt_virtual_call_sites(0), _virtual_call_sites(0),
+      _routine_call_sites(0), _external_call_sites(0),
+      _stub_c_call_sites(0), _section_word_insts(0), _section_word_consts(0),
+      _oop_relocs(0), _oop_addr_relocs(0), _unclassified_edges(0), _unmapped_records(0),
+      _has_method_handle_invoke(false), _shared_trampoline_targets(-1) {}
+
+  int total_records() const {
+    return _static_call_sites + _opt_virtual_call_sites + _virtual_call_sites +
+           _routine_call_sites + _external_call_sites + _section_word_insts +
+           _section_word_consts + _oop_relocs + _oop_addr_relocs;
+  }
+};
+
 struct InstallLayoutCore {
   size_t insts_payload;      // ELF text size plus the runtime prolog reserve
   size_t consts_payload;     // exact size from ConstSectionPlan, or legacy 48 KiB
@@ -252,6 +298,10 @@ class JeandleCompiledCode : public StackObj {
                       bool is_osr_entry) :
                       _obj(nullptr),
                       _elf(nullptr),
+                      _link_graph_ssp(nullptr),
+                      _link_graph(nullptr),
+                      _section_cache(),
+                      _section_cache_built(false),
                       _code_buffer("JeandleCompiledCode"),
                       _routine_call_sites(),
                       _non_routine_call_sites(),
@@ -288,6 +338,10 @@ class JeandleCompiledCode : public StackObj {
   JeandleCompiledCode(ciEnv* env, const char* func_name) :
                       _obj(nullptr),
                       _elf(nullptr),
+                      _link_graph_ssp(nullptr),
+                      _link_graph(nullptr),
+                      _section_cache(),
+                      _section_cache_built(false),
                       _code_buffer("JeandleCompiledStub"),
                       _routine_call_sites(),
                       _non_routine_call_sites(),
@@ -394,6 +448,13 @@ class JeandleCompiledCode : public StackObj {
  private:
   std::unique_ptr<ObjectBuffer> _obj; // Compiled instructions.
   std::unique_ptr<ELFObject> _elf;
+  std::shared_ptr<llvm::orc::SymbolStringPool> _link_graph_ssp;
+  std::unique_ptr<llvm::jitlink::LinkGraph> _link_graph;
+  llvm::SmallVector<SectionInfo, 32> _section_cache;
+  bool _section_cache_built;
+  llvm::jitlink::LinkGraph* shared_link_graph();
+  bool find_section_cached(llvm::StringRef name, SectionInfo& section_info);
+
   CodeBuffer _code_buffer; // Relocations and stubs.
 
   // Call sites in our compiled code:
@@ -446,6 +507,13 @@ class JeandleCompiledCode : public StackObj {
                         llvm::SmallVector<JeandleReloc*>& relocs,
                         llvm::jitlink::LinkGraph* link_graph);
 
+  // Architecture-specific half of the relocation census. Returns true when this
+  // architecture classifies its edges as a pair (RISC-V's HI20/LO12), which then has to be
+  // walked next to the resolver that does the same. Returning false means "use the generic
+  // per-edge walk", exactly as resolve_reloc_info() uses pd_resolve_reloc().
+  bool pd_collect_call_site_census(llvm::jitlink::LinkGraph* link_graph,
+                                   JeandleCallSiteCensus& census);
+
   // Decide every allocation-relevant quantity before any section size
   // has been requested from the CodeBuffer. See the .cpp for why this has to
   // happen before initialize().
@@ -454,6 +522,16 @@ class JeandleCompiledCode : public StackObj {
   // Exact upper bound estimators for insts section
   size_t prolog_upper_bound(uint64_t func_align);
   size_t post_insts_stubs_upper_bound();
+
+  // Exact upper bound estimator for stubs section
+  size_t stubs_upper_bound(const JeandleCallSiteCensus& census, size_t& static_calls,
+                           size_t& external_calls, bool& has_mh);
+
+  // One pass over the LinkGraph edges and the LLVM stackmap records that answers
+  // both reservations. Fills `census` exactly the way resolve_reloc_info() will later
+  // resolve the same edges and records; returns false when the object cannot be inspected
+  // at all, which puts the whole layout decision on the legacy path.
+  bool collect_call_site_census(JeandleCallSiteCensus& census);
 
   // Records allocate/expand/finalize telemetry for this compilation.
   // `layout` is the decision that produced the buffer being reported, so that the planned

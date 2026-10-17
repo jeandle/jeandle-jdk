@@ -413,3 +413,50 @@ int JeandleAssembler::entry_barrier_stub_upper_bound() {
   // addi + sd + movptr + jalr + ld + addi + j + guard word
   return 40;
 }
+
+int JeandleAssembler::exception_handler_upper_bound() {
+  // far_branch_size (6 instructions = 24 bytes)
+  return 24;
+}
+
+int JeandleAssembler::deopt_handler_upper_bound() {
+  // deopt_handler_size() = auipc + far_branch = 4 + 20 = 24 bytes
+  return 24;
+}
+
+int JeandleAssembler::static_call_stub_upper_bound() {
+  // 14 * NativeInstruction::instruction_size + (4 + 16) = 76 bytes
+  return 76;
+}
+
+int JeandleAssembler::trampoline_call_stub_upper_bound() {
+  // max_trampoline_stub_size() = NativeInstruction::instruction_size + NativeCallTrampolineStub::instruction_size (32 bytes)
+  return 32;
+}
+
+// ---------------------------------------------------------------------------
+// Relocation record census for this architecture.
+// ---------------------------------------------------------------------------
+//
+// RISC-V reaches a call target with auipc + jalr when the branch is too far for one
+// instruction, and every such trampoline records the call site that owns it. Runtime calls
+// share one trampoline per target (MacroAssembler::trampoline_call hands
+// runtime_call_type edges to CodeBuffer::share_trampoline_for), but sharing changes the
+// number of *stubs*, not the number of *records*: emit_shared_trampolines() in
+// codeBuffer_riscv.cpp writes one trampoline_stub record per caller offset.
+bool JeandleAssembler::needs_trampoline_branches() {
+  return MacroAssembler::far_branches();
+}
+
+bool JeandleAssembler::shares_runtime_call_trampolines() {
+  return CodeBuffer::supports_shared_stubs();
+}
+
+// Unlike x86_64 and AArch64, RISC-V does not fall back to the generic packing:
+// pd_pack_data_to() writes the record's own fields (relocInfo_riscv.cpp), including the
+// `_rel_offset` that a R_RISCV_PCREL_LO12_I edge carries relative to its HI20 partner -
+// and such a pair contributes one record per edge, because
+// JeandleAssembler::is_section_word_reloc() accepts both halves of the pair.
+bool JeandleAssembler::runtime_call_needs_trampoline(address target) {
+  return true;
+}
