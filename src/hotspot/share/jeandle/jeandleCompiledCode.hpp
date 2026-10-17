@@ -302,6 +302,11 @@ class JeandleCompiledCode : public StackObj {
                       _link_graph(nullptr),
                       _section_cache(),
                       _section_cache_built(false),
+                      _func_symbol_found(false),
+                      _func_symbol_name_matches(false),
+                      _func_symbol_align(0),
+                      _func_symbol_offset(0),
+                      _func_symbol_code_size(0),
                       _code_buffer("JeandleCompiledCode"),
                       _routine_call_sites(),
                       _non_routine_call_sites(),
@@ -349,6 +354,11 @@ class JeandleCompiledCode : public StackObj {
                       _link_graph(nullptr),
                       _section_cache(),
                       _section_cache_built(false),
+                      _func_symbol_found(false),
+                      _func_symbol_name_matches(false),
+                      _func_symbol_align(0),
+                      _func_symbol_offset(0),
+                      _func_symbol_code_size(0),
                       _code_buffer("JeandleCompiledStub"),
                       _routine_call_sites(),
                       _non_routine_call_sites(),
@@ -466,6 +476,13 @@ class JeandleCompiledCode : public StackObj {
   std::unique_ptr<llvm::jitlink::LinkGraph> _link_graph;
   llvm::SmallVector<SectionInfo, 32> _section_cache;
   bool _section_cache_built;
+
+  bool _func_symbol_found;
+  bool _func_symbol_name_matches;
+  uint64_t _func_symbol_align;
+  uint64_t _func_symbol_offset;
+  uint64_t _func_symbol_code_size;
+
   llvm::jitlink::LinkGraph* shared_link_graph();
   bool find_section_cached(llvm::StringRef name, SectionInfo& section_info);
 
@@ -507,6 +524,7 @@ class JeandleCompiledCode : public StackObj {
   // A/B arm applies nothing but still reports what the model would have asked for, which
   // is what keeps the two arms doing the same work and printing the same lines.
   bool _locs_planned;
+
   // Oop handles maintainer:
   llvm::StringMap<jobject> _oop_handles;                // name -> jobject
   llvm::DenseMap<jobject, int> _oop_handle_ids;         // jobject -> id

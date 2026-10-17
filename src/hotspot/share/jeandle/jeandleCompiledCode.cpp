@@ -163,10 +163,45 @@ void JeandleCompiledCode::install_obj(std::unique_ptr<ObjectBuffer> obj) {
   int func_count = 0;
   for (const llvm::object::ELFSymbolRef &sym : _elf->symbols()) {
     llvm::Expected<llvm::object::SymbolRef::Type> type = sym.getType();
-    if (!type || (*type) != llvm::object::SymbolRef::Type::ST_Function) {
+    if (!type) {
+      llvm::consumeError(type.takeError());
+      continue;
+    }
+    if (*type != llvm::object::SymbolRef::Type::ST_Function) {
       continue;
     }
     func_count++;
+    bool symbol_ok = true;
+    llvm::Expected<llvm::StringRef> sym_name = sym.getName();
+    if (sym_name) {
+      _func_symbol_name_matches = sym_name->compare(_func_name) == 0;
+    } else {
+      llvm::consumeError(sym_name.takeError());
+      symbol_ok = false;
+    }
+    llvm::Expected<llvm::object::section_iterator> section = sym.getSection();
+    if (section) {
+      _func_symbol_align = (*section)->getAlignment().value();
+      llvm::Expected<uint64_t> sym_value = sym.getValue();
+      if (sym_value) {
+        _func_symbol_offset =
+            _elf->getSection((*section)->getRawDataRefImpl())->sh_offset + *sym_value;
+      } else {
+        llvm::consumeError(sym_value.takeError());
+        symbol_ok = false;
+      }
+    } else {
+      llvm::consumeError(section.takeError());
+      symbol_ok = false;
+    }
+    llvm::Expected<uint64_t> sym_size = sym.getSize();
+    if (sym_size) {
+      _func_symbol_code_size = *sym_size;
+    } else {
+      llvm::consumeError(sym_size.takeError());
+      symbol_ok = false;
+    }
+    _func_symbol_found = symbol_ok;
   }
   JEANDLE_ERROR_ASSERT_AND_RET_VOID_ON_FAIL(func_count == 1,
     "expected exactly one compiled function in ELF, but found multiple");
@@ -211,7 +246,14 @@ void JeandleCompiledCode::finalize() {
   uint64_t align;
   uint64_t offset;
   uint64_t code_size;
-  bool found = ReadELF::findFunc(*_elf, _func_name, align, offset, code_size);
+  bool found = _func_symbol_found && _func_symbol_name_matches;
+  if (found) {
+    align = _func_symbol_align;
+    offset = _func_symbol_offset;
+    code_size = _func_symbol_code_size;
+  } else {
+    found = ReadELF::findFunc(*_elf, _func_name, align, offset, code_size);
+  }
   JEANDLE_ERROR_ASSERT_AND_RET_VOID_ON_FAIL(found, "compiled function is not found in the ELF file");
 
   // Force func_align to at least 4 bytes on RISC-V so the prolog upper bound and
@@ -1067,6 +1109,7 @@ void JeandleCompiledCode::plan_locs_capacity(const JeandleCallSiteCensus& census
   }
 }
 
+// Everything allocation-relevant therefore has to be decided here, up front.
 void JeandleCompiledCode::decide_install_layout(uint64_t elf_text_size,
                                                 uint64_t func_align,
                                                 InstallLayoutCore& layout) {
