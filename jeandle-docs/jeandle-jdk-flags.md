@@ -9,3 +9,10 @@
 | ```JeandleUseHotspotIntrinsics``` | bool | Prefer HotSpot intrinsics over LLVM intrinsics. | ```false``` |
 | ```JeandleLLVMOptions``` | string | Additional LLVM command line options. | ```null``` |
 | ```JeandleRecordVMCallbacks``` | bool | Record VM callback invocations for standalone LLVM testing. | ```false``` |
+| ```JeandleUseProfile``` | bool | Use interpreter/C1 profile data (MDO) for branch and switch weights, as well as unstable-if branch pruning. | ```true``` |
+| ```JeandleUseProfiledVirtualCallDevirtualization``` | bool | Use receiver type profiles to devirtualize `invokevirtual` and `invokeinterface` calls. | ```true``` |
+| ```JeandleNodeCountInliningCutoff``` | intx | Stop non-forced inlining once the root method's LLVM IR instruction count exceeds this limit. A value of ```0``` disables non-forced inlining limited by this cutoff. | ```18000``` |
+| ```JeandlePrintInlineTree``` | bool | Print the Jeandle inline tree before installing compiled code. | ```false``` |
+| ```JeandleDoPEA``` | bool | Run Partial Escape Analysis (PEA) in the Jeandle optimization pipeline. | ```true``` |
+| ```JeandleEliminateLocks``` | bool | Enable lock elimination in Jeandle PEA. | ```true``` |
+| ```JeandleLoopStripMiningIter``` | uintx | Number of iterations between safepoint polls in strip-mined counted loops. A value of ```0``` disables strip mining. | ```0``` (```1000``` when using G1 GC and the option is left at its default) |
