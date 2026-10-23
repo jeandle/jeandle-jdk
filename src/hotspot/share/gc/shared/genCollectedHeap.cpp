@@ -425,7 +425,9 @@ void GenCollectedHeap::collect_generation(Generation* gen, bool full, size_t siz
   if (run_verification && VerifyBeforeGC) {
     Universe::verify("Before GC");
   }
-  COMPILER2_OR_JVMCI_PRESENT(DerivedPointerTable::clear());
+#if COMPILER2_OR_JVMCI_OR_JEANDLE
+  DerivedPointerTable::clear();
+#endif
 
   // Do collection work
   {
@@ -434,7 +436,9 @@ void GenCollectedHeap::collect_generation(Generation* gen, bool full, size_t siz
     gen->collect(full, clear_soft_refs, size, is_tlab);
   }
 
-  COMPILER2_OR_JVMCI_PRESENT(DerivedPointerTable::update_pointers());
+#if COMPILER2_OR_JVMCI_OR_JEANDLE
+  DerivedPointerTable::update_pointers();
+#endif
 
   gen->stat_record()->accumulated_time.stop();
 
@@ -1116,9 +1120,9 @@ class GenGCEpilogueClosure: public GenCollectedHeap::GenClosure {
 };
 
 void GenCollectedHeap::gc_epilogue(bool full) {
-#if COMPILER2_OR_JVMCI
+#if COMPILER2_OR_JVMCI_OR_JEANDLE
   assert(DerivedPointerTable::is_empty(), "derived pointer present");
-#endif // COMPILER2_OR_JVMCI
+#endif // COMPILER2_OR_JVMCI_OR_JEANDLE
 
   resize_all_tlabs();
 

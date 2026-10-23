@@ -454,7 +454,7 @@ class frame {
  public:
   // Memory management
   void oops_do(OopClosure* f, CodeBlobClosure* cf, const RegisterMap* map) {
-#if COMPILER2_OR_JVMCI
+#if COMPILER2_OR_JVMCI_OR_JEANDLE
     DerivedPointerIterationMode dpim = DerivedPointerTable::is_active() ?
                                        DerivedPointerIterationMode::_with_table :
                                        DerivedPointerIterationMode::_ignore;

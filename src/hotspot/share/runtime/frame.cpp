@@ -1194,7 +1194,7 @@ void frame::verify(const RegisterMap* map) const {
       // make sure we have the right receiver type
     }
   }
-#if COMPILER2_OR_JVMCI
+#if COMPILER2_OR_JVMCI_OR_JEANDLE
   assert(DerivedPointerTable::is_empty(), "must be empty before verify");
 #endif
 
