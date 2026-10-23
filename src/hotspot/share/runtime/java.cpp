@@ -86,6 +86,7 @@
 #include "c1/c1_Runtime1.hpp"
 #endif
 #ifdef COMPILER2
+#include "asm/codeBufferInstrumentation.hpp"
 #include "code/compiledIC.hpp"
 #include "opto/compile.hpp"
 #include "opto/indexSet.hpp"
@@ -391,6 +392,7 @@ void print_statistics() {
 //       are trying to shutdown the VM at the same time, only one thread
 //       can run before_exit() and all other threads must wait.
 void before_exit(JavaThread* thread, bool halt) {
+  CodeBufferInstrumentation::output_and_shutdown();
   #define BEFORE_EXIT_NOT_RUN 0
   #define BEFORE_EXIT_RUNNING 1
   #define BEFORE_EXIT_DONE    2
