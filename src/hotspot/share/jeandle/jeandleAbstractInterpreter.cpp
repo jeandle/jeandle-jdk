@@ -3822,7 +3822,15 @@ void JeandleAbstractInterpreter::multianewarray() {
 
   args.push_back(call_java_op("jeandle.current_thread", {}));
 
-  _jvm->apush(create_call_ex(callee, args, llvm::CallingConv::Hotspot_JIT, {create_current_deopt_bundle()}));
+  llvm::InvokeInst* result = create_call_ex(callee, args, llvm::CallingConv::Hotspot_JIT,
+                                          {create_current_deopt_bundle()});
+  RETURN_VOID_ON_JEANDLE_ERROR();
+  result->addRetAttr(llvm::Attribute::get(*_context,
+      llvm::jeandle::Attribute::JavaKlass,
+      std::to_string((uintptr_t)array_klass->constant_encoding())));
+  result->addRetAttr(llvm::Attribute::get(*_context,
+      llvm::jeandle::Attribute::JavaKlassExact));
+  _jvm->apush(result);
 }
 
 void JeandleAbstractInterpreter::shared_lock(LockValue lock) {
