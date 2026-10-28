@@ -37,10 +37,16 @@ public class TestPEACopyFold {
         Method cloneInt = TestWrapper.class.getMethod("testCloneIntArray");
         Method cloneInstance = TestWrapper.class.getMethod("testCloneInstance");
         Method exceptions = TestWrapper.class.getMethod("testExceptions");
+        Method largeCopy = TestWrapper.class.getMethod("testLargeVirtualCopy");
+        Method largeOverlap = TestWrapper.class.getMethod("testLargeVirtualOverlap");
+        Method largeClone = TestWrapper.class.getMethod("testLargeVirtualClone");
+        Method largeEscape = TestWrapper.class.getMethod("testLargeVirtualEscape");
+        Method denseEscape = TestWrapper.class.getMethod("testDenseReferenceEscape");
         Method requestDeopt = TestWrapper.class.getDeclaredMethod("requestDeopt");
         Method[] targets = {v2vInt, v2vRef, copyOf, copyOfRange, overlap,
                             escape, deoptV2V, deoptConcrete, cloneRef, cloneInt,
-                            cloneInstance, exceptions};
+                            cloneInstance, exceptions, largeCopy, largeOverlap, largeClone,
+                            largeEscape, denseEscape};
 
         PEATestUtils.behaviorRun(WRAPPER, targets)
                 .dontinline(requestDeopt)
@@ -49,7 +55,9 @@ public class TestPEACopyFold {
         // Each copy kind must fold through the real frontend and execute
         // with the same configuration as the behavior comparison.
         try (PEATestUtils.RunResult run = PEATestUtils.shapeRun(WRAPPER, v2vInt, cloneRef, cloneInt, deoptConcrete,
-                                                              copyOf, copyOfRange, cloneInstance)
+                                                              copyOf, copyOfRange, cloneInstance,
+                                                              largeCopy, largeOverlap, largeClone,
+                                                              largeEscape, denseEscape)
                 .dontinline(requestDeopt)
                 .run()) {
             assertFold(run, v2vInt, 2);
@@ -58,6 +66,13 @@ public class TestPEACopyFold {
             assertFold(run, deoptConcrete, 1);
             assertFold(run, copyOf, 2);
             assertFold(run, copyOfRange, 2);
+            assertFold(run, largeCopy, 2);
+            assertFold(run, largeOverlap, 1);
+            assertFold(run, largeClone, 2);
+            assertFold(run, largeEscape, 1);
+            Asserts.assertEquals(run.report(denseEscape).round(0).copyFolds(), 0,
+                    "dense reference replay keeps bulk copy");
+            run.report(denseEscape).round(0).after().assertPresent("@jeandle.copy");
             // The clone fast path folds, then joins the native slow path.
             // Both identities remain real across that join, exercising replay.
             assertFold(run, cloneInstance, 0);
@@ -85,6 +100,7 @@ public class TestPEACopyFold {
         private static final String[] SRC_STRINGS = {"aa", "bb", "cc", "dd"};
         private static final int[] SRC_INTS = {10, 20, 30, 40, 50, 60};
         private static int[] sinkInt;
+        private static String[] sinkRef;
 
         private static Method deoptTarget;
         private int x;
@@ -143,6 +159,22 @@ public class TestPEACopyFold {
             }
             if (configured("testExceptions")) {
                 payload = mix(payload, testExceptions());
+            }
+            if (configured("testLargeVirtualCopy")) {
+                deoptTarget = TestWrapper.class.getMethod("testLargeVirtualCopy");
+                payload = mix(payload, testLargeVirtualCopy());
+            }
+            if (configured("testLargeVirtualOverlap")) {
+                payload = mix(payload, testLargeVirtualOverlap());
+            }
+            if (configured("testLargeVirtualClone")) {
+                payload = mix(payload, testLargeVirtualClone());
+            }
+            if (configured("testLargeVirtualEscape")) {
+                payload = mix(payload, testLargeVirtualEscape());
+            }
+            if (configured("testDenseReferenceEscape")) {
+                payload = mix(payload, testDenseReferenceEscape());
             }
 
             System.out.println("PEA-RESULT:" + Long.toUnsignedString(payload, 16));
@@ -351,6 +383,76 @@ public class TestPEACopyFold {
                 sum = sum * 31 + dst[i].charAt(0);
             }
             return sum;
+        }
+
+        public static long testLargeVirtualCopy() {
+            int[] src = new int[16];
+            src[0] = 19;
+            src[15] = 31;
+            int[] dst = new int[16];
+            dst[7] = 99;
+            System.arraycopy(src, 0, dst, 0, 16);
+            requestDeopt();
+            for (int i = 0; i < 16; i++) {
+                Asserts.assertEQ(dst[i], i == 0 ? 19 : i == 15 ? 31 : 0,
+                        "large copy entries survive active-frame deoptimization");
+            }
+            return dst[0] + dst[7] + dst[15];
+        }
+
+        public static long testLargeVirtualOverlap() {
+            int[] array = new int[17];
+            array[0] = 19;
+            array[15] = 31;
+            array[16] = 99;
+            System.arraycopy(array, 0, array, 1, 16);
+            Asserts.assertEQ(array[1], 19, "overlap first entry");
+            Asserts.assertEQ(array[15], 0, "overlap default entry");
+            Asserts.assertEQ(array[16], 31, "overlap last entry");
+            return array[0] + array[1] + array[15] + array[16];
+        }
+
+        public static long testLargeVirtualClone() {
+            int[] src = new int[16];
+            src[0] = 19;
+            src[15] = 31;
+            int[] dst = src.clone();
+            Asserts.assertEQ(dst[0], 19, "clone first entry");
+            Asserts.assertEQ(dst[7], 0, "clone default entry");
+            Asserts.assertEQ(dst[15], 31, "clone last entry");
+            return dst[0] + dst[7] + dst[15];
+        }
+
+        public static long testLargeVirtualEscape() {
+            int[] src = new int[16];
+            src[0] = 19;
+            src[15] = 31;
+            int[] dst = new int[16];
+            dst[7] = 99;
+            System.arraycopy(src, 0, dst, 0, 16);
+            sinkInt = dst;
+            Asserts.assertTrue(sinkInt == dst, "published destination identity");
+            for (int i = 0; i < 16; i++) {
+                Asserts.assertEQ(sinkInt[i], i == 0 ? 19 : i == 15 ? 31 : 0,
+                        "large copy replay preserves entries and defaults");
+            }
+            return sinkInt[0] + sinkInt[7] + sinkInt[15];
+        }
+
+        public static long testDenseReferenceEscape() {
+            String[] src = {SRC_STRINGS[0], SRC_STRINGS[1], SRC_STRINGS[2], SRC_STRINGS[3],
+                            SRC_STRINGS[0], SRC_STRINGS[1], SRC_STRINGS[2], SRC_STRINGS[3],
+                            SRC_STRINGS[0], SRC_STRINGS[1], SRC_STRINGS[2], SRC_STRINGS[3],
+                            SRC_STRINGS[0], SRC_STRINGS[1], SRC_STRINGS[2], SRC_STRINGS[3]};
+            String[] dst = src.clone();
+            sinkRef = dst;
+            Asserts.assertTrue(sinkRef == dst, "dense destination identity");
+            Asserts.assertTrue(dst != src, "dense clone has independent identity");
+            for (int i = 0; i < 16; i++) {
+                Asserts.assertTrue(sinkRef[i] == SRC_STRINGS[i & 3],
+                        "dense bulk copy preserves every reference");
+            }
+            return sinkRef.length;
         }
 
         // The exception shapes must survive the optimization: null, bounds,

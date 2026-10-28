@@ -35,7 +35,7 @@ import org.openjdk.jmh.annotations.Warmup;
 /**
  * Array copies into FRESH destinations that never escape, at CONSTANT
  * lengths: PEA folds the jeandle.copy pseudo call into virtual field state
- * and eliminates both the copy and the allocation. The copy length must be
+ * and can eliminate the destination allocation when its uses scalarize. The copy length must be
  * a compile-time constant for the fold (a @Param value is a runtime int and
  * stays conservative). Runs with Jeandle PEA enabled; JeandleArrayCopy/Of
  * (PEA off, pre-allocated destinations) remain the CopySpecialization
@@ -54,6 +54,7 @@ public class JeandleScalarizedCopy {
     private int[] intsSource;
     private long[] longsSource;
     private Object[] objectsSource;
+    private static volatile int[] escapingCopy;
 
     @Setup
     public void setup() {
@@ -94,6 +95,16 @@ public class JeandleScalarizedCopy {
         int[] dst = new int[8];
         System.arraycopy(intsSource, 2, dst, 0, 8);
         return sum(dst, 8);
+    }
+
+    // Consume the same eight copied elements without a loop to distinguish
+    // copy folding from consuming-loop scalarization.
+    @Benchmark
+    public long freshIntCopy8Unrolled() {
+        int[] dst = new int[8];
+        System.arraycopy(intsSource, 2, dst, 0, 8);
+        return (long) dst[0] + dst[1] + dst[2] + dst[3]
+                + dst[4] + dst[5] + dst[6] + dst[7];
     }
 
     @Benchmark
@@ -150,6 +161,74 @@ public class JeandleScalarizedCopy {
             sum += System.identityHashCode(c[i]) & 1;
         }
         return sum;
+    }
+
+    // Virtual-source copies transfer existing scalar values, including
+    // default slots. Read fixed endpoints to isolate copy support from
+    // consuming-loop unrolling.
+    @Benchmark
+    public int virtualSparseCopy16() {
+        int[] src = new int[16];
+        src[0] = intsSource[0];
+        src[15] = intsSource[15];
+        int[] dst = new int[16];
+        System.arraycopy(src, 0, dst, 0, 16);
+        return dst[0] + dst[7] + dst[15];
+    }
+
+    @Benchmark
+    public int virtualSparseCopy64() {
+        int[] src = new int[64];
+        src[0] = intsSource[0];
+        src[63] = intsSource[63];
+        int[] dst = new int[64];
+        System.arraycopy(src, 0, dst, 0, 64);
+        return dst[0] + dst[31] + dst[63];
+    }
+
+    @Benchmark
+    public int virtualDenseCopy16() {
+        int[] src = {intsSource[0], intsSource[1], intsSource[2], intsSource[3],
+                     intsSource[4], intsSource[5], intsSource[6], intsSource[7],
+                     intsSource[8], intsSource[9], intsSource[10], intsSource[11],
+                     intsSource[12], intsSource[13], intsSource[14], intsSource[15]};
+        int[] dst = new int[16];
+        System.arraycopy(src, 0, dst, 0, 16);
+        return dst[0] + dst[7] + dst[15];
+    }
+
+    @Benchmark
+    public int[] virtualEscapingCopy16() {
+        int[] src = new int[16];
+        src[0] = intsSource[0];
+        src[15] = intsSource[15];
+        int[] dst = new int[16];
+        System.arraycopy(src, 0, dst, 0, 16);
+        escapingCopy = dst;
+        return dst;
+    }
+
+    @Benchmark
+    public int virtualClone16() {
+        int[] src = new int[16];
+        src[0] = intsSource[0];
+        src[15] = intsSource[15];
+        int[] dst = src.clone();
+        return dst[0] + dst[7] + dst[15];
+    }
+
+    @State(Scope.Thread)
+    public static class CopyLength {
+        @Param({"4", "16", "64"})
+        public int value;
+    }
+
+    @Benchmark
+    public int runtimeIntCopy(CopyLength input) {
+        int length = input.value;
+        int[] dst = new int[length];
+        System.arraycopy(intsSource, 0, dst, 0, length);
+        return dst[0] + dst[length - 1];
     }
 
     @Benchmark
