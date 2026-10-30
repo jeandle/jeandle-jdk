@@ -305,6 +305,29 @@ bool JeandleIntrinsicLowering::is_supported(vmIntrinsics::ID id) {
     case vmIntrinsics::_hashCode:
     case vmIntrinsics::_identityHashCode:
 
+    // String operations over Latin1 and native-endian UTF16 arrays.
+    case vmIntrinsics::_compareToL:
+    case vmIntrinsics::_compareToU:
+    case vmIntrinsics::_compareToLU:
+    case vmIntrinsics::_compareToUL:
+    case vmIntrinsics::_indexOfL:
+    case vmIntrinsics::_indexOfU:
+    case vmIntrinsics::_indexOfUL:
+    case vmIntrinsics::_indexOfIL:
+    case vmIntrinsics::_indexOfIU:
+    case vmIntrinsics::_indexOfIUL:
+    case vmIntrinsics::_indexOfL_char:
+    case vmIntrinsics::_indexOfU_char:
+    case vmIntrinsics::_equalsL:
+    case vmIntrinsics::_equalsU:
+    case vmIntrinsics::_toBytesStringU:
+    case vmIntrinsics::_getCharsStringU:
+    case vmIntrinsics::_compressStringC:
+    case vmIntrinsics::_compressStringB:
+    case vmIntrinsics::_inflateStringC:
+    case vmIntrinsics::_inflateStringB:
+      return true;
+
     // arrayequals
     case vmIntrinsics::_equalsB:
     case vmIntrinsics::_equalsC:
@@ -609,6 +632,28 @@ bool JeandleIntrinsicLowering::lower(vmIntrinsics::ID id, const ciMethod* target
       return lower_arrays_copy_of(false);
     case vmIntrinsics::_copyOfRange:
       return lower_arrays_copy_of(true);
+
+    case vmIntrinsics::_compareToL:
+    case vmIntrinsics::_compareToU:
+    case vmIntrinsics::_compareToLU:
+    case vmIntrinsics::_compareToUL:
+    case vmIntrinsics::_indexOfL:
+    case vmIntrinsics::_indexOfU:
+    case vmIntrinsics::_indexOfUL:
+    case vmIntrinsics::_indexOfIL:
+    case vmIntrinsics::_indexOfIU:
+    case vmIntrinsics::_indexOfIUL:
+    case vmIntrinsics::_indexOfL_char:
+    case vmIntrinsics::_indexOfU_char:
+    case vmIntrinsics::_equalsL:
+    case vmIntrinsics::_equalsU:
+    case vmIntrinsics::_toBytesStringU:
+    case vmIntrinsics::_getCharsStringU:
+    case vmIntrinsics::_compressStringC:
+    case vmIntrinsics::_compressStringB:
+    case vmIntrinsics::_inflateStringC:
+    case vmIntrinsics::_inflateStringB:
+      return lower_string_intrinsic(id);
 
     // arraycopy
     case vmIntrinsics::_equalsB:
@@ -1378,7 +1423,10 @@ bool JeandleIntrinsicLowering::lower_new_array() {
   llvm::Function* new_array_op = m.getFunction("jeandle.new_array");
   llvm::CallBase* fast_call =
       emit_callsite(new_array_op, llvm::CallingConv::Hotspot_JIT,
-                    {klass, length, size_in_bytes, base_offset, length_limit}, fast_attrs);
+                    {klass, length, size_in_bytes, base_offset, length_limit,
+                     /*uninitialized=*/builder.getFalse(),
+                     /*defer_initialization_membar=*/builder.getFalse()},
+                    fast_attrs);
   // emit_callsite with exception edge moves builder to a new normal_dest block.
   builder.CreateBr(merge_bb);
   llvm::BasicBlock* fast_normal_bb = builder.GetInsertBlock();

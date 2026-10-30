@@ -239,6 +239,7 @@ class JeandleIntrinsicLowering : public StackObj {
   // StringUTF16 trusted single-code-unit access. The byte[] backing stores
   // UTF16 values in the platform's native byte order.
   bool lower_string_char_access(bool is_store);
+  bool lower_string_intrinsic(vmIntrinsics::ID id);
   bool lower_arrays_copy_of(bool is_copy_of_range);
   bool lower_object_clone();
   void emit_clone_copy(llvm::Value* src_base,

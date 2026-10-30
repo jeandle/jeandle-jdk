@@ -244,3 +244,138 @@ void JeandleRuntimeRoutine::generate_zero_heap_words_stub() {
   _routine_entry[_zero_heap_words_stub] = entry;
   _gc_leaf_routines.insert(entry);
 }
+
+// C ABI: (UTF16 source, Latin1 destination, i32 count) -> count or zero.
+// SIMD blocks are committed only after validation. A dirty block resumes at
+// its first character so failure preserves the complete legal prefix.
+void JeandleRuntimeRoutine::generate_string_compress_stub() {
+  ResourceMark rm;
+  CodeBuffer buffer(_string_compress_stub, 2048, 64);
+  MacroAssembler* masm = new MacroAssembler(&buffer);
+  const Register src = c_rarg0;
+  const Register dst = c_rarg1;
+  const Register count = c_rarg2;
+  const Register original_count = r8;
+  Label scalar, scalar_loop, success, failure, done;
+  address start = __ pc();
+
+  __ movl(original_count, count);
+  if (UseAVX >= 2 && MaxVectorSize >= 32) {
+    Label vector_loop, vector_tail;
+    __ cmpl(count, 16);
+    __ jcc(Assembler::less, scalar);
+    __ movl(rax, 0xff00);
+    __ movdl(xmm3, rax);
+    __ vpbroadcastw(xmm3, xmm3, Assembler::AVX_256bit);
+    __ bind(vector_loop);
+    __ cmpl(count, 32);
+    __ jcc(Assembler::less, vector_tail);
+    __ vmovdqu(xmm0, Address(src, 0));
+    __ vmovdqu(xmm1, Address(src, 32));
+    __ vpor(xmm2, xmm0, xmm1, Assembler::AVX_256bit);
+    __ vptest(xmm2, xmm3, Assembler::AVX_256bit);
+    __ jcc(Assembler::notZero, scalar);
+    __ vpackuswb(xmm0, xmm0, xmm1, Assembler::AVX_256bit);
+    // Packing is local to 128-bit lanes; restore source character order.
+    __ vpermq(xmm0, xmm0, 0xd8, Assembler::AVX_256bit);
+    __ vmovdqu(Address(dst, 0), xmm0);
+    __ addptr(src, 64);
+    __ addptr(dst, 32);
+    __ subl(count, 32);
+    __ jmp(vector_loop);
+    __ bind(vector_tail);
+    __ cmpl(count, 16);
+    __ jcc(Assembler::less, scalar);
+    __ vmovdqu(xmm0, Address(src, 0));
+    __ vptest(xmm0, xmm3, Assembler::AVX_256bit);
+    __ jcc(Assembler::notZero, scalar);
+    __ vpackuswb(xmm0, xmm0, xmm0, Assembler::AVX_256bit);
+    __ vpermq(xmm0, xmm0, 0xd8, Assembler::AVX_256bit);
+    __ movdqu(Address(dst, 0), xmm0);
+    __ addptr(src, 32);
+    __ addptr(dst, 16);
+    __ subl(count, 16);
+  } else if (UseSSE42Intrinsics) {
+    Label vector_loop;
+    __ cmpl(count, 16);
+    __ jcc(Assembler::less, scalar);
+    __ movl(rax, 0xff00ff00);
+    __ movdl(xmm3, rax);
+    __ pshufd(xmm3, xmm3, 0);
+    __ bind(vector_loop);
+    __ cmpl(count, 16);
+    __ jcc(Assembler::less, scalar);
+    __ movdqu(xmm0, Address(src, 0));
+    __ movdqu(xmm1, Address(src, 16));
+    __ movdqu(xmm2, xmm0);
+    __ por(xmm2, xmm1);
+    __ ptest(xmm2, xmm3);
+    __ jcc(Assembler::notZero, scalar);
+    __ packuswb(xmm0, xmm1);
+    __ movdqu(Address(dst, 0), xmm0);
+    __ addptr(src, 32);
+    __ addptr(dst, 16);
+    __ subl(count, 16);
+    __ jmp(vector_loop);
+  }
+
+  __ bind(scalar);
+  __ testl(count, count);
+  __ jcc(Assembler::zero, success);
+  __ bind(scalar_loop);
+  __ load_unsigned_short(rax, Address(src, 0));
+  __ cmpl(rax, 255);
+  __ jcc(Assembler::above, failure);
+  __ movb(Address(dst, 0), rax);
+  __ addptr(src, 2);
+  __ addptr(dst, 1);
+  __ subl(count, 1);
+  __ jcc(Assembler::notZero, scalar_loop);
+  __ bind(success);
+  __ movl(rax, original_count);
+  __ jmp(done);
+  __ bind(failure);
+  __ xorl(rax, rax);
+  __ bind(done);
+  if (UseAVX > 0) {
+    __ vzeroupper();
+  }
+  __ ret(0);
+  masm->flush();
+
+  RuntimeStub* stub = RuntimeStub::new_runtime_stub(
+      _string_compress_stub, &buffer, (int)(__ pc() - start),
+      0 /* frame size */, nullptr /* oop maps */, false);
+  address entry = stub->entry_point();
+  _routine_entry[_string_compress_stub] = entry;
+  _gc_leaf_routines.insert(entry);
+}
+
+// C ABI: (Latin1 source, UTF16 destination, i32 count) -> void.
+void JeandleRuntimeRoutine::generate_string_inflate_stub() {
+  ResourceMark rm;
+  CodeBuffer buffer(_string_inflate_stub, 2048, 64);
+  MacroAssembler* masm = new MacroAssembler(&buffer);
+  address start = __ pc();
+
+  assert(c_rarg0 == rdi && c_rarg1 == rsi && c_rarg2 == rdx,
+         "unexpected C calling convention");
+  __ movptr(rax, rdi);
+  __ movptr(rdi, rsi);
+  __ movptr(rsi, rax);
+  __ movl(rdx, rdx);
+  __ byte_array_inflate(rsi, rdi, rdx, xmm0, rcx,
+                        VM_Version::supports_avx512vlbw() && VM_Version::supports_bmi2() ? k1 : knoreg);
+  if (UseAVX > 0) {
+    __ vzeroupper();
+  }
+  __ ret(0);
+  masm->flush();
+
+  RuntimeStub* stub = RuntimeStub::new_runtime_stub(
+      _string_inflate_stub, &buffer, (int)(__ pc() - start),
+      0 /* frame size */, nullptr /* oop maps */, false);
+  address entry = stub->entry_point();
+  _routine_entry[_string_inflate_stub] = entry;
+  _gc_leaf_routines.insert(entry);
+}

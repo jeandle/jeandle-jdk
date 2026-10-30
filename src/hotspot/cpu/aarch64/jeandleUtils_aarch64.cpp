@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2025, the Jeandle-JDK Authors. All Rights Reserved.
+ * Copyright (c) 2025, 2026, the Jeandle-JDK Authors. All Rights Reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -78,6 +78,9 @@ void JeandleFuncSig::setup_description(llvm::Function* func, ciMethod* method, b
   if (UseCompressedOops) {
     func->addFnAttr(llvm::Attribute::get(func->getContext(), llvm::jeandle::Attribute::UseCompressedOops));
   }
+
+  // HotSpot locates caller frames using a fixed stack-pointer adjustment.
+  func->addFnAttr("no-realign-stack");
 
   // Always disable tail call for jeandle, to ensure the correct stack states.
   func->addFnAttr("disable-tail-calls", "true");

@@ -36,6 +36,7 @@
 #include "jeandle/jeandleProfile.hpp"
 
 #include "jeandle/__hotspotHeadersBegin__.hpp"
+#include "ci/ciArray.hpp"
 #include "ci/ciClassList.hpp"
 #include "ci/ciEnv.hpp"
 #include "ci/ciInstanceKlass.hpp"
@@ -52,6 +53,7 @@
 #include "ci/ciUtilities.inline.hpp"
 #include "code/oopRecorder.hpp"
 #include "logging/log.hpp"
+#include "oops/arrayOop.hpp"
 #include "oops/fieldInfo.inline.hpp"
 #include "oops/fieldStreams.inline.hpp"
 #include "oops/instanceMirrorKlass.hpp"
@@ -123,6 +125,12 @@ bool constant_field(int oop_id, int offset, ciField*& field, ciConstant& con, in
   }
 
   if (base_oop->is_array()) {
+    // Array length is immutable even when its elements are not stable.
+    if (offset == arrayOopDesc::length_offset_in_bytes()) {
+      con = ciConstant(T_INT, base_oop->as_array()->length());
+      return true;
+    }
+
     JeandleCompilation* compilation = JeandleCompilation::current();
     JeandleCompiledCode* compiled_code = compilation->compiled_code();
     int base_stable_dimension = compiled_code->stable_array_dimension(oop_id);
@@ -403,7 +411,7 @@ JeandleVMCallback::get_constant_field(int oop_id, int offset) {
 
   int basic_type;
   if (field == nullptr) {
-    // @Stable array element.
+    // Array length or @Stable array element.
     basic_type = con.basic_type();
   } else {
     // Instance or static field.

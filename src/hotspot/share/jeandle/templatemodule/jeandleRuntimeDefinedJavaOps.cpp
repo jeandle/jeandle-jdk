@@ -55,6 +55,7 @@
 #include "runtime/objectMonitor.hpp"
 #include "runtime/safepointMechanism.hpp"
 #include "runtime/sharedRuntime.hpp"
+#include "runtime/vm_version.hpp"
 
 // All JavaOps are nounwind and gc-leaf-function by default. These attributes
 // are a paired Jeandle leaf contract: add them together, or remove them
@@ -1180,6 +1181,16 @@ void RuntimeDefinedJavaOps::define_global_variables(llvm::Module& template_modul
   define_global("DEBUG_MODE",                                       int1_type,  static_cast<uint64_t>(true));
 #else
   define_global("DEBUG_MODE",                                       int1_type,  static_cast<uint64_t>(false));
+#endif
+
+  // Widest usable vector width for the string kernels. The kernels branch on
+  // this constant so LLVM folds away the unused width at compile time.
+#ifdef X86
+  define_global("VM_Version.string_vector_512bit",                  int1_type,
+                static_cast<uint64_t>(VM_Version::supports_avx512vlbw() && MaxVectorSize >= 64));
+#else
+  define_global("VM_Version.string_vector_512bit",                  int1_type,
+                static_cast<uint64_t>(false));
 #endif
 
   define_global("KlassArray.base_offset_in_bytes",                  int32_type, static_cast<uint64_t>(Array<Klass*>::base_offset_in_bytes()));

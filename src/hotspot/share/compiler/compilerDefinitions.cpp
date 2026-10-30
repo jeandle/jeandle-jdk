@@ -646,6 +646,10 @@ void CompilerConfig::ergo_initialize() {
 #ifdef JEANDLE
 
   if (UseJeandleCompiler) {
+    // Keep small intrinsic wrappers eligible for inlining in non-tiered mode.
+    if (FLAG_IS_DEFAULT(InlineSmallCode) && InlineSmallCode < 1500) {
+      FLAG_SET_DEFAULT(InlineSmallCode, 1500);
+    }
 #ifdef COMPILER2
     if (!DoEscapeAnalysis && JeandleDoPEA) {
       FLAG_SET_ERGO(JeandleDoPEA, false);
