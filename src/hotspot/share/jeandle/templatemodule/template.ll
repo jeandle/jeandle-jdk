@@ -1529,6 +1529,15 @@ filter:
   %prepared.filter.offset = phi i32 [ %last.offset, %pair ], [ 1, %second ]
   %prepared.filter.char = phi i32 [ %last, %pair ], [ %second.char, %second ]
   br label %scan.header
+; The scan filters candidate positions in vector windows, then confirms each
+; surviving lane with a full needle comparison. Repetitive inputs whose
+; endpoint characters match everywhere (e.g. periodic haystacks) degrade to
+; the same quadratic worst case as the C2 pcmpestri stub and the Graal
+; two-character-plus-regionEquals snippet; no mainstream VM substring
+; intrinsic uses a bounded algorithm. The kernel is a leaf routine without
+; safepoint polls, like the HotSpot substring stubs, so the duration of a
+; single call bounds its time-to-safepoint contribution (measured by
+; TestStringSafepointLatency).
 scan.header:
   %pos = phi i32 [ %from, %unprepared ], [ %from, %filter ], [ %next, %vector.next ], [ %l64.next.pos, %latin64.next ]
   %filter.offset = phi i32 [ 0, %unprepared ], [ %prepared.filter.offset, %filter ], [ %filter.offset, %vector.next ], [ %filter.offset, %latin64.next ]

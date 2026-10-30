@@ -255,7 +255,9 @@ void JeandleRuntimeRoutine::generate_string_compress_stub() {
   const Register src = c_rarg0;
   const Register dst = c_rarg1;
   const Register count = c_rarg2;
-  const Register original_count = r8;
+  // c_rarg3 stays distinct from count under both x64 calling conventions;
+  // a fixed register choice would alias c_rarg2 on Windows.
+  const Register original_count = c_rarg3;
   Label scalar, scalar_loop, success, failure, done;
   address start = __ pc();
 
@@ -356,15 +358,15 @@ void JeandleRuntimeRoutine::generate_string_inflate_stub() {
   ResourceMark rm;
   CodeBuffer buffer(_string_inflate_stub, 2048, 64);
   MacroAssembler* masm = new MacroAssembler(&buffer);
+  const Register src = c_rarg0;
+  const Register dst = c_rarg1;
+  const Register len = c_rarg2;
+  // Scratch under both x64 calling conventions; never a C argument register.
+  const Register tmp = r11;
   address start = __ pc();
 
-  assert(c_rarg0 == rdi && c_rarg1 == rsi && c_rarg2 == rdx,
-         "unexpected C calling convention");
-  __ movptr(rax, rdi);
-  __ movptr(rdi, rsi);
-  __ movptr(rsi, rax);
-  __ movl(rdx, rdx);
-  __ byte_array_inflate(rsi, rdi, rdx, xmm0, rcx,
+  __ movl(len, len);
+  __ byte_array_inflate(src, dst, len, xmm0, tmp,
                         VM_Version::supports_avx512vlbw() && VM_Version::supports_bmi2() ? k1 : knoreg);
   if (UseAVX > 0) {
     __ vzeroupper();
