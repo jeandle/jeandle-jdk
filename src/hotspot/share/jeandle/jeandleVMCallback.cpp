@@ -542,6 +542,11 @@ int JeandleVMCallback::get_klass_layout_helper(uintptr_t klass_ptr) {
   return klass->layout_helper();
 }
 
+int JeandleVMCallback::get_super_check_offset(uintptr_t klass_ptr) {
+  Klass* klass = reinterpret_cast<Klass*>(klass_ptr);
+  return klass->super_check_offset();
+}
+
 int JeandleVMCallback::get_klass_modifier_flags(uintptr_t klass_ptr) {
   Klass* klass = reinterpret_cast<Klass*>(klass_ptr);
   return klass->modifier_flags();
@@ -1152,6 +1157,7 @@ void JeandleVMCallback::register_callbacks() {
   callbacks.GetMirrorKlass = &JeandleVMCallback::get_mirror_klass;
   callbacks.AreSameClassMirrors = &JeandleVMCallback::are_same_class_mirrors;
   callbacks.GetKlassLayoutHelper = &JeandleVMCallback::get_klass_layout_helper;
+  callbacks.GetSuperCheckOffset = &JeandleVMCallback::get_super_check_offset;
   callbacks.GetKlassModifierFlags = &JeandleVMCallback::get_klass_modifier_flags;
   callbacks.GetKlassAccessFlags = &JeandleVMCallback::get_klass_access_flags;
   callbacks.IsHiddenKlass = &JeandleVMCallback::is_hidden_klass;

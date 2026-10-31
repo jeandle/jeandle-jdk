@@ -443,6 +443,48 @@ return_false:
   ret i1 false
 }
 
+; The supplied offset must be Klass::super_check_offset() for %super_klass.
+; ConstantFieldFolding selects this form only after proving the target Klass.
+define hotspotcc i1 @jeandle.check_klass_subtype_with_offset(ptr addrspace(0) nocapture %sub_klass, ptr addrspace(0) nocapture %super_klass, i32 %super_check_offset) "lower-phase"="1" #0 {
+entry:
+  %is_same_klass = icmp eq ptr addrspace(0) %sub_klass, %super_klass
+  br i1 %is_same_klass, label %return_true, label %check_primary_supers
+
+check_primary_supers:
+  ; Load super_check klass from _primary_supers of the sub_klass.
+  %super_check_addr = getelementptr inbounds i8, ptr addrspace(0) %sub_klass, i32 %super_check_offset
+  %super_check = load atomic ptr addrspace(0), ptr addrspace(0) %super_check_addr unordered, align 8
+
+  %is_super_match = icmp eq ptr %super_klass, %super_check
+  ; Match C2's static subtype-check heuristic without adding branch_weights to
+  ; the pre-optimization module, where they would be confused with MDO profile.
+  %is_super_match_likely = call i1 @llvm.expect.with.probability.i1(i1 %is_super_match, i1 true, double 8.300000e-01)
+  br i1 %is_super_match_likely, label %return_true, label %check_secondary_supers
+
+check_secondary_supers:
+  ; Check if there are secondary supers.
+  %secondary_super_cache_offset = load i32, ptr @Klass.secondary_super_cache_offset
+  %has_secondary = icmp eq i32 %super_check_offset, %secondary_super_cache_offset
+  %has_secondary_unlikely = call i1 @llvm.expect.with.probability.i1(i1 %has_secondary, i1 false, double 6.300000e-01)
+  br i1 %has_secondary_unlikely, label %slow_path, label %return_false
+
+slow_path:
+  %is_subtype_slow = call hotspotcc i1 @jeandle.check_klass_subtype_slow_path(ptr addrspace(0) %sub_klass, ptr addrspace(0) %super_klass)
+  br i1 %is_subtype_slow, label %return_true, label %return_false
+
+return_true:
+  ret i1 true
+return_false:
+  ret i1 false
+}
+
+define hotspotcc i1 @jeandle.checkcast_nonnull_with_offset(ptr addrspace(0) nocapture %super_klass, ptr addrspace(1) nocapture nonnull %oop, i32 %super_check_offset) noinline "lower-phase"="1" #0 {
+entry:
+  %sub_klass = call hotspotcc ptr addrspace(0) @jeandle.load_klass(ptr addrspace(1) nonnull %oop)
+  %is_subtype = call hotspotcc i1 @jeandle.check_klass_subtype_with_offset(ptr addrspace(0) %sub_klass, ptr addrspace(0) %super_klass, i32 %super_check_offset)
+  ret i1 %is_subtype
+}
+
 ; Check if the sub_klass extends from the super_klass using both primary and secondary supers.
 ; Fast path: checks primary super chain.
 ; Slow path: scans secondary supers array if needed.
