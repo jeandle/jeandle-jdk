@@ -164,6 +164,15 @@ bool JeandleIntrinsicLowering::is_supported(vmIntrinsics::ID id) {
     case vmIntrinsics::_dcopySign:
     case vmIntrinsics::_fcopySign:
 
+    // Math.signum: no CPU gating. The lowering is a line-for-line translation
+    // of Math.signum's Java body into compare/select IR (see lower_signum),
+    // which is valid IR on every target Jeandle supports. Flag gating
+    // (InlineMathNatives && UseSignumIntrinsic) is enforced by
+    // vmIntrinsics::is_disabled_by_flags(), which try_lower_intrinsic() runs
+    // after is_supported() returns true.
+    case vmIntrinsics::_dsignum:
+    case vmIntrinsics::_fsignum:
+
     // min/max: no CPU gating needed. llvm.smin/smax always lower to a
     // compare+select/cmov sequence and llvm.minimum/maximum always lower to
     // a NaN/signed-zero-correct sequence on every target Jeandle supports;
@@ -408,6 +417,12 @@ bool JeandleIntrinsicLowering::lower(vmIntrinsics::ID id, const ciMethod* target
     case vmIntrinsics::_dcopySign:
     case vmIntrinsics::_fcopySign:
       return emit_llvm_builtin(llvm::Intrinsic::copysign);
+
+    // Math.signum: select chain mirroring the Java source term by term
+    // (see lower_signum).
+    case vmIntrinsics::_dsignum:
+    case vmIntrinsics::_fsignum:
+      return lower_signum(id);
 
     case vmIntrinsics::_bitCount_i:
     case vmIntrinsics::_bitCount_l:
@@ -1281,6 +1296,41 @@ bool JeandleIntrinsicLowering::lower_fp_range_check(vmIntrinsics::ID id) {
       {arg->getType()},
       {arg, builder.getInt32(static_cast<uint32_t>(mask))});
   _interp->_jvm->ipush(builder.CreateZExt(result, builder.getInt32Ty()));
+  return true;
+}
+
+// ---- lower_signum ----
+// Math.signum(double|float) lowers its Java source term by term:
+//   return (x == 0.0 || Double.isNaN(x)) ? x : copySign(1.0, x);
+// as
+//   notnan = fcmp ord  x, x        ; false only when x is NaN (isNaN(x))
+//   iszero = fcmp oeq  x, 0.0      ; x == 0.0, +0.0 and -0.0 both
+//   cs     = llvm.copysign(1.0, x) ; +-1.0 carrying the sign of x
+//   sel0   = select iszero, x, cs  ; zeros return the original signed zero
+//   res    = select notnan, sel0, x
+// A NaN input returns the original value -- payload and sign preserved --
+// because the outer select falls back to x itself; every non-NaN, non-zero
+// input becomes a signed 1.0.
+bool JeandleIntrinsicLowering::lower_signum(vmIntrinsics::ID id) {
+  llvm::IRBuilder<>& builder = _interp->_ir_builder;
+  bool is_double = (id == vmIntrinsics::_dsignum);
+
+  llvm::Value* x = is_double ? _interp->_jvm->dpop() : _interp->_jvm->fpop();
+  llvm::Type* fp_ty = x->getType();
+  llvm::Value* notnan = builder.CreateFCmp(llvm::CmpInst::FCMP_ORD, x, x);
+  llvm::Value* iszero = builder.CreateFCmp(llvm::CmpInst::FCMP_OEQ, x,
+                                           llvm::ConstantFP::get(fp_ty, 0.0));
+  llvm::Value* cs = builder.CreateIntrinsic(
+      fp_ty, llvm::Intrinsic::copysign,
+      {llvm::ConstantFP::get(fp_ty, 1.0), x});
+  llvm::Value* sel0 = builder.CreateSelect(iszero, x, cs);
+  llvm::Value* res = builder.CreateSelect(notnan, sel0, x);
+
+  if (is_double) {
+    _interp->_jvm->dpush(res);
+  } else {
+    _interp->_jvm->fpush(res);
+  }
   return true;
 }
 
