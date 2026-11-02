@@ -108,8 +108,10 @@ bool JeandleIntrinsicLowering::is_supported(vmIntrinsics::ID id) {
     // Math.round reuses llvm.floor for its exact tie decision (see
     // lower_round), so it shares floor's dependency: without SSE4.1 x86 would
     // lower every round into a floorf/floor libcall. There is no dedicated
-    // VM flag for these two IDs (not in vmIntrinsics::is_disabled_by_flags),
-    // so a user opt-out goes through -XX:DisableIntrinsic=_roundF,_roundD.
+    // VM flag for these two IDs (no case in
+    // vmIntrinsics::disabled_by_jvm_flags()), so a user opt-out goes through
+    // -XX:DisableIntrinsic=_roundF,_roundD, which
+    // vmIntrinsics::is_disabled_by_flags() honors in try_lower_intrinsic().
     case vmIntrinsics::_roundF:
     case vmIntrinsics::_roundD:
       return cpu_supports_rounding();
@@ -1361,9 +1363,14 @@ bool JeandleIntrinsicLowering::lower_signum(vmIntrinsics::ID id) {
 //   rounds-to-even to 8388610.0f (ulp = 1 above 2^23).
 // The tie is therefore decided with exact operations only:
 //   t    = llvm.floor(a)     exact: IEEE floor is an exact operation
-//   frac = a - t             exact by Sterbenz' lemma: for |a| >= 1, t lies
-//                            within a factor of 2 of a; for |a| < 1, t is 0
-//                            or -1 and a - t lands in [0, 1)
+//   frac = a - t             exact everywhere except a in (-0.5, 0): |a| >= 1
+//                            is Sterbenz' range (t lies within a factor of 2
+//                            of a), a in [0, 1) has t = 0, and a in [-1, -0.5]
+//                            has t = -1, also within a factor of 2 of a. In
+//                            the exceptional window the exact a + 1 already
+//                            exceeds 0.5 and rounding to nearest cannot move
+//                            it below the representable 0.5 (up to 1.0 at
+//                            most), so the compare below decides exactly.
 //   ge   = frac >= 0.5       ordered compare, so it is false for NaN and the
 //                            NaN falls through to the final conversion as 0
 //   t1   = t + 1.0           exact whenever this branch is taken: frac >= 0.5
