@@ -355,11 +355,16 @@ public class TestPowDouble {
             if (!bitExact) {
                 // llvm.pow follows the host libm, whose pow(1, y) is 1.0 for
                 // every non-finite y where the Math.pow specification says
-                // NaN. Pin the documented divergence of the LLVM-backed mode.
+                // NaN. Pin the documented divergence of the LLVM-backed mode
+                // for all five skipped rows.
                 Asserts.assertEquals(double_pow(1.0d, Double.NaN), 1.0d,
                         "llvm.pow(1, NaN) is the libm value 1.0, not the spec NaN");
                 Asserts.assertEquals(double_pow(1.0d, Double.POSITIVE_INFINITY), 1.0d,
                         "llvm.pow(1, +inf) is the libm value 1.0, not the spec NaN");
+                Asserts.assertEquals(double_pow(1.0d, Double.NEGATIVE_INFINITY), 1.0d,
+                        "llvm.pow(1, -inf) is the libm value 1.0, not the spec NaN");
+                Asserts.assertEquals(double_pow(-1.0d, Double.POSITIVE_INFINITY), 1.0d,
+                        "llvm.pow(-1, +inf) is the libm value 1.0, not the spec NaN");
                 Asserts.assertEquals(double_pow(-1.0d, Double.NEGATIVE_INFINITY), 1.0d,
                         "llvm.pow(-1, -inf) is the libm value 1.0, not the spec NaN");
             }
@@ -453,12 +458,19 @@ public class TestPowDouble {
                 double x = randomDouble(random);
                 String what = "random pow_half " + i + " (" + x + ")";
                 if (bitExact) {
-                    checkBits(what, double_pow_half(x), ref_double_pow(x, 0.5d));
-                } else if (x > 0.0d) {
-                    // The fast path is sqrt on both sides: still bit-exact.
+                    // Both sides run the same dpow routine, which returns
+                    // sqrt(x) for a non-negative base: bit-exact everywhere,
+                    // NaN payloads included.
                     checkBits(what, double_pow_half(x), ref_double_pow(x, 0.5d));
                 } else {
-                    checkValue(what, double_pow_half(x), ref_double_pow(x, 0.5d));
+                    // llvm mode performs no 0.5 specialization (no runtime
+                    // entry), so the compiled side is the host libm's
+                    // pow(x, 0.5) while the reference runs the interpreter's
+                    // fdlibm port -- two implementations, compared with the
+                    // ulp tolerance. checkUlp still demands exact agreement
+                    // for the zeros and infinities and NaN for the negative
+                    // and NaN bases.
+                    checkUlp(what, double_pow_half(x), ref_double_pow(x, 0.5d));
                 }
             }
         }
