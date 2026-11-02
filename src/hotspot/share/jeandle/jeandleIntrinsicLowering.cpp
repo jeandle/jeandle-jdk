@@ -175,6 +175,14 @@ bool JeandleIntrinsicLowering::is_supported(vmIntrinsics::ID id) {
     case vmIntrinsics::_dlog10:
     case vmIntrinsics::_dexp:
 
+    // Math.pow: no CPU gating. The dual-path lowering picks the platform's
+    // dpow entry at lowering time (StubRoutines::dpow where the libm stubs
+    // were generated, else SharedRuntime::dpow, else llvm.pow), so no
+    // feature check applies here. Flag gating (InlineNatives/
+    // InlineMathNatives) is enforced by vmIntrinsics::is_disabled_by_flags(),
+    // which try_lower_intrinsic() runs after is_supported() returns true.
+    case vmIntrinsics::_dpow:
+
     // Math.copySign: no CPU gating needed. llvm.copysign is exactly the IEEE
     // copySign operation the javadoc specifies -- the sign bit of the second
     // operand is copied verbatim (even when that operand is a NaN or a signed
@@ -532,6 +540,10 @@ bool JeandleIntrinsicLowering::lower(vmIntrinsics::ID id, const ciMethod* target
                                   &JeandleRuntimeRoutine::StubRoutines_dexp_callee,
                                   "SharedRuntime_dexp",
                                   &JeandleRuntimeRoutine::SharedRuntime_dexp_callee);
+    // Math.pow: two-argument dual-path call with the constant-exponent
+    // specializations (see lower_pow).
+    case vmIntrinsics::_dpow:
+      return lower_pow();
 
     // getClass
     //
@@ -791,32 +803,151 @@ bool JeandleIntrinsicLowering::emit_llvm_builtin(llvm::Intrinsic::ID llvm_id,
 // lower_dual_path_libm — JeandleUseHotspotIntrinsics selection
 // =============================================================================
 
-bool JeandleIntrinsicLowering::lower_dual_path_libm(llvm::Intrinsic::ID llvm_id,
-                                                     const char* stub_name,
-                                                     JeandleRuntimeCalleeFn stub_fn,
-                                                     const char* shared_name,
-                                                     JeandleRuntimeCalleeFn shared_fn) {
-  if (JeandleUseHotspotIntrinsics) {
-    // Try HotSpot runtime stub -> SharedRuntime -> llvm builtin
-    JeandleRuntimeCalleeFn fn = nullptr;
-    if (JeandleRuntimeRoutine::find_routine_entry(stub_name) != nullptr) {
-      fn = stub_fn;
-    } else if (JeandleRuntimeRoutine::find_routine_entry(shared_name) != nullptr) {
-      fn = shared_fn;
+// Resolve the runtime callee a dual-path libm lowering should call: the
+// StubRoutines entry when its platform stub was generated, else the
+// always-linked SharedRuntime port. Returns nullptr when
+// JeandleUseHotspotIntrinsics is off or neither entry is registered, in
+// which case the llvm builtin is used instead.
+static JeandleRuntimeCalleeFn select_dual_path_libm_callee(
+    const char* stub_name, JeandleRuntimeCalleeFn stub_fn,
+    const char* shared_name, JeandleRuntimeCalleeFn shared_fn) {
+  if (!JeandleUseHotspotIntrinsics) {
+    return nullptr;
+  }
+  // Prefer the stub: it is the very fdlibm port the interpreter's Math.*
+  // entries call, so compiled and interpreted results stay bit-identical
+  // on platforms that generate it; SharedRuntime::d* is the same port in C
+  // and matches the interpreter's fallback configuration.
+  if (JeandleRuntimeRoutine::find_routine_entry(stub_name) != nullptr) {
+    return stub_fn;
+  }
+  if (JeandleRuntimeRoutine::find_routine_entry(shared_name) != nullptr) {
+    return shared_fn;
+  }
+  return nullptr;
+}
+
+bool JeandleIntrinsicLowering::lower_dual_path_libm(
+    llvm::Intrinsic::ID llvm_id,
+    const char* stub_name, JeandleRuntimeCalleeFn stub_fn,
+    const char* shared_name, JeandleRuntimeCalleeFn shared_fn,
+    unsigned num_dargs) {
+  assert(num_dargs >= 1 && num_dargs <= 2, "unsupported double-argument count");
+  JeandleRuntimeCalleeFn fn =
+      select_dual_path_libm_callee(stub_name, stub_fn, shared_name, shared_fn);
+  if (fn != nullptr) {
+    static constexpr CallSiteAttributeMetadata libm_attrs = {CTRL_NONE, MEM_NONE};
+    // Pop the JVM-stack doubles in reverse (LIFO) order so the callee sees
+    // them in declaration order: dpow gets (base, exponent) after the
+    // exponent is popped first; the one-argument intrinsics get {x}.
+    llvm::Value* dargs[2] = {nullptr, nullptr};
+    for (unsigned i = num_dargs; i-- > 0; ) {
+      dargs[i] = _interp->_jvm->dpop();
     }
-    if (fn != nullptr) {
-      static constexpr CallSiteAttributeMetadata libm_attrs = {CTRL_NONE, MEM_NONE};
-      llvm::Value* arg = _interp->_jvm->dpop();
-      llvm::CallBase* site = emit_callsite(fn(_interp->_module), llvm::CallingConv::C,
-                                           {arg}, libm_attrs, /*is_gc_leaf_entry=*/true);
-      _interp->_jvm->dpush(site);
+    llvm::CallBase* site = emit_callsite(fn(_interp->_module), llvm::CallingConv::C,
+                                         llvm::ArrayRef<llvm::Value*>(dargs, num_dargs),
+                                         libm_attrs, /*is_gc_leaf_entry=*/true);
+    _interp->_jvm->dpush(site);
+    return true;
+  }
+  // No runtime available, fall through to the LLVM builtin, which pops the
+  // Java arguments from the target signature itself (two for pow).
+  return emit_llvm_builtin(llvm_id);
+}
+
+// ---- lower_pow ----
+//
+// Math.pow(double a, double b) lowers to the dual-path dpow runtime call
+// (StubRoutines::dpow -> SharedRuntime::dpow -> llvm.pow), plus the two
+// constant-exponent specializations C2's LibraryCallKit::inline_math_pow
+// performs:
+//   pow(x, 2.0)  => x * x
+//   pow(x, 0.5)  => sqrt(x) guarded to x > 0, dpow as the unlikely slow path
+bool JeandleIntrinsicLowering::lower_pow() {
+  llvm::LLVMContext& ctx = *_interp->_context;
+  llvm::IRBuilder<>& builder = _interp->_ir_builder;
+
+  // Peek before deciding: when neither specialization applies, the operands
+  // stay on the stack for lower_dual_path_libm to pop. peek_value addresses
+  // logical operands (double/long slots carry a null high-word placeholder).
+  llvm::ConstantFP* exp = llvm::dyn_cast<llvm::ConstantFP>(
+      _interp->_jvm->peek_value(0).value());
+  llvm::Value* base = _interp->_jvm->peek_value(1).value();
+
+  JeandleRuntimeCalleeFn dpow_callee = select_dual_path_libm_callee(
+      "StubRoutines_dpow", &JeandleRuntimeRoutine::StubRoutines_dpow_callee,
+      "SharedRuntime_dpow", &JeandleRuntimeRoutine::SharedRuntime_dpow_callee);
+
+  if (exp != nullptr && exp->isExactlyValue(2.0)) {
+    // fdlibm's __ieee754_pow -- both the SharedRuntime port and the stub --
+    // special-cases y == 2 to `return x*x` before any range reduction, so
+    // the multiply is bit-exact with the runtime call on every input,
+    // signed zeros, infinities and NaN payloads included.
+    _interp->_jvm->dpop();
+    _interp->_jvm->dpop();
+    _interp->_jvm->dpush(builder.CreateFMul(base, base, "pow.squared"));
+    return true;
+  }
+
+  if (exp != nullptr && exp->isExactlyValue(0.5) && dpow_callee != nullptr) {
+    // pow(x, 0.5) => sqrt(x) for x > 0. The guard is an ordered compare
+    // against 0.0 that routes x <= 0.0 to the runtime: a negative base has
+    // pow NaN (which sqrt also gives, but the exact fdlibm behavior stays
+    // on the runtime for parity), and the zeros must not take the sqrt
+    // path because pow(+-0.0, 0.5) is +0.0 while sqrt(-0.0) is -0.0 and a
+    // floating-point compare cannot tell the zero signs apart. NaN stays on
+    // the fast path: `ole` is unordered-false and sqrt(NaN) is the
+    // specified NaN. Mirrors C2's inline_math_pow.
+    _interp->_jvm->dpop();
+    _interp->_jvm->dpop();
+    llvm::Value* zero = llvm::ConstantFP::get(builder.getDoubleTy(), 0.0);
+    llvm::Value* needs_runtime = builder.CreateFCmp(
+        llvm::CmpInst::FCMP_OLE, base, zero, "pow.sqrt_unsafe");
+    // generate_slow_guard branches to the returned slow block and leaves the
+    // builder inserting in the fast block. A null return means the compare
+    // folded to constant-false (base provably > 0), so no guard blocks are
+    // created and only the sqrt remains.
+    llvm::BasicBlock* slow_bb = generate_slow_guard(needs_runtime, nullptr);
+    llvm::CallInst* fast_result = builder.CreateIntrinsic(
+        llvm::Intrinsic::sqrt, {base->getType()}, {base}, nullptr, "pow.sqrt");
+    if (slow_bb == nullptr) {
+      _interp->_jvm->dpush(fast_result);
       return true;
     }
-    // No runtime available, fall through to LLVM builtin
-    return emit_llvm_builtin(llvm_id);
-  } else {
-    return emit_llvm_builtin(llvm_id);
+
+    llvm::BasicBlock* fast_bb = builder.GetInsertBlock();
+    llvm::BasicBlock* merge_bb =
+        llvm::BasicBlock::Create(ctx, "pow_half_merge", _interp->_llvm_func);
+    builder.CreateBr(merge_bb);
+
+    // Slow path: exact pow(x, 0.5) from the same dpow routine the unguarded
+    // call would use.
+    builder.SetInsertPoint(slow_bb);
+    static constexpr CallSiteAttributeMetadata libm_attrs = {CTRL_NONE, MEM_NONE};
+    llvm::CallBase* slow_result = emit_callsite(
+        dpow_callee(_interp->_module), llvm::CallingConv::C,
+        {base, llvm::ConstantFP::get(builder.getDoubleTy(), 0.5)},
+        libm_attrs, /*is_gc_leaf_entry=*/true);
+    builder.CreateBr(merge_bb);
+    llvm::BasicBlock* slow_tail_bb = builder.GetInsertBlock();
+
+    // Merge the two results; the interpreter continues in the merge block.
+    builder.SetInsertPoint(merge_bb);
+    _interp->_block->set_tail_llvm_block(merge_bb);
+    llvm::PHINode* result =
+        builder.CreatePHI(builder.getDoubleTy(), 2, "pow_half.result");
+    result->addIncoming(fast_result, fast_bb);
+    result->addIncoming(slow_result, slow_tail_bb);
+    _interp->_jvm->dpush(result);
+    return true;
   }
+
+  return lower_dual_path_libm(llvm::Intrinsic::pow,
+                              "StubRoutines_dpow",
+                              &JeandleRuntimeRoutine::StubRoutines_dpow_callee,
+                              "SharedRuntime_dpow",
+                              &JeandleRuntimeRoutine::SharedRuntime_dpow_callee,
+                              /*num_dargs=*/2);
 }
 
 // =============================================================================

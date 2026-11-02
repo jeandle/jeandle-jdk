@@ -170,14 +170,19 @@ class JeandleIntrinsicLowering : public StackObj {
   // Pattern helpers — reusable lowering patterns shared by multiple intrinsics
   // ========================================================================
 
-  // Dual-path libm (dsin, dcos, dtan, dlog, dlog10, dexp):
+  // Dual-path libm (dsin, dcos, dtan, dlog, dlog10, dexp, dpow):
   //   JeandleUseHotspotIntrinsics=true  -> try stub -> try SharedRuntime -> llvm builtin
   //   JeandleUseHotspotIntrinsics=false -> llvm builtin only
+  // num_dargs double arguments are popped from the JVM stack (LIFO) and
+  // passed to the runtime callee in declaration order; only dpow uses two,
+  // passing (base, exponent). The llvm-builtin fallback always pops the
+  // full Java signature itself.
   bool lower_dual_path_libm(llvm::Intrinsic::ID llvm_id,
                             const char* stub_name,
                             JeandleRuntimeCalleeFn stub_fn,
                             const char* shared_name,
-                            JeandleRuntimeCalleeFn shared_fn);
+                            JeandleRuntimeCalleeFn shared_fn,
+                            unsigned num_dargs = 1);
 
   // JavaOp-based intrinsic: resolve the named JavaOp, pop args, call, push result.
   bool lower_java_op(const char* java_op_name,
@@ -235,6 +240,7 @@ class JeandleIntrinsicLowering : public StackObj {
   bool lower_fp_range_check(vmIntrinsics::ID id);
   bool lower_signum(vmIntrinsics::ID id);
   bool lower_round(vmIntrinsics::ID id);
+  bool lower_pow();
   bool lower_float16_convert(vmIntrinsics::ID id);
   bool lower_llvm_fence(vmIntrinsics::ID id);
   bool lower_preconditions_check_index(BasicType bt);
