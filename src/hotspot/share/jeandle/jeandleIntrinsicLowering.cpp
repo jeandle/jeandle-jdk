@@ -153,6 +153,17 @@ bool JeandleIntrinsicLowering::is_supported(vmIntrinsics::ID id) {
     case vmIntrinsics::_dlog10:
     case vmIntrinsics::_dexp:
 
+    // Math.copySign: no CPU gating needed. llvm.copysign is exactly the IEEE
+    // copySign operation the javadoc specifies -- the sign bit of the second
+    // operand is copied verbatim (even when that operand is a NaN or a signed
+    // zero) and the first operand's payload bits, NaN payloads included, pass
+    // through untouched. It lowers to a bit-level sign move on every target
+    // Jeandle supports, never a libcall. Flag gating (InlineMathNatives &&
+    // UseCopySignIntrinsic) is enforced by vmIntrinsics::is_disabled_by_flags(),
+    // which try_lower_intrinsic() runs after is_supported() returns true.
+    case vmIntrinsics::_dcopySign:
+    case vmIntrinsics::_fcopySign:
+
     // min/max: no CPU gating needed. llvm.smin/smax always lower to a
     // compare+select/cmov sequence and llvm.minimum/maximum always lower to
     // a NaN/signed-zero-correct sequence on every target Jeandle supports;
@@ -387,6 +398,16 @@ bool JeandleIntrinsicLowering::lower(vmIntrinsics::ID id, const ciMethod* target
     case vmIntrinsics::_fmaD:
     case vmIntrinsics::_fmaF:
       return emit_llvm_builtin(llvm::Intrinsic::fma);
+
+    // Math.copySign: llvm.copysign is bit-identical to the IEEE copySign
+    // operation the javadoc specifies -- the magnitude operand with the sign
+    // bit of the sign operand, copied verbatim even when the sign operand is
+    // a NaN or a signed zero, leaving NaN payloads of the magnitude operand
+    // unmodified. The overloaded intrinsic selects its f32/f64 form from the
+    // Java return type.
+    case vmIntrinsics::_dcopySign:
+    case vmIntrinsics::_fcopySign:
+      return emit_llvm_builtin(llvm::Intrinsic::copysign);
 
     case vmIntrinsics::_bitCount_i:
     case vmIntrinsics::_bitCount_l:
