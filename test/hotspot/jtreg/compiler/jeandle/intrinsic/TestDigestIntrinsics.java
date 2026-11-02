@@ -80,20 +80,26 @@ public class TestDigestIntrinsics {
         Asserts.assertEquals(referenceDigests, digestLines(output),
                 "digests differ from the all-intrinsics-disabled reference run");
 
-        String ir = Files.walk(dumpPath)
-                .filter(Files::isRegularFile)
-                .filter(path -> path.toString().endsWith(".ll"))
-                .map(path -> {
-                    try {
-                        return Files.readString(path);
-                    } catch (Exception e) {
-                        throw new RuntimeException(e);
-                    }
-                })
-                .reduce("", String::concat);
+        String ir;
+        try (var files = Files.walk(dumpPath)) {
+            ir = files
+                    .filter(Files::isRegularFile)
+                    .filter(path -> path.toString().endsWith(".ll"))
+                    .map(path -> {
+                        try {
+                            return Files.readString(path);
+                        } catch (Exception e) {
+                            throw new RuntimeException(e);
+                        }
+                    })
+                    .reduce("", String::concat);
+        }
         // Single-block MD5 routine presence must match the effective flag.
+        // The call form with the open paren is not a prefix of the
+        // multi-block routine name, so this assertion cannot be satisfied
+        // by the multi-block path.
         assertRoutineMatchesFlag(output, ir, "UseMD5Intrinsics",
-                "StubRoutines_md5_implCompress", "MD5 single-block");
+                "StubRoutines_md5_implCompress(", "MD5 single-block");
         // Multi-block routines are gated per algorithm: the flag disables the
         // branch; a missing platform stub (x86 never generates sha3 MB)
         // disables it as well. On x86 UseSHA3Intrinsics is force-disabled,
@@ -171,8 +177,13 @@ public class TestDigestIntrinsics {
 
             // Mixed-algorithm call site: the same compiled
             // DigestBase.implCompressMultiBlock sees both MD5 and SHA-256
-            // receivers, so both instanceof guards are exercised and the
-            // non-matching receivers take the Java fallback path.
+            // receivers, so both instanceof guards select their own stub in
+            // one compiled body (the SHA-256 receiver traverses the guard
+            // chain past the md5 guard). The Java fallback path itself is
+            // pinned by the SHA3-256 rows above: on x86 the sha3 branch is
+            // compile-time-closed, every guard misses and the fallback runs;
+            // its correctness is covered by the DIGEST comparison against
+            // the intrinsics-disabled reference.
             MessageDigest md5 = MessageDigest.getInstance("MD5", "SUN");
             MessageDigest sha = MessageDigest.getInstance("SHA-256", "SUN");
             byte[] data = new byte[300];

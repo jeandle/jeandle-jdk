@@ -311,7 +311,8 @@ bool JeandleIntrinsicLowering::is_supported(vmIntrinsics::ID id) {
     case vmIntrinsics::_equalsC:
       return true;
 
-    // Single-block SHA compression. Availability is checked again by the
+    // Single-block digest compression (MD5 and the SHA family).
+    // Availability is checked again by the
     // lowering because platform stubs are generated conditionally.
     case vmIntrinsics::_md5_implCompress:
     case vmIntrinsics::_sha_implCompress:
@@ -773,7 +774,7 @@ bool JeandleIntrinsicLowering::lower_dual_path_libm(llvm::Intrinsic::ID llvm_id,
 }
 
 // =============================================================================
-// lower_digestBase_implCompress — single-block SHA compression
+// lower_digestBase_implCompress — single-block digest compression (MD5/SHA)
 // =============================================================================
 
 bool JeandleIntrinsicLowering::lower_digestBase_implCompress(vmIntrinsics::ID id) {
@@ -987,7 +988,7 @@ bool JeandleIntrinsicLowering::lower_digestBase_implCompressMB() {
     vmIntrinsics::ID gate_id;         // per-algorithm Use*Intrinsics gate
     const char* klass_name;
     const char* label;                // block naming
-    const char* stub_name;            // JeandleRoutine entry name
+    const char* stub_name;            // JeandleRuntimeRoutine entry name
     JeandleRuntimeCalleeFn callee;
     const char* state_signature;      // state field type
     BasicType state_elem;
