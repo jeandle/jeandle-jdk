@@ -220,6 +220,7 @@ class JeandleIntrinsicLowering : public StackObj {
   bool lower_fp_to_bits_canonical(vmIntrinsics::ID id);
   bool lower_fp_range_check(vmIntrinsics::ID id);
   bool lower_signum(vmIntrinsics::ID id);
+  bool lower_round(vmIntrinsics::ID id);
   bool lower_float16_convert(vmIntrinsics::ID id);
   bool lower_llvm_fence(vmIntrinsics::ID id);
   bool lower_preconditions_check_index(BasicType bt);

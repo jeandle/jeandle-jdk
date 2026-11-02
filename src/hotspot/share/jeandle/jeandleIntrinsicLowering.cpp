@@ -105,6 +105,13 @@ bool JeandleIntrinsicLowering::is_supported(vmIntrinsics::ID id) {
     case vmIntrinsics::_floor:
     case vmIntrinsics::_ceil:
     case vmIntrinsics::_rint:
+    // Math.round reuses llvm.floor for its exact tie decision (see
+    // lower_round), so it shares floor's dependency: without SSE4.1 x86 would
+    // lower every round into a floorf/floor libcall. There is no dedicated
+    // VM flag for these two IDs (not in vmIntrinsics::is_disabled_by_flags),
+    // so a user opt-out goes through -XX:DisableIntrinsic=_roundF,_roundD.
+    case vmIntrinsics::_roundF:
+    case vmIntrinsics::_roundD:
       return cpu_supports_rounding();
 
     case vmIntrinsics::_bitCount_i:
@@ -423,6 +430,12 @@ bool JeandleIntrinsicLowering::lower(vmIntrinsics::ID id, const ciMethod* target
     case vmIntrinsics::_dsignum:
     case vmIntrinsics::_fsignum:
       return lower_signum(id);
+
+    // Math.round: exact floor/select chain plus Java's saturating fp->int
+    // conversion (see lower_round).
+    case vmIntrinsics::_roundF:
+    case vmIntrinsics::_roundD:
+      return lower_round(id);
 
     case vmIntrinsics::_bitCount_i:
     case vmIntrinsics::_bitCount_l:
@@ -1330,6 +1343,59 @@ bool JeandleIntrinsicLowering::lower_signum(vmIntrinsics::ID id) {
     _interp->_jvm->dpush(res);
   } else {
     _interp->_jvm->fpush(res);
+  }
+  return true;
+}
+
+// ---- lower_round ----
+// Math.round(float)->int / Math.round(double)->long is specified as Java's
+// saturating floating-point-to-integer conversion of the exact mathematical
+// floor(a + 0.5) (ties toward +infinity): NaN converts to 0, out-of-range
+// values to MIN/MAX. Emitting the literal floor(a + 0.5) would be wrong,
+// because the addition rounds to the floating-point precision first and so
+// double-rounds whenever a + 0.5 crosses a binade boundary:
+//   Math.round(0.49999999999999994d) must be 0, but a + 0.5d rounds-to-even
+//   to 1.0d (the exact sum 1 - 2^-54 is the tie between 1.0d and its next
+//   lower neighbour);
+//   Math.round(8388609.0f) must be 8388609, but 8388609.0f + 0.5f
+//   rounds-to-even to 8388610.0f (ulp = 1 above 2^23).
+// The tie is therefore decided with exact operations only:
+//   t    = llvm.floor(a)     exact: IEEE floor is an exact operation
+//   frac = a - t             exact by Sterbenz' lemma: for |a| >= 1, t lies
+//                            within a factor of 2 of a; for |a| < 1, t is 0
+//                            or -1 and a - t lands in [0, 1)
+//   ge   = frac >= 0.5       ordered compare, so it is false for NaN and the
+//                            NaN falls through to the final conversion as 0
+//   t1   = t + 1.0           exact whenever this branch is taken: frac >= 0.5
+//                            implies ulp(a) <= 0.5 (a < 2^23 for f32,
+//                            a < 2^52 for f64), so the integer t + 1 is still
+//                            representable at that magnitude
+//   r    = ge ? t1 : t       the exact floor(a + 0.5) as a floating-point value
+//   res  = llvm.fptosi.sat.iN.fM(r)
+//                            Java's saturating NaN->0 integer conversion
+bool JeandleIntrinsicLowering::lower_round(vmIntrinsics::ID id) {
+  llvm::LLVMContext& ctx = *_interp->_context;
+  llvm::IRBuilder<>& builder = _interp->_ir_builder;
+  bool is_double = (id == vmIntrinsics::_roundD);
+
+  llvm::Value* a = is_double ? _interp->_jvm->dpop() : _interp->_jvm->fpop();
+  llvm::Type* fp_ty = a->getType();
+  llvm::Type* int_ty = JeandleType::java2llvm(
+      is_double ? BasicType::T_LONG : BasicType::T_INT, ctx);
+
+  llvm::Value* t = builder.CreateIntrinsic(llvm::Intrinsic::floor, {fp_ty}, {a});
+  llvm::Value* frac = builder.CreateFSub(a, t);
+  llvm::Value* ge = builder.CreateFCmp(llvm::CmpInst::FCMP_OGE, frac,
+                                       llvm::ConstantFP::get(fp_ty, 0.5));
+  llvm::Value* t1 = builder.CreateFAdd(t, llvm::ConstantFP::get(fp_ty, 1.0));
+  llvm::Value* r = builder.CreateSelect(ge, t1, t);
+  llvm::Value* res = builder.CreateIntrinsic(
+      llvm::Intrinsic::fptosi_sat, {int_ty, fp_ty}, {r});
+
+  if (is_double) {
+    _interp->_jvm->lpush(res);
+  } else {
+    _interp->_jvm->ipush(res);
   }
   return true;
 }
