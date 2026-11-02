@@ -140,8 +140,15 @@ public class TestPEAArrayLengthBoundsAndTypes {
         Asserts.assertEquals(before.allocations().size(), 1,
                 target + ": one source array feeds the nullable length phi");
         int sourceLengths = before.lineCount(ARRAY_LENGTH);
-        Asserts.assertTrue(sourceLengths > 0,
-                target + ": source retains an explicit arraylength call into PEA");
+        if (sourceLengths == 0) {
+            // Earlier optimization may propagate the non-null array's length
+            // before PEA. Require the exact replacement, not just a missing op.
+            long foldedLengthUses = before.lines().stream()
+                    .filter(line -> line.contains("_lengthResult(III)J")
+                            && line.contains("\"(i32 3,")).count();
+            Asserts.assertEquals(foldedLengthUses, 1L,
+                    target + ": earlier optimization supplies the exact source length");
+        }
         Asserts.assertEquals(first.effectCount("ReplaceCall", ARRAY_LENGTH),
                 (long) sourceLengths,
                 target + ": every source arraylength call is replaced");
