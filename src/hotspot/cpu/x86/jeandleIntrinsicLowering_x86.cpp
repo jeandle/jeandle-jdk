@@ -48,6 +48,16 @@ bool JeandleIntrinsicLowering::cpu_supports_popcount() {
   return UsePopCountInstruction;
 }
 
+bool JeandleIntrinsicLowering::cpu_supports_bit_shuffle() {
+  // BMI2 provides PEXT (parallel bit extract) and PDEP (parallel bit
+  // deposit) for Integer/Long.compress/expand. UseBMI2Instructions is set by
+  // VM_Version when the hardware supports it and can be overridden via
+  // -XX:-UseBMI2Instructions; apply_vm_flag_feature_overrides() keeps the
+  // LLVM "bmi2" target feature in sync with the flag, so whenever this gate
+  // passes, the emitted intrinsic can lower to the hardware instruction.
+  return UseBMI2Instructions;
+}
+
 bool JeandleIntrinsicLowering::cpu_supports_spin_wait() {
   // PAUSE is part of SSE2, which is baseline on x86-64.
   return true;
@@ -110,6 +120,53 @@ bool JeandleIntrinsicLowering::lower_writeback_sync(vmIntrinsics::ID id) {
       (VM_Version::supports_clflushopt() || VM_Version::supports_clwb())) {
     builder.CreateIntrinsic(
         llvm::Intrinsic::x86_sse_sfence, llvm::ArrayRef<llvm::Type*>{}, {});
+  }
+  return true;
+}
+
+// Integer/Long.compress/expand(i, mask) via BMI2 PEXT/PDEP. PEXT extracts
+// (compresses) and PDEP deposits (expands); both take (source, mask), which
+// matches the Java argument order. LLVM names the intrinsics "bmi" even
+// though PEXT/PDEP are BMI2 instructions.
+bool JeandleIntrinsicLowering::lower_bit_shuffle(vmIntrinsics::ID id) {
+  llvm::IRBuilder<>& builder = _interp->_ir_builder;
+  const bool is_long = (id == vmIntrinsics::_compress_l ||
+                        id == vmIntrinsics::_expand_l);
+
+  // Target signature is (int,int) or (long,long): the mask is the second JVM
+  // stack slot, so it is popped first.
+  llvm::Value* mask = is_long ? _interp->_jvm->lpop() : _interp->_jvm->ipop();
+  llvm::Value* value = is_long ? _interp->_jvm->lpop() : _interp->_jvm->ipop();
+
+  // LLVM does not constant-fold these intrinsics; fold both-constant call
+  // sites here with C2's bit loop (see fold_constant_bit_shuffle).
+  llvm::Value* folded = fold_constant_bit_shuffle(
+      id, llvm::dyn_cast<llvm::ConstantInt>(value),
+      llvm::dyn_cast<llvm::ConstantInt>(mask));
+  if (folded != nullptr) {
+    if (is_long) {
+      _interp->_jvm->lpush(folded);
+    } else {
+      _interp->_jvm->ipush(folded);
+    }
+    return true;
+  }
+
+  llvm::Intrinsic::ID llvm_id = llvm::Intrinsic::not_intrinsic;
+  switch (id) {
+    case vmIntrinsics::_compress_i: llvm_id = llvm::Intrinsic::x86_bmi_pext_32; break;
+    case vmIntrinsics::_expand_i:   llvm_id = llvm::Intrinsic::x86_bmi_pdep_32; break;
+    case vmIntrinsics::_compress_l: llvm_id = llvm::Intrinsic::x86_bmi_pext_64; break;
+    case vmIntrinsics::_expand_l:   llvm_id = llvm::Intrinsic::x86_bmi_pdep_64; break;
+    default: break;
+  }
+  assert(llvm_id != llvm::Intrinsic::not_intrinsic,
+         "unsupported bit-shuffle intrinsic id");
+  llvm::Value* result = builder.CreateIntrinsic(llvm_id, {}, {value, mask});
+  if (is_long) {
+    _interp->_jvm->lpush(result);
+  } else {
+    _interp->_jvm->ipush(result);
   }
   return true;
 }

@@ -138,6 +138,7 @@ class JeandleIntrinsicLowering : public StackObj {
   // Arch-specific CPU feature checks. Defined in cpu/<arch>/jeandleIntrinsicLowering_<arch>.cpp.
   static bool cpu_supports_rounding();          // floor/ceil/rint
   static bool cpu_supports_popcount();          // bitCount_i/bitCount_l
+  static bool cpu_supports_bit_shuffle();       // compress/expand bit shuffle
   static bool cpu_supports_spin_wait();         // onSpinWait
   // Byte limit of the inline 128-bit vector tier for vectorizedMismatch.
   // A value of 0 disables the tier (values below the 16-byte scalar tier
@@ -215,6 +216,19 @@ class JeandleIntrinsicLowering : public StackObj {
   // ========================================================================
   bool lower_bit_count(vmIntrinsics::ID id);
   bool lower_count_zeros(vmIntrinsics::ID id, llvm::Intrinsic::ID llvm_id);
+
+  // Integer/Long.compress/expand. Arch-specific emission (x86: BMI2
+  // PEXT/PDEP; aarch64/riscv: stubs, see cpu_supports_bit_shuffle).
+  bool lower_bit_shuffle(vmIntrinsics::ID id);   // arch-specific
+
+  // Shared bit-shuffle semantics, used by the per-target lower_bit_shuffle:
+  // when both operands are constants, fold them with the same bit loop C2
+  // uses (CompressBitsNode::compress_bits / ExpandBitsNode::expand_bits).
+  // Returns nullptr when either operand is non-constant.
+  static llvm::Value* fold_constant_bit_shuffle(vmIntrinsics::ID id,
+                                                llvm::ConstantInt* value,
+                                                llvm::ConstantInt* mask);
+
   bool lower_reverse_bytes_narrow(vmIntrinsics::ID id);
   bool lower_llvm_bitcast();
   bool lower_fp_to_bits_canonical(vmIntrinsics::ID id);

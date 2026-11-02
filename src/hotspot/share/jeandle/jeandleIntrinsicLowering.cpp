@@ -120,6 +120,19 @@ bool JeandleIntrinsicLowering::is_supported(vmIntrinsics::ID id) {
     case vmIntrinsics::_bitCount_l:
       return cpu_supports_popcount();
 
+    // Integer/Long.compress/expand lower to BMI2 PEXT/PDEP (see
+    // lower_bit_shuffle). There is no dedicated VM flag gate for these IDs
+    // in vmIntrinsics::disabled_by_jvm_flags() -- like C2, whose x86 match
+    // rules predicate the CompressBits/ExpandBits nodes on BMI2 support at
+    // instruction selection, the BMI2 decision is made here. With
+    // -XX:-UseBMI2Instructions the call falls back to the normal invoke,
+    // whose inlinable Java body implements the exact same bit semantics.
+    case vmIntrinsics::_compress_i:
+    case vmIntrinsics::_compress_l:
+    case vmIntrinsics::_expand_i:
+    case vmIntrinsics::_expand_l:
+      return cpu_supports_bit_shuffle();
+
     case vmIntrinsics::_onSpinWait:
       return cpu_supports_spin_wait();
 
@@ -442,6 +455,14 @@ bool JeandleIntrinsicLowering::lower(vmIntrinsics::ID id, const ciMethod* target
     case vmIntrinsics::_bitCount_i:
     case vmIntrinsics::_bitCount_l:
       return lower_bit_count(id);
+
+    // Integer/Long.compress/expand: arch-specific BMI2 PEXT/PDEP emission
+    // with shared constant folding (see lower_bit_shuffle).
+    case vmIntrinsics::_compress_i:
+    case vmIntrinsics::_compress_l:
+    case vmIntrinsics::_expand_i:
+    case vmIntrinsics::_expand_l:
+      return lower_bit_shuffle(id);
 
     case vmIntrinsics::_numberOfLeadingZeros_i:
     case vmIntrinsics::_numberOfLeadingZeros_l:
@@ -1293,6 +1314,50 @@ bool JeandleIntrinsicLowering::lower_count_zeros(vmIntrinsics::ID id,
     _interp->_jvm->ipush(call);
   }
   return true;
+}
+
+// ---- fold_constant_bit_shuffle ----
+// Integer/Long.compress/expand of two constant operands, folded by the
+// lowering itself: LLVM does not constant-fold the x86 bmi intrinsics, so an
+// all-constant call site would otherwise stay a PEXT/PDEP call until codegen.
+// The loops mirror C2's CompressBitsNode::compress_bits and
+// ExpandBitsNode::expand_bits (opto/intrinsicnode.cpp): compress gathers the
+// bits of the value selected by the mask bits into the low positions;
+// expand scatters the low bits of the value to the positions selected by the
+// mask. Working on the unsigned bit patterns is equivalent to C2's jlong
+// loop because only bit 0 of value/mask is consumed per iteration.
+llvm::Value* JeandleIntrinsicLowering::fold_constant_bit_shuffle(
+    vmIntrinsics::ID id, llvm::ConstantInt* value, llvm::ConstantInt* mask) {
+  if (value == nullptr || mask == nullptr) {
+    return nullptr;
+  }
+
+  const unsigned width = value->getBitWidth();
+  const bool compress = (id == vmIntrinsics::_compress_i ||
+                         id == vmIntrinsics::_compress_l);
+  uint64_t src = value->getZExtValue();
+  uint64_t msk = mask->getZExtValue();
+  uint64_t res = 0;
+
+  if (compress) {
+    for (unsigned i = 0, j = 0; i < width; i++) {
+      if (msk & 1) {
+        res |= (src & 1) << j++;
+      }
+      src >>= 1;
+      msk >>= 1;
+    }
+  } else {
+    for (unsigned i = 0; i < width; i++) {
+      if (msk & 1) {
+        res |= (src & 1) << i;
+        src >>= 1;
+      }
+      msk >>= 1;
+    }
+  }
+
+  return llvm::ConstantInt::get(value->getType(), res);
 }
 
 // ---- lower_fp_range_check ----
