@@ -254,6 +254,22 @@ class JeandleIntrinsicLowering : public StackObj {
   llvm::Value* load_instance_object_field(llvm::Value* obj, ciField* field);
   // Klass* constant as a C-heap pointer value for jeandle.instanceof guards.
   llvm::Value* klass_constant_pointer(ciKlass* klass);
+  // Emit the fallback Java call for a guarded intrinsic in the block the
+  // builder is currently parked at, branch to merge_bb, and PHI-merge the
+  // i32 results of the guarded stub paths with the call result. Returns the
+  // PHI, or nullptr when emit_java_call recorded a compilation error (the
+  // caller returns true so the error aborts the compilation).
+  llvm::Value* merge_with_java_fallback(llvm::ArrayRef<llvm::Value*> stub_results,
+                                        llvm::ArrayRef<llvm::BasicBlock*> stub_blocks,
+                                        llvm::BasicBlock* merge_bb,
+                                        llvm::ArrayRef<llvm::Value*> java_args,
+                                        bool has_receiver,
+                                        const llvm::Twine& phi_name);
+  bool lower_aescrypt_block(vmIntrinsics::ID id);
+  // Guarded AES block-cipher modes (CBC and ECB). The mode only selects the
+  // stub, the holder class and the CBC r-vector argument, so one shared
+  // lowering covers all four intrinsics.
+  bool lower_block_cipher_mode(vmIntrinsics::ID id);
   bool lower_new_array();
   bool lower_unsafe_allocate_instance();
   bool lower_object_notify(vmIntrinsics::ID id);
