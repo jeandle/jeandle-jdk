@@ -38,6 +38,7 @@
 #include "jeandle/__hotspotHeadersBegin__.hpp"
 #include "ci/ciField.hpp"
 #include "ci/ciInstanceKlass.hpp"
+#include "ci/ciKlass.hpp"
 #include "ci/ciMethod.hpp"
 #include "ci/ciSignature.hpp"
 #include "ci/ciSymbol.hpp"
@@ -312,10 +313,29 @@ bool JeandleIntrinsicLowering::is_supported(vmIntrinsics::ID id) {
 
     // Single-block SHA compression. Availability is checked again by the
     // lowering because platform stubs are generated conditionally.
+    case vmIntrinsics::_md5_implCompress:
     case vmIntrinsics::_sha_implCompress:
     case vmIntrinsics::_sha2_implCompress:
     case vmIntrinsics::_sha5_implCompress:
     case vmIntrinsics::_sha3_implCompress:
+
+    // Crypto and digest stub intrinsics. As with SHA, the lowering re-checks
+    // availability: per-algorithm Use*Intrinsics flags via
+    // vmIntrinsics::is_disabled_by_flags (called by try_lower_intrinsic) and
+    // platform stub generation via JeandleRuntimeRoutine::find_routine_entry.
+    case vmIntrinsics::_digestBase_implCompressMB:
+    case vmIntrinsics::_aescrypt_encryptBlock:
+    case vmIntrinsics::_aescrypt_decryptBlock:
+    case vmIntrinsics::_cipherBlockChaining_encryptAESCrypt:
+    case vmIntrinsics::_cipherBlockChaining_decryptAESCrypt:
+    case vmIntrinsics::_electronicCodeBook_encryptAESCrypt:
+    case vmIntrinsics::_electronicCodeBook_decryptAESCrypt:
+    case vmIntrinsics::_counterMode_AESCrypt:
+    case vmIntrinsics::_galoisCounterMode_AESCrypt:
+    case vmIntrinsics::_ghash_processBlocks:
+    case vmIntrinsics::_chacha20Block:
+    case vmIntrinsics::_poly1305_processBlocks:
+      return true;
 
     // StringUTF16 trusted single-code-unit access
     case vmIntrinsics::_getCharStringU:
@@ -616,11 +636,16 @@ bool JeandleIntrinsicLowering::lower(vmIntrinsics::ID id, const ciMethod* target
     case vmIntrinsics::_equalsC:
       return lower_arrayequals(T_CHAR);
 
+    case vmIntrinsics::_md5_implCompress:
     case vmIntrinsics::_sha_implCompress:
     case vmIntrinsics::_sha2_implCompress:
     case vmIntrinsics::_sha5_implCompress:
     case vmIntrinsics::_sha3_implCompress:
       return lower_digestBase_implCompress(id);
+
+    // Multi-block digest compression (per-receiver-algorithm guarded).
+    case vmIntrinsics::_digestBase_implCompressMB:
+      return lower_digestBase_implCompressMB();
     // HashCode
     case vmIntrinsics::_identityHashCode:
     case vmIntrinsics::_hashCode:
@@ -765,6 +790,12 @@ bool JeandleIntrinsicLowering::lower_digestBase_implCompress(vmIntrinsics::ID id
   BasicType state_element_type = T_ILLEGAL;
   JeandleRuntimeCalleeFn callee_fn = nullptr;
   switch (id) {
+    case vmIntrinsics::_md5_implCompress:
+      state_signature = "[I";
+      state_element_type = T_INT;
+      stub_name = "StubRoutines_md5_implCompress";
+      callee_fn = &JeandleRuntimeRoutine::StubRoutines_md5_implCompress_callee;
+      break;
     case vmIntrinsics::_sha_implCompress:
       state_signature = "[I";
       state_element_type = T_INT;
@@ -870,6 +901,240 @@ bool JeandleIntrinsicLowering::lower_digestBase_implCompress(vmIntrinsics::ID id
                   {src_start, state_base, block_size}, attrs,
                   /*is_gc_leaf_entry=*/true);
   }
+  return true;
+}
+
+// =============================================================================
+// Shared crypto-intrinsic helpers
+// =============================================================================
+
+ciInstanceKlass* JeandleIntrinsicLowering::resolve_loaded_instance_klass(
+    const char* klass_name) {
+  ciKlass* klass = const_cast<ciMethod*>(_target)->holder()->find_klass(
+      ciSymbol::make(klass_name));
+  if (klass == nullptr || !klass->is_loaded() || !klass->is_instance_klass()) {
+    return nullptr;
+  }
+  return klass->as_instance_klass();
+}
+
+ciField* JeandleIntrinsicLowering::find_instance_field(
+    ciInstanceKlass* holder, const char* name, const char* signature) {
+  return holder->get_field_by_name(ciSymbol::make(name),
+                                   ciSymbol::make(signature), false);
+}
+
+llvm::Value* JeandleIntrinsicLowering::array_element0_pointer(
+    llvm::Value* array, BasicType elem_type) {
+  return array_data_pointer(array, elem_type, nullptr);
+}
+
+llvm::Value* JeandleIntrinsicLowering::array_data_pointer(
+    llvm::Value* array, BasicType elem_type, llvm::Value* byte_offset) {
+  llvm::IRBuilder<>& builder = _interp->_ir_builder;
+  llvm::Value* offset = builder.getInt32(
+      arrayOopDesc::base_offset_in_bytes(elem_type));
+  if (byte_offset != nullptr) {
+    offset = builder.CreateAdd(offset, byte_offset);
+  }
+  return builder.CreateInBoundsPtrAdd(array, offset);
+}
+
+llvm::Value* JeandleIntrinsicLowering::load_instance_object_field(
+    llvm::Value* obj, ciField* field) {
+  llvm::IRBuilder<>& builder = _interp->_ir_builder;
+  llvm::Value* field_addr = _interp->compute_instance_field_address(
+      obj, field->offset_in_bytes());
+  BasicType ref_type = field->layout_type();
+  if (UseCompressedOops && is_reference_type(ref_type)) {
+    ref_type = T_NARROWOOP;
+  }
+  llvm::Value* value = _interp->load_from_address(field_addr, ref_type, false);
+  if (ref_type == T_NARROWOOP) {
+    value = builder.CreateAddrSpaceCast(
+        value, JeandleType::java2llvm(T_OBJECT, *_interp->_context));
+  }
+  return value;
+}
+
+llvm::Value* JeandleIntrinsicLowering::klass_constant_pointer(ciKlass* klass) {
+  llvm::IRBuilder<>& builder = _interp->_ir_builder;
+  llvm::PointerType* klass_type = llvm::PointerType::get(
+      *_interp->_context, llvm::jeandle::AddrSpace::CHeapAddrSpace);
+  return builder.CreateIntToPtr(
+      builder.getInt64((intptr_t)klass->constant_encoding()), klass_type);
+}
+
+// =============================================================================
+// lower_digestBase_implCompressMB — multi-block digest compression
+// =============================================================================
+
+// Mirrors C2's predicated inline_digestBase_implCompressMB: the shared
+// DigestBase.implCompressMultiBlock0 is intrinsified per receiver algorithm
+// with an instanceof guard per branch; receivers that match no branch run
+// the normal Java loop (the virtual implCompress dispatch) via a plain call.
+bool JeandleIntrinsicLowering::lower_digestBase_implCompressMB() {
+  ciSignature* sig = _target->signature();
+  if (sig->count() != 3 || sig->type_at(0)->basic_type() != T_ARRAY ||
+      sig->type_at(1)->basic_type() != T_INT ||
+      sig->type_at(2)->basic_type() != T_INT ||
+      sig->type_at(0)->name() == nullptr ||
+      strcmp(sig->type_at(0)->name(), "[B") != 0) {
+    return false;
+  }
+
+  struct MBSpec {
+    vmIntrinsics::ID gate_id;         // per-algorithm Use*Intrinsics gate
+    const char* klass_name;
+    const char* label;                // block naming
+    const char* stub_name;            // JeandleRoutine entry name
+    JeandleRuntimeCalleeFn callee;
+    const char* state_signature;      // state field type
+    BasicType state_elem;
+    bool has_block_size;              // SHA3 passes blockSize to the stub
+  };
+  static const MBSpec SPECS[] = {
+      { vmIntrinsics::_md5_implCompress, "sun/security/provider/MD5", "md5",
+        "StubRoutines_md5_implCompressMB",
+        &JeandleRuntimeRoutine::StubRoutines_md5_implCompressMB_callee,
+        "[I", T_INT, false },
+      { vmIntrinsics::_sha_implCompress, "sun/security/provider/SHA", "sha1",
+        "StubRoutines_sha1_implCompressMB",
+        &JeandleRuntimeRoutine::StubRoutines_sha1_implCompressMB_callee,
+        "[I", T_INT, false },
+      { vmIntrinsics::_sha2_implCompress, "sun/security/provider/SHA2", "sha256",
+        "StubRoutines_sha256_implCompressMB",
+        &JeandleRuntimeRoutine::StubRoutines_sha256_implCompressMB_callee,
+        "[I", T_INT, false },
+      { vmIntrinsics::_sha5_implCompress, "sun/security/provider/SHA5", "sha512",
+        "StubRoutines_sha512_implCompressMB",
+        &JeandleRuntimeRoutine::StubRoutines_sha512_implCompressMB_callee,
+        "[J", T_LONG, false },
+      { vmIntrinsics::_sha3_implCompress, "sun/security/provider/SHA3", "sha3",
+        "StubRoutines_sha3_implCompressMB",
+        &JeandleRuntimeRoutine::StubRoutines_sha3_implCompressMB_callee,
+        "[B", T_BYTE, true },
+  };
+
+  // Compile-time branch gating, like C2's predicate selection: the
+  // algorithm's Use*Intrinsics flag must be on (the MB id itself only
+  // requires one of the five), the platform must have generated the MB
+  // stub, and the algorithm class and its fields must be resolvable.
+  struct ResolvedMB { const MBSpec* spec; ciInstanceKlass* klass;
+                      ciField* state_field; ciField* block_size_field; };
+  llvm::SmallVector<ResolvedMB, 5> branches;
+  for (const MBSpec& spec : SPECS) {
+    if (vmIntrinsics::is_disabled_by_flags(spec.gate_id)) continue;
+    if (JeandleRuntimeRoutine::find_routine_entry(spec.stub_name) == nullptr) continue;
+    ciInstanceKlass* klass = resolve_loaded_instance_klass(spec.klass_name);
+    if (klass == nullptr) continue;
+    ciField* state = find_instance_field(klass, "state", spec.state_signature);
+    if (state == nullptr) continue;
+    ciField* block_size = spec.has_block_size
+        ? find_instance_field(klass, "blockSize", "I") : nullptr;
+    if (spec.has_block_size && block_size == nullptr) continue;
+    branches.push_back({&spec, klass, state, block_size});
+  }
+  if (branches.empty()) {
+    return false;
+  }
+
+  // All compile-time checks must happen before the operand stack is touched;
+  // this includes the declared holder for the potential Java fallback call.
+  const Bytecodes::Code bc = _interp->_bytecodes.cur_bc_raw();
+  ciKlass* declared_holder = _interp->_bytecodes.get_declared_method_holder();
+  if (declared_holder == nullptr) {
+    return false;
+  }
+
+  // Peek (not pop) until every fallible step has succeeded, preserving the
+  // operand stack for the normal invoke path on failure.
+  llvm::Value* receiver = _interp->_jvm->raw_peek(3).value();
+  llvm::Value* src = _interp->_jvm->raw_peek(2).value();
+  llvm::Value* ofs = _interp->_jvm->raw_peek(1).value();
+  llvm::Value* limit = _interp->_jvm->raw_peek(0).value();
+  _interp->null_check(src);
+
+  // Commit: pop all operands; the values stay live as SSA across branches.
+  _interp->_jvm->ipop();  // limit
+  _interp->_jvm->ipop();  // ofs
+  _interp->_jvm->apop();  // b
+  _interp->_jvm->apop();  // receiver (null-checked by invoke())
+
+  llvm::IRBuilder<>& builder = _interp->_ir_builder;
+  llvm::LLVMContext& ctx = *_interp->_context;
+
+  llvm::Value* src_start = array_data_pointer(src, T_BYTE, ofs);
+
+  llvm::BasicBlock* merge_bb =
+      llvm::BasicBlock::Create(ctx, "digestMB_merge", _interp->_llvm_func);
+  llvm::SmallVector<llvm::Value*, 6> results;
+  llvm::SmallVector<llvm::BasicBlock*, 6> result_blocks;
+
+  static constexpr CallSiteAttributeMetadata STUB_ATTRS = {
+      CTRL_NONE, MEM_READ | MEM_WRITE};
+
+  for (const ResolvedMB& branch : branches) {
+    // Receiver null check already happened in invoke(), so the non-null
+    // jeandle.check_instanceof contract holds.
+    llvm::CallInst* hit = _interp->call_java_op(
+        "jeandle.check_instanceof",
+        {klass_constant_pointer(branch.klass), receiver});
+
+    llvm::BasicBlock* hit_bb = llvm::BasicBlock::Create(
+        ctx, std::string("digestMB_") + branch.spec->label + "_hit",
+        _interp->_llvm_func);
+    llvm::BasicBlock* next_bb = llvm::BasicBlock::Create(
+        ctx, std::string("digestMB_") + branch.spec->label + "_next",
+        _interp->_llvm_func);
+    builder.CreateCondBr(hit, hit_bb, next_bb);
+
+    builder.SetInsertPoint(hit_bb);
+    llvm::Value* state_array =
+        load_instance_object_field(receiver, branch.state_field);
+    llvm::Value* state_base =
+        array_element0_pointer(state_array, branch.spec->state_elem);
+    llvm::CallBase* call;
+    if (branch.block_size_field == nullptr) {
+      call = emit_callsite(branch.spec->callee(_interp->_module),
+                           llvm::CallingConv::C,
+                           {src_start, state_base, ofs, limit}, STUB_ATTRS,
+                           /*is_gc_leaf_entry=*/true);
+    } else {
+      llvm::Value* block_size_addr = _interp->compute_instance_field_address(
+          receiver, branch.block_size_field->offset_in_bytes());
+      llvm::Value* block_size =
+          _interp->load_from_address(block_size_addr, T_INT, false);
+      call = emit_callsite(branch.spec->callee(_interp->_module),
+                           llvm::CallingConv::C,
+                           {src_start, state_base, block_size, ofs, limit},
+                           STUB_ATTRS, /*is_gc_leaf_entry=*/true);
+    }
+    builder.CreateBr(merge_bb);
+    results.push_back(call);
+    result_blocks.push_back(builder.GetInsertBlock());
+    builder.SetInsertPoint(next_bb);
+  }
+
+  // No guard matched: run the original Java loop (virtual implCompress
+  // dispatch preserved by the callee) through a normal call.
+  llvm::InvokeInst* java_call = _interp->emit_java_call(
+      const_cast<ciMethod*>(_target), declared_holder, _target->signature(),
+      {receiver, src, ofs, limit}, /*has_receiver=*/true,
+      /*is_method_handle_invoke=*/false, bc, /*call_does_dispatch=*/false);
+  RETURN_ON_JEANDLE_ERROR(true);
+  builder.CreateBr(merge_bb);
+  results.push_back(java_call);
+  result_blocks.push_back(builder.GetInsertBlock());
+
+  builder.SetInsertPoint(merge_bb);
+  _interp->_block->set_tail_llvm_block(merge_bb);
+  llvm::PHINode* result = builder.CreatePHI(
+      JeandleType::java2llvm(T_INT, ctx), results.size(), "digestMB.ofs");
+  for (size_t i = 0; i < results.size(); ++i) {
+    result->addIncoming(results[i], result_blocks[i]);
+  }
+  _interp->_jvm->ipush(result);
   return true;
 }
 

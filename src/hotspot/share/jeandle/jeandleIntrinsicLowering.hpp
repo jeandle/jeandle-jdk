@@ -36,6 +36,9 @@
 #define PROB_FAIR               (0.5f)
 
 class JeandleAbstractInterpreter;
+class ciField;
+class ciInstanceKlass;
+class ciKlass;
 class ciMethod;
 
 // =============================================================================
@@ -231,6 +234,26 @@ class JeandleIntrinsicLowering : public StackObj {
   bool lower_remainder_unsigned(vmIntrinsics::ID id);
   bool lower_multiply_high(vmIntrinsics::ID id);
   bool lower_digestBase_implCompress(vmIntrinsics::ID id);
+  bool lower_digestBase_implCompressMB();
+
+  // ---- shared crypto-intrinsic helpers ----
+  // Resolve a class by binary name relative to the intrinsic target holder.
+  // Returns nullptr unless the class is loaded; guarded fast paths must
+  // close when it is not (mirrors C2's predicate klass check).
+  ciInstanceKlass* resolve_loaded_instance_klass(const char* klass_name);
+  // Find a non-static field by name/signature (searches superclasses);
+  // nullptr when unresolvable.
+  ciField* find_instance_field(ciInstanceKlass* holder, const char* name,
+                               const char* signature);
+  // Pointer to the first element of an array (header + base offset).
+  llvm::Value* array_element0_pointer(llvm::Value* array, BasicType elem_type);
+  // Pointer to array element data at the given byte offset.
+  llvm::Value* array_data_pointer(llvm::Value* array, BasicType elem_type,
+                                  llvm::Value* byte_offset);
+  // Load a reference-typed instance field, decoding compressed oops.
+  llvm::Value* load_instance_object_field(llvm::Value* obj, ciField* field);
+  // Klass* constant as a C-heap pointer value for jeandle.instanceof guards.
+  llvm::Value* klass_constant_pointer(ciKlass* klass);
   bool lower_new_array();
   bool lower_unsafe_allocate_instance();
   bool lower_object_notify(vmIntrinsics::ID id);
