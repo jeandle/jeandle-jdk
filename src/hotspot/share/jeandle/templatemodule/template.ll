@@ -65,6 +65,13 @@
 @arrayOopDesc.element_size.double  = external global i32
 @arrayOopDesc.element_size.object  = external global i32
 
+; JVM access flag bits from accessFlags.hpp, injected by the VM.
+@AccessFlags.jvm_acc_public = external global i32
+@AccessFlags.jvm_acc_final = external global i32
+@AccessFlags.jvm_acc_abstract = external global i32
+@AccessFlags.jvm_acc_interface = external global i32
+@AccessFlags.jvm_acc_is_hidden_class = external global i32
+
 ; Byte offsets for Klass structure fields.
 @Klass.access_flags_offset = external global i32
 @Klass.java_mirror_offset = external global i32
@@ -277,8 +284,8 @@ read_flags:
   %access_flags_offset = load i32, ptr @Klass.access_flags_offset
   %access_flags_addr = getelementptr inbounds i8, ptr addrspace(0) %klass, i32 %access_flags_offset
   %access_flags = load atomic i32, ptr addrspace(0) %access_flags_addr unordered, align 4
-  ; JVM_ACC_INTERFACE (0x0200).
-  %interface_bits = and i32 %access_flags, 512
+  %interface_bit = load i32, ptr @AccessFlags.jvm_acc_interface
+  %interface_bits = and i32 %access_flags, %interface_bit
   %is_interface = icmp ne i32 %interface_bits, 0
   %interface_result = zext i1 %is_interface to i32
   br label %done
@@ -312,8 +319,8 @@ read_flags:
   %access_flags_offset = load i32, ptr @Klass.access_flags_offset
   %access_flags_addr = getelementptr inbounds i8, ptr addrspace(0) %klass, i32 %access_flags_offset
   %access_flags = load atomic i32, ptr addrspace(0) %access_flags_addr unordered, align 4
-  ; JVM_ACC_IS_HIDDEN_CLASS (0x04000000).
-  %hidden_bits = and i32 %access_flags, 67108864
+  %hidden_bit = load i32, ptr @AccessFlags.jvm_acc_is_hidden_class
+  %hidden_bits = and i32 %access_flags, %hidden_bit
   %is_hidden = icmp ne i32 %hidden_bits, 0
   %hidden_result = zext i1 %is_hidden to i32
   br label %done
@@ -329,6 +336,12 @@ entry:
   %klass_addr = getelementptr inbounds i8, ptr addrspace(1) %mirror, i32 %klass_offset
   %klass = load atomic ptr addrspace(0), ptr addrspace(1) %klass_addr unordered, align 8
   %is_primitive = icmp eq ptr addrspace(0) %klass, null
+  ; Primitive mirrors report JVM_ACC_PUBLIC | JVM_ACC_FINAL | JVM_ACC_ABSTRACT.
+  %acc_public = load i32, ptr @AccessFlags.jvm_acc_public
+  %acc_final = load i32, ptr @AccessFlags.jvm_acc_final
+  %acc_abstract = load i32, ptr @AccessFlags.jvm_acc_abstract
+  %primitive_default = or i32 %acc_public, %acc_final
+  %primitive_modifiers = or i32 %primitive_default, %acc_abstract
   br i1 %is_primitive, label %done, label %read_flags
 
 read_flags:
@@ -338,8 +351,7 @@ read_flags:
   br label %done
 
 done:
-  ; JVM_ACC_PUBLIC | JVM_ACC_FINAL | JVM_ACC_ABSTRACT for primitive mirrors.
-  %result = phi i32 [ 1041, %entry ], [ %modifier_flags, %read_flags ]
+  %result = phi i32 [ %primitive_modifiers, %entry ], [ %modifier_flags, %read_flags ]
   ret i32 %result
 }
 
@@ -349,6 +361,12 @@ entry:
   %klass_addr = getelementptr inbounds i8, ptr addrspace(1) %mirror, i32 %klass_offset
   %klass = load atomic ptr addrspace(0), ptr addrspace(1) %klass_addr unordered, align 8
   %is_primitive = icmp eq ptr addrspace(0) %klass, null
+  ; Primitive mirrors report JVM_ACC_PUBLIC | JVM_ACC_FINAL | JVM_ACC_ABSTRACT.
+  %acc_public = load i32, ptr @AccessFlags.jvm_acc_public
+  %acc_final = load i32, ptr @AccessFlags.jvm_acc_final
+  %acc_abstract = load i32, ptr @AccessFlags.jvm_acc_abstract
+  %primitive_default = or i32 %acc_public, %acc_final
+  %primitive_modifiers = or i32 %primitive_default, %acc_abstract
   br i1 %is_primitive, label %done, label %read_flags
 
 read_flags:
@@ -358,7 +376,7 @@ read_flags:
   br label %done
 
 done:
-  %result = phi i32 [ 1041, %entry ], [ %access_flags, %read_flags ]
+  %result = phi i32 [ %primitive_modifiers, %entry ], [ %access_flags, %read_flags ]
   ret i32 %result
 }
 

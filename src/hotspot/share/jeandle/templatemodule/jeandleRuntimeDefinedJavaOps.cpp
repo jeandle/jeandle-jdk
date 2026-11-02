@@ -1182,6 +1182,16 @@ void RuntimeDefinedJavaOps::define_global_variables(llvm::Module& template_modul
   define_global("DEBUG_MODE",                                       int1_type,  static_cast<uint64_t>(false));
 #endif
 
+  // JVM access flag bits from accessFlags.hpp. The template's class_* JavaOps
+  // test them through these globals, and ConstantFieldFolding reads them back
+  // via VMConstants::fromModule. Defining them from the real macros keeps both
+  // sides synchronized with HotSpot without manual maintenance.
+  define_global("AccessFlags.jvm_acc_public",                   int32_type, static_cast<uint64_t>(JVM_ACC_PUBLIC));
+  define_global("AccessFlags.jvm_acc_final",                    int32_type, static_cast<uint64_t>(JVM_ACC_FINAL));
+  define_global("AccessFlags.jvm_acc_abstract",                 int32_type, static_cast<uint64_t>(JVM_ACC_ABSTRACT));
+  define_global("AccessFlags.jvm_acc_interface",                int32_type, static_cast<uint64_t>(JVM_ACC_INTERFACE));
+  define_global("AccessFlags.jvm_acc_is_hidden_class",          int32_type, static_cast<uint64_t>(JVM_ACC_IS_HIDDEN_CLASS));
+
   define_global("KlassArray.base_offset_in_bytes",                  int32_type, static_cast<uint64_t>(Array<Klass*>::base_offset_in_bytes()));
   define_global("KlassArray.length_offset_in_bytes",                int32_type, static_cast<uint64_t>(Array<Klass*>::length_offset_in_bytes()));
   define_global("arrayOopDesc.length_offset_in_bytes",              int32_type, static_cast<uint64_t>(arrayOopDesc::length_offset_in_bytes()));
