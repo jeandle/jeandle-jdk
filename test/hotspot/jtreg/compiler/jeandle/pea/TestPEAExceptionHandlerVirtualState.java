@@ -177,7 +177,8 @@ public class TestPEAExceptionHandlerVirtualState {
                 "type-check");
         ParsedBlock checkBlock = requireBlock(blocks, typeCheck, target, callee);
         Asserts.assertEquals(checkBlock.lines().stream()
-                        .filter(line -> line.contains("@jeandle.check_instanceof(")).count(), 1L,
+                        .filter(line -> line.contains("@jeandle.check_instanceof(")
+                                || line.contains("@jeandle.checkcast_nonnull_with_offset(")).count(), 1L,
                 target + ": exact exception type check for " + callee);
 
         List<String> checkSuccessors = conditionalSuccessors(checkBlock, target, callee);

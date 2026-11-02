@@ -65,10 +65,18 @@
 @arrayOopDesc.element_size.double  = external global i32
 @arrayOopDesc.element_size.object  = external global i32
 
+; JVM access flag bits from accessFlags.hpp, injected by the VM.
+@AccessFlags.jvm_acc_public = external global i32
+@AccessFlags.jvm_acc_final = external global i32
+@AccessFlags.jvm_acc_abstract = external global i32
+@AccessFlags.jvm_acc_interface = external global i32
+@AccessFlags.jvm_acc_is_hidden_class = external global i32
+
 ; Byte offsets for Klass structure fields.
 @Klass.access_flags_offset = external global i32
 @Klass.java_mirror_offset = external global i32
 @Klass.layout_helper_offset = external global i32
+@Klass.modifier_flags_offset = external global i32
 @Klass.secondary_super_cache_offset = external global i32
 @Klass.secondary_supers_offset = external global i32
 @Klass.super_check_offset_offset = external global i32
@@ -237,6 +245,141 @@ entry:
   ret ptr addrspace(0) %klass
 }
 
+; Keep Class.isArray opaque until ConstantFieldFolding has propagated mirror
+; values across control-flow merges. Unfolded calls use the usual Klass layout
+; helper check after phase-1 lowering.
+define hotspotcc i32 @jeandle.class_is_array(ptr addrspace(1) nocapture readonly %mirror) noinline "lower-phase"="1" #0 {
+entry:
+  %klass_offset = load i32, ptr @java_lang_Class.klass_offset
+  %klass_addr = getelementptr inbounds i8, ptr addrspace(1) %mirror, i32 %klass_offset
+  %klass = load atomic ptr addrspace(0), ptr addrspace(1) %klass_addr unordered, align 8
+  %is_primitive = icmp eq ptr addrspace(0) %klass, null
+  br i1 %is_primitive, label %done, label %read_layout
+
+read_layout:
+  %layout_helper_offset = load i32, ptr @Klass.layout_helper_offset
+  %layout_helper_addr = getelementptr inbounds i8, ptr addrspace(0) %klass, i32 %layout_helper_offset
+  %layout_helper = load atomic i32, ptr addrspace(0) %layout_helper_addr unordered, align 4
+  %is_array = icmp slt i32 %layout_helper, 0
+  %array_result = zext i1 %is_array to i32
+  br label %done
+
+done:
+  %result = phi i32 [ 0, %entry ], [ %array_result, %read_layout ]
+  ret i32 %result
+}
+
+; Keep Class.isInterface opaque across mirror phi nodes. The callback can fold
+; the query when all incoming mirrors agree; otherwise lower to the access
+; flags test used by the original intrinsic.
+define hotspotcc i32 @jeandle.class_is_interface(ptr addrspace(1) nocapture readonly %mirror) noinline "lower-phase"="1" #0 {
+entry:
+  %klass_offset = load i32, ptr @java_lang_Class.klass_offset
+  %klass_addr = getelementptr inbounds i8, ptr addrspace(1) %mirror, i32 %klass_offset
+  %klass = load atomic ptr addrspace(0), ptr addrspace(1) %klass_addr unordered, align 8
+  %is_primitive = icmp eq ptr addrspace(0) %klass, null
+  br i1 %is_primitive, label %done, label %read_flags
+
+read_flags:
+  %access_flags_offset = load i32, ptr @Klass.access_flags_offset
+  %access_flags_addr = getelementptr inbounds i8, ptr addrspace(0) %klass, i32 %access_flags_offset
+  %access_flags = load atomic i32, ptr addrspace(0) %access_flags_addr unordered, align 4
+  %interface_bit = load i32, ptr @AccessFlags.jvm_acc_interface
+  %interface_bits = and i32 %access_flags, %interface_bit
+  %is_interface = icmp ne i32 %interface_bits, 0
+  %interface_result = zext i1 %is_interface to i32
+  br label %done
+
+done:
+  %result = phi i32 [ 0, %entry ], [ %interface_result, %read_flags ]
+  ret i32 %result
+}
+
+; Keep primitive-mirror identity visible to ConstantFieldFolding across phi
+; nodes. The ordinary lowering tests the VM-injected Klass field for null.
+define hotspotcc i32 @jeandle.class_is_primitive(ptr addrspace(1) nocapture readonly %mirror) noinline "lower-phase"="1" #0 {
+entry:
+  %klass_offset = load i32, ptr @java_lang_Class.klass_offset
+  %klass_addr = getelementptr inbounds i8, ptr addrspace(1) %mirror, i32 %klass_offset
+  %klass = load atomic ptr addrspace(0), ptr addrspace(1) %klass_addr unordered, align 8
+  %is_primitive = icmp eq ptr addrspace(0) %klass, null
+  %result = zext i1 %is_primitive to i32
+  ret i32 %result
+}
+
+define hotspotcc i32 @jeandle.class_is_hidden(ptr addrspace(1) nocapture readonly %mirror) noinline "lower-phase"="1" #0 {
+entry:
+  %klass_offset = load i32, ptr @java_lang_Class.klass_offset
+  %klass_addr = getelementptr inbounds i8, ptr addrspace(1) %mirror, i32 %klass_offset
+  %klass = load atomic ptr addrspace(0), ptr addrspace(1) %klass_addr unordered, align 8
+  %is_primitive = icmp eq ptr addrspace(0) %klass, null
+  br i1 %is_primitive, label %done, label %read_flags
+
+read_flags:
+  %access_flags_offset = load i32, ptr @Klass.access_flags_offset
+  %access_flags_addr = getelementptr inbounds i8, ptr addrspace(0) %klass, i32 %access_flags_offset
+  %access_flags = load atomic i32, ptr addrspace(0) %access_flags_addr unordered, align 4
+  %hidden_bit = load i32, ptr @AccessFlags.jvm_acc_is_hidden_class
+  %hidden_bits = and i32 %access_flags, %hidden_bit
+  %is_hidden = icmp ne i32 %hidden_bits, 0
+  %hidden_result = zext i1 %is_hidden to i32
+  br label %done
+
+done:
+  %result = phi i32 [ 0, %entry ], [ %hidden_result, %read_flags ]
+  ret i32 %result
+}
+
+define hotspotcc i32 @jeandle.class_get_modifiers(ptr addrspace(1) nocapture readonly %mirror) noinline "lower-phase"="1" #0 {
+entry:
+  %klass_offset = load i32, ptr @java_lang_Class.klass_offset
+  %klass_addr = getelementptr inbounds i8, ptr addrspace(1) %mirror, i32 %klass_offset
+  %klass = load atomic ptr addrspace(0), ptr addrspace(1) %klass_addr unordered, align 8
+  %is_primitive = icmp eq ptr addrspace(0) %klass, null
+  ; Primitive mirrors report JVM_ACC_PUBLIC | JVM_ACC_FINAL | JVM_ACC_ABSTRACT.
+  %acc_public = load i32, ptr @AccessFlags.jvm_acc_public
+  %acc_final = load i32, ptr @AccessFlags.jvm_acc_final
+  %acc_abstract = load i32, ptr @AccessFlags.jvm_acc_abstract
+  %primitive_default = or i32 %acc_public, %acc_final
+  %primitive_modifiers = or i32 %primitive_default, %acc_abstract
+  br i1 %is_primitive, label %done, label %read_flags
+
+read_flags:
+  %modifier_flags_offset = load i32, ptr @Klass.modifier_flags_offset
+  %modifier_flags_addr = getelementptr inbounds i8, ptr addrspace(0) %klass, i32 %modifier_flags_offset
+  %modifier_flags = load atomic i32, ptr addrspace(0) %modifier_flags_addr unordered, align 4
+  br label %done
+
+done:
+  %result = phi i32 [ %primitive_modifiers, %entry ], [ %modifier_flags, %read_flags ]
+  ret i32 %result
+}
+
+define hotspotcc i32 @jeandle.class_get_access_flags(ptr addrspace(1) nocapture readonly %mirror) noinline "lower-phase"="1" #0 {
+entry:
+  %klass_offset = load i32, ptr @java_lang_Class.klass_offset
+  %klass_addr = getelementptr inbounds i8, ptr addrspace(1) %mirror, i32 %klass_offset
+  %klass = load atomic ptr addrspace(0), ptr addrspace(1) %klass_addr unordered, align 8
+  %is_primitive = icmp eq ptr addrspace(0) %klass, null
+  ; Primitive mirrors report JVM_ACC_PUBLIC | JVM_ACC_FINAL | JVM_ACC_ABSTRACT.
+  %acc_public = load i32, ptr @AccessFlags.jvm_acc_public
+  %acc_final = load i32, ptr @AccessFlags.jvm_acc_final
+  %acc_abstract = load i32, ptr @AccessFlags.jvm_acc_abstract
+  %primitive_default = or i32 %acc_public, %acc_final
+  %primitive_modifiers = or i32 %primitive_default, %acc_abstract
+  br i1 %is_primitive, label %done, label %read_flags
+
+read_flags:
+  %access_flags_offset = load i32, ptr @Klass.access_flags_offset
+  %access_flags_addr = getelementptr inbounds i8, ptr addrspace(0) %klass, i32 %access_flags_offset
+  %access_flags = load atomic i32, ptr addrspace(0) %access_flags_addr unordered, align 4
+  br label %done
+
+done:
+  %result = phi i32 [ %primitive_modifiers, %entry ], [ %access_flags, %read_flags ]
+  ret i32 %result
+}
+
 ; Load Klass::layout_helper from a Klass pointer. Keeping this as a phase-1
 ; JavaOp lets ConstantFieldFolding answer the query while the Klass is still a
 ; compile-time constant; unresolved queries lower to the ordinary VM load.
@@ -271,7 +414,7 @@ define hotspotcc ptr addrspace(0) @jeandle.load_array_element_klass(ptr addrspac
 }
 
 ; This is the slow path for subtype checking when the fast path fails.
-define hotspotcc i1 @jeandle.check_klass_subtype_slow_path(ptr addrspace(0) nocapture %sub_klass, ptr addrspace(0) nocapture %super_klass) "lower-phase"="0" #0 {
+define hotspotcc i1 @jeandle.check_klass_subtype_slow_path(ptr addrspace(0) nocapture %sub_klass, ptr addrspace(0) nocapture %super_klass) noinline "lower-phase"="1" #0 {
 entry:
   ; Load secondary_supers array and secondary_super_cache.
   %secondary_supers_offset = load i32, ptr @Klass.secondary_supers_offset
@@ -318,6 +461,48 @@ return_false:
   ret i1 false
 }
 
+; The supplied offset must be Klass::super_check_offset() for %super_klass.
+; ConstantFieldFolding selects this form only after proving the target Klass.
+define hotspotcc i1 @jeandle.check_klass_subtype_with_offset(ptr addrspace(0) nocapture %sub_klass, ptr addrspace(0) nocapture %super_klass, i32 %super_check_offset) "lower-phase"="1" #0 {
+entry:
+  %is_same_klass = icmp eq ptr addrspace(0) %sub_klass, %super_klass
+  br i1 %is_same_klass, label %return_true, label %check_primary_supers
+
+check_primary_supers:
+  ; Load super_check klass from _primary_supers of the sub_klass.
+  %super_check_addr = getelementptr inbounds i8, ptr addrspace(0) %sub_klass, i32 %super_check_offset
+  %super_check = load atomic ptr addrspace(0), ptr addrspace(0) %super_check_addr unordered, align 8
+
+  %is_super_match = icmp eq ptr %super_klass, %super_check
+  ; Match C2's static subtype-check heuristic without adding branch_weights to
+  ; the pre-optimization module, where they would be confused with MDO profile.
+  %is_super_match_likely = call i1 @llvm.expect.with.probability.i1(i1 %is_super_match, i1 true, double 8.300000e-01)
+  br i1 %is_super_match_likely, label %return_true, label %check_secondary_supers
+
+check_secondary_supers:
+  ; Check if there are secondary supers.
+  %secondary_super_cache_offset = load i32, ptr @Klass.secondary_super_cache_offset
+  %has_secondary = icmp eq i32 %super_check_offset, %secondary_super_cache_offset
+  %has_secondary_unlikely = call i1 @llvm.expect.with.probability.i1(i1 %has_secondary, i1 false, double 6.300000e-01)
+  br i1 %has_secondary_unlikely, label %slow_path, label %return_false
+
+slow_path:
+  %is_subtype_slow = call hotspotcc i1 @jeandle.check_klass_subtype_slow_path(ptr addrspace(0) %sub_klass, ptr addrspace(0) %super_klass)
+  br i1 %is_subtype_slow, label %return_true, label %return_false
+
+return_true:
+  ret i1 true
+return_false:
+  ret i1 false
+}
+
+define hotspotcc i1 @jeandle.checkcast_nonnull_with_offset(ptr addrspace(0) nocapture %super_klass, ptr addrspace(1) nocapture nonnull %oop, i32 %super_check_offset) noinline "lower-phase"="1" #0 {
+entry:
+  %sub_klass = call hotspotcc ptr addrspace(0) @jeandle.load_klass(ptr addrspace(1) nonnull %oop)
+  %is_subtype = call hotspotcc i1 @jeandle.check_klass_subtype_with_offset(ptr addrspace(0) %sub_klass, ptr addrspace(0) %super_klass, i32 %super_check_offset)
+  ret i1 %is_subtype
+}
+
 ; Check if the sub_klass extends from the super_klass using both primary and secondary supers.
 ; Fast path: checks primary super chain.
 ; Slow path: scans secondary supers array if needed.
@@ -337,13 +522,17 @@ check_primary_supers:
   %super_check = load atomic ptr addrspace(0), ptr addrspace(0) %super_check_addr unordered, align 8
 
   %is_super_match = icmp eq ptr %super_klass, %super_check
-  br i1 %is_super_match, label %return_true, label %check_secondary_supers
+  ; Match C2's static subtype-check heuristic without adding branch_weights to
+  ; the pre-optimization module, where they would be confused with MDO profile.
+  %is_super_match_likely = call i1 @llvm.expect.with.probability.i1(i1 %is_super_match, i1 true, double 8.300000e-01)
+  br i1 %is_super_match_likely, label %return_true, label %check_secondary_supers
 
 check_secondary_supers:
   ; Check if there are secondary supers.
   %secondary_super_cache_offset = load i32, ptr @Klass.secondary_super_cache_offset
   %has_secondary = icmp eq i32 %super_check_offset, %secondary_super_cache_offset
-  br i1 %has_secondary, label %slow_path, label %return_false
+  %has_secondary_unlikely = call i1 @llvm.expect.with.probability.i1(i1 %has_secondary, i1 false, double 6.300000e-01)
+  br i1 %has_secondary_unlikely, label %slow_path, label %return_false
 
 slow_path:
   %is_subtype_slow = call hotspotcc i1 @jeandle.check_klass_subtype_slow_path(ptr addrspace(0) %sub_klass, ptr addrspace(0) %super_klass)
@@ -1542,5 +1731,6 @@ return_zero:
 return_one:
   ret i32 1
 }
+declare i1 @llvm.expect.with.probability.i1(i1, i1, double) nounwind readnone
 
 attributes #0 = { nounwind "gc-leaf-function" }

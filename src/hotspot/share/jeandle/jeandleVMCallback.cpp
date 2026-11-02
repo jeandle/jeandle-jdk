@@ -522,12 +522,44 @@ uintptr_t JeandleVMCallback::get_mirror_klass(int oop_id) {
   return record_klass_metadata(klass);
 }
 
+int JeandleVMCallback::are_same_class_mirrors(int left_oop_id, int right_oop_id) {
+  ciObject* left = oop_by_id(left_oop_id);
+  ciObject* right = oop_by_id(right_oop_id);
+  if (left == nullptr || right == nullptr || !left->is_instance() ||
+      !right->is_instance() ||
+      left->as_instance()->java_mirror_type() == nullptr ||
+      right->as_instance()->java_mirror_type() == nullptr) {
+    return -1;
+  }
+  return left->equals(right) ? 1 : 0;
+}
+
 int JeandleVMCallback::get_klass_layout_helper(uintptr_t klass_ptr) {
   if (klass_ptr == 0) {
     return 0;
   }
   Klass* klass = reinterpret_cast<Klass*>(klass_ptr);
   return klass->layout_helper();
+}
+
+int JeandleVMCallback::get_super_check_offset(uintptr_t klass_ptr) {
+  Klass* klass = reinterpret_cast<Klass*>(klass_ptr);
+  return klass->super_check_offset();
+}
+
+int JeandleVMCallback::get_klass_modifier_flags(uintptr_t klass_ptr) {
+  Klass* klass = reinterpret_cast<Klass*>(klass_ptr);
+  return klass->modifier_flags();
+}
+
+int JeandleVMCallback::get_klass_access_flags(uintptr_t klass_ptr) {
+  Klass* klass = reinterpret_cast<Klass*>(klass_ptr);
+  return klass->access_flags().as_int();
+}
+
+bool JeandleVMCallback::is_hidden_klass(uintptr_t klass_ptr) {
+  Klass* klass = reinterpret_cast<Klass*>(klass_ptr);
+  return klass->is_hidden();
 }
 
 bool JeandleVMCallback::is_klass_initialized(uintptr_t klass_ptr) {
@@ -1123,7 +1155,12 @@ void JeandleVMCallback::register_callbacks() {
   callbacks.GetOopKlass = &JeandleVMCallback::get_oop_klass;
   callbacks.GetKlassConstant = &JeandleVMCallback::get_klass_constant;
   callbacks.GetMirrorKlass = &JeandleVMCallback::get_mirror_klass;
+  callbacks.AreSameClassMirrors = &JeandleVMCallback::are_same_class_mirrors;
   callbacks.GetKlassLayoutHelper = &JeandleVMCallback::get_klass_layout_helper;
+  callbacks.GetSuperCheckOffset = &JeandleVMCallback::get_super_check_offset;
+  callbacks.GetKlassModifierFlags = &JeandleVMCallback::get_klass_modifier_flags;
+  callbacks.GetKlassAccessFlags = &JeandleVMCallback::get_klass_access_flags;
+  callbacks.IsHiddenKlass = &JeandleVMCallback::is_hidden_klass;
   callbacks.IsKlassInitialized = &JeandleVMCallback::is_klass_initialized;
   callbacks.GetJavaMirror = &JeandleVMCallback::get_java_mirror;
   callbacks.GetInlineCalleeIR = &JeandleVMCallback::get_inline_callee_ir;
