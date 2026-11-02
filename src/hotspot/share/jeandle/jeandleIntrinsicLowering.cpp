@@ -175,6 +175,13 @@ bool JeandleIntrinsicLowering::is_supported(vmIntrinsics::ID id) {
     case vmIntrinsics::_dlog10:
     case vmIntrinsics::_dexp:
 
+    // Math.atan2 (_datan2) is deliberately absent from this list: HotSpot has
+    // no runtime entry for it (no StubRoutines::datan2, no
+    // SharedRuntime::datan2) and C2's LibraryCallKit rejects it too, so
+    // Jeandle does not intrinsify it either. Math.atan2 goes through the
+    // normally-inlined pure-Java FdLibm.Atan2 chain, which is bit-identical
+    // to what the interpreter runs.
+
     // Math.pow: no CPU gating. The dual-path lowering picks the platform's
     // dpow entry at lowering time (StubRoutines::dpow where the libm stubs
     // were generated, else SharedRuntime::dpow, else llvm.pow), so no
@@ -493,17 +500,20 @@ bool JeandleIntrinsicLowering::lower(vmIntrinsics::ID id, const ciMethod* target
     case vmIntrinsics::_reverseBytes_s:
       return lower_reverse_bytes_narrow(id);
 
-    // Dual-path libm (JeandleUseHotspotIntrinsics selects the path)
-    // TODO/FIXME: LLVM's `llvm.sin`, `llvm.cos`, etc. do **not** guarantee
-    // fdlibm-compatible results, especially for large inputs where range
-    // reduction quality varies by target. This will cause the calculation
-    // results to be inconsistent with those of the interpreter.
-    //
-    // TODO(#424): This is not AArch64-specific; x86 can diverge too when LLVM
-    // lowers these intrinsics to a different libm implementation. We have
-    // reproduced bit mismatches for dlog and dlog10, so the final design should
-    // decide whether these stay LLVM-backed, become runtime-only, or get a
-    // platform/semantics policy instead of this global switch.
+    // Dual-path libm (JeandleUseHotspotIntrinsics, default true). Selection
+    // is runtime-first (see select_dual_path_libm_callee): the StubRoutines
+    // libm entry when the platform generated one, else the always-linked
+    // SharedRuntime fdlibm port; the llvm builtin is used only when the flag
+    // opts out or no runtime entry is registered. The default makes compiled
+    // Math.{sin,cos,tan,log,log10,exp} (and pow, see lower_pow) call the very
+    // routines the interpreter's Math.* entries call, so compiled and
+    // interpreted execution agree bit-for-bit on x86, where both sides use
+    // the same StubRoutines entry. The LLVM path instead trades that
+    // agreement for compile-time constant folding: llvm.* lowers to the host
+    // libm, whose results can differ from the fdlibm port by 1-2 ulp, and
+    // llvm.pow additionally returns 1.0 instead of the specified NaN for
+    // pow(1.0, non-finite) and pow(-1.0, +-inf) (pinned in TestPowDouble).
+    // Design: docs/superpowers/specs/2026-11-02-numeric-bit-intrinsics-design.md
     case vmIntrinsics::_dsin:
       return lower_dual_path_libm(llvm::Intrinsic::sin,
                                   "StubRoutines_dsin",
