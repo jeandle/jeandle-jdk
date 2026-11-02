@@ -1231,8 +1231,8 @@ bool JeandleIntrinsicLowering::lower_aescrypt_block(vmIntrinsics::ID id) {
     return false;
   }
 
-  // Peek until every check above has succeeded so a false return leaves the
-  // stack untouched for the normal invoke path.
+  // Peek (not pop) until every fallible step has succeeded, preserving the
+  // operand stack for the normal invoke path on failure.
   llvm::Value* receiver = _interp->_jvm->raw_peek(4).value();
   llvm::Value* src      = _interp->_jvm->raw_peek(3).value();
   llvm::Value* src_ofs  = _interp->_jvm->raw_peek(2).value();
@@ -1241,16 +1241,17 @@ bool JeandleIntrinsicLowering::lower_aescrypt_block(vmIntrinsics::ID id) {
   _interp->null_check(src);
   _interp->null_check(dst);
 
-  llvm::Value* src_start = array_data_pointer(src, T_BYTE, src_ofs);
-  llvm::Value* dst_start = array_data_pointer(dst, T_BYTE, dst_ofs);
-  llvm::Value* k_array = load_instance_object_field(receiver, k_field);
-  llvm::Value* k_start = array_element0_pointer(k_array, T_INT);
-
+  // Commit: pop all operands; the values stay live as SSA across the call.
   _interp->_jvm->ipop();  // dst_ofs
   _interp->_jvm->apop();  // dst
   _interp->_jvm->ipop();  // src_ofs
   _interp->_jvm->apop();  // src
-  _interp->_jvm->apop();  // receiver
+  _interp->_jvm->apop();  // receiver (null-checked by invoke())
+
+  llvm::Value* src_start = array_data_pointer(src, T_BYTE, src_ofs);
+  llvm::Value* dst_start = array_data_pointer(dst, T_BYTE, dst_ofs);
+  llvm::Value* k_array = load_instance_object_field(receiver, k_field);
+  llvm::Value* k_start = array_element0_pointer(k_array, T_INT);
 
   static constexpr CallSiteAttributeMetadata attrs = {
       CTRL_NONE, MEM_READ | MEM_WRITE};
@@ -1268,11 +1269,11 @@ bool JeandleIntrinsicLowering::lower_aescrypt_block(vmIntrinsics::ID id) {
 // inline_electronicCodeBook_AESCrypt: the shared FeedbackCipher mode methods
 // are intrinsified behind an instanceof guard on the runtime type of the
 // embeddedCipher field. Non-AES and null embedded ciphers take a normal Java
-// call, and so does decryption with conjoint src==dst buffers: the stubs
-// decrypt block-wise in place, which the Java loop avoids by staging each
-// block through a scratch buffer.
+// call, and so does decryption with conjoint src==dst buffers: like C2's
+// conservative predicate, the guard keeps the Java loop's observable
+// behavior, which the stub's in-place block updates would not reproduce for
+// that buffer shape.
 bool JeandleIntrinsicLowering::lower_block_cipher_mode(vmIntrinsics::ID id) {
-  const char* holder_name = nullptr;
   const char* label = nullptr;                // IR block-name prefix
   const char* stub_name = nullptr;
   JeandleRuntimeCalleeFn callee_fn = nullptr;
@@ -1280,14 +1281,12 @@ bool JeandleIntrinsicLowering::lower_block_cipher_mode(vmIntrinsics::ID id) {
   bool decrypting = false;
   switch (id) {
     case vmIntrinsics::_cipherBlockChaining_encryptAESCrypt:
-      holder_name = "com/sun/crypto/provider/CipherBlockChaining";
       label = "cbc";
       stub_name = "StubRoutines_cipherBlockChaining_encryptAESCrypt";
       callee_fn = &JeandleRuntimeRoutine::StubRoutines_cipherBlockChaining_encryptAESCrypt_callee;
       has_r_vector = true;
       break;
     case vmIntrinsics::_cipherBlockChaining_decryptAESCrypt:
-      holder_name = "com/sun/crypto/provider/CipherBlockChaining";
       label = "cbc";
       stub_name = "StubRoutines_cipherBlockChaining_decryptAESCrypt";
       callee_fn = &JeandleRuntimeRoutine::StubRoutines_cipherBlockChaining_decryptAESCrypt_callee;
@@ -1295,13 +1294,11 @@ bool JeandleIntrinsicLowering::lower_block_cipher_mode(vmIntrinsics::ID id) {
       decrypting = true;
       break;
     case vmIntrinsics::_electronicCodeBook_encryptAESCrypt:
-      holder_name = "com/sun/crypto/provider/ElectronicCodeBook";
       label = "ecb";
       stub_name = "StubRoutines_electronicCodeBook_encryptAESCrypt";
       callee_fn = &JeandleRuntimeRoutine::StubRoutines_electronicCodeBook_encryptAESCrypt_callee;
       break;
     case vmIntrinsics::_electronicCodeBook_decryptAESCrypt:
-      holder_name = "com/sun/crypto/provider/ElectronicCodeBook";
       label = "ecb";
       stub_name = "StubRoutines_electronicCodeBook_decryptAESCrypt";
       callee_fn = &JeandleRuntimeRoutine::StubRoutines_electronicCodeBook_decryptAESCrypt_callee;

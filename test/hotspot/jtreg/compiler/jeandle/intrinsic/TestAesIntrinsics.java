@@ -11,9 +11,13 @@
  * @test
  * @summary Test Jeandle lowering of AES intrinsics: single-block
  *          encrypt/decrypt, CBC, ECB (CTR/GCM/GHASH are added by a later
- *          revision of this test). The conjoint decrypt buffers exercise
- *          the guard-miss Java fallback, which must produce identical
- *          output.
+ *          revision of this test). A DES/CBC payload drives the
+ *          embeddedCipher instanceof-miss Java fallback of the compiled CBC
+ *          mode methods, and a reflective conjoint decrypt drives the
+ *          decrypt src==dst fallback edge (CipherCore copies conjoint
+ *          Cipher inputs, so the package-private mode API is used
+ *          directly). All outputs must match the intrinsics-disabled
+ *          reference run.
  * @requires os.arch == "amd64" | os.arch == "x86_64"
  * @library /test/lib /
  * @build jdk.test.lib.Asserts jdk.test.whitebox.WhiteBox
@@ -25,6 +29,8 @@
 package compiler.jeandle.intrinsic;
 
 import java.lang.management.ManagementFactory;
+import java.lang.reflect.Constructor;
+import java.lang.reflect.Method;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.List;
@@ -45,6 +51,7 @@ public class TestAesIntrinsics {
     public static void main(String[] args) throws Exception {
         OutputAnalyzer reference = ProcessTools.executeCommand(
                 ProcessTools.createLimitedTestJavaProcessBuilder(
+                        "--add-opens", "java.base/com.sun.crypto.provider=ALL-UNNAMED",
                         "-XX:+UnlockDiagnosticVMOptions",
                         "-XX:-UseAESIntrinsics", "-XX:-UseAESCTRIntrinsics",
                         "-XX:-UseGHASHIntrinsics",
@@ -55,6 +62,7 @@ public class TestAesIntrinsics {
         List<String> commandArgs = new java.util.ArrayList<>(List.of(
                 "-Xbatch", "-XX:-TieredCompilation", "-XX:+UseJeandleCompiler",
                 "-XX:CompileThreshold=1000",
+                "--add-opens", "java.base/com.sun.crypto.provider=ALL-UNNAMED",
                 "-XX:+UnlockDiagnosticVMOptions", "-XX:+UseAESIntrinsics",
                 "-XX:+UseAESCTRIntrinsics", "-XX:+UseGHASHIntrinsics",
                 "-Xlog:jeandle=debug", "-XX:+JeandleDumpIR",
@@ -136,7 +144,10 @@ public class TestAesIntrinsics {
     static class TestWrapper {
         static final byte[] KEY = hex("000102030405060708090a0b0c0d0e0f");
         static final byte[] IV = hex("101112131415161718191a1b1c1d1e1f");
+        static final byte[] DES_KEY = hex("0123456789abcdef");
+        static final byte[] DES_IV = hex("3031323334353637");
         static final int[] LENGTHS = {16, 64, 256, 1024}; // 1, 4, 16, 64 blocks
+        static final int[] DES_LENGTHS = {16, 64}; // DES 8-byte blocks
         // Hot enough for the mode methods to pass -XX:CompileThreshold.
         static final int WARMUP = 2000;
 
@@ -164,10 +175,20 @@ public class TestAesIntrinsics {
                 run("ECB", "AES/ECB/NoPadding", plain, true);
                 run("CBC", "AES/CBC/NoPadding", plain, false);
                 run("CBC", "AES/CBC/NoPadding", plain, true);
-                // Conjoint buffers: CBC decrypt's src==dst guard must route
-                // to the Java fallback and still produce the right plaintext.
                 runConjoint("CBC", "AES/CBC/NoPadding", plain);
             }
+
+            // DES/CBC builds CipherBlockChaining around a DESCrypt, so the
+            // already-compiled AES/CBC mode methods run their instanceof
+            // guard-miss path: every call goes through the Java fallback.
+            for (int length : DES_LENGTHS) {
+                byte[] plain = data(length);
+                runDes(plain, false);
+                runDes(plain, true);
+            }
+
+            // The conjoint decrypt edge of the CBC intrinsic.
+            runReflectiveConjoint("CBC");
             System.out.println("TestAesIntrinsics PASSED");
         }
 
@@ -199,6 +220,24 @@ public class TestAesIntrinsics {
             }
         }
 
+        static void runDes(byte[] plain, boolean decrypt) throws Exception {
+            Cipher enc = Cipher.getInstance("DES/CBC/NoPadding", "SunJCE");
+            enc.init(Cipher.ENCRYPT_MODE, new SecretKeySpec(DES_KEY, "DES"),
+                    new IvParameterSpec(DES_IV));
+            byte[] cipherText = enc.doFinal(plain);
+            if (!decrypt) {
+                System.out.println("CRYPT DES enc " + plain.length + " "
+                        + hexOf(cipherText));
+                return;
+            }
+            Cipher dec = Cipher.getInstance("DES/CBC/NoPadding", "SunJCE");
+            dec.init(Cipher.DECRYPT_MODE, new SecretKeySpec(DES_KEY, "DES"),
+                    new IvParameterSpec(DES_IV));
+            byte[] plainBack = dec.doFinal(cipherText);
+            System.out.println("CRYPT DES dec " + plain.length + " "
+                    + hexOf(plainBack));
+        }
+
         static void runConjoint(String label, String transform, byte[] plain)
                 throws Exception {
             Cipher enc = Cipher.getInstance(transform, "SunJCE");
@@ -208,12 +247,49 @@ public class TestAesIntrinsics {
             Cipher dec = Cipher.getInstance(transform, "SunJCE");
             dec.init(Cipher.DECRYPT_MODE, new SecretKeySpec(KEY, "AES"),
                     new IvParameterSpec(IV));
-            // src == dst: exercises the conjoint guard on the decrypt
-            // intrinsic fast path.
+            // src == dst through the public Cipher API: CipherCore copies
+            // conjoint inputs to an internal buffer, so the mode method sees
+            // disjoint arrays and takes the stub path. This pins the
+            // end-to-end result of that pipeline; the conjoint edge itself
+            // is driven reflectively below.
             int n = dec.doFinal(buf, 0, buf.length, buf, 0);
             if (label != null) {
                 System.out.println("CRYPT " + label + " conj " + n + " " + hexOf(buf));
             }
+        }
+
+        // CipherCore never hands conjoint buffers to the mode method, so the
+        // src==dst edge of the CBC decrypt intrinsic is driven through the
+        // package-private mode API directly: CipherBlockChaining.decrypt is
+        // invoked reflectively with the same array as cipher and plain.
+        static void runReflectiveConjoint(String label) throws Exception {
+            Class<?> symCls = Class.forName("com.sun.crypto.provider.SymmetricCipher");
+            Class<?> aesCls = Class.forName("com.sun.crypto.provider.AESCrypt");
+            Class<?> cbcCls = Class.forName("com.sun.crypto.provider.CipherBlockChaining");
+
+            Constructor<?> aesCtor = aesCls.getDeclaredConstructor();
+            aesCtor.setAccessible(true);
+            Constructor<?> cbcCtor = cbcCls.getDeclaredConstructor(symCls);
+            cbcCtor.setAccessible(true);
+            Object cbc = cbcCtor.newInstance(aesCtor.newInstance());
+
+            Method init = cbcCls.getDeclaredMethod("init", boolean.class,
+                    String.class, byte[].class, byte[].class);
+            init.setAccessible(true);
+            init.invoke(cbc, /*decrypting=*/true, "AES", KEY, IV);
+            Method reset = cbcCls.getDeclaredMethod("reset");
+            reset.setAccessible(true);
+            reset.invoke(cbc);
+            Method decrypt = cbcCls.getDeclaredMethod("decrypt", byte[].class,
+                    int.class, int.class, byte[].class, int.class);
+            decrypt.setAccessible(true);
+
+            Cipher enc = Cipher.getInstance("AES/CBC/NoPadding", "SunJCE");
+            enc.init(Cipher.ENCRYPT_MODE, new SecretKeySpec(KEY, "AES"),
+                    new IvParameterSpec(IV));
+            byte[] buf = enc.doFinal(data(64));
+            int n = (Integer) decrypt.invoke(cbc, buf, 0, buf.length, buf, 0);
+            System.out.println("CRYPT " + label + " rconj " + n + " " + hexOf(buf));
         }
 
         static byte[] data(int length) {

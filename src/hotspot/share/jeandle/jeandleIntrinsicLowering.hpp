@@ -258,7 +258,9 @@ class JeandleIntrinsicLowering : public StackObj {
   // builder is currently parked at, branch to merge_bb, and PHI-merge the
   // i32 results of the guarded stub paths with the call result. Returns the
   // PHI, or nullptr when emit_java_call recorded a compilation error (the
-  // caller returns true so the error aborts the compilation).
+  // caller returns true so the error aborts the compilation). On success the
+  // builder is left positioned at merge_bb with the tail block recorded, so
+  // the caller must only ipush the result and emit no further IR of its own.
   llvm::Value* merge_with_java_fallback(llvm::ArrayRef<llvm::Value*> stub_results,
                                         llvm::ArrayRef<llvm::BasicBlock*> stub_blocks,
                                         llvm::BasicBlock* merge_bb,
@@ -266,9 +268,9 @@ class JeandleIntrinsicLowering : public StackObj {
                                         bool has_receiver,
                                         const llvm::Twine& phi_name);
   bool lower_aescrypt_block(vmIntrinsics::ID id);
-  // Guarded AES block-cipher modes (CBC and ECB). The mode only selects the
-  // stub, the holder class and the CBC r-vector argument, so one shared
-  // lowering covers all four intrinsics.
+  // Guarded AES block-cipher modes (CBC and ECB); the intrinsic id selects
+  // the stub, its callee, the CBC r-vector argument and the encrypt/decrypt
+  // direction, so one shared lowering covers all four intrinsics.
   bool lower_block_cipher_mode(vmIntrinsics::ID id);
   bool lower_new_array();
   bool lower_unsafe_allocate_instance();
