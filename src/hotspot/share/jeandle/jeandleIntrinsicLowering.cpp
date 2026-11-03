@@ -660,6 +660,15 @@ bool JeandleIntrinsicLowering::lower(vmIntrinsics::ID id, const ciMethod* target
     case vmIntrinsics::_electronicCodeBook_decryptAESCrypt:
       return lower_block_cipher_mode(id);
 
+    case vmIntrinsics::_counterMode_AESCrypt:
+      return lower_counter_mode();
+
+    case vmIntrinsics::_galoisCounterMode_AESCrypt:
+      return lower_galois_counter_mode();
+
+    case vmIntrinsics::_ghash_processBlocks:
+      return lower_ghash_process_blocks();
+
     // HashCode
     case vmIntrinsics::_identityHashCode:
     case vmIntrinsics::_hashCode:
@@ -1446,6 +1455,387 @@ bool JeandleIntrinsicLowering::lower_block_cipher_mode(vmIntrinsics::ID id) {
     return true;
   }
   _interp->_jvm->ipush(result);
+  return true;
+}
+
+// =============================================================================
+// lower_counter_mode — guarded CTR AES intrinsic
+// =============================================================================
+
+// Mirrors C2's predicated inline_counterMode_AESCrypt: CounterMode.implCrypt
+// is shared by every counter-style cipher, so the fast path guards on the
+// runtime type of the embeddedCipher field and every non-AES (or null)
+// embedded cipher takes a normal Java call. Unlike the CBC/ECB modes there is
+// no conjoint exclusion: CTR is a stream cipher, so in-place operation is
+// well-defined for the stub too. The stub consumes whole keystream blocks, so
+// it receives the counter, the saved encrypted counter and the address of the
+// used field, whose remaining keystream bytes and updated position it writes
+// back itself.
+bool JeandleIntrinsicLowering::lower_counter_mode() {
+  const char* const stub_name = "StubRoutines_counterMode_AESCrypt";
+
+  // implCrypt(byte[] src, int srcOfs, int len, byte[] dst, int dstOfs): int
+  ciSignature* sig = _target->signature();
+  if (sig->count() != 5 ||
+      sig->type_at(0)->basic_type() != T_ARRAY ||
+      sig->type_at(0)->name() == nullptr ||
+      strcmp(sig->type_at(0)->name(), "[B") != 0 ||
+      sig->type_at(1)->basic_type() != T_INT ||
+      sig->type_at(2)->basic_type() != T_INT ||
+      sig->type_at(3)->basic_type() != T_ARRAY ||
+      sig->type_at(3)->name() == nullptr ||
+      strcmp(sig->type_at(3)->name(), "[B") != 0 ||
+      sig->type_at(4)->basic_type() != T_INT ||
+      sig->return_type()->basic_type() != T_INT) {
+    return false;
+  }
+
+  if (JeandleRuntimeRoutine::find_routine_entry(stub_name) == nullptr) {
+    return false;
+  }
+
+  // embeddedCipher is declared by FeedbackCipher; counter, encryptedCounter
+  // and used by CounterMode itself. AESCrypt may not be loaded yet when some
+  // other SymmetricCipher reached this call site, in which case the guard
+  // could not be closed and the intrinsic is declined.
+  ciInstanceKlass* holder = _target->holder();
+  ciField* embedded_field = find_instance_field(
+      holder, "embeddedCipher", "Lcom/sun/crypto/provider/SymmetricCipher;");
+  ciInstanceKlass* aes_klass =
+      resolve_loaded_instance_klass("com/sun/crypto/provider/AESCrypt");
+  if (embedded_field == nullptr || aes_klass == nullptr) {
+    return false;
+  }
+  ciField* k_field = find_instance_field(aes_klass, "K", "[I");
+  ciField* counter_field = find_instance_field(holder, "counter", "[B");
+  ciField* encrypted_counter_field =
+      find_instance_field(holder, "encryptedCounter", "[B");
+  ciField* used_field = find_instance_field(holder, "used", "I");
+  if (k_field == nullptr || counter_field == nullptr ||
+      encrypted_counter_field == nullptr || used_field == nullptr) {
+    return false;
+  }
+
+  // The fallback call needs the statically resolved holder; resolve it
+  // before the operand stack is touched (the merge helper asserts it).
+  if (_interp->_bytecodes.get_declared_method_holder() == nullptr) {
+    return false;
+  }
+
+  // Peek (not pop) until every fallible step has succeeded, preserving the
+  // operand stack for the normal invoke path on failure.
+  llvm::Value* receiver = _interp->_jvm->raw_peek(5).value();
+  llvm::Value* src      = _interp->_jvm->raw_peek(4).value();
+  llvm::Value* src_ofs  = _interp->_jvm->raw_peek(3).value();
+  llvm::Value* len      = _interp->_jvm->raw_peek(2).value();
+  llvm::Value* dst      = _interp->_jvm->raw_peek(1).value();
+  llvm::Value* dst_ofs  = _interp->_jvm->raw_peek(0).value();
+  _interp->null_check(src);
+  _interp->null_check(dst);
+
+  // Commit: pop all operands; the values stay live as SSA across branches.
+  _interp->_jvm->ipop();  // dst_ofs
+  _interp->_jvm->apop();  // dst
+  _interp->_jvm->ipop();  // len
+  _interp->_jvm->ipop();  // src_ofs
+  _interp->_jvm->apop();  // src
+  _interp->_jvm->apop();  // receiver (null-checked by invoke())
+
+  llvm::IRBuilder<>& builder = _interp->_ir_builder;
+  llvm::LLVMContext& ctx = *_interp->_context;
+
+  llvm::Value* src_start = array_data_pointer(src, T_BYTE, src_ofs);
+  llvm::Value* dst_start = array_data_pointer(dst, T_BYTE, dst_ofs);
+
+  llvm::BasicBlock* stub_bb = llvm::BasicBlock::Create(
+      ctx, "ctr_stub", _interp->_llvm_func);
+  llvm::BasicBlock* fallback_bb = llvm::BasicBlock::Create(
+      ctx, "ctr_fallback", _interp->_llvm_func);
+  llvm::BasicBlock* merge_bb = llvm::BasicBlock::Create(
+      ctx, "ctr_merge", _interp->_llvm_func);
+
+  // Guard: the embedded cipher must be an AESCrypt at runtime. The
+  // jeandle.instanceof JavaOp is null-safe, so a null embeddedCipher simply
+  // takes the Java path like any other non-AES cipher.
+  llvm::Value* embedded = load_instance_object_field(receiver, embedded_field);
+  llvm::CallInst* is_aes = _interp->call_java_op(
+      "jeandle.instanceof", {klass_constant_pointer(aes_klass), embedded});
+  llvm::Value* embedded_ok = builder.CreateICmpNE(
+      is_aes, builder.getInt32(0), "ctr_embedded_is_aes");
+  builder.CreateCondBr(embedded_ok, stub_bb, fallback_bb);
+
+  // Stub fast path: the guard proved the embedded cipher is an AESCrypt, so
+  // loading its key schedule and the mode state is safe. The stub updates
+  // counter, encryptedCounter and used through the two array pointers and
+  // the used field address.
+  builder.SetInsertPoint(stub_bb);
+  llvm::Value* k_array = load_instance_object_field(embedded, k_field);
+  llvm::Value* k_start = array_element0_pointer(k_array, T_INT);
+  llvm::Value* counter_array =
+      load_instance_object_field(receiver, counter_field);
+  llvm::Value* cnt_start = array_element0_pointer(counter_array, T_BYTE);
+  llvm::Value* enc_counter_array =
+      load_instance_object_field(receiver, encrypted_counter_field);
+  llvm::Value* enc_counter_start =
+      array_element0_pointer(enc_counter_array, T_BYTE);
+  llvm::Value* used_addr = _interp->compute_instance_field_address(
+      receiver, used_field->offset_in_bytes());
+  static constexpr CallSiteAttributeMetadata STUB_ATTRS = {
+      CTRL_NONE, MEM_READ | MEM_WRITE};
+  llvm::CallBase* stub_call = emit_callsite(
+      JeandleRuntimeRoutine::StubRoutines_counterMode_AESCrypt_callee(
+          _interp->_module),
+      llvm::CallingConv::C,
+      {src_start, dst_start, k_start, cnt_start, len,
+       enc_counter_start, used_addr},
+      STUB_ATTRS, /*is_gc_leaf_entry=*/true);
+  builder.CreateBr(merge_bb);
+  llvm::BasicBlock* stub_tail_bb = builder.GetInsertBlock();
+
+  // Guard misses run the original Java method.
+  builder.SetInsertPoint(fallback_bb);
+  llvm::Value* result = merge_with_java_fallback(
+      {stub_call}, {stub_tail_bb}, merge_bb,
+      {receiver, src, src_ofs, len, dst, dst_ofs}, /*has_receiver=*/true,
+      "ctr.result");
+  if (result == nullptr) {
+    return true;
+  }
+  _interp->_jvm->ipush(result);
+  return true;
+}
+
+// =============================================================================
+// lower_galois_counter_mode — guarded combined AES-GCM intrinsic
+// =============================================================================
+
+// Mirrors C2's predicated inline_galoisCounterMode_AESCrypt: the static
+// GaloisCounterMode.implGCMCrypt0 combines the GCTR encryption and the GHASH
+// tag update in one stub call. The fast path guards on the gctr argument's
+// embeddedCipher runtime type — the same null-safe check as the CTR/CBC
+// modes — and feeds the AES key schedule, the GCTR counter and the GHASH
+// state/subkey tables to the stub, which writes out, state and counter back.
+// The call is static, so unlike the mode-method intrinsics every object
+// argument is null-checked here.
+bool JeandleIntrinsicLowering::lower_galois_counter_mode() {
+  const char* const stub_name = "StubRoutines_galoisCounterMode_AESCrypt";
+
+  // implGCMCrypt0(byte[] in, int inOfs, int inLen, byte[] ct, int ctOfs,
+  //               byte[] out, int outOfs, GCTR gctr, GHASH ghash): int
+  ciSignature* sig = _target->signature();
+  if (sig->count() != 9 ||
+      sig->type_at(0)->basic_type() != T_ARRAY ||
+      sig->type_at(0)->name() == nullptr ||
+      strcmp(sig->type_at(0)->name(), "[B") != 0 ||
+      sig->type_at(1)->basic_type() != T_INT ||
+      sig->type_at(2)->basic_type() != T_INT ||
+      sig->type_at(3)->basic_type() != T_ARRAY ||
+      sig->type_at(3)->name() == nullptr ||
+      strcmp(sig->type_at(3)->name(), "[B") != 0 ||
+      sig->type_at(4)->basic_type() != T_INT ||
+      sig->type_at(5)->basic_type() != T_ARRAY ||
+      sig->type_at(5)->name() == nullptr ||
+      strcmp(sig->type_at(5)->name(), "[B") != 0 ||
+      sig->type_at(6)->basic_type() != T_INT ||
+      sig->type_at(7)->basic_type() != T_OBJECT ||
+      sig->type_at(8)->basic_type() != T_OBJECT ||
+      sig->return_type()->basic_type() != T_INT) {
+    return false;
+  }
+
+  // The x86 stub is generated only with AVX512 VAES; a missing entry closes
+  // the intrinsic.
+  if (JeandleRuntimeRoutine::find_routine_entry(stub_name) == nullptr) {
+    return false;
+  }
+
+  // embeddedCipher and counter live on GCTR's CounterMode superclass, the
+  // GHASH state on the GHASH object itself. AESCrypt may not be loaded yet
+  // when some other SymmetricCipher reached this call site, in which case the
+  // guard could not be closed and the intrinsic is declined.
+  ciInstanceKlass* gctr_klass =
+      resolve_loaded_instance_klass("com/sun/crypto/provider/GCTR");
+  ciInstanceKlass* ghash_klass =
+      resolve_loaded_instance_klass("com/sun/crypto/provider/GHASH");
+  ciInstanceKlass* aes_klass =
+      resolve_loaded_instance_klass("com/sun/crypto/provider/AESCrypt");
+  if (gctr_klass == nullptr || ghash_klass == nullptr || aes_klass == nullptr) {
+    return false;
+  }
+  ciField* embedded_field = find_instance_field(
+      gctr_klass, "embeddedCipher", "Lcom/sun/crypto/provider/SymmetricCipher;");
+  ciField* counter_field = find_instance_field(gctr_klass, "counter", "[B");
+  ciField* state_field = find_instance_field(ghash_klass, "state", "[J");
+  ciField* subkey_field = find_instance_field(ghash_klass, "subkeyHtbl", "[J");
+  ciField* k_field = find_instance_field(aes_klass, "K", "[I");
+  if (embedded_field == nullptr || counter_field == nullptr ||
+      state_field == nullptr || subkey_field == nullptr || k_field == nullptr) {
+    return false;
+  }
+
+  // The fallback call needs the statically resolved holder; resolve it
+  // before the operand stack is touched (the merge helper asserts it).
+  if (_interp->_bytecodes.get_declared_method_holder() == nullptr) {
+    return false;
+  }
+
+  // Peek (not pop) until every fallible step has succeeded, preserving the
+  // operand stack for the normal invoke path on failure. A static call has
+  // no receiver null check from invoke(), so every object argument is
+  // null-checked here; the guard below loads fields from gctr and ghash.
+  llvm::Value* in      = _interp->_jvm->raw_peek(8).value();
+  llvm::Value* in_ofs  = _interp->_jvm->raw_peek(7).value();
+  llvm::Value* in_len  = _interp->_jvm->raw_peek(6).value();
+  llvm::Value* ct      = _interp->_jvm->raw_peek(5).value();
+  llvm::Value* ct_ofs  = _interp->_jvm->raw_peek(4).value();
+  llvm::Value* out     = _interp->_jvm->raw_peek(3).value();
+  llvm::Value* out_ofs = _interp->_jvm->raw_peek(2).value();
+  llvm::Value* gctr    = _interp->_jvm->raw_peek(1).value();
+  llvm::Value* ghash   = _interp->_jvm->raw_peek(0).value();
+  _interp->null_check(in);
+  _interp->null_check(ct);
+  _interp->null_check(out);
+  _interp->null_check(gctr);
+  _interp->null_check(ghash);
+
+  // Commit: pop all operands; the values stay live as SSA across branches.
+  _interp->_jvm->apop();  // ghash
+  _interp->_jvm->apop();  // gctr
+  _interp->_jvm->ipop();  // out_ofs
+  _interp->_jvm->apop();  // out
+  _interp->_jvm->ipop();  // ct_ofs
+  _interp->_jvm->apop();  // ct
+  _interp->_jvm->ipop();  // in_len
+  _interp->_jvm->ipop();  // in_ofs
+  _interp->_jvm->apop();  // in
+
+  llvm::IRBuilder<>& builder = _interp->_ir_builder;
+  llvm::LLVMContext& ctx = *_interp->_context;
+
+  llvm::Value* in_start = array_data_pointer(in, T_BYTE, in_ofs);
+  llvm::Value* ct_start = array_data_pointer(ct, T_BYTE, ct_ofs);
+  llvm::Value* out_start = array_data_pointer(out, T_BYTE, out_ofs);
+
+  llvm::BasicBlock* stub_bb = llvm::BasicBlock::Create(
+      ctx, "gcm_stub", _interp->_llvm_func);
+  llvm::BasicBlock* fallback_bb = llvm::BasicBlock::Create(
+      ctx, "gcm_fallback", _interp->_llvm_func);
+  llvm::BasicBlock* merge_bb = llvm::BasicBlock::Create(
+      ctx, "gcm_merge", _interp->_llvm_func);
+
+  // Guard: the gctr's embedded cipher must be an AESCrypt at runtime. The
+  // jeandle.instanceof JavaOp is null-safe, so a null embeddedCipher simply
+  // takes the Java path like any other non-AES cipher.
+  llvm::Value* embedded = load_instance_object_field(gctr, embedded_field);
+  llvm::CallInst* is_aes = _interp->call_java_op(
+      "jeandle.instanceof", {klass_constant_pointer(aes_klass), embedded});
+  llvm::Value* embedded_ok = builder.CreateICmpNE(
+      is_aes, builder.getInt32(0), "gcm_embedded_is_aes");
+  builder.CreateCondBr(embedded_ok, stub_bb, fallback_bb);
+
+  // Stub fast path: the guard proved the embedded cipher is an AESCrypt, so
+  // loading its key schedule and the GCTR/GHASH state is safe. The stub
+  // writes out, the GHASH state and the counter through these pointers.
+  builder.SetInsertPoint(stub_bb);
+  llvm::Value* k_array = load_instance_object_field(embedded, k_field);
+  llvm::Value* k_start = array_element0_pointer(k_array, T_INT);
+  llvm::Value* counter_array = load_instance_object_field(gctr, counter_field);
+  llvm::Value* cnt_start = array_element0_pointer(counter_array, T_BYTE);
+  llvm::Value* state_array = load_instance_object_field(ghash, state_field);
+  llvm::Value* state_start = array_element0_pointer(state_array, T_LONG);
+  llvm::Value* subkey_array = load_instance_object_field(ghash, subkey_field);
+  llvm::Value* subkey_start = array_element0_pointer(subkey_array, T_LONG);
+  static constexpr CallSiteAttributeMetadata STUB_ATTRS = {
+      CTRL_NONE, MEM_READ | MEM_WRITE};
+  llvm::CallBase* stub_call = emit_callsite(
+      JeandleRuntimeRoutine::StubRoutines_galoisCounterMode_AESCrypt_callee(
+          _interp->_module),
+      llvm::CallingConv::C,
+      {in_start, in_len, ct_start, out_start, k_start,
+       state_start, subkey_start, cnt_start},
+      STUB_ATTRS, /*is_gc_leaf_entry=*/true);
+  builder.CreateBr(merge_bb);
+  llvm::BasicBlock* stub_tail_bb = builder.GetInsertBlock();
+
+  // Guard misses run the original Java method.
+  builder.SetInsertPoint(fallback_bb);
+  llvm::Value* result = merge_with_java_fallback(
+      {stub_call}, {stub_tail_bb}, merge_bb,
+      {in, in_ofs, in_len, ct, ct_ofs, out, out_ofs, gctr, ghash},
+      /*has_receiver=*/false, "gcm.result");
+  if (result == nullptr) {
+    return true;
+  }
+  _interp->_jvm->ipush(result);
+  return true;
+}
+
+// =============================================================================
+// lower_ghash_process_blocks — GHASH multi-block intrinsic
+// =============================================================================
+
+// GHASH.processBlocks is package-private and only called on GHASH objects,
+// so like C2's inline_ghash_processBlocks it bridges straight to the stub
+// without a guard. The call is static, so the array arguments are
+// null-checked here instead of by invoke().
+bool JeandleIntrinsicLowering::lower_ghash_process_blocks() {
+  const char* const stub_name = "StubRoutines_ghash_processBlocks";
+
+  // processBlocks(byte[] data, int inOfs, int blocks, long[] st, long[] subH)
+  ciSignature* sig = _target->signature();
+  if (sig->count() != 5 ||
+      sig->type_at(0)->basic_type() != T_ARRAY ||
+      sig->type_at(0)->name() == nullptr ||
+      strcmp(sig->type_at(0)->name(), "[B") != 0 ||
+      sig->type_at(1)->basic_type() != T_INT ||
+      sig->type_at(2)->basic_type() != T_INT ||
+      sig->type_at(3)->basic_type() != T_ARRAY ||
+      sig->type_at(3)->name() == nullptr ||
+      strcmp(sig->type_at(3)->name(), "[J") != 0 ||
+      sig->type_at(4)->basic_type() != T_ARRAY ||
+      sig->type_at(4)->name() == nullptr ||
+      strcmp(sig->type_at(4)->name(), "[J") != 0 ||
+      sig->return_type()->basic_type() != T_VOID) {
+    return false;
+  }
+
+  // The ghash stub is generated only on platforms with carry-less multiply
+  // support; never materialize a direct call when the entry is absent.
+  if (JeandleRuntimeRoutine::find_routine_entry(stub_name) == nullptr) {
+    return false;
+  }
+
+  // Peek (not pop) until every fallible step has succeeded, preserving the
+  // operand stack for the normal invoke path on failure. A static call has
+  // no receiver null check from invoke().
+  llvm::Value* data    = _interp->_jvm->raw_peek(4).value();
+  llvm::Value* in_ofs  = _interp->_jvm->raw_peek(3).value();
+  llvm::Value* blocks  = _interp->_jvm->raw_peek(2).value();
+  llvm::Value* st      = _interp->_jvm->raw_peek(1).value();
+  llvm::Value* sub_h   = _interp->_jvm->raw_peek(0).value();
+  _interp->null_check(data);
+  _interp->null_check(st);
+  _interp->null_check(sub_h);
+
+  // Commit: pop all operands; the values stay live as SSA across the call.
+  _interp->_jvm->apop();  // sub_h
+  _interp->_jvm->apop();  // st
+  _interp->_jvm->ipop();  // blocks
+  _interp->_jvm->ipop();  // in_ofs
+  _interp->_jvm->apop();  // data
+
+  llvm::Value* data_start = array_data_pointer(data, T_BYTE, in_ofs);
+  llvm::Value* state_start = array_element0_pointer(st, T_LONG);
+  llvm::Value* subkey_start = array_element0_pointer(sub_h, T_LONG);
+
+  static constexpr CallSiteAttributeMetadata attrs = {
+      CTRL_NONE, MEM_READ | MEM_WRITE};
+  emit_callsite(
+      JeandleRuntimeRoutine::StubRoutines_ghash_processBlocks_callee(
+          _interp->_module),
+      llvm::CallingConv::C,
+      {state_start, subkey_start, data_start, blocks},
+      attrs, /*is_gc_leaf_entry=*/true);
   return true;
 }
 

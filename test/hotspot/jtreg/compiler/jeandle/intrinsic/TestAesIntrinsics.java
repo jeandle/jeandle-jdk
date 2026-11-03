@@ -10,13 +10,12 @@
 /*
  * @test
  * @summary Test Jeandle lowering of AES intrinsics: single-block
- *          encrypt/decrypt, CBC, ECB (CTR/GCM/GHASH are added by a later
- *          revision of this test). A DES/CBC payload drives the
- *          embeddedCipher instanceof-miss Java fallback of the compiled CBC
- *          mode methods, and a reflective conjoint decrypt drives the
- *          decrypt src==dst fallback edge (CipherCore copies conjoint
- *          Cipher inputs, so the package-private mode API is used
- *          directly). All outputs must match the intrinsics-disabled
+ *          encrypt/decrypt, CBC, ECB, CTR and GCM/GHASH. DES/CBC and DES/CTR
+ *          payloads drive the embeddedCipher instanceof-miss Java fallback of
+ *          the compiled CBC and CTR mode methods, and a reflective conjoint
+ *          decrypt drives the CBC decrypt src==dst fallback edge (CipherCore
+ *          copies conjoint Cipher inputs, so the package-private mode API is
+ *          used directly). All outputs must match the intrinsics-disabled
  *          reference run.
  * @requires os.arch == "amd64" | os.arch == "x86_64"
  * @library /test/lib /
@@ -34,8 +33,10 @@ import java.lang.reflect.Method;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.List;
+import java.util.zip.CRC32;
 
 import javax.crypto.Cipher;
+import javax.crypto.spec.GCMParameterSpec;
 import javax.crypto.spec.IvParameterSpec;
 import javax.crypto.spec.SecretKeySpec;
 
@@ -70,6 +71,10 @@ public class TestAesIntrinsics {
                 "-XX:CompileCommand=compileonly,com/sun/crypto/provider/AESCrypt.*",
                 "-XX:CompileCommand=compileonly,com/sun/crypto/provider/CipherBlockChaining.*",
                 "-XX:CompileCommand=compileonly,com/sun/crypto/provider/ElectronicCodeBook.*",
+                "-XX:CompileCommand=compileonly,com/sun/crypto/provider/CounterMode.*",
+                "-XX:CompileCommand=compileonly,com/sun/crypto/provider/GCTR.*",
+                "-XX:CompileCommand=compileonly,com/sun/crypto/provider/GaloisCounterMode.*",
+                "-XX:CompileCommand=compileonly,com/sun/crypto/provider/GHASH.*",
                 TestWrapper.class.getName()));
 
         OutputAnalyzer output = ProcessTools.executeCommand(
@@ -110,6 +115,17 @@ public class TestAesIntrinsics {
                 "ECB encrypt routine presence must match UseAESIntrinsics && avx512vaes");
         Asserts.assertEquals(ecbStubExpected, ir.contains("StubRoutines_electronicCodeBook_decryptAESCrypt("),
                 "ECB decrypt routine presence must match UseAESIntrinsics && avx512vaes");
+        boolean ctrFlag = effectiveFlag(output, "UseAESCTRIntrinsics");
+        Asserts.assertEquals(ctrFlag, ir.contains("StubRoutines_counterMode_AESCrypt("),
+                "CTR routine presence must match UseAESCTRIntrinsics");
+        // The combined GCM stub is only generated with AVX512 VAES on x86.
+        boolean gcmStubExpected = aesFlag && hasAvx512Vaes();
+        Asserts.assertEquals(gcmStubExpected,
+                ir.contains("StubRoutines_galoisCounterMode_AESCrypt("),
+                "GCM routine presence must match UseAESIntrinsics && avx512vaes");
+        boolean ghashFlag = effectiveFlag(output, "UseGHASHIntrinsics");
+        Asserts.assertEquals(ghashFlag, ir.contains("StubRoutines_ghash_processBlocks("),
+                "GHASH routine presence must match UseGHASHIntrinsics");
     }
 
     // The x86 ECB stubs require the same feature set that
@@ -144,9 +160,15 @@ public class TestAesIntrinsics {
     static class TestWrapper {
         static final byte[] KEY = hex("000102030405060708090a0b0c0d0e0f");
         static final byte[] IV = hex("101112131415161718191a1b1c1d1e1f");
+        // 12 bytes, the standard GCM nonce size; a fixed nonce keeps the
+        // recorded seal/open output identical across both subprocesses.
+        static final byte[] IV_GCM = hex("202122232425262728292a2b");
         static final byte[] DES_KEY = hex("0123456789abcdef");
         static final byte[] DES_IV = hex("3031323334353637");
         static final int[] LENGTHS = {16, 64, 256, 1024}; // 1, 4, 16, 64 blocks
+        // The combined AES-GCM intrinsic is only reached for inputs of at
+        // least GaloisCounterMode.PARALLEL_LEN (7680) bytes.
+        static final int[] GCM_LENGTHS = {7680, 15360};
         static final int[] DES_LENGTHS = {16, 64}; // DES 8-byte blocks
         // Hot enough for the mode methods to pass -XX:CompileThreshold.
         static final int WARMUP = 2000;
@@ -161,12 +183,17 @@ public class TestAesIntrinsics {
             // it is compiled with fully resolved constant pools. The recorded
             // runs below then execute the compiled guarded intrinsics.
             byte[] warm = data(64);
+            // Large enough for the combined AES-GCM intrinsic to run.
+            byte[] warmGcm = data(GCM_LENGTHS[0]);
             for (int i = 0; i < WARMUP; i++) {
                 run(null, "AES/ECB/NoPadding", warm, false);
                 run(null, "AES/ECB/NoPadding", warm, true);
                 run(null, "AES/CBC/NoPadding", warm, false);
                 run(null, "AES/CBC/NoPadding", warm, true);
                 runConjoint(null, "AES/CBC/NoPadding", warm);
+                run(null, "AES/CTR/NoPadding", warm, false);
+                run(null, "AES/CTR/NoPadding", warm, true);
+                runGcm(null, warmGcm);
             }
 
             for (int length : LENGTHS) {
@@ -176,15 +203,24 @@ public class TestAesIntrinsics {
                 run("CBC", "AES/CBC/NoPadding", plain, false);
                 run("CBC", "AES/CBC/NoPadding", plain, true);
                 runConjoint("CBC", "AES/CBC/NoPadding", plain);
+                run("CTR", "AES/CTR/NoPadding", plain, false);
+                run("CTR", "AES/CTR/NoPadding", plain, true);
             }
 
-            // DES/CBC builds CipherBlockChaining around a DESCrypt, so the
-            // already-compiled AES/CBC mode methods run their instanceof
-            // guard-miss path: every call goes through the Java fallback.
+            for (int length : GCM_LENGTHS) {
+                runGcm("GCM", data(length));
+            }
+
+            // DES/CBC builds CipherBlockChaining and DES/CTR builds
+            // CounterMode around a DESCrypt, so the already-compiled AES/CBC
+            // and AES/CTR mode methods run their instanceof guard-miss path:
+            // every call goes through the Java fallback.
             for (int length : DES_LENGTHS) {
                 byte[] plain = data(length);
-                runDes(plain, false);
-                runDes(plain, true);
+                runDes("DES/CBC/NoPadding", "DES", plain, false);
+                runDes("DES/CBC/NoPadding", "DES", plain, true);
+                runDes("DES/CTR/NoPadding", "DESCTR", plain, false);
+                runDes("DES/CTR/NoPadding", "DESCTR", plain, true);
             }
 
             // The conjoint decrypt edge of the CBC intrinsic.
@@ -199,9 +235,13 @@ public class TestAesIntrinsics {
 
         static void run(String label, String transform, byte[] plain,
                         boolean decrypt) throws Exception {
+            // ECB is the only transform without an IV; a missing IV would be
+            // randomly derived on encrypt (nondeterministic output) and
+            // rejected on decrypt.
+            IvParameterSpec iv =
+                    transform.contains("ECB") ? null : new IvParameterSpec(IV);
             Cipher enc = Cipher.getInstance(transform, "SunJCE");
-            enc.init(Cipher.ENCRYPT_MODE, new SecretKeySpec(KEY, "AES"),
-                    transform.contains("CBC") ? new IvParameterSpec(IV) : null);
+            enc.init(Cipher.ENCRYPT_MODE, new SecretKeySpec(KEY, "AES"), iv);
             byte[] cipherText = enc.doFinal(plain);
             if (!decrypt) {
                 if (label != null) {
@@ -211,8 +251,7 @@ public class TestAesIntrinsics {
                 return;
             }
             Cipher dec = Cipher.getInstance(transform, "SunJCE");
-            dec.init(Cipher.DECRYPT_MODE, new SecretKeySpec(KEY, "AES"),
-                    transform.contains("CBC") ? new IvParameterSpec(IV) : null);
+            dec.init(Cipher.DECRYPT_MODE, new SecretKeySpec(KEY, "AES"), iv);
             byte[] plainBack = dec.doFinal(cipherText);
             if (label != null) {
                 System.out.println("CRYPT " + label + " dec " + plain.length + " "
@@ -220,21 +259,22 @@ public class TestAesIntrinsics {
             }
         }
 
-        static void runDes(byte[] plain, boolean decrypt) throws Exception {
-            Cipher enc = Cipher.getInstance("DES/CBC/NoPadding", "SunJCE");
+        static void runDes(String transform, String label, byte[] plain,
+                           boolean decrypt) throws Exception {
+            Cipher enc = Cipher.getInstance(transform, "SunJCE");
             enc.init(Cipher.ENCRYPT_MODE, new SecretKeySpec(DES_KEY, "DES"),
                     new IvParameterSpec(DES_IV));
             byte[] cipherText = enc.doFinal(plain);
             if (!decrypt) {
-                System.out.println("CRYPT DES enc " + plain.length + " "
+                System.out.println("CRYPT " + label + " enc " + plain.length + " "
                         + hexOf(cipherText));
                 return;
             }
-            Cipher dec = Cipher.getInstance("DES/CBC/NoPadding", "SunJCE");
+            Cipher dec = Cipher.getInstance(transform, "SunJCE");
             dec.init(Cipher.DECRYPT_MODE, new SecretKeySpec(DES_KEY, "DES"),
                     new IvParameterSpec(DES_IV));
             byte[] plainBack = dec.doFinal(cipherText);
-            System.out.println("CRYPT DES dec " + plain.length + " "
+            System.out.println("CRYPT " + label + " dec " + plain.length + " "
                     + hexOf(plainBack));
         }
 
@@ -292,6 +332,32 @@ public class TestAesIntrinsics {
             System.out.println("CRYPT " + label + " rconj " + n + " " + hexOf(buf));
         }
 
+        // Seal and open through the Cipher API: bulk data drives the combined
+        // AES-GCM intrinsic while the trailing partial segments drive the
+        // separate GCTR and GHASH intrinsics. The fixed nonce keeps the
+        // recorded output identical across both subprocesses.
+        static void runGcm(String label, byte[] plain) throws Exception {
+            Cipher enc = Cipher.getInstance("AES/GCM/NoPadding", "SunJCE");
+            enc.init(Cipher.ENCRYPT_MODE, new SecretKeySpec(KEY, "AES"),
+                    new GCMParameterSpec(128, IV_GCM));
+            byte[] aad = data(48);
+            enc.updateAAD(aad);
+            byte[] sealed = enc.doFinal(plain);
+            Cipher dec = Cipher.getInstance("AES/GCM/NoPadding", "SunJCE");
+            dec.init(Cipher.DECRYPT_MODE, new SecretKeySpec(KEY, "AES"),
+                    new GCMParameterSpec(128, IV_GCM));
+            dec.updateAAD(aad);
+            byte[] open = dec.doFinal(sealed);
+            if (label != null) {
+                // The GCM payloads are tens of KB; a checksum keeps the
+                // recorded lines small while still covering every byte.
+                System.out.println("CRYPT " + label + " seal " + plain.length + " "
+                        + digestOf(sealed));
+                System.out.println("CRYPT " + label + " open " + plain.length + " "
+                        + digestOf(open));
+            }
+        }
+
         static byte[] data(int length) {
             byte[] data = new byte[length];
             for (int i = 0; i < length; i++) {
@@ -312,6 +378,12 @@ public class TestAesIntrinsics {
             StringBuilder sb = new StringBuilder();
             for (byte b : data) sb.append(String.format("%02x", b));
             return sb.toString();
+        }
+
+        static String digestOf(byte[] data) {
+            CRC32 crc = new CRC32();
+            crc.update(data);
+            return String.format("%08x", crc.getValue());
         }
     }
 }

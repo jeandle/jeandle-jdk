@@ -272,6 +272,9 @@ class JeandleIntrinsicLowering : public StackObj {
   // the stub, its callee, the CBC r-vector argument and the encrypt/decrypt
   // direction, so one shared lowering covers all four intrinsics.
   bool lower_block_cipher_mode(vmIntrinsics::ID id);
+  bool lower_counter_mode();
+  bool lower_galois_counter_mode();
+  bool lower_ghash_process_blocks();
   bool lower_new_array();
   bool lower_unsafe_allocate_instance();
   bool lower_object_notify(vmIntrinsics::ID id);
