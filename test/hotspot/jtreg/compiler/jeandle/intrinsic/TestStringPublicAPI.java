@@ -100,7 +100,8 @@ public class TestStringPublicAPI {
             String left = inputs[i & 3];
             String right = inputs[(i >>> 2) & 3];
             warmupSink = compare(left, right) + (equal(left, right) ? 1 : 0)
-                    + search(left, right, 0) + codePoint(left, (i & 4) == 0 ? 'a' : 0x1f600, 0);
+                    + search(left, right) + search(left, right, 0)
+                    + codePoint(left, (i & 4) == 0 ? 'a' : 0x1f600, 0);
             copy(left, 0, left.length(), destination, 1);
         }
     }
@@ -137,7 +138,51 @@ public class TestStringPublicAPI {
         require(codePoint("x\ud83d\ude00y", 0x1f600, 1) == 1, "supplementary pair");
         require(codePoint("x\ud83d\ude00y", 0x1f600, 2) == -1, "from inside pair");
         require(search("x\ud83d\ude00y", "\ude00", 0) == 2, "substring searches code units");
+        shortSearchWindows();
         searchBoundaries();
+    }
+
+    private static void shortSearchWindows() {
+        for (int encoding : new int[]{0, 1, 3}) {
+            char first = encoding == 3 ? '\u1234' : 'a';
+            char second = (char) (first + 1);
+            char filler = (char) (first + 2);
+            for (int from : new int[]{0, 1, 17}) {
+                for (int length : new int[]{15, 16, 17, 31, 32, 33}) {
+                    for (int count : new int[]{2, 3, 8}) {
+                        char[] source = new char[from + length];
+                        char[] target = new char[count];
+                        Arrays.fill(target, first);
+                        target[1] = second;
+                        String needle = new String(target);
+
+                        // A single first-character candidate must still match the rest.
+                        Arrays.fill(source, filler);
+                        source[from + 4] = first;
+                        if (encoding == 1) source[0] = '\u1234';
+                        checkSearch(new String(source), needle, from, -1);
+
+                        // Dense candidates exercise adjacent refinement at the source tail.
+                        Arrays.fill(source, first);
+                        if (encoding == 1) source[0] = '\u1234';
+                        checkSearch(new String(source), needle, from, -1);
+                        int last = source.length - count;
+                        System.arraycopy(target, 0, source, last, count);
+                        checkSearch(new String(source), needle, from, last);
+                        checkSearch(new String(source), needle, last + 1, -1);
+                    }
+                }
+            }
+        }
+    }
+
+    private static void checkSearch(String source, String target, int from, int expected) {
+        int actual = search(source, target, from);
+        require(actual == expected, "short search window: source=" + source + ", target=" + target
+                + ", from=" + from + ", expected=" + expected + ", actual=" + actual);
+        if (from == 0) {
+            require(search(source, target) == expected, "short search window without fromIndex");
+        }
     }
 
     private static void searchBoundaries() {
@@ -198,6 +243,7 @@ public class TestStringPublicAPI {
 
     public static int compare(String left, String right) { return left.compareTo(right); }
     public static boolean equal(String left, String right) { return left.equals(right); }
+    public static int search(String source, String target) { return source.indexOf(target); }
     public static int search(String source, String target, int from) { return source.indexOf(target, from); }
     public static int codePoint(String source, int point, int from) { return source.indexOf(point, from); }
     public static void copy(String source, int start, int end, char[] destination, int offset) {

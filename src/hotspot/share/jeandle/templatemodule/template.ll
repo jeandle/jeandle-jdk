@@ -1555,11 +1555,15 @@ short.width:
 ; multi-round 4-lane scan when both window loads end inside the source array
 ; (pos+filter.offset+16 <= srcCount). Lanes past the last complete candidate
 ; are masked off; every surviving lane is a complete, in-bounds candidate.
+; A prepared filter checks a distinct needle position. Its positive offset
+; also ensures that an adjacent-character refinement window stays in bounds.
 short.window.check:
   %window.span = add i32 %filter.offset, 16
   %window.last = sub i32 %srcCount, %window.span
   %window.safe = icmp sle i32 %pos, %window.last
-  br i1 %window.safe, label %short.window.dispatch, label %short.prepare
+  %filter.prepared = icmp ne i32 %filter.offset, 0
+  %window.usable = and i1 %window.safe, %filter.prepared
+  br i1 %window.usable, label %short.window.dispatch, label %short.prepare
 short.window.dispatch:
   br i1 %su, label %short.window.words, label %short.window.bytes
 short.window.bytes:
