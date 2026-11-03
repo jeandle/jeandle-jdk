@@ -355,6 +355,7 @@
       llvm::PointerType::get(context, llvm::jeandle::AddrSpace::JavaHeapAddrSpace), \
       llvm::PointerType::get(context, llvm::jeandle::AddrSpace::JavaHeapAddrSpace), \
       llvm::Type::getInt32Ty(context))                                              \
+                                                                                    \
   def(StubRoutines_md5_implCompress,                                                \
       StubRoutines::md5_implCompress(),                                             \
       true,                                                                         \

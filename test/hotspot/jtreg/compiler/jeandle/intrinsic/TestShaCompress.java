@@ -89,13 +89,13 @@ public class TestShaCompress {
                 })
                 .reduce("", String::concat);
         assertRoutineMatchesFlag(output, ir, "UseSHA1Intrinsics",
-                "StubRoutines_sha1_implCompress", "SHA-1");
+                "StubRoutines_sha1_implCompress(", "SHA-1");
         assertRoutineMatchesFlag(output, ir, "UseSHA256Intrinsics",
-                "StubRoutines_sha256_implCompress", "SHA-256");
+                "StubRoutines_sha256_implCompress(", "SHA-256");
         assertRoutineMatchesFlag(output, ir, "UseSHA512Intrinsics",
-                "StubRoutines_sha512_implCompress", "SHA-512");
+                "StubRoutines_sha512_implCompress(", "SHA-512");
         assertRoutineMatchesFlag(output, ir, "UseSHA3Intrinsics",
-                "StubRoutines_sha3_implCompress", "SHA-3");
+                "StubRoutines_sha3_implCompress(", "SHA-3");
     }
 
     private static List<String> digestLines(OutputAnalyzer output) {
