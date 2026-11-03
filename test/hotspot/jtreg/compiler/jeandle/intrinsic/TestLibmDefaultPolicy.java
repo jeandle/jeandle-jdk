@@ -47,10 +47,11 @@ import jdk.test.lib.process.ProcessTools;
  *
  * The subprocess runs with DEFAULT flags -- neither JeandleUseHotspotIntrinsics
  * nor UseLibmIntrinsic is passed -- and must (a) compile Math.log/Math.log10
- * to the HotSpot runtime entries rather than the llvm builtins, and (b) return
- * bit-identical results to interpreted execution, closing the bit mismatches
- * Task 1's baseline run measured under the old default (llvm.* -> host glibc
- * versus the interpreter's StubRoutines fdlibm entries).
+ * (plus a Math.sin sample) to the HotSpot runtime entries rather than the llvm
+ * builtins, and (b) return bit-identical results to interpreted execution,
+ * closing the bit mismatches Task 1's baseline run measured under the old
+ * default (llvm.* -> host glibc versus the interpreter's StubRoutines fdlibm
+ * entries).
  */
 public class TestLibmDefaultPolicy {
     public static void main(String[] args) throws Exception {
@@ -96,13 +97,28 @@ public class TestLibmDefaultPolicy {
         log10Checker.checkNot("llvm.log10.f64");
         log10Checker.checkPattern("gc-leaf-function");
 
+        // Math.sin sampling on the same default path: the exhaustive closure
+        // above covers log/log10 (where the old default was proven wrong);
+        // sin is only sampled here, per the brief.
+        FileCheck sinChecker = new FileCheck(dumpDir,
+                TestWrapper.class.getMethod("double_sin", double.class), false);
+        sinChecker.checkPattern("define hotspotcc double .*TestLibmDefaultPolicy.*double_sin.*");
+        if (is_x86) {
+            sinChecker.check("call double @StubRoutines_dsin");
+        } else {
+            sinChecker.checkPattern("call double inttoptr \\(i64 \\d+ to ptr\\)");
+            sinChecker.checkPatternAnywhere("@SharedRuntime_dsin = alias");
+        }
+        sinChecker.checkNot("llvm.sin.f64");
+        sinChecker.checkPattern("gc-leaf-function");
+
         // --- Value closure evidence printed by the subprocess (it also
         // asserts everything itself, so a violation fails the exit code).
         output.shouldHaveExitValue(0)
               .shouldContain("Method `static jdouble java.lang.Math.log(jdouble)` is parsed as intrinsic")
               .shouldContain("Method `static jdouble java.lang.Math.log10(jdouble)` is parsed as intrinsic")
               .shouldContain("anchors bit-identical: log=14 log10=4")
-              .shouldContain("random samples bit-identical: log=1000 log10=1000")
+              .shouldContain("random samples bit-identical: log=1000 log10=1000 sin=300")
               .shouldContain("ZERO_MISMATCH_CLOSURE")
               .shouldContain("TestLibmDefaultPolicy PASSED (default flags)");
     }
@@ -115,7 +131,8 @@ public class TestLibmDefaultPolicy {
                 "-Xlog:jeandle=debug", "-XX:+UnlockDiagnosticVMOptions", "-XX:+JeandleDumpIR",
                 "-XX:JeandleDumpDirectory=" + dumpDir,
                 "-XX:CompileCommand=compileonly," + TestWrapper.class.getName() + "::double_log",
-                "-XX:CompileCommand=compileonly," + TestWrapper.class.getName() + "::double_log10"));
+                "-XX:CompileCommand=compileonly," + TestWrapper.class.getName() + "::double_log10",
+                "-XX:CompileCommand=compileonly," + TestWrapper.class.getName() + "::double_sin"));
         commandArgs.add(TestWrapper.class.getName());
 
         ProcessBuilder pb = ProcessTools.createLimitedTestJavaProcessBuilder(commandArgs);
@@ -133,11 +150,13 @@ public class TestLibmDefaultPolicy {
         static long sink; // keeps both call paths alive
 
         public static void main(String[] args) {
-            // Trigger the -Xcomp compilation of both wrappers first.
+            // Trigger the -Xcomp compilation of the wrappers first.
             sink += Double.doubleToRawLongBits(double_log(2.0));
             sink += Double.doubleToRawLongBits(double_log10(2.0));
+            sink += Double.doubleToRawLongBits(double_sin(2.0));
             sink += Double.doubleToRawLongBits(ref_double_log(2.0));
             sink += Double.doubleToRawLongBits(ref_double_log10(2.0));
+            sink += Double.doubleToRawLongBits(ref_double_sin(2.0));
 
             checkAnchors();
             checkRandomSamples();
@@ -244,7 +263,15 @@ public class TestLibmDefaultPolicy {
                 checkBits("random log10 " + i + " (" + x + ")",
                         double_log10(x), ref_double_log10(x));
             }
-            System.out.println("random samples bit-identical: log=1000 log10=1000");
+            // sin is defined everywhere, so the generic generator needs no
+            // special-casing; this is a sample on top of the exhaustive
+            // log/log10 closure, not a second sweep.
+            for (int i = 0; i < 300; i++) {
+                double x = randomDouble(random);
+                checkBits("random sin " + i + " (" + x + ")",
+                        double_sin(x), ref_double_sin(x));
+            }
+            System.out.println("random samples bit-identical: log=1000 log10=1000 sin=300");
         }
 
         // Full raw-bit space plus moderate magnitudes: normals, subnormals,
@@ -382,6 +409,10 @@ public class TestLibmDefaultPolicy {
             return Math.log10(a);
         }
 
+        public static double double_sin(double a) {
+            return Math.sin(a);
+        }
+
         // Not listed in the CompileCommand, so these stay interpreted and act
         // as the reference implementation (the interpreter's Math.* entries).
         public static double ref_double_log(double a) {
@@ -390,6 +421,10 @@ public class TestLibmDefaultPolicy {
 
         public static double ref_double_log10(double a) {
             return Math.log10(a);
+        }
+
+        public static double ref_double_sin(double a) {
+            return Math.sin(a);
         }
     }
 }
