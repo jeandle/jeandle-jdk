@@ -31,8 +31,6 @@
 #include "classfile/vmIntrinsics.hpp"
 #include "memory/allocation.hpp"
 
-#include <initializer_list>
-
 #define PROB_UNLIKELY_MAG(N)    (1e- ## N ## f)
 #define PROB_MIN                PROB_UNLIKELY_MAG(6)
 #define PROB_FAIR               (0.5f)
@@ -242,12 +240,11 @@ class JeandleIntrinsicLowering : public StackObj {
   // ---- shared crypto-intrinsic helpers ----
   // Descriptor for one Java parameter slot in expect_signature.
   enum class SigKind { ByteArray, IntArray, LongArray, Int, Object };
-  // Validate that sig has exactly `count` parameters of the given kinds and
-  // the given return basic type. Array kinds also require the exact array
-  // element signature name ("[B"/"[I"/"[J"); a T_ILLEGAL return skips the
-  // return-type check. Returns false on any mismatch.
-  bool expect_signature(const ciSignature* sig, int count,
-                        std::initializer_list<SigKind> params,
+  // Validate that sig's parameters match `params` in arity and per-slot
+  // kinds, and that the return basic type is `ret`. Array kinds also require
+  // the exact array element signature name ("[B"/"[I"/"[J"); a T_ILLEGAL
+  // return skips the return-type check. Returns false on any mismatch.
+  bool expect_signature(const ciSignature* sig, llvm::ArrayRef<SigKind> params,
                         BasicType ret);
   // Resolve a class by binary name relative to the intrinsic target holder.
   // Returns nullptr unless the class is loaded; guarded fast paths must
@@ -258,12 +255,15 @@ class JeandleIntrinsicLowering : public StackObj {
   ciField* find_instance_field(ciInstanceKlass* holder, const char* name,
                                const char* signature);
   // Pointer to the first element of an array (header + base offset).
-  llvm::Value* array_element0_pointer(llvm::Value* array, BasicType elem_type);
+  llvm::Value* array_element0_pointer(llvm::Value* array, BasicType elem_type,
+                                      const char* name = "");
   // Pointer to array element data at the given byte offset.
   llvm::Value* array_data_pointer(llvm::Value* array, BasicType elem_type,
-                                  llvm::Value* byte_offset);
+                                  llvm::Value* byte_offset,
+                                  const char* name = "");
   // Load a reference-typed instance field, decoding compressed oops.
-  llvm::Value* load_instance_object_field(llvm::Value* obj, ciField* field);
+  llvm::Value* load_instance_object_field(llvm::Value* obj, ciField* field,
+                                          const char* name = "");
   // Klass* constant as a C-heap pointer value for jeandle.instanceof guards.
   llvm::Value* klass_constant_pointer(ciKlass* klass);
   // Emit the fallback Java call for a guarded intrinsic in the block the
@@ -279,6 +279,7 @@ class JeandleIntrinsicLowering : public StackObj {
                                         llvm::ArrayRef<llvm::Value*> java_args,
                                         bool has_receiver,
                                         const llvm::Twine& phi_name);
+  // ---- crypto intrinsic handlers ----
   bool lower_aescrypt_block(vmIntrinsics::ID id);
   // Guarded AES block-cipher modes (CBC and ECB); the intrinsic id selects
   // the stub, its callee, the CBC r-vector argument and the encrypt/decrypt
@@ -318,7 +319,6 @@ class JeandleIntrinsicLowering : public StackObj {
                                                llvm::Value* byte_length,
                                                llvm::Value* scale);
   bool lower_hash_code(vmIntrinsics::ID id);
-
-  };
+};
 
 #endif // SHARE_JEANDLE_INTRINSIC_LOWERING_HPP

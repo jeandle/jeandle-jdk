@@ -660,18 +660,23 @@ bool JeandleIntrinsicLowering::lower(vmIntrinsics::ID id, const ciMethod* target
     case vmIntrinsics::_electronicCodeBook_decryptAESCrypt:
       return lower_block_cipher_mode(id);
 
+    // Counter-mode AES, guarded on the embedded cipher's runtime type.
     case vmIntrinsics::_counterMode_AESCrypt:
       return lower_counter_mode();
 
+    // Combined AES-GCM crypt+GHASH, guarded on the gctr's embedded cipher.
     case vmIntrinsics::_galoisCounterMode_AESCrypt:
       return lower_galois_counter_mode();
 
+    // GHASH multi-block MAC: direct stub bridge, no receiver-type guard.
     case vmIntrinsics::_ghash_processBlocks:
       return lower_ghash_process_blocks();
 
+    // ChaCha20 block keystream: direct stub bridge, no receiver-type guard.
     case vmIntrinsics::_chacha20Block:
       return lower_chacha20_block();
 
+    // Poly1305 multi-block MAC: direct stub bridge, no receiver-type guard.
     case vmIntrinsics::_poly1305_processBlocks:
       return lower_poly1305_process_blocks();
 
@@ -807,7 +812,7 @@ bool JeandleIntrinsicLowering::lower_dual_path_libm(llvm::Intrinsic::ID llvm_id,
 
 bool JeandleIntrinsicLowering::lower_digestBase_implCompress(vmIntrinsics::ID id) {
   ciSignature* sig = _target->signature();
-  if (!expect_signature(sig, 2, {SigKind::ByteArray, SigKind::Int}, T_ILLEGAL)) {
+  if (!expect_signature(sig, {SigKind::ByteArray, SigKind::Int}, T_ILLEGAL)) {
     return false;
   }
 
@@ -857,17 +862,14 @@ bool JeandleIntrinsicLowering::lower_digestBase_implCompress(vmIntrinsics::ID id
   }
 
   ciInstanceKlass* holder = _target->holder();
-  ciField* state_field = holder->get_field_by_name(ciSymbol::make("state"),
-                                                   ciSymbol::make(state_signature),
-                                                   false);
+  ciField* state_field = find_instance_field(holder, "state", state_signature);
   if (state_field == nullptr) {
     return false;
   }
 
   ciField* block_size_field = nullptr;
   if (id == vmIntrinsics::_sha3_implCompress) {
-    block_size_field = holder->get_field_by_name(ciSymbol::make("blockSize"),
-                                                 ciSymbol::make("I"), false);
+    block_size_field = find_instance_field(holder, "blockSize", "I");
     if (block_size_field == nullptr) {
       return false;
     }
@@ -886,32 +888,13 @@ bool JeandleIntrinsicLowering::lower_digestBase_implCompress(vmIntrinsics::ID id
   _interp->_jvm->apop();  // src
   _interp->_jvm->apop();  // receiver (null-checked by invoke())
 
-  llvm::IRBuilder<>& builder = _interp->_ir_builder;
-  llvm::LLVMContext& context = *_interp->_context;
-  llvm::Type* java_oop_type = JeandleType::java2llvm(T_OBJECT, context);
-
-  llvm::Value* src_offset = builder.CreateAdd(
-      builder.getInt32(arrayOopDesc::base_offset_in_bytes(T_BYTE)), ofs,
-      "sha_src_offset");
-  llvm::Value* src_start = builder.CreateInBoundsPtrAdd(src, src_offset,
-                                                        "sha_src_start");
-
-  llvm::Value* state_field_addr = _interp->compute_instance_field_address(
-      receiver, state_field->offset_in_bytes());
-  BasicType state_ref_type = state_field->layout_type();
-  if (UseCompressedOops && is_reference_type(state_ref_type)) {
-    state_ref_type = T_NARROWOOP;
-  }
-  llvm::Value* state_array = _interp->load_from_address(state_field_addr,
-                                                        state_ref_type, false);
-  if (state_ref_type == T_NARROWOOP) {
-    state_array = builder.CreateAddrSpaceCast(state_array, java_oop_type,
-                                              "sha_state_array");
-  }
-
-  llvm::Value* state_base = builder.CreateInBoundsPtrAdd(
-      state_array, builder.getInt32(arrayOopDesc::base_offset_in_bytes(state_element_type)),
-      "sha_state_base");
+  llvm::Value* src_start = array_data_pointer(src, T_BYTE, ofs,
+                                              "sha_src_start");
+  llvm::Value* state_array =
+      load_instance_object_field(receiver, state_field, "sha_state_array");
+  llvm::Value* state_base = array_element0_pointer(state_array,
+                                                   state_element_type,
+                                                   "sha_state_base");
 
   static constexpr CallSiteAttributeMetadata attrs = {
       CTRL_NONE, MEM_READ | MEM_WRITE};
@@ -936,9 +919,8 @@ bool JeandleIntrinsicLowering::lower_digestBase_implCompress(vmIntrinsics::ID id
 // =============================================================================
 
 bool JeandleIntrinsicLowering::expect_signature(
-    const ciSignature* sig, int count, std::initializer_list<SigKind> params,
-    BasicType ret) {
-  if (sig->count() != count || static_cast<int>(params.size()) != count) {
+    const ciSignature* sig, llvm::ArrayRef<SigKind> params, BasicType ret) {
+  if (sig->count() != static_cast<int>(params.size())) {
     return false;
   }
   int index = 0;
@@ -982,23 +964,24 @@ ciField* JeandleIntrinsicLowering::find_instance_field(
 }
 
 llvm::Value* JeandleIntrinsicLowering::array_element0_pointer(
-    llvm::Value* array, BasicType elem_type) {
-  return array_data_pointer(array, elem_type, nullptr);
+    llvm::Value* array, BasicType elem_type, const char* name) {
+  return array_data_pointer(array, elem_type, nullptr, name);
 }
 
 llvm::Value* JeandleIntrinsicLowering::array_data_pointer(
-    llvm::Value* array, BasicType elem_type, llvm::Value* byte_offset) {
+    llvm::Value* array, BasicType elem_type, llvm::Value* byte_offset,
+    const char* name) {
   llvm::IRBuilder<>& builder = _interp->_ir_builder;
   llvm::Value* offset = builder.getInt32(
       arrayOopDesc::base_offset_in_bytes(elem_type));
   if (byte_offset != nullptr) {
     offset = builder.CreateAdd(offset, byte_offset);
   }
-  return builder.CreateInBoundsPtrAdd(array, offset);
+  return builder.CreateInBoundsPtrAdd(array, offset, name);
 }
 
 llvm::Value* JeandleIntrinsicLowering::load_instance_object_field(
-    llvm::Value* obj, ciField* field) {
+    llvm::Value* obj, ciField* field, const char* name) {
   llvm::IRBuilder<>& builder = _interp->_ir_builder;
   llvm::Value* field_addr = _interp->compute_instance_field_address(
       obj, field->offset_in_bytes());
@@ -1009,7 +992,7 @@ llvm::Value* JeandleIntrinsicLowering::load_instance_object_field(
   llvm::Value* value = _interp->load_from_address(field_addr, ref_type, false);
   if (ref_type == T_NARROWOOP) {
     value = builder.CreateAddrSpaceCast(
-        value, JeandleType::java2llvm(T_OBJECT, *_interp->_context));
+        value, JeandleType::java2llvm(T_OBJECT, *_interp->_context), name);
   }
   return value;
 }
@@ -1074,7 +1057,7 @@ llvm::Value* JeandleIntrinsicLowering::merge_with_java_fallback(
 // the normal Java loop (the virtual implCompress dispatch) via a plain call.
 bool JeandleIntrinsicLowering::lower_digestBase_implCompressMB() {
   ciSignature* sig = _target->signature();
-  if (!expect_signature(sig, 3,
+  if (!expect_signature(sig,
                         {SigKind::ByteArray, SigKind::Int, SigKind::Int},
                         T_ILLEGAL)) {
     return false;
@@ -1248,7 +1231,7 @@ bool JeandleIntrinsicLowering::lower_aescrypt_block(vmIntrinsics::ID id) {
 
   // implEncryptBlock(byte[] in, int inOffset, byte[] out, int outOffset)
   ciSignature* sig = _target->signature();
-  if (!expect_signature(sig, 4,
+  if (!expect_signature(sig,
                         {SigKind::ByteArray, SigKind::Int,
                          SigKind::ByteArray, SigKind::Int}, T_VOID)) {
     return false;
@@ -1344,7 +1327,7 @@ bool JeandleIntrinsicLowering::lower_block_cipher_mode(vmIntrinsics::ID id) {
 
   // implEncrypt(byte[] src, int srcOfs, int len, byte[] dst, int dstOfs): int
   ciSignature* sig = _target->signature();
-  if (!expect_signature(sig, 5,
+  if (!expect_signature(sig,
                         {SigKind::ByteArray, SigKind::Int, SigKind::Int,
                          SigKind::ByteArray, SigKind::Int}, T_INT)) {
     return false;
@@ -1495,7 +1478,7 @@ bool JeandleIntrinsicLowering::lower_counter_mode() {
 
   // implCrypt(byte[] src, int srcOfs, int len, byte[] dst, int dstOfs): int
   ciSignature* sig = _target->signature();
-  if (!expect_signature(sig, 5,
+  if (!expect_signature(sig,
                         {SigKind::ByteArray, SigKind::Int, SigKind::Int,
                          SigKind::ByteArray, SigKind::Int}, T_INT)) {
     return false;
@@ -1635,11 +1618,12 @@ bool JeandleIntrinsicLowering::lower_galois_counter_mode() {
   // implGCMCrypt0(byte[] in, int inOfs, int inLen, byte[] ct, int ctOfs,
   //               byte[] out, int outOfs, GCTR gctr, GHASH ghash): int
   ciSignature* sig = _target->signature();
-  if (!expect_signature(sig, 9,
-                        {SigKind::ByteArray, SigKind::Int, SigKind::Int,
-                         SigKind::ByteArray, SigKind::Int,
-                         SigKind::ByteArray, SigKind::Int,
-                         SigKind::Object, SigKind::Object}, T_INT)) {
+  if (!expect_signature(sig,
+                        {SigKind::ByteArray, SigKind::Int,
+                         SigKind::Int, SigKind::ByteArray,
+                         SigKind::Int, SigKind::ByteArray,
+                         SigKind::Int, SigKind::Object,
+                         SigKind::Object}, T_INT)) {
     return false;
   }
 
@@ -1784,7 +1768,7 @@ bool JeandleIntrinsicLowering::lower_ghash_process_blocks() {
 
   // processBlocks(byte[] data, int inOfs, int blocks, long[] st, long[] subH)
   ciSignature* sig = _target->signature();
-  if (!expect_signature(sig, 5,
+  if (!expect_signature(sig,
                         {SigKind::ByteArray, SigKind::Int, SigKind::Int,
                          SigKind::LongArray, SigKind::LongArray}, T_VOID)) {
     return false;
@@ -1836,10 +1820,12 @@ bool JeandleIntrinsicLowering::lower_ghash_process_blocks() {
 // ChaCha20Cipher.implChaCha20Block is private and static, so like C2's
 // inline_chacha20Block it bridges straight to the stub without a receiver
 // guard; a static call has no receiver null check from invoke(), so both
-// array arguments are null-checked here. The stub generates as many keystream
-// blocks as its vector width allows (a multiple of the 64-byte ChaCha block)
-// and returns the byte count; the Java caller iterates the keystream buffer
-// by exactly that count, so the value is passed through verbatim.
+// array arguments are null-checked here, and the Java caller (chaCha20Block)
+// has already validated the state and keystream buffer sizes when the
+// intrinsic callee is reached. The stub generates as many keystream blocks as
+// its vector width allows (a multiple of the 64-byte ChaCha block) and
+// returns the byte count; the Java caller iterates the keystream buffer by
+// exactly that count, so the value is passed through verbatim.
 bool JeandleIntrinsicLowering::lower_chacha20_block() {
   const char* const stub_name = "StubRoutines_chacha20Block";
   JeandleRuntimeCalleeFn const callee_fn =
@@ -1847,8 +1833,7 @@ bool JeandleIntrinsicLowering::lower_chacha20_block() {
 
   // implChaCha20Block(int[] initState, byte[] result): int
   ciSignature* sig = _target->signature();
-  if (!expect_signature(sig, 2, {SigKind::IntArray, SigKind::ByteArray},
-                        T_INT)) {
+  if (!expect_signature(sig, {SigKind::IntArray, SigKind::ByteArray}, T_INT)) {
     return false;
   }
 
@@ -1890,9 +1875,11 @@ bool JeandleIntrinsicLowering::lower_chacha20_block() {
 
 // Poly1305.processMultipleBlocks passes the accumulator and key limbs as
 // explicit long[] arguments, so like C2's inline_poly1305_processBlocks it
-// bridges straight to the stub without a receiver-type guard. The receiver is
-// null-checked by invoke(); the Java byte offset is folded into the input
-// pointer, as the stub ABI takes no separate offset.
+// bridges straight to the stub without a receiver-type guard; the limb arrays
+// alias the authenticator's a/r state and their bounds were validated by the
+// sibling processMultipleBlocksCheck call. The receiver is null-checked by
+// invoke(); the Java byte offset is folded into the input pointer, as the
+// stub ABI takes no separate offset.
 bool JeandleIntrinsicLowering::lower_poly1305_process_blocks() {
   const char* const stub_name = "StubRoutines_poly1305_processBlocks";
   JeandleRuntimeCalleeFn const callee_fn =
@@ -1901,7 +1888,7 @@ bool JeandleIntrinsicLowering::lower_poly1305_process_blocks() {
   // processMultipleBlocks(byte[] input, int offset, int length,
   //                       long[] aLimbs, long[] rLimbs)
   ciSignature* sig = _target->signature();
-  if (!expect_signature(sig, 5,
+  if (!expect_signature(sig,
                         {SigKind::ByteArray, SigKind::Int, SigKind::Int,
                          SigKind::LongArray, SigKind::LongArray}, T_VOID)) {
     return false;
