@@ -79,6 +79,20 @@ public class TestBitShuffle {
         constChecker.checkNot("llvm.x86.bmi.pext");
         constChecker.checkPattern("ret i32 9320");
 
+        // The expand arm of the same constant folding, which no other case
+        // reaches. Integer.expand(0x2468, 0x0F0F0F0F) == 0x02040608 ==
+        // 33818120: the mask selects each byte's low nibble and the four
+        // value nibbles 2,4,6,8 scatter into them, i.e. the inverse of the
+        // compress above -- expand(compress(x, m), m) == x & m
+        // == 0x12345678 & 0x0F0F0F0F == 0x02040608. Same naming rule as
+        // above: "int_const_expand" neither extends nor is extended by
+        // "int_expand", so no dump file of one matches the other's prefix.
+        FileCheck constExpandChecker = new FileCheck(intrinsicDump,
+                TestWrapper.class.getMethod("int_const_expand"), false);
+        constExpandChecker.checkPattern("define hotspotcc i32 .*TestBitShuffle.*int_const_expand.*");
+        constExpandChecker.checkNot("llvm.x86.bmi.pdep");
+        constExpandChecker.checkPattern("ret i32 33818120");
+
         output.shouldContain("is parsed as intrinsic")
               .shouldContain("java.lang.Integer.compress")
               .shouldContain("java.lang.Integer.expand")
@@ -112,6 +126,16 @@ public class TestBitShuffle {
         longExpandChecker = new FileCheck(controlDump,
                 TestWrapper.class.getMethod("long_expand", long.class, long.class), false);
         longExpandChecker.checkNot("llvm.x86.bmi.pdep");
+
+        // The both-constant expand also compiles through the Java fallback
+        // here, so its raw dump must not contain a PDEP call either. No
+        // folded-constant check in this run: without the intrinsic there is
+        // nothing to fold and even the optimized dump keeps the fallback
+        // loop's phi (observed: "ret i32 %common.ret.op").
+        constExpandChecker = new FileCheck(controlDump,
+                TestWrapper.class.getMethod("int_const_expand"), false);
+        constExpandChecker.checkPattern("define hotspotcc i32 .*TestBitShuffle.*int_const_expand.*");
+        constExpandChecker.checkNot("llvm.x86.bmi.pdep");
     }
 
     private static OutputAnalyzer runSubprocess(String dumpDir, String... extraFlags)
@@ -126,7 +150,8 @@ public class TestBitShuffle {
                 "-XX:CompileCommand=compileonly," + TestWrapper.class.getName() + "::int_expand",
                 "-XX:CompileCommand=compileonly," + TestWrapper.class.getName() + "::long_compress",
                 "-XX:CompileCommand=compileonly," + TestWrapper.class.getName() + "::long_expand",
-                "-XX:CompileCommand=compileonly," + TestWrapper.class.getName() + "::int_const_compress"));
+                "-XX:CompileCommand=compileonly," + TestWrapper.class.getName() + "::int_const_compress",
+                "-XX:CompileCommand=compileonly," + TestWrapper.class.getName() + "::int_const_expand"));
         commandArgs.addAll(List.of(extraFlags));
         commandArgs.add(TestWrapper.class.getName());
 
@@ -190,6 +215,10 @@ public class TestBitShuffle {
             // --- the all-constant call folds to the same value at runtime ---
             Asserts.assertEquals(0x2468, int_const_compress(),
                     "const compress(0x12345678, 0x0F0F0F0F)");
+            Asserts.assertEquals(0x02040608, int_const_expand(),
+                    "const expand(0x2468, 0x0F0F0F0F)");
+            Asserts.assertEquals(0x02040608, ref_int_expand(0x2468, 0x0F0F0F0F),
+                    "const expand(0x2468, 0x0F0F0F0F) (vs interpreted)");
 
             int[] intValues = {0, -1, 1, 0x12345678, 0xCAFEBABE, 0x55555555,
                                Integer.MIN_VALUE, Integer.MAX_VALUE};
@@ -315,6 +344,13 @@ public class TestBitShuffle {
         // and must fold the call instead of emitting PEXT.
         public static int int_const_compress() {
             return Integer.compress(0x12345678, 0x0F0F0F0F);
+        }
+
+        // Same shape for expand (PDEP): the operands are the compress result
+        // and the same mask, so the folded value is the mask projection
+        // 0x12345678 & 0x0F0F0F0F == 0x02040608.
+        public static int int_const_expand() {
+            return Integer.expand(0x2468, 0x0F0F0F0F);
         }
 
         // Not listed in CompileCommand, so these stay interpreted and act as

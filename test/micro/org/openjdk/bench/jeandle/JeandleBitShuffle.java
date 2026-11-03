@@ -38,7 +38,7 @@ import org.openjdk.jmh.infra.Blackhole;
  * ({@code -XX:-UseJeandleCompiler} on the same build). Each invocation walks
  * pre-filled value and mask arrays so neither argument is a compile-time
  * constant; results are consumed through a Blackhole. Masks deliberately
- * spread the popcount from 0 to the full width, because the pure-Java
+ * spread the popcount across the full width, because the pure-Java
  * fallback cost scales with the number of set mask bits while a bit-manip
  * intrinsic is popcount-independent.
  */
@@ -66,9 +66,11 @@ public class JeandleBitShuffle {
             int hash = i * 0x9E3779B9;
             intValues[i] = hash ^ (hash >>> 16);
             longValues[i] = ((long) hash << 32) | (hash * 0x85EBCA6BL & 0xFFFFFFFFL);
-            // Even lanes take masks of linearly increasing popcount, odd
-            // lanes take structured/peppered patterns, covering popcounts
-            // 0..32 for int and 0..64 for long.
+            // Even lanes take masks stepping through every even popcount
+            // from 0 to the full width (0/32 and 0/64 both occur); odd lanes
+            // add structured/peppered patterns whose popcounts cluster near
+            // the middle (about 14-20 for int, 27-40 for long) instead of
+            // covering every count.
             if ((i & 1) == 0) {
                 // i % 32 == 0 alternates between the empty and full mask so
                 // popcounts 0 and 32 both occur; other multiples of two step

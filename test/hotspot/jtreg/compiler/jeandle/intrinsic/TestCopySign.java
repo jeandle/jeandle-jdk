@@ -153,9 +153,11 @@ public class TestCopySign {
             checkD("(NaN, +1) -> +NaN same payload", posNaN, 1.0d);
             checkD("(NaN, -1) -> -NaN same payload", posNaN, -1.0d);
             checkD("(-NaN, +1) -> +NaN same payload", negNaN, 1.0d);
+            checkD("(-NaN, -1) -> -NaN same payload", negNaN, -1.0d);
             checkF("(NaN, +1) -> +NaN same payload", posNaNF, 1.0f);
             checkF("(NaN, -1) -> -NaN same payload", posNaNF, -1.0f);
             checkF("(-NaN, +1) -> +NaN same payload", negNaNF, 1.0f);
+            checkF("(-NaN, -1) -> -NaN same payload", negNaNF, -1.0f);
 
             // --- (magnitude, +/-0.0) : the zero's sign decides ---
             checkD("(x, +0.0) -> +x", 3.0d, 0.0d);

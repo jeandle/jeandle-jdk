@@ -100,15 +100,20 @@ public class TestLibmDefaultPolicy {
         // Math.sin sampling on the same default path: the exhaustive closure
         // above covers log/log10 (where the old default was proven wrong);
         // sin is only sampled here, per the brief.
+        //
+        // Unlike log/log10 above, sin has no arch split: BOTH x86 and aarch64
+        // generate the dsin stub, so the default policy always selects it.
+        // x86 gates it on UseLibmIntrinsic (default on) and aarch64 sets
+        // StubRoutines::_dsin whenever vmIntrinsics::is_intrinsic_available
+        // (_dsin) holds -- no UseLibmIntrinsic gate on aarch64
+        // (stubGenerator_aarch64.cpp) -- so the runtime-first callee lookup
+        // always finds the stub and the SharedRuntime fdlibm alias is never
+        // reached for sin. (aarch64's dlog/dlog10 stub generation is
+        // commented out there, hence the split above.)
         FileCheck sinChecker = new FileCheck(dumpDir,
                 TestWrapper.class.getMethod("double_sin", double.class), false);
         sinChecker.checkPattern("define hotspotcc double .*TestLibmDefaultPolicy.*double_sin.*");
-        if (is_x86) {
-            sinChecker.check("call double @StubRoutines_dsin");
-        } else {
-            sinChecker.checkPattern("call double inttoptr \\(i64 \\d+ to ptr\\)");
-            sinChecker.checkPatternAnywhere("@SharedRuntime_dsin = alias");
-        }
+        sinChecker.check("call double @StubRoutines_dsin");
         sinChecker.checkNot("llvm.sin.f64");
         sinChecker.checkPattern("gc-leaf-function");
 
