@@ -801,10 +801,7 @@ bool JeandleIntrinsicLowering::lower_dual_path_libm(llvm::Intrinsic::ID llvm_id,
 
 bool JeandleIntrinsicLowering::lower_digestBase_implCompress(vmIntrinsics::ID id) {
   ciSignature* sig = _target->signature();
-  if (sig->count() != 2 || sig->type_at(0)->basic_type() != T_ARRAY ||
-      sig->type_at(1)->basic_type() != T_INT ||
-      sig->type_at(0)->name() == nullptr ||
-      strcmp(sig->type_at(0)->name(), "[B") != 0) {
+  if (!expect_signature(sig, 2, {SigKind::ByteArray, SigKind::Int}, T_ILLEGAL)) {
     return false;
   }
 
@@ -878,6 +875,11 @@ bool JeandleIntrinsicLowering::lower_digestBase_implCompress(vmIntrinsics::ID id
   llvm::Value* ofs = _interp->_jvm->raw_peek(0).value();
   _interp->null_check(src);
 
+  // Commit: pop all operands; the values stay live as SSA across the call.
+  _interp->_jvm->ipop();  // ofs
+  _interp->_jvm->apop();  // src
+  _interp->_jvm->apop();  // receiver (null-checked by invoke())
+
   llvm::IRBuilder<>& builder = _interp->_ir_builder;
   llvm::LLVMContext& context = *_interp->_context;
   llvm::Type* java_oop_type = JeandleType::java2llvm(T_OBJECT, context);
@@ -905,10 +907,6 @@ bool JeandleIntrinsicLowering::lower_digestBase_implCompress(vmIntrinsics::ID id
       state_array, builder.getInt32(arrayOopDesc::base_offset_in_bytes(state_element_type)),
       "sha_state_base");
 
-  _interp->_jvm->ipop();  // ofs
-  _interp->_jvm->apop();  // src
-  _interp->_jvm->apop();  // receiver
-
   static constexpr CallSiteAttributeMetadata attrs = {
       CTRL_NONE, MEM_READ | MEM_WRITE};
   if (block_size_field == nullptr) {
@@ -930,6 +928,36 @@ bool JeandleIntrinsicLowering::lower_digestBase_implCompress(vmIntrinsics::ID id
 // =============================================================================
 // Shared crypto-intrinsic helpers
 // =============================================================================
+
+bool JeandleIntrinsicLowering::expect_signature(
+    const ciSignature* sig, int count, std::initializer_list<SigKind> params,
+    BasicType ret) {
+  if (sig->count() != count || static_cast<int>(params.size()) != count) {
+    return false;
+  }
+  int index = 0;
+  for (SigKind kind : params) {
+    ciType* type = sig->type_at(index++);
+    BasicType basic;
+    const char* array_name;  // nullptr for non-array kinds
+    switch (kind) {
+      case SigKind::ByteArray:  basic = T_ARRAY;  array_name = "[B"; break;
+      case SigKind::IntArray:   basic = T_ARRAY;  array_name = "[I"; break;
+      case SigKind::LongArray:  basic = T_ARRAY;  array_name = "[J"; break;
+      case SigKind::Int:        basic = T_INT;    array_name = nullptr; break;
+      case SigKind::Object:     basic = T_OBJECT; array_name = nullptr; break;
+      default:                  return false;
+    }
+    // Only array types carry a name(); the name comparison must be reached
+    // after the basic-type check so it never dereferences a basic ciType.
+    if (type->basic_type() != basic ||
+        (array_name != nullptr &&
+         (type->name() == nullptr || strcmp(type->name(), array_name) != 0))) {
+      return false;
+    }
+  }
+  return ret == T_ILLEGAL || sig->return_type()->basic_type() == ret;
+}
 
 ciInstanceKlass* JeandleIntrinsicLowering::resolve_loaded_instance_klass(
     const char* klass_name) {
@@ -1040,11 +1068,9 @@ llvm::Value* JeandleIntrinsicLowering::merge_with_java_fallback(
 // the normal Java loop (the virtual implCompress dispatch) via a plain call.
 bool JeandleIntrinsicLowering::lower_digestBase_implCompressMB() {
   ciSignature* sig = _target->signature();
-  if (sig->count() != 3 || sig->type_at(0)->basic_type() != T_ARRAY ||
-      sig->type_at(1)->basic_type() != T_INT ||
-      sig->type_at(2)->basic_type() != T_INT ||
-      sig->type_at(0)->name() == nullptr ||
-      strcmp(sig->type_at(0)->name(), "[B") != 0) {
+  if (!expect_signature(sig, 3,
+                        {SigKind::ByteArray, SigKind::Int, SigKind::Int},
+                        T_ILLEGAL)) {
     return false;
   }
 
@@ -1183,7 +1209,7 @@ bool JeandleIntrinsicLowering::lower_digestBase_implCompressMB() {
   // dispatch preserved by the callee) through a normal call.
   llvm::Value* mb_ofs = merge_with_java_fallback(
       results, result_blocks, merge_bb, {receiver, src, ofs, limit},
-      /*has_receiver=*/true, "digestMB.ofs");
+      /*has_receiver=*/true, "digestMB_ofs");
   if (mb_ofs == nullptr) {
     return true;
   }
@@ -1216,16 +1242,9 @@ bool JeandleIntrinsicLowering::lower_aescrypt_block(vmIntrinsics::ID id) {
 
   // implEncryptBlock(byte[] in, int inOffset, byte[] out, int outOffset)
   ciSignature* sig = _target->signature();
-  if (sig->count() != 4 ||
-      sig->type_at(0)->basic_type() != T_ARRAY ||
-      sig->type_at(0)->name() == nullptr ||
-      strcmp(sig->type_at(0)->name(), "[B") != 0 ||
-      sig->type_at(1)->basic_type() != T_INT ||
-      sig->type_at(2)->basic_type() != T_ARRAY ||
-      sig->type_at(2)->name() == nullptr ||
-      strcmp(sig->type_at(2)->name(), "[B") != 0 ||
-      sig->type_at(3)->basic_type() != T_INT ||
-      sig->return_type()->basic_type() != T_VOID) {
+  if (!expect_signature(sig, 4,
+                        {SigKind::ByteArray, SigKind::Int,
+                         SigKind::ByteArray, SigKind::Int}, T_VOID)) {
     return false;
   }
 
@@ -1319,17 +1338,9 @@ bool JeandleIntrinsicLowering::lower_block_cipher_mode(vmIntrinsics::ID id) {
 
   // implEncrypt(byte[] src, int srcOfs, int len, byte[] dst, int dstOfs): int
   ciSignature* sig = _target->signature();
-  if (sig->count() != 5 ||
-      sig->type_at(0)->basic_type() != T_ARRAY ||
-      sig->type_at(0)->name() == nullptr ||
-      strcmp(sig->type_at(0)->name(), "[B") != 0 ||
-      sig->type_at(1)->basic_type() != T_INT ||
-      sig->type_at(2)->basic_type() != T_INT ||
-      sig->type_at(3)->basic_type() != T_ARRAY ||
-      sig->type_at(3)->name() == nullptr ||
-      strcmp(sig->type_at(3)->name(), "[B") != 0 ||
-      sig->type_at(4)->basic_type() != T_INT ||
-      sig->return_type()->basic_type() != T_INT) {
+  if (!expect_signature(sig, 5,
+                        {SigKind::ByteArray, SigKind::Int, SigKind::Int,
+                         SigKind::ByteArray, SigKind::Int}, T_INT)) {
     return false;
   }
 
@@ -1467,26 +1478,20 @@ bool JeandleIntrinsicLowering::lower_block_cipher_mode(vmIntrinsics::ID id) {
 // runtime type of the embeddedCipher field and every non-AES (or null)
 // embedded cipher takes a normal Java call. Unlike the CBC/ECB modes there is
 // no conjoint exclusion: CTR is a stream cipher, so in-place operation is
-// well-defined for the stub too. The stub consumes whole keystream blocks, so
-// it receives the counter, the saved encrypted counter and the address of the
-// used field, whose remaining keystream bytes and updated position it writes
-// back itself.
+// well-defined for the stub too. The stub receives the counter, the saved
+// encrypted counter and the address of the `used` field; the stub consumes
+// the keystream left over in `encryptedCounter` from position `used` and
+// stores the updated position back through that address.
 bool JeandleIntrinsicLowering::lower_counter_mode() {
   const char* const stub_name = "StubRoutines_counterMode_AESCrypt";
+  JeandleRuntimeCalleeFn const callee_fn =
+      &JeandleRuntimeRoutine::StubRoutines_counterMode_AESCrypt_callee;
 
   // implCrypt(byte[] src, int srcOfs, int len, byte[] dst, int dstOfs): int
   ciSignature* sig = _target->signature();
-  if (sig->count() != 5 ||
-      sig->type_at(0)->basic_type() != T_ARRAY ||
-      sig->type_at(0)->name() == nullptr ||
-      strcmp(sig->type_at(0)->name(), "[B") != 0 ||
-      sig->type_at(1)->basic_type() != T_INT ||
-      sig->type_at(2)->basic_type() != T_INT ||
-      sig->type_at(3)->basic_type() != T_ARRAY ||
-      sig->type_at(3)->name() == nullptr ||
-      strcmp(sig->type_at(3)->name(), "[B") != 0 ||
-      sig->type_at(4)->basic_type() != T_INT ||
-      sig->return_type()->basic_type() != T_INT) {
+  if (!expect_signature(sig, 5,
+                        {SigKind::ByteArray, SigKind::Int, SigKind::Int,
+                         SigKind::ByteArray, SigKind::Int}, T_INT)) {
     return false;
   }
 
@@ -1583,8 +1588,7 @@ bool JeandleIntrinsicLowering::lower_counter_mode() {
   static constexpr CallSiteAttributeMetadata STUB_ATTRS = {
       CTRL_NONE, MEM_READ | MEM_WRITE};
   llvm::CallBase* stub_call = emit_callsite(
-      JeandleRuntimeRoutine::StubRoutines_counterMode_AESCrypt_callee(
-          _interp->_module),
+      callee_fn(_interp->_module),
       llvm::CallingConv::C,
       {src_start, dst_start, k_start, cnt_start, len,
        enc_counter_start, used_addr},
@@ -1597,7 +1601,7 @@ bool JeandleIntrinsicLowering::lower_counter_mode() {
   llvm::Value* result = merge_with_java_fallback(
       {stub_call}, {stub_tail_bb}, merge_bb,
       {receiver, src, src_ofs, len, dst, dst_ofs}, /*has_receiver=*/true,
-      "ctr.result");
+      "ctr_result");
   if (result == nullptr) {
     return true;
   }
@@ -1619,27 +1623,17 @@ bool JeandleIntrinsicLowering::lower_counter_mode() {
 // argument is null-checked here.
 bool JeandleIntrinsicLowering::lower_galois_counter_mode() {
   const char* const stub_name = "StubRoutines_galoisCounterMode_AESCrypt";
+  JeandleRuntimeCalleeFn const callee_fn =
+      &JeandleRuntimeRoutine::StubRoutines_galoisCounterMode_AESCrypt_callee;
 
   // implGCMCrypt0(byte[] in, int inOfs, int inLen, byte[] ct, int ctOfs,
   //               byte[] out, int outOfs, GCTR gctr, GHASH ghash): int
   ciSignature* sig = _target->signature();
-  if (sig->count() != 9 ||
-      sig->type_at(0)->basic_type() != T_ARRAY ||
-      sig->type_at(0)->name() == nullptr ||
-      strcmp(sig->type_at(0)->name(), "[B") != 0 ||
-      sig->type_at(1)->basic_type() != T_INT ||
-      sig->type_at(2)->basic_type() != T_INT ||
-      sig->type_at(3)->basic_type() != T_ARRAY ||
-      sig->type_at(3)->name() == nullptr ||
-      strcmp(sig->type_at(3)->name(), "[B") != 0 ||
-      sig->type_at(4)->basic_type() != T_INT ||
-      sig->type_at(5)->basic_type() != T_ARRAY ||
-      sig->type_at(5)->name() == nullptr ||
-      strcmp(sig->type_at(5)->name(), "[B") != 0 ||
-      sig->type_at(6)->basic_type() != T_INT ||
-      sig->type_at(7)->basic_type() != T_OBJECT ||
-      sig->type_at(8)->basic_type() != T_OBJECT ||
-      sig->return_type()->basic_type() != T_INT) {
+  if (!expect_signature(sig, 9,
+                        {SigKind::ByteArray, SigKind::Int, SigKind::Int,
+                         SigKind::ByteArray, SigKind::Int,
+                         SigKind::ByteArray, SigKind::Int,
+                         SigKind::Object, SigKind::Object}, T_INT)) {
     return false;
   }
 
@@ -1748,8 +1742,7 @@ bool JeandleIntrinsicLowering::lower_galois_counter_mode() {
   static constexpr CallSiteAttributeMetadata STUB_ATTRS = {
       CTRL_NONE, MEM_READ | MEM_WRITE};
   llvm::CallBase* stub_call = emit_callsite(
-      JeandleRuntimeRoutine::StubRoutines_galoisCounterMode_AESCrypt_callee(
-          _interp->_module),
+      callee_fn(_interp->_module),
       llvm::CallingConv::C,
       {in_start, in_len, ct_start, out_start, k_start,
        state_start, subkey_start, cnt_start},
@@ -1762,7 +1755,7 @@ bool JeandleIntrinsicLowering::lower_galois_counter_mode() {
   llvm::Value* result = merge_with_java_fallback(
       {stub_call}, {stub_tail_bb}, merge_bb,
       {in, in_ofs, in_len, ct, ct_ofs, out, out_ofs, gctr, ghash},
-      /*has_receiver=*/false, "gcm.result");
+      /*has_receiver=*/false, "gcm_result");
   if (result == nullptr) {
     return true;
   }
@@ -1780,22 +1773,14 @@ bool JeandleIntrinsicLowering::lower_galois_counter_mode() {
 // null-checked here instead of by invoke().
 bool JeandleIntrinsicLowering::lower_ghash_process_blocks() {
   const char* const stub_name = "StubRoutines_ghash_processBlocks";
+  JeandleRuntimeCalleeFn const callee_fn =
+      &JeandleRuntimeRoutine::StubRoutines_ghash_processBlocks_callee;
 
   // processBlocks(byte[] data, int inOfs, int blocks, long[] st, long[] subH)
   ciSignature* sig = _target->signature();
-  if (sig->count() != 5 ||
-      sig->type_at(0)->basic_type() != T_ARRAY ||
-      sig->type_at(0)->name() == nullptr ||
-      strcmp(sig->type_at(0)->name(), "[B") != 0 ||
-      sig->type_at(1)->basic_type() != T_INT ||
-      sig->type_at(2)->basic_type() != T_INT ||
-      sig->type_at(3)->basic_type() != T_ARRAY ||
-      sig->type_at(3)->name() == nullptr ||
-      strcmp(sig->type_at(3)->name(), "[J") != 0 ||
-      sig->type_at(4)->basic_type() != T_ARRAY ||
-      sig->type_at(4)->name() == nullptr ||
-      strcmp(sig->type_at(4)->name(), "[J") != 0 ||
-      sig->return_type()->basic_type() != T_VOID) {
+  if (!expect_signature(sig, 5,
+                        {SigKind::ByteArray, SigKind::Int, SigKind::Int,
+                         SigKind::LongArray, SigKind::LongArray}, T_VOID)) {
     return false;
   }
 
@@ -1831,8 +1816,7 @@ bool JeandleIntrinsicLowering::lower_ghash_process_blocks() {
   static constexpr CallSiteAttributeMetadata attrs = {
       CTRL_NONE, MEM_READ | MEM_WRITE};
   emit_callsite(
-      JeandleRuntimeRoutine::StubRoutines_ghash_processBlocks_callee(
-          _interp->_module),
+      callee_fn(_interp->_module),
       llvm::CallingConv::C,
       {state_start, subkey_start, data_start, blocks},
       attrs, /*is_gc_leaf_entry=*/true);

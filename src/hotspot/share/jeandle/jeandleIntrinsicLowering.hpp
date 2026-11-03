@@ -31,6 +31,8 @@
 #include "classfile/vmIntrinsics.hpp"
 #include "memory/allocation.hpp"
 
+#include <initializer_list>
+
 #define PROB_UNLIKELY_MAG(N)    (1e- ## N ## f)
 #define PROB_MIN                PROB_UNLIKELY_MAG(6)
 #define PROB_FAIR               (0.5f)
@@ -40,6 +42,7 @@ class ciField;
 class ciInstanceKlass;
 class ciKlass;
 class ciMethod;
+class ciSignature;
 
 // =============================================================================
 // Control-flow facts for a lowered intrinsic call site. Combined into
@@ -237,6 +240,15 @@ class JeandleIntrinsicLowering : public StackObj {
   bool lower_digestBase_implCompressMB();
 
   // ---- shared crypto-intrinsic helpers ----
+  // Descriptor for one Java parameter slot in expect_signature.
+  enum class SigKind { ByteArray, IntArray, LongArray, Int, Object };
+  // Validate that sig has exactly `count` parameters of the given kinds and
+  // the given return basic type. Array kinds also require the exact array
+  // element signature name ("[B"/"[I"/"[J"); a T_ILLEGAL return skips the
+  // return-type check. Returns false on any mismatch.
+  bool expect_signature(const ciSignature* sig, int count,
+                        std::initializer_list<SigKind> params,
+                        BasicType ret);
   // Resolve a class by binary name relative to the intrinsic target holder.
   // Returns nullptr unless the class is loaded; guarded fast paths must
   // close when it is not (mirrors C2's predicate klass check).
