@@ -669,6 +669,12 @@ bool JeandleIntrinsicLowering::lower(vmIntrinsics::ID id, const ciMethod* target
     case vmIntrinsics::_ghash_processBlocks:
       return lower_ghash_process_blocks();
 
+    case vmIntrinsics::_chacha20Block:
+      return lower_chacha20_block();
+
+    case vmIntrinsics::_poly1305_processBlocks:
+      return lower_poly1305_process_blocks();
+
     // HashCode
     case vmIntrinsics::_identityHashCode:
     case vmIntrinsics::_hashCode:
@@ -1819,6 +1825,125 @@ bool JeandleIntrinsicLowering::lower_ghash_process_blocks() {
       callee_fn(_interp->_module),
       llvm::CallingConv::C,
       {state_start, subkey_start, data_start, blocks},
+      attrs, /*is_gc_leaf_entry=*/true);
+  return true;
+}
+
+// =============================================================================
+// lower_chacha20_block — ChaCha20 block keystream intrinsic
+// =============================================================================
+
+// ChaCha20Cipher.implChaCha20Block is private and static, so like C2's
+// inline_chacha20Block it bridges straight to the stub without a receiver
+// guard; a static call has no receiver null check from invoke(), so both
+// array arguments are null-checked here. The stub generates as many keystream
+// blocks as its vector width allows (a multiple of the 64-byte ChaCha block)
+// and returns the byte count; the Java caller iterates the keystream buffer
+// by exactly that count, so the value is passed through verbatim.
+bool JeandleIntrinsicLowering::lower_chacha20_block() {
+  const char* const stub_name = "StubRoutines_chacha20Block";
+  JeandleRuntimeCalleeFn const callee_fn =
+      &JeandleRuntimeRoutine::StubRoutines_chacha20Block_callee;
+
+  // implChaCha20Block(int[] initState, byte[] result): int
+  ciSignature* sig = _target->signature();
+  if (!expect_signature(sig, 2, {SigKind::IntArray, SigKind::ByteArray},
+                        T_INT)) {
+    return false;
+  }
+
+  // The stub is generated only on platforms with vector support; never
+  // materialize a direct call when the entry is absent.
+  if (JeandleRuntimeRoutine::find_routine_entry(stub_name) == nullptr) {
+    return false;
+  }
+
+  // Peek (not pop) until every fallible step has succeeded, preserving the
+  // operand stack for the normal invoke path on failure. A static call has
+  // no receiver null check from invoke().
+  llvm::Value* state  = _interp->_jvm->raw_peek(1).value();
+  llvm::Value* result = _interp->_jvm->raw_peek(0).value();
+  _interp->null_check(state);
+  _interp->null_check(result);
+
+  // Commit: pop all operands; the values stay live as SSA across the call.
+  _interp->_jvm->apop();  // result
+  _interp->_jvm->apop();  // state
+
+  llvm::Value* state_start = array_element0_pointer(state, T_INT);
+  llvm::Value* result_start = array_element0_pointer(result, T_BYTE);
+
+  static constexpr CallSiteAttributeMetadata attrs = {
+      CTRL_NONE, MEM_READ | MEM_WRITE};
+  llvm::CallBase* keystream_len = emit_callsite(
+      callee_fn(_interp->_module),
+      llvm::CallingConv::C,
+      {state_start, result_start},
+      attrs, /*is_gc_leaf_entry=*/true);
+  _interp->_jvm->ipush(keystream_len);
+  return true;
+}
+
+// =============================================================================
+// lower_poly1305_process_blocks — Poly1305 multi-block intrinsic
+// =============================================================================
+
+// Poly1305.processMultipleBlocks passes the accumulator and key limbs as
+// explicit long[] arguments, so like C2's inline_poly1305_processBlocks it
+// bridges straight to the stub without a receiver-type guard. The receiver is
+// null-checked by invoke(); the Java byte offset is folded into the input
+// pointer, as the stub ABI takes no separate offset.
+bool JeandleIntrinsicLowering::lower_poly1305_process_blocks() {
+  const char* const stub_name = "StubRoutines_poly1305_processBlocks";
+  JeandleRuntimeCalleeFn const callee_fn =
+      &JeandleRuntimeRoutine::StubRoutines_poly1305_processBlocks_callee;
+
+  // processMultipleBlocks(byte[] input, int offset, int length,
+  //                       long[] aLimbs, long[] rLimbs)
+  ciSignature* sig = _target->signature();
+  if (!expect_signature(sig, 5,
+                        {SigKind::ByteArray, SigKind::Int, SigKind::Int,
+                         SigKind::LongArray, SigKind::LongArray}, T_VOID)) {
+    return false;
+  }
+
+  // The poly stub vector loop needs AVX512 IFMA + BW/VL, and the VM turns
+  // UsePoly1305Intrinsics off without them; never materialize a direct call
+  // when the entry is absent.
+  if (JeandleRuntimeRoutine::find_routine_entry(stub_name) == nullptr) {
+    return false;
+  }
+
+  // Peek (not pop) until every fallible step has succeeded, preserving the
+  // operand stack for the normal invoke path on failure. The receiver below
+  // input is null-checked by invoke().
+  llvm::Value* input    = _interp->_jvm->raw_peek(4).value();
+  llvm::Value* offset   = _interp->_jvm->raw_peek(3).value();
+  llvm::Value* length   = _interp->_jvm->raw_peek(2).value();
+  llvm::Value* a_limbs  = _interp->_jvm->raw_peek(1).value();
+  llvm::Value* r_limbs  = _interp->_jvm->raw_peek(0).value();
+  _interp->null_check(input);
+  _interp->null_check(a_limbs);
+  _interp->null_check(r_limbs);
+
+  // Commit: pop all operands; the values stay live as SSA across the call.
+  _interp->_jvm->apop();  // r_limbs
+  _interp->_jvm->apop();  // a_limbs
+  _interp->_jvm->ipop();  // length
+  _interp->_jvm->ipop();  // offset
+  _interp->_jvm->apop();  // input
+  _interp->_jvm->apop();  // receiver (null-checked by invoke())
+
+  llvm::Value* input_start = array_data_pointer(input, T_BYTE, offset);
+  llvm::Value* acc_start = array_element0_pointer(a_limbs, T_LONG);
+  llvm::Value* r_start = array_element0_pointer(r_limbs, T_LONG);
+
+  static constexpr CallSiteAttributeMetadata attrs = {
+      CTRL_NONE, MEM_READ | MEM_WRITE};
+  emit_callsite(
+      callee_fn(_interp->_module),
+      llvm::CallingConv::C,
+      {input_start, length, acc_start, r_start},
       attrs, /*is_gc_leaf_entry=*/true);
   return true;
 }

@@ -287,6 +287,11 @@ class JeandleIntrinsicLowering : public StackObj {
   bool lower_counter_mode();
   bool lower_galois_counter_mode();
   bool lower_ghash_process_blocks();
+  // ChaCha20 block keystream and Poly1305 multi-block MAC: direct stub
+  // bridges with no receiver-type guard (the limb arrays are explicit
+  // arguments and the ChaCha20 block is a static method).
+  bool lower_chacha20_block();
+  bool lower_poly1305_process_blocks();
   bool lower_new_array();
   bool lower_unsafe_allocate_instance();
   bool lower_object_notify(vmIntrinsics::ID id);
