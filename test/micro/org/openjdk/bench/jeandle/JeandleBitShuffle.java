@@ -37,7 +37,8 @@ import org.openjdk.jmh.infra.Blackhole;
  * Integer/Long compress and expand under Jeandle, compared against C2
  * ({@code -XX:-UseJeandleCompiler} on the same build). Each invocation walks
  * pre-filled value and mask arrays so neither argument is a compile-time
- * constant; results are consumed through a Blackhole. Masks deliberately
+ * constant; results are consumed through a Java Blackhole (see README.md
+ * in this directory for the required harness options). Masks deliberately
  * spread the popcount across the full width, because the pure-Java
  * fallback cost scales with the number of set mask bits while a bit-manip
  * intrinsic is popcount-independent.
@@ -58,6 +59,7 @@ public class JeandleBitShuffle {
 
     @Setup
     public void setup() {
+        JeandleBenchmarkSupport.requireJavaBlackhole();
         intValues = new int[SIZE];
         intMasks = new int[SIZE];
         longValues = new long[SIZE];

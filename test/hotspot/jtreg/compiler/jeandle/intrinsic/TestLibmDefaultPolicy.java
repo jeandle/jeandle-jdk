@@ -32,12 +32,16 @@
 package compiler.jeandle.intrinsic;
 
 import compiler.jeandle.fileCheck.FileCheck;
+import java.lang.management.ManagementFactory;
 import java.nio.file.Files;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Random;
 
+import com.sun.management.HotSpotDiagnosticMXBean;
+
 import jdk.test.lib.Asserts;
+import jdk.test.lib.Platform;
 import jdk.test.lib.process.OutputAnalyzer;
 import jdk.test.lib.process.ProcessTools;
 
@@ -45,26 +49,26 @@ import jdk.test.lib.process.ProcessTools;
  * Regression test for the out-of-the-box libm selection policy
  * (JeandleUseHotspotIntrinsics defaults to true).
  *
- * The subprocess runs with DEFAULT flags -- neither JeandleUseHotspotIntrinsics
- * nor UseLibmIntrinsic is passed -- and must (a) compile Math.log/Math.log10
- * (plus a Math.sin sample) to the HotSpot runtime entries rather than the llvm
- * builtins, and (b) return bit-identical results to interpreted execution,
- * closing the bit mismatches Task 1's baseline run measured under the old
- * default (llvm.* -> host glibc versus the interpreter's StubRoutines fdlibm
- * entries).
+ * The first subprocess uses default flags. On x86 a second subprocess disables
+ * the libm stubs to exercise SharedRuntime. Both must compile Math.log/log10
+ * and a Math.sin sample to the platform's HotSpot runtime entries and return
+ * bit-identical results to interpreted execution on that platform.
  */
 public class TestLibmDefaultPolicy {
     public static void main(String[] args) throws Exception {
-        boolean is_x86 = System.getProperty("os.arch").equals("amd64")
-                || System.getProperty("os.arch").equals("x86_64");
+        runAndCheck();
+        if (Platform.isX64()) {
+            runAndCheck("-XX:-UseLibmIntrinsic");
+        }
+    }
 
+    private static void runAndCheck(String... extraFlags) throws Exception {
         String dumpDir = Files.createTempDirectory("jeandle_test_libm_default").toString();
-        OutputAnalyzer output = runSubprocess(dumpDir);
+        OutputAnalyzer output = runSubprocess(dumpDir, extraFlags);
+        output.shouldHaveExitValue(0).shouldMatch("LIBM_STUBS=(true|false)");
+        boolean logStub = output.getOutput().contains("LIBM_STUBS=true");
 
-        // --- Raw IR of the wrappers: the runtime entry, never the llvm
-        // builtin. This is the primary regression check -- it failed while
-        // the default selected the LLVM path (the dumps contained
-        // @llvm.log.f64) -- so it runs before any subprocess output checks.
+        // Check that raw wrapper IR selects the current runtime entry.
         //
         // "double_log10" sorts before "double_log" in ASCII ('1' < '_'), so
         // every double_log10 dump file sorts before every double_log one and
@@ -73,8 +77,8 @@ public class TestLibmDefaultPolicy {
         FileCheck logChecker = new FileCheck(dumpDir,
                 TestWrapper.class.getMethod("double_log", double.class), false);
         logChecker.checkPattern("define hotspotcc double .*TestLibmDefaultPolicy.*double_log.*");
-        if (is_x86) {
-            // Default UseLibmIntrinsic: the interpreter's own libm stub.
+        if (logStub) {
+            // The interpreter's own libm stub.
             logChecker.check("call double @StubRoutines_dlog");
         } else {
             // No platform libm stubs here, so the always-linked fdlibm port:
@@ -88,7 +92,7 @@ public class TestLibmDefaultPolicy {
         FileCheck log10Checker = new FileCheck(dumpDir,
                 TestWrapper.class.getMethod("double_log10", double.class), false);
         log10Checker.checkPattern("define hotspotcc double .*TestLibmDefaultPolicy.*double_log10.*");
-        if (is_x86) {
+        if (logStub) {
             log10Checker.check("call double @StubRoutines_dlog10");
         } else {
             log10Checker.checkPattern("call double inttoptr \\(i64 \\d+ to ptr\\)");
@@ -97,23 +101,16 @@ public class TestLibmDefaultPolicy {
         log10Checker.checkNot("llvm.log10.f64");
         log10Checker.checkPattern("gc-leaf-function");
 
-        // Math.sin sampling on the same default path: the exhaustive closure
-        // above covers log/log10 (where the old default was proven wrong);
-        // sin is only sampled here, per the brief.
-        //
-        // Unlike log/log10 above, sin has no arch split: BOTH x86 and aarch64
-        // generate the dsin stub, so the default policy always selects it.
-        // x86 gates it on UseLibmIntrinsic (default on) and aarch64 sets
-        // StubRoutines::_dsin whenever vmIntrinsics::is_intrinsic_available
-        // (_dsin) holds -- no UseLibmIntrinsic gate on aarch64
-        // (stubGenerator_aarch64.cpp) -- so the runtime-first callee lookup
-        // always finds the stub and the SharedRuntime fdlibm alias is never
-        // reached for sin. (aarch64's dlog/dlog10 stub generation is
-        // commented out there, hence the split above.)
+        // AArch64 generates dsin independently of x86's UseLibmIntrinsic flag.
         FileCheck sinChecker = new FileCheck(dumpDir,
                 TestWrapper.class.getMethod("double_sin", double.class), false);
         sinChecker.checkPattern("define hotspotcc double .*TestLibmDefaultPolicy.*double_sin.*");
-        sinChecker.check("call double @StubRoutines_dsin");
+        if (logStub || Platform.isAArch64()) {
+            sinChecker.check("call double @StubRoutines_dsin");
+        } else {
+            sinChecker.checkPattern("call double inttoptr \\(i64 \\d+ to ptr\\)");
+            sinChecker.checkPatternAnywhere("@SharedRuntime_dsin = alias");
+        }
         sinChecker.checkNot("llvm.sin.f64");
         sinChecker.checkPattern("gc-leaf-function");
 
@@ -125,12 +122,11 @@ public class TestLibmDefaultPolicy {
               .shouldContain("anchors bit-identical: log=14 log10=4")
               .shouldContain("random samples bit-identical: log=1000 log10=1000 sin=300")
               .shouldContain("ZERO_MISMATCH_CLOSURE")
-              .shouldContain("TestLibmDefaultPolicy PASSED (default flags)");
+              .shouldContain("TestLibmDefaultPolicy PASSED");
     }
 
-    private static OutputAnalyzer runSubprocess(String dumpDir) throws Exception {
-        // DEFAULT policy flags: no JeandleUseHotspotIntrinsics and no
-        // UseLibmIntrinsic anywhere in the command line.
+    private static OutputAnalyzer runSubprocess(String dumpDir, String... extraFlags) throws Exception {
+        // Keep JeandleUseHotspotIntrinsics at its default in every run.
         ArrayList<String> commandArgs = new ArrayList<>(List.of(
                 "-Xbatch", "-XX:-TieredCompilation", "-XX:+UseJeandleCompiler", "-Xcomp",
                 "-Xlog:jeandle=debug", "-XX:+UnlockDiagnosticVMOptions", "-XX:+JeandleDumpIR",
@@ -138,6 +134,7 @@ public class TestLibmDefaultPolicy {
                 "-XX:CompileCommand=compileonly," + TestWrapper.class.getName() + "::double_log",
                 "-XX:CompileCommand=compileonly," + TestWrapper.class.getName() + "::double_log10",
                 "-XX:CompileCommand=compileonly," + TestWrapper.class.getName() + "::double_sin"));
+        commandArgs.addAll(List.of(extraFlags));
         commandArgs.add(TestWrapper.class.getName());
 
         ProcessBuilder pb = ProcessTools.createLimitedTestJavaProcessBuilder(commandArgs);
@@ -155,6 +152,10 @@ public class TestLibmDefaultPolicy {
         static long sink; // keeps both call paths alive
 
         public static void main(String[] args) {
+            boolean libmStubs = Platform.isX64()
+                    && Boolean.parseBoolean(ManagementFactory.getPlatformMXBean(
+                            HotSpotDiagnosticMXBean.class).getVMOption("UseLibmIntrinsic").getValue());
+            System.out.println("LIBM_STUBS=" + libmStubs);
             // Trigger the -Xcomp compilation of the wrappers first.
             sink += Double.doubleToRawLongBits(double_log(2.0));
             sink += Double.doubleToRawLongBits(double_log10(2.0));
@@ -169,7 +170,7 @@ public class TestLibmDefaultPolicy {
             long log10Checked = sweep(false);
             System.out.println("ZERO_MISMATCH_CLOSURE log_checked=" + logChecked
                     + " log10_checked=" + log10Checked + " sink=" + sink);
-            System.out.println("TestLibmDefaultPolicy PASSED (default flags)");
+            System.out.println("TestLibmDefaultPolicy PASSED");
         }
 
         // --- comparison helpers ---
@@ -186,22 +187,9 @@ public class TestLibmDefaultPolicy {
                             + ") != interpreted " + ref + " (" + bits(ref) + ")");
         }
 
-        // --- the Task 1 regression anchors ---
-        //
-        // Under the old default (JeandleUseHotspotIntrinsics=false) the
-        // compiled wrappers called llvm.log/llvm.log10, which LLVM lowered to
-        // the host glibc, while the interpreted references went through the
-        // interpreter's StubRoutines fdlibm entries. Task 1's baseline sweep
-        // (seed 20261102, 478671 inputs) measured 14 one-ulp Math.log
-        // mismatches and, for Math.log10, 6478 finite mismatches of which
-        // these 4 were the only two-ulp ones, plus 82463 NaN-payload
-        // differences. The inputs and the interpreter's answer bits below are
-        // copied from that evidence:
-        // docs/reports/2026-11-02-numeric-bit-intrinsics/baseline-before/driver-full.out
-        // With the default flipped to the runtime entries, compiled and
-        // interpreted execution call the same routine, so every anchor must
-        // now be bit-identical -- and equal to the recorded fdlibm value,
-        // which also rules out both sides drifting off together.
+        // Inputs sensitive to the selected libm implementation. The oracle is
+        // the current platform's interpreted HotSpot runtime, whose answers
+        // can differ between StubRoutines and SharedRuntime implementations.
 
         // The 14 Math.log one-ulp mismatch inputs.
         private static final long[] LOG_ANCHOR_INPUTS = {
@@ -211,24 +199,11 @@ public class TestLibmDefaultPolicy {
             0x3ff031892920b14cL, 0x3ff0be48e2087b26L, 0x3ff029dae256ee03L,
             0x3ff0fb064857e1fcL, 0x401821077501340cL,
         };
-        // The interpreter's recorded Math.log answers for the inputs above.
-        private static final long[] LOG_ANCHOR_INTERP_EXPECTED = {
-            0x3fab35b64b169e20L, 0x3fabc265ccaa9dc9L, 0x3faa1b97421b5567L,
-            0x3f85884c0952e668L, 0x3fa905771991c1e6L, 0x3f907090514b5e85L,
-            0x3f8aaface93772fcL, 0x3f99c496bcba2c01L, 0x3fa601924722c8d9L,
-            0x3f889e8bcfdc291aL, 0x3fa73fe7b68eeaccL, 0x3f84d2412c896899L,
-            0x3fae74416f06395fL, 0x3ffcc101d9d75ab1L,
-        };
         // The 4 Math.log10 inputs that mismatched by two ulp (the other 6474
         // finite log10 mismatches were one-ulp).
         private static final long[] LOG10_TWO_ULP_ANCHOR_INPUTS = {
             0x3ff092e0cfff6a70L, 0x3ff088b763aa25dcL,
             0x3ff0119211124877L, 0x3ff024d0ad77ffaaL,
-        };
-        // The interpreter's recorded Math.log10 answers for the inputs above.
-        private static final long[] LOG10_TWO_ULP_ANCHOR_INTERP_EXPECTED = {
-            0x3f8f55eda71adcb9L, 0x3f8d33f00415fa73L,
-            0x3f5e753af10e2cb0L, 0x3f6fd599d99425a7L,
         };
 
         private static void checkAnchors() {
@@ -236,19 +211,11 @@ public class TestLibmDefaultPolicy {
                 double x = Double.longBitsToDouble(LOG_ANCHOR_INPUTS[i]);
                 double computed = double_log(x);
                 checkBits("log anchor " + i + " (" + x + ")", computed, ref_double_log(x));
-                Asserts.assertEquals(Double.doubleToRawLongBits(computed),
-                        LOG_ANCHOR_INTERP_EXPECTED[i],
-                        "log anchor " + i + ": expected the recorded fdlibm bits "
-                                + Long.toHexString(LOG_ANCHOR_INTERP_EXPECTED[i]));
             }
             for (int i = 0; i < LOG10_TWO_ULP_ANCHOR_INPUTS.length; i++) {
                 double x = Double.longBitsToDouble(LOG10_TWO_ULP_ANCHOR_INPUTS[i]);
                 double computed = double_log10(x);
                 checkBits("log10 two-ulp anchor " + i + " (" + x + ")", computed, ref_double_log10(x));
-                Asserts.assertEquals(Double.doubleToRawLongBits(computed),
-                        LOG10_TWO_ULP_ANCHOR_INTERP_EXPECTED[i],
-                        "log10 two-ulp anchor " + i + ": expected the recorded fdlibm bits "
-                                + Long.toHexString(LOG10_TWO_ULP_ANCHOR_INTERP_EXPECTED[i]));
             }
             System.out.println("anchors bit-identical: log=" + LOG_ANCHOR_INPUTS.length
                     + " log10=" + LOG10_TWO_ULP_ANCHOR_INPUTS.length);

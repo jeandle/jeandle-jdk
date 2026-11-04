@@ -40,7 +40,8 @@ import org.openjdk.jmh.infra.Blackhole;
  * body - the shape later constant-folding optimizations are measured against -
  * while the base still comes from state so the call is not fully
  * constant-foldable. Bases stay positive and finite so the general libm path,
- * not a special-case bail-out, dominates the measurement.
+ * not a special-case bail-out, dominates the measurement. Results require a
+ * Java Blackhole; see README.md in this directory for the harness options.
  */
 @BenchmarkMode(Mode.AverageTime)
 @OutputTimeUnit(TimeUnit.NANOSECONDS)
@@ -56,6 +57,7 @@ public class JeandlePow {
 
     @Setup
     public void setup() {
+        JeandleBenchmarkSupport.requireJavaBlackhole();
         bases = new double[SIZE];
         exponents = new double[SIZE];
         for (int i = 0; i < SIZE; i++) {

@@ -31,68 +31,63 @@
 package compiler.jeandle.intrinsic;
 
 import compiler.jeandle.fileCheck.FileCheck;
+import java.lang.management.ManagementFactory;
 import java.nio.file.Files;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Random;
 
+import com.sun.management.HotSpotDiagnosticMXBean;
+
 import jdk.test.lib.Asserts;
+import jdk.test.lib.Platform;
 import jdk.test.lib.process.OutputAnalyzer;
 import jdk.test.lib.process.ProcessTools;
 
 public class TestRound {
     public static void main(String[] args) throws Exception {
-        // Run 1: intrinsics enabled. The subprocess checks results against the
-        // exact specification values and its dumped IR must contain the
-        // floor/sub/cmp/select + fptosi.sat chain.
-        String intrinsicDump = Files.createTempDirectory("jeandle_test_round_on").toString();
-        OutputAnalyzer output = runSubprocess(intrinsicDump);
-        output.shouldHaveExitValue(0);
+        checkRun(false);
+        checkRun(true, "-XX:DisableIntrinsic=_roundF,_roundD");
+        if (Platform.isX64()) {
+            checkRun(false, "-XX:UseSSE=2");
+        }
+    }
 
-        FileCheck intChecker = new FileCheck(intrinsicDump,
-                TestWrapper.class.getMethod("int_round", float.class), false);
-        intChecker.checkPattern("define hotspotcc i32 .*TestRound.*int_round.*");
-        intChecker.check("call float @llvm.floor.f32");
-        intChecker.check("call i32 @llvm.fptosi.sat.i32.f32");
-        // The intrinsic must replace the call, not sit next to it.
-        intChecker.checkNot("java_lang_Math_round");
-
-        FileCheck longChecker = new FileCheck(intrinsicDump,
-                TestWrapper.class.getMethod("long_round", double.class), false);
-        longChecker.checkPattern("define hotspotcc i64 .*TestRound.*long_round.*");
-        longChecker.check("call double @llvm.floor.f64");
-        longChecker.check("call i64 @llvm.fptosi.sat.i64.f64");
-        longChecker.checkNot("java_lang_Math_round");
-
-        output.shouldContain("is parsed as intrinsic")
-              .shouldContain("java.lang.Math.round");
-
-        // Run 2: control group with the intrinsics disabled through
-        // -XX:DisableIntrinsic (Math.round has no dedicated VM flag switch).
-        // Results must stay correct and the raw (pre-optimization) IR must
-        // not contain the intrinsic's floor/fptosi.sat shape. Only the raw
-        // dump is a valid witness here: with the intrinsics off the call
-        // either stays an invoke of the outlined Math.round callee or inlines
-        // its integer-bit-manipulation fallback body, neither of which uses
-        // floating-point rounding, while the LLVM optimizer could still fold
-        // a hand-rolled fallback into similar shapes in the optimized dump.
-        String controlDump = Files.createTempDirectory("jeandle_test_round_off").toString();
-        output = runSubprocess(controlDump, "-XX:DisableIntrinsic=_roundF,_roundD");
-        // No intrinsic parse may mention Math.round itself.
+    private static void checkRun(boolean disabled, String... extraFlags) throws Exception {
+        String dumpDir = Files.createTempDirectory("jeandle_test_round").toString();
+        OutputAnalyzer output = runSubprocess(dumpDir, extraFlags);
         output.shouldHaveExitValue(0)
-              .shouldNotContain("java.lang.Math.round");
+              .shouldContain("TestRound PASSED")
+              .shouldMatch("ROUND_CPU_SUPPORTED=(true|false)");
+        boolean intrinsic = !disabled
+                && output.getOutput().contains("ROUND_CPU_SUPPORTED=true");
 
-        intChecker = new FileCheck(controlDump,
+        FileCheck intChecker = new FileCheck(dumpDir,
                 TestWrapper.class.getMethod("int_round", float.class), false);
         intChecker.checkPattern("define hotspotcc i32 .*TestRound.*int_round.*");
-        intChecker.checkNot("llvm.floor");
-        intChecker.checkNot("llvm.fptosi.sat");
-
-        longChecker = new FileCheck(controlDump,
+        FileCheck longChecker = new FileCheck(dumpDir,
                 TestWrapper.class.getMethod("long_round", double.class), false);
         longChecker.checkPattern("define hotspotcc i64 .*TestRound.*long_round.*");
-        longChecker.checkNot("llvm.floor");
-        longChecker.checkNot("llvm.fptosi.sat");
+        if (intrinsic) {
+            intChecker.check("call float @llvm.floor.f32");
+            intChecker.check("call i32 @llvm.fptosi.sat.i32.f32");
+            intChecker.checkNot("java_lang_Math_round");
+            longChecker.check("call double @llvm.floor.f64");
+            longChecker.check("call i64 @llvm.fptosi.sat.i64.f64");
+            longChecker.checkNot("java_lang_Math_round");
+            output.shouldContain("java.lang.Math.round(jfloat)` is parsed as intrinsic")
+                  .shouldContain("java.lang.Math.round(jdouble)` is parsed as intrinsic");
+        } else {
+            // Check the raw frontend call as well as the absence of the
+            // intrinsic: both flag and CPU gating must keep the Java fallback.
+            intChecker.checkPattern("(?:call|invoke) hotspotcc i32 .*java_lang_Math_round");
+            longChecker.checkPattern("(?:call|invoke) hotspotcc i64 .*java_lang_Math_round");
+            intChecker.checkNot("llvm.floor");
+            intChecker.checkNot("llvm.fptosi.sat");
+            longChecker.checkNot("llvm.floor");
+            longChecker.checkNot("llvm.fptosi.sat");
+            output.shouldNotContain("java.lang.Math.round");
+        }
     }
 
     private static OutputAnalyzer runSubprocess(String dumpDir, String... extraFlags)
@@ -129,6 +124,13 @@ public class TestRound {
         }
 
         public static void main(String[] args) {
+            // Use the child VM's effective flag, including hardware detection
+            // and command-line overrides, just like cpu_supports_rounding().
+            boolean supported = !Platform.isX64()
+                    || Integer.parseInt(ManagementFactory.getPlatformMXBean(
+                            HotSpotDiagnosticMXBean.class).getVMOption("UseSSE").getValue()) >= 4;
+            System.out.println("ROUND_CPU_SUPPORTED=" + supported);
+
             // --- ties round toward positive infinity ---
             checkF("round(2.5f) -> 3", 2.5f, 3);
             checkF("round(-2.5f) -> -2", -2.5f, -2);

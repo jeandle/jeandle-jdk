@@ -37,10 +37,11 @@ import org.openjdk.jmh.infra.Blackhole;
  * Math.copySign, Math.signum and Math.round under Jeandle, compared against
  * C2 ({@code -XX:-UseJeandleCompiler} on the same build). Each invocation
  * walks a pre-filled array so arguments are never compile-time constants;
- * every result is consumed through a Blackhole to defeat dead-code
- * elimination. Two-argument methods use two distinct input arrays so both
- * arguments vary per operation. Values mix magnitudes, signs, zeroes, NaN
- * and rounding ties so no single special case dominates.
+ * every result is consumed through a Java Blackhole (see README.md in this
+ * directory for the required harness options). Two-argument methods use two
+ * distinct input arrays so both arguments vary per operation. Values mix
+ * magnitudes, signs, zeroes, NaN and rounding ties so no single special case
+ * dominates.
  */
 @BenchmarkMode(Mode.AverageTime)
 @OutputTimeUnit(TimeUnit.NANOSECONDS)
@@ -62,6 +63,7 @@ public class JeandleMathMisc {
 
     @Setup
     public void setup() {
+        JeandleBenchmarkSupport.requireJavaBlackhole();
         doubleMagnitudes = new double[SIZE];
         doubleSigns = new double[SIZE];
         signumDoubles = new double[SIZE];
@@ -88,14 +90,14 @@ public class JeandleMathMisc {
                 case 6 -> doubleMagnitudes[i] = Double.longBitsToDouble(
                         0x0010000000000000L + i);
                 default -> doubleMagnitudes[i] = Double.longBitsToDouble(
-                        (i % 2046 + 1) << 52);
+                        (long) (i % 2046 + 1) << 52);
             }
             signumDoubles[i] = switch (lane) {
                 case 0 -> signed;
                 case 1 -> 0.0;
                 case 2 -> -0.0;
                 case 3 -> Double.NaN;
-                case 4 -> Double.longBitsToDouble((i % 2046 + 1) << 52);
+                case 4 -> Double.longBitsToDouble((long) (i % 2046 + 1) << 52);
                 case 5 -> Double.longBitsToDouble(0x0010000000000000L + i);
                 case 6 -> Double.POSITIVE_INFINITY;
                 default -> Double.NEGATIVE_INFINITY;
@@ -145,7 +147,7 @@ public class JeandleMathMisc {
                 case 5 -> i * 1e-9;
                 case 6 -> (i & 1) == 0 ? Double.NaN : 0.0;
                 default -> (i & 1) == 0 ? -0.0 : Double.longBitsToDouble(
-                        (i % 2046 + 1) << 52);
+                        (long) (i % 2046 + 1) << 52);
             };
         }
         check(Math.copySign(3.5, -1.0) == -3.5, "copySign(double, double)");
