@@ -30,4 +30,11 @@ final class JeandleBenchmarkSupport {
                     + "Jeandle benchmarks require Java blackholes for both Jeandle and C2");
         }
     }
+
+    // Setup-time sanity check of the JDK methods under measurement.
+    static void check(boolean condition, String what) {
+        if (!condition) {
+            throw new IllegalStateException("Unexpected " + what + " result");
+        }
+    }
 }

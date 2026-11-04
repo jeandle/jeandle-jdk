@@ -134,8 +134,11 @@ public class JeandleMathMisc {
                 case 3 -> -i - 0.5f;
                 case 4 -> i * 1e6f;
                 case 5 -> i * 1e-6f;
-                case 6 -> (i & 1) == 0 ? Float.NaN : 0.0f;
-                default -> (i & 1) == 0 ? -0.0f : Float.intBitsToFloat(
+                // Bit 3 alternates within a lane (the lane is i & 7), so
+                // both the NaN/0.0f and the -0.0f/normal branches are live
+                // and Math.round sees zeros as well as NaNs.
+                case 6 -> (i & 8) == 0 ? Float.NaN : 0.0f;
+                default -> (i & 8) == 0 ? -0.0f : Float.intBitsToFloat(
                         (i % 254 + 1) << 23);
             };
             roundDoubles[i] = switch (lane) {
@@ -145,17 +148,17 @@ public class JeandleMathMisc {
                 case 3 -> -i - 0.5;
                 case 4 -> i * 1e9;
                 case 5 -> i * 1e-9;
-                case 6 -> (i & 1) == 0 ? Double.NaN : 0.0;
-                default -> (i & 1) == 0 ? -0.0 : Double.longBitsToDouble(
+                case 6 -> (i & 8) == 0 ? Double.NaN : 0.0;
+                default -> (i & 8) == 0 ? -0.0 : Double.longBitsToDouble(
                         (long) (i % 2046 + 1) << 52);
             };
         }
-        check(Math.copySign(3.5, -1.0) == -3.5, "copySign(double, double)");
-        check(Math.copySign(-3.5f, 2.0f) == 3.5f, "copySign(float, float)");
-        check(Math.signum(-42.0) == -1.0 && Math.signum(0.25f) == 1.0f,
+        JeandleBenchmarkSupport.check(Math.copySign(3.5, -1.0) == -3.5, "copySign(double, double)");
+        JeandleBenchmarkSupport.check(Math.copySign(-3.5f, 2.0f) == 3.5f, "copySign(float, float)");
+        JeandleBenchmarkSupport.check(Math.signum(-42.0) == -1.0 && Math.signum(0.25f) == 1.0f,
                 "signum");
-        check(Math.round(2.5f) == 3 && Math.round(-2.5f) == -2, "round(float)");
-        check(Math.round(2.5) == 3L && Math.round(-2.5) == -2L, "round(double)");
+        JeandleBenchmarkSupport.check(Math.round(2.5f) == 3 && Math.round(-2.5f) == -2, "round(float)");
+        JeandleBenchmarkSupport.check(Math.round(2.5) == 3L && Math.round(-2.5) == -2L, "round(double)");
     }
 
     @Benchmark
@@ -203,12 +206,6 @@ public class JeandleMathMisc {
     public void roundD(Blackhole bh) {
         for (int i = 0; i < SIZE; i++) {
             bh.consume(Math.round(roundDoubles[i]));
-        }
-    }
-
-    private static void check(boolean condition, String what) {
-        if (!condition) {
-            throw new IllegalStateException("Unexpected " + what + " result");
         }
     }
 }

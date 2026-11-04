@@ -66,9 +66,9 @@ public class JeandlePow {
             // Mostly non-integer exponents over ~-8 .. ~8.
             exponents[i] = ((i % 32) - 16) * 0.5 + ((i & 1) == 0 ? 0.25 : 0.75);
         }
-        check(Math.pow(2.0, 10.0) == 1024.0, "pow default");
-        check(Math.pow(3.0, 2.0) == 9.0, "pow square");
-        check(Math.pow(9.0, 0.5) == 3.0, "pow half");
+        JeandleBenchmarkSupport.check(Math.pow(2.0, 10.0) == 1024.0, "pow default");
+        JeandleBenchmarkSupport.check(Math.pow(3.0, 2.0) == 9.0, "pow square");
+        JeandleBenchmarkSupport.check(Math.pow(9.0, 0.5) == 3.0, "pow half");
     }
 
     @Benchmark
@@ -92,12 +92,6 @@ public class JeandlePow {
     public void powHalf(Blackhole bh) {
         for (int i = 0; i < SIZE; i++) {
             bh.consume(Math.pow(bases[i], 0.5));
-        }
-    }
-
-    private static void check(boolean condition, String what) {
-        if (!condition) {
-            throw new IllegalStateException("Unexpected " + what + " result");
         }
     }
 }

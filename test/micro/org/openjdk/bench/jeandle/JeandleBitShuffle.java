@@ -99,13 +99,13 @@ public class JeandleBitShuffle {
                         | (intMasks[i] * 0x9E3779B9 & 0xFFFFFFFFL);
             }
         }
-        check(Integer.compress(0x12345678, -1) == 0x12345678, "int compress full mask");
-        check(Integer.compress(0x12345678, 0) == 0, "int compress empty mask");
-        check(Integer.expand(0x12345678, -1) == 0x12345678, "int expand full mask");
-        check(Integer.expand(0x12345678, 0) == 0, "int expand empty mask");
-        check(Long.compress(0x123456789ABCDEFL, -1L) == 0x123456789ABCDEFL,
+        JeandleBenchmarkSupport.check(Integer.compress(0x12345678, -1) == 0x12345678, "int compress full mask");
+        JeandleBenchmarkSupport.check(Integer.compress(0x12345678, 0) == 0, "int compress empty mask");
+        JeandleBenchmarkSupport.check(Integer.expand(0x12345678, -1) == 0x12345678, "int expand full mask");
+        JeandleBenchmarkSupport.check(Integer.expand(0x12345678, 0) == 0, "int expand empty mask");
+        JeandleBenchmarkSupport.check(Long.compress(0x123456789ABCDEFL, -1L) == 0x123456789ABCDEFL,
                 "long compress full mask");
-        check(Long.expand(0x123456789ABCDEFL, -1L) == 0x123456789ABCDEFL,
+        JeandleBenchmarkSupport.check(Long.expand(0x123456789ABCDEFL, -1L) == 0x123456789ABCDEFL,
                 "long expand full mask");
     }
 
@@ -138,12 +138,6 @@ public class JeandleBitShuffle {
     public void expandL(Blackhole bh) {
         for (int i = 0; i < SIZE; i++) {
             bh.consume(Long.expand(longValues[i], longMasks[i]));
-        }
-    }
-
-    private static void check(boolean condition, String what) {
-        if (!condition) {
-            throw new IllegalStateException("Unexpected " + what + " result");
         }
     }
 }

@@ -166,8 +166,12 @@ public class TestLibmDefaultPolicy {
 
             checkAnchors();
             checkRandomSamples();
-            long logChecked = sweep(true);
-            long log10Checked = sweep(false);
+            // Build the (deterministic, seed-pinned) input set once and run
+            // both sweeps over it; rebuilding it per sweep would re-allocate
+            // and re-box the ~478k-element list a second time for no reason.
+            double[] baselineInputs = buildBaselineInputs();
+            long logChecked = sweep(true, baselineInputs);
+            long log10Checked = sweep(false, baselineInputs);
             System.out.println("ZERO_MISMATCH_CLOSURE log_checked=" + logChecked
                     + " log10_checked=" + log10Checked + " sink=" + sink);
             System.out.println("TestLibmDefaultPolicy PASSED");
@@ -268,9 +272,8 @@ public class TestLibmDefaultPolicy {
         // baseline measured 14 + 88941 raw-bit mismatches (log / log10);
         // against the fixed default the identical sweep must produce ZERO.
 
-        private static long sweep(boolean isLog) {
+        private static long sweep(boolean isLog, double[] xs) {
             String op = isLog ? "Math.log" : "Math.log10";
-            double[] xs = buildBaselineInputs();
             long mismatch = 0;
             for (double x : xs) {
                 long c = Double.doubleToRawLongBits(isLog ? double_log(x) : double_log10(x));

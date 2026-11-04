@@ -51,10 +51,8 @@ public class TestSignum {
         FileCheck doubleChecker = new FileCheck(intrinsicDump,
                 TestWrapper.class.getMethod("double_signum", double.class), false);
         doubleChecker.checkPattern("define hotspotcc double .*TestSignum.*double_signum.*");
-        doubleChecker.check("fcmp ord double");
-        doubleChecker.check("fcmp oeq double");
+        doubleChecker.check("fcmp ueq double");
         doubleChecker.check("call double @llvm.copysign.f64");
-        doubleChecker.checkPattern("select i1 .* double .* double");
         doubleChecker.checkPattern("select i1 .* double .* double");
         // The intrinsic must replace the call, not sit next to it.
         doubleChecker.checkNot("java_lang_Math_signum");
@@ -62,10 +60,8 @@ public class TestSignum {
         FileCheck floatChecker = new FileCheck(intrinsicDump,
                 TestWrapper.class.getMethod("float_signum", float.class), false);
         floatChecker.checkPattern("define hotspotcc float .*TestSignum.*float_signum.*");
-        floatChecker.check("fcmp ord float");
-        floatChecker.check("fcmp oeq float");
+        floatChecker.check("fcmp ueq float");
         floatChecker.check("call float @llvm.copysign.f32");
-        floatChecker.checkPattern("select i1 .* float .* float");
         floatChecker.checkPattern("select i1 .* float .* float");
         floatChecker.checkNot("java_lang_Math_signum");
 
@@ -91,14 +87,14 @@ public class TestSignum {
                 TestWrapper.class.getMethod("double_signum", double.class), false);
         doubleChecker.checkPattern("define hotspotcc double .*TestSignum.*double_signum.*");
         doubleChecker.checkNot("llvm.copysign");
-        doubleChecker.checkNot("fcmp ord");
+        doubleChecker.checkNot("fcmp ueq");
         doubleChecker.checkNot("select i1");
 
         floatChecker = new FileCheck(controlDump,
                 TestWrapper.class.getMethod("float_signum", float.class), false);
         floatChecker.checkPattern("define hotspotcc float .*TestSignum.*float_signum.*");
         floatChecker.checkNot("llvm.copysign");
-        floatChecker.checkNot("fcmp ord");
+        floatChecker.checkNot("fcmp ueq");
         floatChecker.checkNot("select i1");
     }
 
