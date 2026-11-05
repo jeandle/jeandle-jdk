@@ -232,14 +232,6 @@ class JeandleIntrinsicLowering : public StackObj {
   // to a normal invoke of the inlinable Java implementation.
   bool lower_bit_shuffle(vmIntrinsics::ID id);   // arch-specific
 
-  // Shared bit-shuffle semantics, used by the per-target lower_bit_shuffle:
-  // when both operands are constants, fold them with the same bit loop C2
-  // uses (CompressBitsNode::compress_bits / ExpandBitsNode::expand_bits).
-  // Returns nullptr when either operand is non-constant.
-  static llvm::Value* fold_constant_bit_shuffle(vmIntrinsics::ID id,
-                                                llvm::ConstantInt* value,
-                                                llvm::ConstantInt* mask);
-
   bool lower_reverse_bytes_narrow(vmIntrinsics::ID id);
   bool lower_llvm_bitcast();
   bool lower_fp_to_bits_canonical(vmIntrinsics::ID id);

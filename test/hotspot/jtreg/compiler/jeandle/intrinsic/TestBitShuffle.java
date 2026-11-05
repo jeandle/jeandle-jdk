@@ -44,8 +44,8 @@ public class TestBitShuffle {
     public static void main(String[] args) throws Exception {
         // Run 1: intrinsics enabled. The subprocess checks every value
         // against the interpreted reference implementation and its dumped
-        // raw IR must contain the BMI2 PEXT/PDEP calls. The all-constant
-        // call must be folded by the lowering: no PEXT, a constant return.
+        // raw IR must contain the BMI2 PEXT/PDEP calls. Constant calls,
+        // including constants hidden behind PHIs, fold during optimization.
         String intrinsicDump = Files.createTempDirectory("jeandle_test_bit_shuffle_on").toString();
         OutputAnalyzer output = runSubprocess(intrinsicDump);
         output.shouldHaveExitValue(0);
@@ -70,12 +70,27 @@ public class TestBitShuffle {
         longExpandChecker.checkPattern("define hotspotcc i64 .*TestBitShuffle.*long_expand.*");
         longExpandChecker.check("call i64 @llvm.x86.bmi.pdep.64");
 
+        // Dynamic operands must retain the intrinsic after optimization.
+        for (String name : List.of("int_compress", "int_expand", "long_compress", "long_expand")) {
+            boolean isLong = name.startsWith("long");
+            Class<?> type = isLong ? long.class : int.class;
+            FileCheck checker = new FileCheck(intrinsicDump,
+                    TestWrapper.class.getMethod(name, type, type), true);
+            checker.check("call i" + (isLong ? 64 : 32) + " @llvm.x86.bmi."
+                    + (name.endsWith("compress") ? "pext." : "pdep.") + (isLong ? 64 : 32));
+        }
+
+        checkPhiFold(intrinsicDump, "int_phi_compress", false, "pext", 9320);
+        checkPhiFold(intrinsicDump, "int_phi_expand", false, "pdep", 33818120);
+        checkPhiFold(intrinsicDump, "long_phi_compress", true, "pext", 0x2468ACE0L);
+        checkPhiFold(intrinsicDump, "long_phi_expand", true, "pdep", 0x020406080A0C0E00L);
+
         // Integer.compress(0x12345678, 0x0F0F0F0F) == 0x2468 == 9320. The
         // method name deliberately does not extend "int_compress": the
         // FileCheck dump lookup matches file names by method-name prefix.
         FileCheck constChecker = new FileCheck(intrinsicDump,
-                TestWrapper.class.getMethod("int_const_compress"), false);
-        constChecker.checkPattern("define hotspotcc i32 .*TestBitShuffle.*int_const_compress.*");
+                TestWrapper.class.getMethod("int_const_compress"), true);
+        constChecker.checkPattern("define hotspotcc .*i32 .*TestBitShuffle.*int_const_compress.*");
         constChecker.checkNot("llvm.x86.bmi.pext");
         constChecker.checkPattern("ret i32 9320");
 
@@ -88,8 +103,8 @@ public class TestBitShuffle {
         // above: "int_const_expand" neither extends nor is extended by
         // "int_expand", so no dump file of one matches the other's prefix.
         FileCheck constExpandChecker = new FileCheck(intrinsicDump,
-                TestWrapper.class.getMethod("int_const_expand"), false);
-        constExpandChecker.checkPattern("define hotspotcc i32 .*TestBitShuffle.*int_const_expand.*");
+                TestWrapper.class.getMethod("int_const_expand"), true);
+        constExpandChecker.checkPattern("define hotspotcc .*i32 .*TestBitShuffle.*int_const_expand.*");
         constExpandChecker.checkNot("llvm.x86.bmi.pdep");
         constExpandChecker.checkPattern("ret i32 33818120");
 
@@ -138,6 +153,21 @@ public class TestBitShuffle {
         constExpandChecker.checkNot("llvm.x86.bmi.pdep");
     }
 
+    private static void checkPhiFold(String dumpDir, String name, boolean isLong,
+                                     String intrinsic, long expected) throws Exception {
+        int width = isLong ? 64 : 32;
+        var method = TestWrapper.class.getMethod(name, boolean.class);
+        String definition = "define hotspotcc .*i" + width + " .*TestBitShuffle.*" + name + "\\(";
+        FileCheck raw = new FileCheck(dumpDir, method, false);
+        raw.checkPattern(definition);
+        raw.check("phi i" + width);
+        raw.check("call i" + width + " @llvm.x86.bmi." + intrinsic + "." + width);
+        FileCheck optimized = new FileCheck(dumpDir, method, true);
+        optimized.checkNot("llvm.x86.bmi.");
+        optimized.checkPattern(definition);
+        optimized.checkPattern("ret i" + width + " " + expected + "$");
+    }
+
     private static OutputAnalyzer runSubprocess(String dumpDir, String... extraFlags)
             throws Exception {
         // Extra flags must precede the main class name or they become
@@ -151,7 +181,11 @@ public class TestBitShuffle {
                 "-XX:CompileCommand=compileonly," + TestWrapper.class.getName() + "::long_compress",
                 "-XX:CompileCommand=compileonly," + TestWrapper.class.getName() + "::long_expand",
                 "-XX:CompileCommand=compileonly," + TestWrapper.class.getName() + "::int_const_compress",
-                "-XX:CompileCommand=compileonly," + TestWrapper.class.getName() + "::int_const_expand"));
+                "-XX:CompileCommand=compileonly," + TestWrapper.class.getName() + "::int_const_expand",
+                "-XX:CompileCommand=compileonly," + TestWrapper.class.getName() + "::int_phi_compress",
+                "-XX:CompileCommand=compileonly," + TestWrapper.class.getName() + "::int_phi_expand",
+                "-XX:CompileCommand=compileonly," + TestWrapper.class.getName() + "::long_phi_compress",
+                "-XX:CompileCommand=compileonly," + TestWrapper.class.getName() + "::long_phi_expand"));
         commandArgs.addAll(List.of(extraFlags));
         commandArgs.add(TestWrapper.class.getName());
 
@@ -219,6 +253,19 @@ public class TestBitShuffle {
                     "const expand(0x2468, 0x0F0F0F0F)");
             Asserts.assertEquals(0x02040608, ref_int_expand(0x2468, 0x0F0F0F0F),
                     "const expand(0x2468, 0x0F0F0F0F) (vs interpreted)");
+
+            // Execute both predecessors of each constant merge. The reference
+            // methods are excluded from compilation and stay interpreted.
+            for (boolean condition : new boolean[] {false, true}) {
+                Asserts.assertEquals(int_phi_compress(condition),
+                        ref_int_compress(0x12345678, 0x0F0F0F0F), "int PHI compress");
+                Asserts.assertEquals(int_phi_expand(condition),
+                        ref_int_expand(0x2468, 0x0F0F0F0F), "int PHI expand");
+                Asserts.assertEquals(long_phi_compress(condition),
+                        ref_long_compress(0x123456789ABCDEF0L, 0x0F0F0F0F0F0F0F0FL), "long PHI compress");
+                Asserts.assertEquals(long_phi_expand(condition),
+                        ref_long_expand(0x2468ACE0L, 0x0F0F0F0F0F0F0F0FL), "long PHI expand");
+            }
 
             int[] intValues = {0, -1, 1, 0x12345678, 0xCAFEBABE, 0x55555555,
                                Integer.MIN_VALUE, Integer.MAX_VALUE};
@@ -340,8 +387,7 @@ public class TestBitShuffle {
             return Long.expand(i, mask);
         }
 
-        // Two literal constants: the lowering sees two ConstantInt operands
-        // and must fold the call instead of emitting PEXT.
+        // Literal constants also fold during optimization.
         public static int int_const_compress() {
             return Integer.compress(0x12345678, 0x0F0F0F0F);
         }
@@ -351,6 +397,28 @@ public class TestBitShuffle {
         // 0x12345678 & 0x0F0F0F0F == 0x02040608.
         public static int int_const_expand() {
             return Integer.expand(0x2468, 0x0F0F0F0F);
+        }
+
+        // javac retains these branches and Jeandle creates merge PHIs before
+        // the intrinsic calls. Keep names distinct for FileCheck's prefix lookup.
+        public static int int_phi_compress(boolean condition) {
+            int value = condition ? 0x12345678 : 0x12345678;
+            return Integer.compress(value, 0x0F0F0F0F);
+        }
+
+        public static int int_phi_expand(boolean condition) {
+            int mask = condition ? 0x0F0F0F0F : 0x0F0F0F0F;
+            return Integer.expand(0x2468, mask);
+        }
+
+        public static long long_phi_compress(boolean condition) {
+            long value = condition ? 0x123456789ABCDEF0L : 0x123456789ABCDEF0L;
+            return Long.compress(value, 0x0F0F0F0F0F0F0F0FL);
+        }
+
+        public static long long_phi_expand(boolean condition) {
+            long mask = condition ? 0x0F0F0F0F0F0F0F0FL : 0x0F0F0F0F0F0F0F0FL;
+            return Long.expand(0x2468ACE0L, mask);
         }
 
         // Not listed in CompileCommand, so these stay interpreted and act as

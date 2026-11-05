@@ -1453,50 +1453,6 @@ bool JeandleIntrinsicLowering::lower_count_zeros(vmIntrinsics::ID id,
   return true;
 }
 
-// ---- fold_constant_bit_shuffle ----
-// Integer/Long.compress/expand of two constant operands, folded by the
-// lowering itself: LLVM does not constant-fold the x86 bmi intrinsics, so an
-// all-constant call site would otherwise stay a PEXT/PDEP call until codegen.
-// The loops mirror C2's CompressBitsNode::compress_bits and
-// ExpandBitsNode::expand_bits (opto/intrinsicnode.cpp): compress gathers the
-// bits of the value selected by the mask bits into the low positions;
-// expand scatters the low bits of the value to the positions selected by the
-// mask. Working on the unsigned bit patterns is equivalent to C2's jlong
-// loop because only bit 0 of value/mask is consumed per iteration.
-llvm::Value* JeandleIntrinsicLowering::fold_constant_bit_shuffle(
-    vmIntrinsics::ID id, llvm::ConstantInt* value, llvm::ConstantInt* mask) {
-  if (value == nullptr || mask == nullptr) {
-    return nullptr;
-  }
-
-  const unsigned width = value->getBitWidth();
-  const bool compress = (id == vmIntrinsics::_compress_i ||
-                         id == vmIntrinsics::_compress_l);
-  uint64_t src = value->getZExtValue();
-  uint64_t msk = mask->getZExtValue();
-  uint64_t res = 0;
-
-  if (compress) {
-    for (unsigned i = 0, j = 0; i < width; i++) {
-      if (msk & 1) {
-        res |= (src & 1) << j++;
-      }
-      src >>= 1;
-      msk >>= 1;
-    }
-  } else {
-    for (unsigned i = 0; i < width; i++) {
-      if (msk & 1) {
-        res |= (src & 1) << i;
-        src >>= 1;
-      }
-      msk >>= 1;
-    }
-  }
-
-  return llvm::ConstantInt::get(value->getType(), res);
-}
-
 // ---- lower_fp_range_check ----
 // Float/Double.isFinite and isInfinite map directly to llvm.is.fpclass.
 bool JeandleIntrinsicLowering::lower_fp_range_check(vmIntrinsics::ID id) {

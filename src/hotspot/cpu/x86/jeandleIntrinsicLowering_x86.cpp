@@ -138,20 +138,6 @@ bool JeandleIntrinsicLowering::lower_bit_shuffle(vmIntrinsics::ID id) {
   llvm::Value* mask = is_long ? _interp->_jvm->lpop() : _interp->_jvm->ipop();
   llvm::Value* value = is_long ? _interp->_jvm->lpop() : _interp->_jvm->ipop();
 
-  // LLVM does not constant-fold these intrinsics; fold both-constant call
-  // sites here with C2's bit loop (see fold_constant_bit_shuffle).
-  llvm::Value* folded = fold_constant_bit_shuffle(
-      id, llvm::dyn_cast<llvm::ConstantInt>(value),
-      llvm::dyn_cast<llvm::ConstantInt>(mask));
-  if (folded != nullptr) {
-    if (is_long) {
-      _interp->_jvm->lpush(folded);
-    } else {
-      _interp->_jvm->ipush(folded);
-    }
-    return true;
-  }
-
   llvm::Intrinsic::ID llvm_id = llvm::Intrinsic::not_intrinsic;
   switch (id) {
     case vmIntrinsics::_compress_i: llvm_id = llvm::Intrinsic::x86_bmi_pext_32; break;
