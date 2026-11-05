@@ -464,8 +464,13 @@ bool JeandleIntrinsicLowering::lower(vmIntrinsics::ID id, const ciMethod* target
     case vmIntrinsics::_bitCount_l:
       return lower_bit_count(id);
 
-    // Integer/Long.compress/expand: arch-specific BMI2 PEXT/PDEP emission
-    // with shared constant folding (see lower_bit_shuffle).
+    // Integer/Long.compress/expand: arch-specific BMI2 PEXT/PDEP emission.
+    // lower_bit_shuffle only emits the intrinsic -- constant arguments
+    // (including ones that only later passes reveal, e.g. behind selects or
+    // inlined callers) are folded on the LLVM side by the X86 target's
+    // instCombineIntrinsic hook (X86InstCombineIntrinsic.cpp), which is
+    // active because the optimization pipeline is built with the
+    // compilation TargetMachine; TestBitShuffle covers the fold paths.
     case vmIntrinsics::_compress_i:
     case vmIntrinsics::_compress_l:
     case vmIntrinsics::_expand_i:
@@ -542,8 +547,9 @@ bool JeandleIntrinsicLowering::lower(vmIntrinsics::ID id, const ciMethod* target
                                   &JeandleRuntimeRoutine::StubRoutines_dexp_callee,
                                   "SharedRuntime_dexp",
                                   &JeandleRuntimeRoutine::SharedRuntime_dexp_callee);
-    // Math.pow: two-argument dual-path call with the constant-exponent
-    // specializations (see lower_pow).
+    // Math.pow: two-argument dual-path call with the guarded sqrt
+    // specialization for a literal 0.5 exponent (see lower_pow); the exact
+    // constant-exponent identities (2.0, +-0.0) are folded on the LLVM side.
     case vmIntrinsics::_dpow:
       return lower_pow();
 
@@ -855,18 +861,26 @@ bool JeandleIntrinsicLowering::lower_dual_path_libm(
 // ---- lower_pow ----
 //
 // Math.pow(double a, double b) lowers to the dual-path dpow runtime call
-// (StubRoutines::dpow -> SharedRuntime::dpow -> llvm.pow), plus the two
-// constant-exponent specializations C2's LibraryCallKit::inline_math_pow
-// performs:
-//   pow(x, 2.0)  => x * x
+// (StubRoutines::dpow -> SharedRuntime::dpow -> llvm.pow), plus C2's
+// sqrt specialization for a literal 0.5 exponent:
 //   pow(x, 0.5)  => sqrt(x) guarded to x > 0, dpow as the unlikely slow path
+//
+// The exact constant-exponent identities -- pow(x, 2.0) => x*x and
+// pow(x, +-0.0) => 1.0 -- are deliberately NOT folded here. They are folded
+// on the LLVM side (the LibmIdentityFolding pass on the runtime call, and
+// LLVM's own libcall simplifier on llvm.pow), which also covers exponents
+// that only later passes prove constant (inlined callers, select/phi
+// collapses). Both identities are bit-exact against both runtime entries on
+// every input; y == 1.0 => x is not among them because the runtime quiets a
+// signaling-NaN base while returning x would not.
 bool JeandleIntrinsicLowering::lower_pow() {
   llvm::LLVMContext& ctx = *_interp->_context;
   llvm::IRBuilder<>& builder = _interp->_ir_builder;
 
-  // Peek before deciding: when neither specialization applies, the operands
-  // stay on the stack for the generic path below to pop. peek_value addresses
-  // logical operands (double/long slots carry a null high-word placeholder).
+  // Peek before deciding: when the specialization does not apply, the
+  // operands stay on the stack for the generic path below to pop. peek_value
+  // addresses logical operands (double/long slots carry a null high-word
+  // placeholder).
   llvm::ConstantFP* exp = llvm::dyn_cast<llvm::ConstantFP>(
       _interp->_jvm->peek_value(0).value());
   llvm::Value* base = _interp->_jvm->peek_value(1).value();
@@ -877,17 +891,6 @@ bool JeandleIntrinsicLowering::lower_pow() {
   JeandleRuntimeCalleeFn dpow_callee = select_dual_path_libm_callee(
       "StubRoutines_dpow", &JeandleRuntimeRoutine::StubRoutines_dpow_callee,
       "SharedRuntime_dpow", &JeandleRuntimeRoutine::SharedRuntime_dpow_callee);
-
-  if (exp != nullptr && exp->isExactlyValue(2.0)) {
-    // Both runtime dpow entries -- the SharedRuntime fdlibm port and the
-    // x86 Intel LIBM stub -- special-case y == 2 to `return x*x` before any
-    // range reduction, so the multiply is bit-exact with the runtime call
-    // on every input, signed zeros, infinities and NaN payloads included.
-    _interp->_jvm->dpop();
-    _interp->_jvm->dpop();
-    _interp->_jvm->dpush(builder.CreateFMul(base, base, "pow.squared"));
-    return true;
-  }
 
   if (exp != nullptr && exp->isExactlyValue(0.5) && dpow_callee != nullptr) {
     // pow(x, 0.5) => sqrt(x) for x > 0. The guard is an ordered compare
