@@ -39,7 +39,7 @@ class JavaThread;
 
 class EscapeBarrier : StackObj {
 
-#if COMPILER2_OR_JVMCI
+#if COMPILER2_OR_JVMCI || INCLUDE_JEANDLE
   JavaThread* const _calling_thread;
   JavaThread* const _deoptee_thread;
   bool        const _barrier_active;
@@ -71,8 +71,10 @@ public:
   // Revert ea based optimizations for given deoptee thread
   EscapeBarrier(bool barrier_active, JavaThread* calling_thread, JavaThread* deoptee_thread)
     : _calling_thread(calling_thread), _deoptee_thread(deoptee_thread),
-      _barrier_active(barrier_active && (JVMCI_ONLY(UseJVMCICompiler) NOT_JVMCI(false)
-                      COMPILER2_PRESENT(|| DoEscapeAnalysis)))
+      _barrier_active(barrier_active &&
+                      (JVMCI_ONLY(UseJVMCICompiler) NOT_JVMCI(false)
+                       COMPILER2_PRESENT(|| DoEscapeAnalysis)
+                       JEANDLE_PRESENT(|| JeandleDoPEA)))
   {
     if (_barrier_active) sync_and_suspend_one();
   }
@@ -80,8 +82,10 @@ public:
   // Revert ea based optimizations for all java threads
   EscapeBarrier(bool barrier_active, JavaThread* calling_thread)
     : _calling_thread(calling_thread), _deoptee_thread(nullptr),
-      _barrier_active(barrier_active && (JVMCI_ONLY(UseJVMCICompiler) NOT_JVMCI(false)
-                      COMPILER2_PRESENT(|| DoEscapeAnalysis)))
+      _barrier_active(barrier_active &&
+                      (JVMCI_ONLY(UseJVMCICompiler) NOT_JVMCI(false)
+                       COMPILER2_PRESENT(|| DoEscapeAnalysis)
+                       JEANDLE_PRESENT(|| JeandleDoPEA)))
   {
     if (_barrier_active) sync_and_suspend_all();
   }
@@ -93,7 +97,7 @@ public:
   EscapeBarrier(bool barrier_active, JavaThread* calling_thread) { }
   static bool deoptimizing_objects_for_all_threads() { return false; }
   bool barrier_active() const                        { return false; }
-#endif // COMPILER2_OR_JVMCI
+#endif // COMPILER2_OR_JVMCI || INCLUDE_JEANDLE
 
   // Deoptimize objects of frames of the target thread up to the given depth.
   // Deoptimize objects of caller frames if they passed references to ArgEscape objects as arguments.
@@ -105,18 +109,18 @@ public:
   // Deoptimize objects of frames of the target thread at depth >= d1 and depth <= d2.
   // Deoptimize objects of caller frames if they passed references to ArgEscape objects as arguments.
   // Return false in the case of a reallocation failure and true otherwise.
-  bool deoptimize_objects(int d1, int d2)                      NOT_COMPILER2_OR_JVMCI_RETURN_(true);
+#if COMPILER2_OR_JVMCI || INCLUDE_JEANDLE
+  bool deoptimize_objects(int d1, int d2);
 
   // Find and deoptimize non escaping objects and the holding frames on all stacks.
-  bool deoptimize_objects_all_threads()                        NOT_COMPILER2_OR_JVMCI_RETURN_(true);
+  bool deoptimize_objects_all_threads();
 
   // A java thread was added to the list of threads.
-  static void thread_added(JavaThread* jt)                     NOT_COMPILER2_OR_JVMCI_RETURN;
+  static void thread_added(JavaThread* jt);
 
   // A java thread was removed from the list of threads.
-  static void thread_removed(JavaThread* jt)                   NOT_COMPILER2_OR_JVMCI_RETURN;
+  static void thread_removed(JavaThread* jt);
 
-#if COMPILER2_OR_JVMCI
   // Returns true iff objects were reallocated and relocked because of access through JVMTI.
   static bool objs_are_deoptimized(JavaThread* thread, intptr_t* fr_id);
 
@@ -141,7 +145,12 @@ public:
   // accessors
   JavaThread* calling_thread() const     { return _calling_thread; }
   JavaThread* deoptee_thread() const     { return _deoptee_thread; }
-#endif // COMPILER2_OR_JVMCI
+#else
+  bool deoptimize_objects(int d1, int d2) { return true; }
+  bool deoptimize_objects_all_threads()   { return true; }
+  static void thread_added(JavaThread* jt) { }
+  static void thread_removed(JavaThread* jt) { }
+#endif // COMPILER2_OR_JVMCI || INCLUDE_JEANDLE
 };
 
 #endif // SHARE_RUNTIME_ESCAPEBARRIER_HPP

@@ -182,22 +182,33 @@ public class TestUnstableIfPruneBoundaries {
         FileCheck biasedFc = new FileCheck(dir, biased, /*optimized=*/false);
         biasedFc.checkPattern("define hotspotcc i32 .*TestUnstableIfPruneBoundaries_biasedNotPruned");
         biasedFc.checkPattern("branch_weights\", i32 [0-9]+, i32 [0-9]+");
-        FileCheck biasedNoTrap = new FileCheck(dir, biased, /*optimized=*/false);
-        biasedNoTrap.checkNotPattern("unstable_if");
-        FileCheck biasedNoUct = new FileCheck(dir, biased, /*optimized=*/false);
-        biasedNoUct.checkNotPattern("@llvm.experimental.deoptimize");
+        FileCheck biasedNoPrune = new FileCheck(dir, biased, /*optimized=*/false);
+        biasedNoPrune.checkPattern(
+                "define hotspotcc i32 .*TestUnstableIfPruneBoundaries_biasedNotPruned");
+        biasedNoPrune.checkPatternAndNotPatternUntil(
+                "br i1 ",
+                "unstable_if|@llvm\\.experimental\\.deoptimize",
+                "^}$");
 
         compileAndAwaitDump(sw, dir);
         FileCheck swFc = new FileCheck(dir, sw, /*optimized=*/false);
         swFc.checkPattern("define hotspotcc i32 .*TestUnstableIfPruneBoundaries_switchOneColdCase");
         swFc.checkPattern("switch i32 ");
         FileCheck swNoUnstable = new FileCheck(dir, sw, /*optimized=*/false);
-        swNoUnstable.checkNotPattern("unstable_if");
+        swNoUnstable.checkPattern(
+                "define hotspotcc i32 .*TestUnstableIfPruneBoundaries_switchOneColdCase");
+        swNoUnstable.checkPatternAndNotPatternUntil(
+                "switch i32 ",
+                "unstable_if",
+                "^}$");
 
         compileAndAwaitDump(imm, dir);
         FileCheck immFc = new FileCheck(dir, imm, /*optimized=*/false);
         immFc.checkPattern("define hotspotcc i32 .*TestUnstableIfPruneBoundaries_immature");
-        immFc.checkNotPattern("unstable_if");
+        immFc.checkPatternAndNotPatternUntil(
+                "br i1 ",
+                "unstable_if",
+                "^}$");
 
         if (biasedNotPruned(500) != 501 || biasedNotPruned(5000) != 4999) {
             throw new RuntimeException("biasedNotPruned wrong");

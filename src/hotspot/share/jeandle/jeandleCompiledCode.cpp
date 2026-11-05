@@ -876,7 +876,7 @@ JeandleStackMap* JeandleCompiledCode::parse_stackmap(StackMapParser& stackmaps,
         // PEA virtual-object descriptor. The header (this encoding) location was
         // already consumed by the loop; the wire layout that remains is:
         //   [klass]       i64 constant = raw Klass* identity
-        //   [field_count] i32 constant
+        //   [field_count] i32 constant (highest bit marks a semantic box)
         //   field_count x ([field_enc][field_value])
         // See DeoptValueEncoding::ScalarValueType (Jeandle/Deoptimization.h) and
         // appendVirtualObjectDescriptor (JeandleTransformUtils.cpp). The parser
@@ -887,7 +887,12 @@ JeandleStackMap* JeandleCompiledCode::parse_stackmap(StackMapParser& stackmaps,
         uint64_t klass_raw = StackMapUtil::getConstantUlong(stackmaps, *(location++));
 
         assert(location != record->location_end(), "must be in range");
-        int field_count = (int)StackMapUtil::getConstantUint(stackmaps, *(location++));
+        uint32_t raw_field_count =
+            StackMapUtil::getConstantUint(stackmaps, *(location++));
+        bool is_boxed =
+            (raw_field_count & DeoptValueEncoding::BoxedDescriptorFlag) != 0;
+        int field_count = static_cast<int>(
+            raw_field_count & DeoptValueEncoding::DescriptorFieldCountMask);
 
         // Resolve klass -> java mirror via the ci interface (matches
         // jeandle_get_java_mirror and C2 FillLocArray). parse_stackmap runs at
@@ -910,7 +915,9 @@ JeandleStackMap* JeandleCompiledCode::parse_stackmap(StackMapParser& stackmaps,
                "PEA VO klass must be loaded");
         ConstantOopWriteValue* klass_sv = new ConstantOopWriteValue(
             ci_k->java_mirror()->constant_encoding());
-        ObjectValue* ov = new ObjectValue(vo_id, klass_sv);
+        ObjectValue* ov = is_boxed
+            ? static_cast<ObjectValue*>(new AutoBoxObjectValue(vo_id, klass_sv))
+            : new ObjectValue(vo_id, klass_sv);
 
         if (objects == nullptr) {
           objects = new GrowableArray<ScopeValue*>();

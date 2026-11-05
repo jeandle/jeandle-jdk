@@ -207,6 +207,8 @@ bool JeandleCompiler::initialize_commandline_options() {
     argv_string.push_back(JeandleDoPEA ? "-jeandle-pea=true" : "-jeandle-pea=false");
     argv_string.push_back(JeandleEliminateLocks ? "-jeandle-pea-eliminate-locks=true"
                                                 : "-jeandle-pea-eliminate-locks=false");
+    argv_string.push_back(JeandleOptBoxing ? "-jeandle-pea-opt-boxing=true"
+                                           : "-jeandle-pea-opt-boxing=false");
     if (Inline) {
       argv_string.push_back("-jeandle-inline=default");
     } else if (InlineAccessors) {

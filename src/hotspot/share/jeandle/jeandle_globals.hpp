@@ -83,6 +83,9 @@
   product(bool, JeandleEliminateLocks, true,                                \
           "Enable lock elimination in Jeandle PEA")                         \
                                                                             \
+  product(bool, JeandleOptBoxing, true,                                     \
+          "Enable boxing and unboxing elimination in Jeandle PEA")          \
+                                                                            \
   product(uintx, JeandleLoopStripMiningIter, 0,                             \
           "Number of iterations between safepoint polls in strip-mined "    \
           "counted loops (0 disables strip mining).")                       \

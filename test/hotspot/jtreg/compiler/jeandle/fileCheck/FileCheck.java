@@ -184,6 +184,35 @@ public class FileCheck {
         Asserts.assertTrue(found, "File check next: " + content);
     }
 
+    // Starting at the current cursor, require one pattern and reject another
+    // before reaching the end pattern. The end line is excluded from the
+    // checked range, and the cursor advances past it.
+    public void checkPatternAndNotPatternUntil(String requiredContent,
+                                               String forbiddenContent,
+                                               String endContent) {
+        Pattern requiredPattern = Pattern.compile(requiredContent.trim());
+        Pattern forbiddenPattern = Pattern.compile(forbiddenContent.trim());
+        Pattern endPattern = Pattern.compile(endContent.trim());
+        boolean foundRequired = false;
+        boolean foundForbidden = false;
+        boolean foundEnd = false;
+
+        while (this.lineIndex < lines.size()) {
+            String line = lines.get(this.lineIndex++);
+            if (endPattern.matcher(line).find()) {
+                foundEnd = true;
+                break;
+            }
+            foundRequired |= requiredPattern.matcher(line).find();
+            foundForbidden |= forbiddenPattern.matcher(line).find();
+        }
+
+        Asserts.assertTrue(foundEnd, "File check end: " + endContent);
+        Asserts.assertTrue(foundRequired, "File check: " + requiredContent);
+        Asserts.assertFalse(foundForbidden,
+                            "File check not: " + forbiddenContent);
+    }
+
     // Check whether the pattern isn't in the file.
     public void checkNotPattern(String content) {
         boolean found = false;

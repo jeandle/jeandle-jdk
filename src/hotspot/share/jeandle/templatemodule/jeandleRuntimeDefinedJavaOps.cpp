@@ -35,6 +35,9 @@
 
 #include "jeandle/__hotspotHeadersBegin__.hpp"
 #include "ci/ciUtilities.hpp"
+#include "classfile/symbolTable.hpp"
+#include "classfile/systemDictionary.hpp"
+#include "classfile/vmSymbols.hpp"
 #include "gc/g1/g1BarrierSetRuntime.hpp"
 #include "gc/g1/g1CardTable.hpp"
 #include "gc/g1/g1ThreadLocalData.hpp"
@@ -46,15 +49,21 @@
 #include "oops/array.hpp"
 #include "oops/compressedOops.inline.hpp"
 #include "oops/instanceKlass.hpp"
+#include "oops/instanceMirrorKlass.hpp"
 #include "classfile/javaClasses.hpp"
 #include "oops/klass.hpp"
 #include "oops/markWord.hpp"
 #include "oops/objArrayKlass.hpp"
 #include "oops/oop.hpp"
 #include "runtime/javaThread.hpp"
+#include "runtime/deoptimization.hpp"
+#include "runtime/fieldDescriptor.hpp"
+#include "runtime/fieldDescriptor.inline.hpp"
 #include "runtime/objectMonitor.hpp"
 #include "runtime/safepointMechanism.hpp"
 #include "runtime/sharedRuntime.hpp"
+
+#include <atomic>
 
 // All JavaOps are nounwind and gc-leaf-function by default. These attributes
 // are a paired Jeandle leaf contract: add them together, or remove them
@@ -113,6 +122,481 @@ DEF_JAVA_OP(current_thread, 0, llvm::PointerType::get(context, llvm::jeandle::Ad
                                                               llvm::PointerType::get(context, llvm::jeandle::AddrSpace::CHeapAddrSpace));
   ir_builder.CreateRet(current_thread_ptr);
 JAVA_OP_END
+
+// Wrapper unboxing JavaOp. The frontend passes the LLVM-side JBasicType wire
+// id and a non-null wrapper oop. Keeping the offset selection in this
+// runtime-defined body makes the JavaOp layout-sensitive while keeping the
+// semantic call visible until PEA has handled a virtual wrapper.
+DEF_JAVA_OP(unbox, 2, llvm::Type::getInt64Ty(context),
+            llvm::Type::getInt32Ty(context),
+            llvm::PointerType::get(context, llvm::jeandle::AddrSpace::JavaHeapAddrSpace))
+  llvm::Value* kind = func->getArg(0);
+  llvm::Value* box = func->getArg(1);
+
+  llvm::BasicBlock* default_block = llvm::BasicBlock::Create(context, "unbox.invalid", func);
+  llvm::BasicBlock* done_block = llvm::BasicBlock::Create(context, "unbox.done", func);
+  llvm::PHINode* result = llvm::PHINode::Create(llvm::Type::getInt64Ty(context), 8,
+                                                 "unbox.result", done_block);
+  llvm::SwitchInst* dispatch = ir_builder.CreateSwitch(kind, default_block, 8);
+
+  auto emit_case = [&](int case_id, BasicType type, int offset,
+                       bool sign_extend, bool floating) {
+    llvm::BasicBlock* block = llvm::BasicBlock::Create(
+        context, "unbox.case", func);
+    dispatch->addCase(llvm::ConstantInt::get(llvm::Type::getInt32Ty(context), case_id),
+                      block);
+    llvm::IRBuilder<> case_builder(block);
+    llvm::Type* memory_type = nullptr;
+    switch (type) {
+      case T_BOOLEAN:
+      case T_BYTE:   memory_type = case_builder.getInt8Ty(); break;
+      case T_CHAR:
+      case T_SHORT:  memory_type = case_builder.getInt16Ty(); break;
+      case T_INT:    memory_type = case_builder.getInt32Ty(); break;
+      case T_LONG:   memory_type = case_builder.getInt64Ty(); break;
+      case T_FLOAT:  memory_type = case_builder.getFloatTy(); break;
+      case T_DOUBLE: memory_type = case_builder.getDoubleTy(); break;
+      default:       ShouldNotReachHere();
+    }
+    llvm::Value* address = case_builder.CreateInBoundsGEP(
+        case_builder.getInt8Ty(), box,
+        case_builder.getInt32(offset), "unbox.value.address");
+    llvm::Value* loaded = case_builder.CreateLoad(memory_type, address,
+                                                  "unbox.value");
+    llvm::Value* encoded = nullptr;
+    if (floating) {
+      llvm::Type* bits_type = type == T_FLOAT
+          ? case_builder.getInt32Ty() : case_builder.getInt64Ty();
+      llvm::Value* bits = case_builder.CreateBitCast(loaded, bits_type,
+                                                     "unbox.bits");
+      encoded = type == T_FLOAT
+          ? case_builder.CreateZExt(bits, case_builder.getInt64Ty(),
+                                    "unbox.float.bits64")
+          : bits;
+    } else if (type == T_LONG) {
+      encoded = loaded;
+    } else if (sign_extend) {
+      encoded = case_builder.CreateSExt(loaded, case_builder.getInt64Ty(),
+                                        "unbox.sext");
+    } else {
+      encoded = case_builder.CreateZExt(loaded, case_builder.getInt64Ty(),
+                                        "unbox.zext");
+    }
+    result->addIncoming(encoded, block);
+    case_builder.CreateBr(done_block);
+  };
+
+  emit_case(0, T_BOOLEAN, java_lang_boxing_object::value_offset(T_BOOLEAN),
+            false, false);
+  emit_case(1, T_BYTE, java_lang_boxing_object::value_offset(T_BYTE),
+            true, false);
+  emit_case(2, T_CHAR, java_lang_boxing_object::value_offset(T_CHAR),
+            false, false);
+  emit_case(3, T_SHORT, java_lang_boxing_object::value_offset(T_SHORT),
+            true, false);
+  emit_case(4, T_INT, java_lang_boxing_object::value_offset(T_INT),
+            true, false);
+  emit_case(5, T_LONG, java_lang_boxing_object::value_offset(T_LONG),
+            true, false);
+  emit_case(6, T_FLOAT, java_lang_boxing_object::value_offset(T_FLOAT),
+            false, true);
+  emit_case(7, T_DOUBLE, java_lang_boxing_object::value_offset(T_DOUBLE),
+            false, true);
+
+  ir_builder.SetInsertPoint(default_block);
+  ir_builder.CreateUnreachable();
+  ir_builder.SetInsertPoint(done_block);
+  ir_builder.CreateRet(result);
+JAVA_OP_END
+
+// Generic wrapper boxing JavaOp. The semantic operation stays intact until
+// PEA. Escaping paths therefore retain the complete valueOf behavior:
+// Boolean uses TRUE/FALSE, integral wrappers use frontend-resolved cache
+// constants with a live-cache fallback, and Float/Double always allocate. The
+// first three operands remain the stable semantic ABI consumed by PEA; the
+// remaining operands only specialize post-PEA materialization.
+DEF_JAVA_OP(box, 2,
+            llvm::PointerType::get(context, llvm::jeandle::AddrSpace::JavaHeapAddrSpace),
+            llvm::Type::getInt32Ty(context),
+            llvm::PointerType::get(context, llvm::jeandle::AddrSpace::CHeapAddrSpace),
+            llvm::Type::getInt64Ty(context),
+            llvm::PointerType::get(context, llvm::jeandle::AddrSpace::JavaHeapAddrSpace),
+            llvm::PointerType::get(context, llvm::jeandle::AddrSpace::JavaHeapAddrSpace),
+            llvm::Type::getInt64Ty(context),
+            llvm::Type::getInt64Ty(context),
+            llvm::Type::getInt1Ty(context))
+  // DEF_JAVA_OP defaults to a nounwind gc-leaf operation. Boxing is different:
+  // its cache-miss path calls jeandle.new_instance and therefore must retain
+  // the normal JavaOp call semantics while PEA is still allowed to see it.
+  func->removeFnAttr(llvm::Attribute::NoUnwind);
+  func->removeFnAttr("gc-leaf-function");
+  func->addFnAttr("jeandle.not-guaranteed-safepoint");
+
+  llvm::Type* int8_type = llvm::Type::getInt8Ty(context);
+  llvm::Type* int16_type = llvm::Type::getInt16Ty(context);
+  llvm::Type* int32_type = llvm::Type::getInt32Ty(context);
+  llvm::Type* int64_type = llvm::Type::getInt64Ty(context);
+  llvm::PointerType* java_ptr =
+      llvm::PointerType::get(context, llvm::jeandle::AddrSpace::JavaHeapAddrSpace);
+  llvm::PointerType* c_heap_ptr =
+      llvm::PointerType::get(context, llvm::jeandle::AddrSpace::CHeapAddrSpace);
+  llvm::PointerType* narrow_ptr =
+      llvm::PointerType::get(context, llvm::jeandle::AddrSpace::NarrowOopAddrSpace);
+  llvm::Function* mirror_fn = template_module.getFunction("jeandle.load_mirror_from_klass");
+  llvm::Function* layout_fn = template_module.getFunction("jeandle.layout_helper");
+  llvm::Function* new_fn = template_module.getFunction("jeandle.new_instance");
+  if (mirror_fn == nullptr || layout_fn == nullptr || new_fn == nullptr) {
+    RuntimeDefinedJavaOps::set_failed("boxing JavaOp dependencies are missing");
+    return;
+  }
+
+  llvm::IRBuilder<> &builder = ir_builder;
+  llvm::Value* kind = func->getArg(0);
+  llvm::Value* wrapper_klass = func->getArg(1);
+  llvm::Value* raw_value = func->getArg(2);
+  llvm::Value* profiled_cache_or_true = func->getArg(3);
+  llvm::Value* profiled_false = func->getArg(4);
+  llvm::Value* profiled_cache_low = func->getArg(5);
+  llvm::Value* profiled_cache_length = func->getArg(6);
+  llvm::Value* has_profiled_cache = func->getArg(7);
+  auto load_global_i32 = [&](llvm::IRBuilder<>& b, const char* name) {
+    llvm::GlobalVariable* global = template_module.getGlobalVariable(name, true);
+    assert(global != nullptr, "boxing global is missing");
+    return b.CreateLoad(llvm::Type::getInt32Ty(context), global, name);
+  };
+  auto load_oop = [&](llvm::IRBuilder<>& b,
+                      llvm::Value* address,
+                      const char* name) -> llvm::Value* {
+    if (UseCompressedOops) {
+      llvm::LoadInst* narrow = b.CreateLoad(
+          narrow_ptr, address, llvm::Twine(name) + ".narrow");
+      return b.CreateAddrSpaceCast(
+          narrow, java_ptr, llvm::Twine(name) + ".addrspacecast");
+    }
+    return b.CreateLoad(java_ptr, address, llvm::Twine(name) + ".wide");
+  };
+  auto load_static_ref = [&](llvm::IRBuilder<>& b,
+                             const char* klass_name,
+                             const char* offset_name) -> llvm::Value* {
+    llvm::GlobalVariable* klass_global =
+        template_module.getGlobalVariable(klass_name, true);
+    assert(klass_global != nullptr, "boxing class global is missing");
+    llvm::Value* klass_raw = b.CreateLoad(int64_type, klass_global);
+    llvm::Value* klass = b.CreateIntToPtr(klass_raw, c_heap_ptr);
+    llvm::CallInst* mirror = b.CreateCall(mirror_fn, {klass});
+    mirror->setCallingConv(llvm::CallingConv::Hotspot_JIT);
+    llvm::Value* offset = load_global_i32(b, offset_name);
+    llvm::Value* address = b.CreateInBoundsGEP(
+        int8_type, mirror, offset, "box.static.ref.address");
+    return load_oop(b, address, "box.static.ref");
+  };
+  auto load_static_int = [&](llvm::IRBuilder<>& b,
+                             const char* klass_name,
+                             const char* offset_name,
+                             const char* value_name) -> llvm::Value* {
+    llvm::GlobalVariable* klass_global =
+        template_module.getGlobalVariable(klass_name, true);
+    assert(klass_global != nullptr, "boxing class global is missing");
+    llvm::Value* klass_raw = b.CreateLoad(int64_type, klass_global);
+    llvm::Value* klass = b.CreateIntToPtr(klass_raw, c_heap_ptr);
+    llvm::CallInst* mirror = b.CreateCall(mirror_fn, {klass});
+    mirror->setCallingConv(llvm::CallingConv::Hotspot_JIT);
+    llvm::Value* offset = load_global_i32(b, offset_name);
+    llvm::Value* address = b.CreateInBoundsGEP(
+        int8_type, mirror, offset, llvm::Twine(value_name) + ".address");
+    llvm::Value* value = b.CreateLoad(int32_type, address, value_name);
+    return b.CreateSExt(value, int64_type, llvm::Twine(value_name) + ".i64");
+  };
+  auto load_payload = [&](llvm::IRBuilder<>& b,
+                          llvm::Value* object,
+                          BasicType payload_type) -> llvm::Value* {
+    llvm::Value* address = b.CreateInBoundsGEP(
+        int8_type, object,
+        b.getInt32(java_lang_boxing_object::value_offset(payload_type)));
+    llvm::Value* loaded = nullptr;
+    switch (payload_type) {
+      case T_BYTE:
+        loaded = b.CreateLoad(int8_type, address);
+        return b.CreateSExt(loaded, int64_type);
+      case T_CHAR:
+        loaded = b.CreateLoad(int16_type, address);
+        return b.CreateZExt(loaded, int64_type);
+      case T_SHORT:
+        loaded = b.CreateLoad(int16_type, address);
+        return b.CreateSExt(loaded, int64_type);
+      case T_INT:
+        loaded = b.CreateLoad(int32_type, address);
+        return b.CreateSExt(loaded, int64_type);
+      case T_LONG:
+        return b.CreateLoad(int64_type, address);
+      default:
+        ShouldNotReachHere();
+        return llvm::PoisonValue::get(int64_type);
+    }
+  };
+  auto store_payload = [&](llvm::IRBuilder<>& b,
+                           llvm::Value* object,
+                           BasicType payload_type) {
+    llvm::Value* address = b.CreateInBoundsGEP(
+        int8_type, object,
+        b.getInt32(java_lang_boxing_object::value_offset(payload_type)));
+    switch (payload_type) {
+      case T_BOOLEAN:
+      case T_BYTE:
+        b.CreateStore(b.CreateTrunc(raw_value, int8_type), address);
+        break;
+      case T_CHAR:
+      case T_SHORT:
+        b.CreateStore(b.CreateTrunc(raw_value, int16_type), address);
+        break;
+      case T_INT:
+        b.CreateStore(b.CreateTrunc(raw_value, int32_type), address);
+        break;
+      case T_LONG:
+        b.CreateStore(raw_value, address);
+        break;
+      case T_FLOAT: {
+        llvm::Value* bits = b.CreateTrunc(raw_value, int32_type);
+        b.CreateStore(b.CreateBitCast(bits, llvm::Type::getFloatTy(context)),
+                      address);
+        break;
+      }
+      case T_DOUBLE:
+        b.CreateStore(b.CreateBitCast(raw_value, llvm::Type::getDoubleTy(context)),
+                      address);
+        break;
+      default:
+        ShouldNotReachHere();
+    }
+  };
+  auto emit_allocation = [&](llvm::IRBuilder<>& b,
+                             BasicType payload_type) -> llvm::Value* {
+    llvm::CallInst* layout = b.CreateCall(layout_fn, {wrapper_klass});
+    layout->setCallingConv(llvm::CallingConv::Hotspot_JIT);
+    llvm::Value* size = b.CreateAnd(layout, b.getInt32(-2), "box.size");
+    llvm::Value* slow = b.CreateICmpNE(
+        b.CreateAnd(layout, b.getInt32(1)), b.getInt32(0), "box.slow");
+    llvm::CallInst* object = b.CreateCall(
+        new_fn, {wrapper_klass, size, slow},
+        {create_empty_deopt_bundle()});
+    object->setCallingConv(llvm::CallingConv::Hotspot_JIT);
+    store_payload(b, object, payload_type);
+    // The wrapper payload is part of object initialization. Publish it after
+    // both fast and slow allocation paths instead of letting new_instance's
+    // fast-path barrier run before this store.
+    b.CreateFence(llvm::AtomicOrdering::Release);
+    return object;
+  };
+
+  llvm::BasicBlock* invalid = llvm::BasicBlock::Create(context, "box.invalid", func);
+  llvm::BasicBlock* done = llvm::BasicBlock::Create(context, "box.done", func);
+  llvm::PHINode* result = llvm::PHINode::Create(java_ptr, 8, "box.result", done);
+  llvm::SwitchInst* dispatch = builder.CreateSwitch(kind, invalid, 8);
+
+  auto emit_uncached_case = [&](int case_id, BasicType payload_type) {
+    llvm::BasicBlock* block =
+        llvm::BasicBlock::Create(context, "box.uncached", func);
+    dispatch->addCase(llvm::cast<llvm::ConstantInt>(
+        llvm::ConstantInt::get(int32_type, case_id)), block);
+    llvm::IRBuilder<> b(block);
+    llvm::Value* object = emit_allocation(b, payload_type);
+    b.CreateBr(done);
+    result->addIncoming(object, block);
+  };
+  auto emit_boolean_case = [&]() {
+    llvm::BasicBlock* block =
+        llvm::BasicBlock::Create(context, "box.boolean", func);
+    llvm::BasicBlock* constant_block =
+        llvm::BasicBlock::Create(context, "box.boolean.constant", func);
+    llvm::BasicBlock* dynamic_block =
+        llvm::BasicBlock::Create(context, "box.boolean.dynamic", func);
+    dispatch->addCase(llvm::cast<llvm::ConstantInt>(
+        llvm::ConstantInt::get(int32_type, 0)), block);
+    llvm::IRBuilder<> b(block);
+    b.CreateCondBr(has_profiled_cache, constant_block, dynamic_block);
+
+    llvm::IRBuilder<> constant_builder(constant_block);
+    llvm::Value* constant_is_true = constant_builder.CreateICmpNE(
+        raw_value, constant_builder.getInt64(0));
+    llvm::Value* constant_object = constant_builder.CreateSelect(
+        constant_is_true, profiled_cache_or_true, profiled_false);
+    constant_builder.CreateBr(done);
+    result->addIncoming(constant_object, constant_block);
+
+    llvm::IRBuilder<> dynamic_builder(dynamic_block);
+    llvm::Value* true_object = load_static_ref(
+        dynamic_builder, "jeandle.box.Boolean.klass",
+        "jeandle.box.Boolean.true_offset");
+    llvm::Value* false_object = load_static_ref(
+        dynamic_builder, "jeandle.box.Boolean.klass",
+        "jeandle.box.Boolean.false_offset");
+    llvm::Value* dynamic_is_true = dynamic_builder.CreateICmpNE(
+        raw_value, dynamic_builder.getInt64(0));
+    llvm::Value* dynamic_object = dynamic_builder.CreateSelect(
+        dynamic_is_true, true_object, false_object);
+    dynamic_builder.CreateBr(done);
+    result->addIncoming(dynamic_object, dynamic_block);
+  };
+  auto emit_cached_case = [&](int case_id,
+                              BasicType payload_type,
+                              const char* klass_name,
+                              const char* offset_name,
+                              const char* low_offset_name,
+                              const char* high_offset_name) {
+    llvm::BasicBlock* block =
+        llvm::BasicBlock::Create(context, "box.cached", func);
+    llvm::BasicBlock* constant_metadata =
+        llvm::BasicBlock::Create(context, "box.cache.constant", func);
+    llvm::BasicBlock* dynamic_metadata =
+        llvm::BasicBlock::Create(context, "box.cache.dynamic", func);
+    llvm::BasicBlock* check =
+        llvm::BasicBlock::Create(context, "box.cache.check", func);
+    llvm::BasicBlock* hit =
+        llvm::BasicBlock::Create(context, "box.cache_hit", func);
+    llvm::BasicBlock* miss =
+        llvm::BasicBlock::Create(context, "box.cache_miss", func);
+    dispatch->addCase(llvm::cast<llvm::ConstantInt>(
+        llvm::ConstantInt::get(int32_type, case_id)), block);
+    llvm::IRBuilder<> b(block);
+    b.CreateCondBr(has_profiled_cache, constant_metadata, dynamic_metadata);
+
+    llvm::IRBuilder<> constant_builder(constant_metadata);
+    constant_builder.CreateBr(check);
+
+    llvm::IRBuilder<> dynamic_builder(dynamic_metadata);
+    llvm::Value* dynamic_cache =
+        load_static_ref(dynamic_builder, klass_name, offset_name);
+    llvm::Value* dynamic_low = nullptr;
+    llvm::Value* dynamic_length = nullptr;
+    if (low_offset_name != nullptr) {
+      assert(high_offset_name != nullptr, "both Integer cache bounds required");
+      dynamic_low = load_static_int(
+          dynamic_builder, klass_name, low_offset_name, "box.cache.low");
+      llvm::Value* dynamic_high = load_static_int(
+          dynamic_builder, klass_name, high_offset_name, "box.cache.high");
+      dynamic_length = dynamic_builder.CreateAdd(
+          dynamic_builder.CreateSub(dynamic_high, dynamic_low),
+          dynamic_builder.getInt64(1), "box.cache.length");
+    } else {
+      assert(high_offset_name == nullptr, "both Integer cache bounds required");
+      llvm::Value* dynamic_base = dynamic_builder.CreateInBoundsGEP(
+          int8_type, dynamic_cache,
+          load_global_i32(dynamic_builder,
+                          "arrayOopDesc.base_offset_in_bytes.object"));
+      llvm::Value* first =
+          load_oop(dynamic_builder, dynamic_base, "box.cache.first");
+      dynamic_low = load_payload(dynamic_builder, first, payload_type);
+      llvm::Value* length_offset =
+          load_global_i32(dynamic_builder,
+                          "arrayOopDesc.length_offset_in_bytes");
+      llvm::Value* length_address = dynamic_builder.CreateInBoundsGEP(
+          int8_type, dynamic_cache, length_offset,
+          "box.cache.length.address");
+      llvm::Value* length_value =
+          dynamic_builder.CreateLoad(int32_type, length_address,
+                                     "box.cache.length");
+      dynamic_length = dynamic_builder.CreateZExt(length_value, int64_type);
+    }
+    dynamic_builder.CreateBr(check);
+
+    llvm::IRBuilder<> check_builder(check);
+    llvm::PHINode* cache = check_builder.CreatePHI(java_ptr, 2, "box.cache");
+    cache->addIncoming(profiled_cache_or_true, constant_metadata);
+    cache->addIncoming(dynamic_cache, dynamic_metadata);
+    llvm::PHINode* low = check_builder.CreatePHI(
+        int64_type, 2, "box.cache.low");
+    low->addIncoming(profiled_cache_low, constant_metadata);
+    low->addIncoming(dynamic_low, dynamic_metadata);
+    llvm::PHINode* length = check_builder.CreatePHI(
+        int64_type, 2, "box.cache.length");
+    length->addIncoming(profiled_cache_length, constant_metadata);
+    length->addIncoming(dynamic_length, dynamic_metadata);
+    llvm::Value* base = check_builder.CreateInBoundsGEP(
+        int8_type, cache,
+        load_global_i32(check_builder,
+                        "arrayOopDesc.base_offset_in_bytes.object"));
+    llvm::Value* index = nullptr;
+    llvm::Value* in_cache = nullptr;
+    if (payload_type == T_BYTE || payload_type == T_CHAR ||
+        payload_type == T_SHORT || payload_type == T_INT) {
+      // Keep byte, char, short, and int cache indexes in their Java
+      // computational type. The semantic ABI carries the payload in i64, but
+      // widening these operations creates avoidable extensions on the
+      // cache-hit hot path.
+      llvm::Value* narrow_raw = check_builder.CreateTrunc(
+          raw_value, int32_type, "box.cache.raw.i32");
+      llvm::Value* narrow_low = check_builder.CreateTrunc(
+          low, int32_type, "box.cache.low.i32");
+      llvm::Value* narrow_length = check_builder.CreateTrunc(
+          length, int32_type, "box.cache.length.i32");
+      llvm::Value* narrow_index = check_builder.CreateSub(
+          narrow_raw, narrow_low, "box.cache.index.i32");
+      in_cache = check_builder.CreateICmpULT(
+          narrow_index, narrow_length, "box.cache.in_range");
+      index = check_builder.CreateZExt(
+          narrow_index, int64_type, "box.cache.index");
+    } else {
+      index = check_builder.CreateSub(
+          raw_value, low, "box.cache.index");
+    }
+    // One unsigned comparison covers both bounds: values below low wrap to a
+    // value at least as large as the non-negative cache length.
+    if (case_id == 1) {
+      // Every canonical byte is cached. The frontend's raw-byte guard proves
+      // that raw_value is the sign extension of an actual byte, so no range
+      // branch or allocation path is needed.
+      check_builder.CreateBr(hit);
+    } else {
+      if (in_cache == nullptr) {
+        in_cache = check_builder.CreateICmpULT(
+            index, length, "box.cache.in_range");
+      }
+      check_builder.CreateCondBr(in_cache, hit, miss);
+    }
+
+    llvm::IRBuilder<> hit_builder(hit);
+    llvm::Value* element_size = hit_builder.CreateSExt(
+        load_global_i32(hit_builder, "heapOopSize"), int64_type);
+    llvm::Value* byte_offset = hit_builder.CreateMul(index, element_size);
+    llvm::Value* element_address = hit_builder.CreateInBoundsGEP(
+        int8_type, base, byte_offset);
+    llvm::Value* cached_object =
+        load_oop(hit_builder, element_address, "box.cache.element");
+    hit_builder.CreateBr(done);
+    result->addIncoming(cached_object, hit);
+
+    if (case_id != 1) {
+      llvm::IRBuilder<> miss_builder(miss);
+      llvm::Value* allocated = emit_allocation(miss_builder, payload_type);
+      miss_builder.CreateBr(done);
+      result->addIncoming(allocated, miss);
+    } else {
+      new llvm::UnreachableInst(context, miss);
+    }
+  };
+
+  emit_boolean_case();
+  emit_cached_case(1, T_BYTE, "jeandle.box.ByteCache.klass",
+                   "jeandle.box.ByteCache.cache_offset", nullptr, nullptr);
+  emit_cached_case(2, T_CHAR, "jeandle.box.CharacterCache.klass",
+                   "jeandle.box.CharacterCache.cache_offset", nullptr, nullptr);
+  emit_cached_case(3, T_SHORT, "jeandle.box.ShortCache.klass",
+                   "jeandle.box.ShortCache.cache_offset", nullptr, nullptr);
+  emit_cached_case(4, T_INT, "jeandle.box.IntegerCache.klass",
+                   "jeandle.box.IntegerCache.cache_offset",
+                   "jeandle.box.IntegerCache.low_offset",
+                   "jeandle.box.IntegerCache.high_offset");
+  emit_cached_case(5, T_LONG, "jeandle.box.LongCache.klass",
+                   "jeandle.box.LongCache.cache_offset", nullptr, nullptr);
+  emit_uncached_case(6, T_FLOAT);
+  emit_uncached_case(7, T_DOUBLE);
+
+  builder.SetInsertPoint(invalid);
+  builder.CreateUnreachable();
+  builder.SetInsertPoint(done);
+  builder.CreateRet(result);
+JAVA_OP_END
+
 
 DEF_JAVA_OP(membar_cpuorder, 1, llvm::Type::getVoidTy(context))
   // C2's MemBarCPUOrder only prevents compiler movement; it has no hardware
@@ -663,6 +1147,32 @@ DEF_JAVA_OP(post_barrier, 9, llvm::Type::getVoidTy(context),
   ir_builder.CreateRetVoid();
 JAVA_OP_END
 
+// Load the java.lang.Class mirror rooted in a non-null Klass::_java_mirror
+// OopHandle. Boxing uses this to read initialized wrapper cache fields.
+DEF_JAVA_OP(load_mirror_from_klass, 2,
+            llvm::PointerType::get(context, llvm::jeandle::AddrSpace::JavaHeapAddrSpace),
+            llvm::PointerType::get(context, llvm::jeandle::AddrSpace::CHeapAddrSpace))
+  llvm::Value* klass = func->getArg(0);
+  llvm::GlobalVariable* mirror_offset_gv =
+      template_module.getGlobalVariable("Klass.java_mirror_offset", /*AllowInternal=*/true);
+  if (!mirror_offset_gv) {
+    RuntimeDefinedJavaOps::set_failed("Klass.java_mirror_offset global not found in template module");
+    return;
+  }
+
+  llvm::Value* mirror_offset =
+      ir_builder.CreateLoad(ir_builder.getInt32Ty(), mirror_offset_gv);
+  llvm::Value* oop_handle_addr =
+      ir_builder.CreateInBoundsGEP(ir_builder.getInt8Ty(), klass, mirror_offset);
+  llvm::Type* c_heap_ptr_ty =
+      llvm::PointerType::get(context, llvm::jeandle::AddrSpace::CHeapAddrSpace);
+  llvm::Value* oop_handle = ir_builder.CreateLoad(c_heap_ptr_ty, oop_handle_addr);
+  llvm::Type* mirror_ty =
+      llvm::PointerType::get(context, llvm::jeandle::AddrSpace::JavaHeapAddrSpace);
+  llvm::Value* mirror = ir_builder.CreateLoad(mirror_ty, oop_handle);
+  ir_builder.CreateRet(mirror);
+JAVA_OP_END
+
 // Object.getClass(): load the java.lang.Class mirror for an object.
 // Two-level load via the OopHandle stored in Klass::_java_mirror:
 //   1. Load klass from object header (jeandle.load_klass).
@@ -1087,6 +1597,165 @@ static inline void insert_patch_size_metadata(
 
 } // anonymous namespace
 
+namespace {
+
+enum BoxMetadataKind : uint8_t {
+  BoxMetadataBoolean = 0,
+  BoxMetadataByteCache,
+  BoxMetadataCharacterCache,
+  BoxMetadataShortCache,
+  BoxMetadataIntegerCache,
+  BoxMetadataLongCache,
+  BoxMetadataKindCount
+};
+
+enum BoxMetadataState : uint8_t {
+  BoxMetadataUnseen = 0,
+  BoxMetadataInitializing,
+  BoxMetadataReady
+};
+
+struct BoxMetadataValues {
+  uintptr_t klass;
+  int32_t offset0;
+  int32_t offset1;
+  int32_t offset2;
+};
+
+// Cache classes are initialized lazily. Keep successful lookups for the rest
+// of the VM lifetime, but do not permanently remember an unsuccessful lookup:
+// a later valueOf call may have initialized the cache class.
+std::atomic<uint8_t> box_metadata_states[BoxMetadataKindCount];
+BoxMetadataValues box_metadata_values[BoxMetadataKindCount];
+
+bool query_box_metadata(BoxMetadataKind kind, BoxMetadataValues& values) {
+  Symbol* klass_name = nullptr;
+  Symbol* signature0 = nullptr;
+  Symbol* signature1 = nullptr;
+  Symbol* signature2 = nullptr;
+  const char* field_name0 = nullptr;
+  const char* field_name1 = nullptr;
+  const char* field_name2 = nullptr;
+
+  switch (kind) {
+    case BoxMetadataBoolean:
+      klass_name = vmSymbols::java_lang_Boolean();
+      signature0 = vmSymbols::java_lang_Boolean_signature();
+      signature1 = vmSymbols::java_lang_Boolean_signature();
+      field_name0 = "TRUE";
+      field_name1 = "FALSE";
+      break;
+    case BoxMetadataByteCache:
+      klass_name = vmSymbols::java_lang_Byte_ByteCache();
+      signature0 = vmSymbols::java_lang_Byte_array_signature();
+      field_name0 = "cache";
+      break;
+    case BoxMetadataCharacterCache:
+      klass_name = vmSymbols::java_lang_Character_CharacterCache();
+      signature0 = vmSymbols::java_lang_Character_array_signature();
+      field_name0 = "cache";
+      break;
+    case BoxMetadataShortCache:
+      klass_name = vmSymbols::java_lang_Short_ShortCache();
+      signature0 = vmSymbols::java_lang_Short_array_signature();
+      field_name0 = "cache";
+      break;
+    case BoxMetadataIntegerCache:
+      klass_name = vmSymbols::java_lang_Integer_IntegerCache();
+      signature0 = vmSymbols::java_lang_Integer_array_signature();
+      signature1 = vmSymbols::int_signature();
+      signature2 = vmSymbols::int_signature();
+      field_name0 = "cache";
+      field_name1 = "low";
+      field_name2 = "high";
+      break;
+    case BoxMetadataLongCache:
+      klass_name = vmSymbols::java_lang_Long_LongCache();
+      signature0 = vmSymbols::java_lang_Long_array_signature();
+      field_name0 = "cache";
+      break;
+    default:
+      return false;
+  }
+
+  InstanceKlass* klass = SystemDictionary::find_instance_klass(
+      Thread::current(), klass_name, Handle(), Handle());
+  if (klass == nullptr || !klass->is_initialized()) {
+    return false;
+  }
+
+  auto find_offset = [&](const char* field_name, Symbol* signature,
+                         int32_t& offset) {
+    TempNewSymbol field_symbol = SymbolTable::new_symbol(field_name);
+    fieldDescriptor field;
+    if (klass->find_field(field_symbol, signature, true, &field) == nullptr) {
+      return false;
+    }
+    offset = field.offset();
+    return true;
+  };
+
+  if (!find_offset(field_name0, signature0, values.offset0)) {
+    return false;
+  }
+  values.offset1 = 0;
+  if (field_name1 != nullptr &&
+      !find_offset(field_name1, signature1, values.offset1)) {
+    return false;
+  }
+  values.offset2 = 0;
+  if (field_name2 != nullptr &&
+      !find_offset(field_name2, signature2, values.offset2)) {
+    return false;
+  }
+  values.klass = reinterpret_cast<uintptr_t>(klass);
+  return true;
+}
+
+bool get_box_metadata(BoxMetadataKind kind, BoxMetadataValues& values) {
+  std::atomic<uint8_t>& state = box_metadata_states[kind];
+  if (state.load(std::memory_order_acquire) == BoxMetadataReady) {
+    values = box_metadata_values[kind];
+    return true;
+  }
+
+  uint8_t expected = BoxMetadataUnseen;
+  if (!state.compare_exchange_strong(expected, BoxMetadataInitializing,
+                                     std::memory_order_acq_rel,
+                                     std::memory_order_acquire)) {
+    // Another compiler thread is resolving this kind. It is safe for this
+    // compilation to use the template's zero marker; a later compilation
+    // will observe the published result.
+    return false;
+  }
+
+  BoxMetadataValues resolved{};
+  if (!query_box_metadata(kind, resolved)) {
+    // Do not cache the negative result: lazy cache initialization can make a
+    // later compilation eligible for semantic boxing.
+    state.store(BoxMetadataUnseen, std::memory_order_release);
+    return false;
+  }
+
+  box_metadata_values[kind] = resolved;
+  state.store(BoxMetadataReady, std::memory_order_release);
+  values = resolved;
+  return true;
+}
+
+void set_box_metadata_global(llvm::Module& module,
+                             const char* name,
+                             llvm::Type* type,
+                             uint64_t value) {
+  llvm::GlobalVariable* global =
+      module.getGlobalVariable(name, /*AllowInternal=*/true);
+  guarantee(global != nullptr, "boxing metadata global is missing: %s", name);
+  global->setInitializer(llvm::ConstantInt::get(type, value));
+  global->setConstant(true);
+}
+
+} // anonymous namespace
+
 const char* RuntimeDefinedJavaOps::_error_msg = nullptr;
 
 bool RuntimeDefinedJavaOps::define_all(llvm::Module& template_module) {
@@ -1108,6 +1777,7 @@ bool RuntimeDefinedJavaOps::define_all(llvm::Module& template_module) {
   define_card_table_barrier(template_module);
   define_pre_barrier(template_module);
   define_post_barrier(template_module);
+  define_load_mirror_from_klass(template_module);
   define_get_class(template_module);
   define_current_thread_obj(template_module);
   define_reference_refers_to(template_module);
@@ -1117,9 +1787,62 @@ bool RuntimeDefinedJavaOps::define_all(llvm::Module& template_module) {
   define_encode_klass(template_module);
   define_decode_klass(template_module);
   define_hashcode_fast(template_module);
+  define_unbox(template_module);
+  define_box(template_module);
   define_clone_payload(template_module);
 
   return failed();
+}
+
+void RuntimeDefinedJavaOps::refresh_boxing_metadata(llvm::Module& target_module) {
+  llvm::LLVMContext& context = target_module.getContext();
+  llvm::Type* int32_type = llvm::Type::getInt32Ty(context);
+  llvm::Type* int64_type = llvm::Type::getInt64Ty(context);
+
+  auto refresh = [&](BoxMetadataKind kind,
+                     const char* klass_global,
+                     const char* offset0_global,
+                     const char* offset1_global = nullptr,
+                     const char* offset2_global = nullptr) {
+    BoxMetadataValues values{};
+    if (!get_box_metadata(kind, values)) {
+      return;
+    }
+    set_box_metadata_global(target_module, klass_global, int64_type,
+                            static_cast<uint64_t>(values.klass));
+    set_box_metadata_global(target_module, offset0_global, int32_type,
+                            static_cast<uint64_t>(values.offset0));
+    if (offset1_global != nullptr) {
+      set_box_metadata_global(target_module, offset1_global, int32_type,
+                              static_cast<uint64_t>(values.offset1));
+    }
+    if (offset2_global != nullptr) {
+      set_box_metadata_global(target_module, offset2_global, int32_type,
+                              static_cast<uint64_t>(values.offset2));
+    }
+  };
+
+  refresh(BoxMetadataBoolean,
+          "jeandle.box.Boolean.klass",
+          "jeandle.box.Boolean.true_offset",
+          "jeandle.box.Boolean.false_offset");
+  refresh(BoxMetadataByteCache,
+          "jeandle.box.ByteCache.klass",
+          "jeandle.box.ByteCache.cache_offset");
+  refresh(BoxMetadataCharacterCache,
+          "jeandle.box.CharacterCache.klass",
+          "jeandle.box.CharacterCache.cache_offset");
+  refresh(BoxMetadataShortCache,
+          "jeandle.box.ShortCache.klass",
+          "jeandle.box.ShortCache.cache_offset");
+  refresh(BoxMetadataIntegerCache,
+          "jeandle.box.IntegerCache.klass",
+          "jeandle.box.IntegerCache.cache_offset",
+          "jeandle.box.IntegerCache.low_offset",
+          "jeandle.box.IntegerCache.high_offset");
+  refresh(BoxMetadataLongCache,
+          "jeandle.box.LongCache.klass",
+          "jeandle.box.LongCache.cache_offset");
 }
 
 void RuntimeDefinedJavaOps::define_metadata(llvm::Module& template_module) {
@@ -1163,7 +1886,8 @@ void RuntimeDefinedJavaOps::define_global_variables(llvm::Module& template_modul
 
   // Define a global variable in template module.
   auto define_global = [&](const llvm::StringRef name, llvm::Type* type, uint64_t value) {
-    llvm::GlobalVariable* global_var = template_module.getGlobalVariable(name);
+    llvm::GlobalVariable* global_var =
+        template_module.getGlobalVariable(name, /*AllowInternal=*/true);
     assert(global_var && global_var->isDeclaration(), "unexpected declaration");
 
     global_var->setInitializer(llvm::ConstantInt::get(type, value));
@@ -1182,6 +1906,87 @@ void RuntimeDefinedJavaOps::define_global_variables(llvm::Module& template_modul
   define_global("DEBUG_MODE",                                       int1_type,  static_cast<uint64_t>(false));
 #endif
 
+  // The cache classes are not VM classes, so keep their metadata and static
+  // field offsets in the template as compile-time constants. Integer uses the
+  // live low/high fields because its CDS-restored backing array may be larger
+  // than the cache range selected for the current run. The other integral
+  // wrappers have fixed caches whose bounds are represented by their arrays.
+  auto define_box_static_field = [&](const char* klass_global,
+                                     const char* offset_global,
+                                     Symbol* klass_name,
+                                     Symbol* signature,
+                                     const char* field_name) -> bool {
+    InstanceKlass* klass = SystemDictionary::find_instance_klass(
+        Thread::current(), klass_name, Handle(), Handle());
+    auto define_zero_if_needed = [&](const char* name, llvm::Type* type) {
+      llvm::GlobalVariable* global =
+          template_module.getGlobalVariable(name, /*AllowInternal=*/true);
+      if (global != nullptr && global->isDeclaration())
+        define_global(name, type, 0);
+    };
+    if (klass == nullptr || !klass->is_initialized()) {
+      // Cache classes can be initialized after the compiler template is
+      // created. Leave a safe zero marker; the frontend then rejects the
+      // semantic box and keeps the original valueOf invoke.
+      define_zero_if_needed(klass_global, int64_type);
+      define_zero_if_needed(offset_global, int32_type);
+      return false;
+    }
+    TempNewSymbol field_symbol = SymbolTable::new_symbol(field_name);
+    fieldDescriptor field;
+    if (klass->find_field(field_symbol, signature, true, &field) == nullptr) {
+      define_zero_if_needed(klass_global, int64_type);
+      define_zero_if_needed(offset_global, int32_type);
+      return false;
+    }
+    llvm::GlobalVariable* class_global =
+        template_module.getGlobalVariable(klass_global, /*AllowInternal=*/true);
+    if (class_global != nullptr && class_global->isDeclaration()) {
+      define_global(klass_global, int64_type,
+                    static_cast<uint64_t>(reinterpret_cast<uintptr_t>(klass)));
+    }
+    define_global(offset_global, int32_type,
+                  static_cast<uint64_t>(field.offset()));
+    return true;
+  };
+
+  define_box_static_field("jeandle.box.Boolean.klass",
+                          "jeandle.box.Boolean.true_offset",
+                          vmSymbols::java_lang_Boolean(),
+                          vmSymbols::java_lang_Boolean_signature(), "TRUE");
+  define_box_static_field("jeandle.box.Boolean.klass",
+                          "jeandle.box.Boolean.false_offset",
+                          vmSymbols::java_lang_Boolean(),
+                          vmSymbols::java_lang_Boolean_signature(), "FALSE");
+  define_box_static_field("jeandle.box.ByteCache.klass",
+                          "jeandle.box.ByteCache.cache_offset",
+                          vmSymbols::java_lang_Byte_ByteCache(),
+                          vmSymbols::java_lang_Byte_array_signature(), "cache");
+  define_box_static_field("jeandle.box.CharacterCache.klass",
+                          "jeandle.box.CharacterCache.cache_offset",
+                          vmSymbols::java_lang_Character_CharacterCache(),
+                          vmSymbols::java_lang_Character_array_signature(), "cache");
+  define_box_static_field("jeandle.box.ShortCache.klass",
+                          "jeandle.box.ShortCache.cache_offset",
+                          vmSymbols::java_lang_Short_ShortCache(),
+                          vmSymbols::java_lang_Short_array_signature(), "cache");
+  define_box_static_field("jeandle.box.IntegerCache.klass",
+                          "jeandle.box.IntegerCache.cache_offset",
+                          vmSymbols::java_lang_Integer_IntegerCache(),
+                          vmSymbols::java_lang_Integer_array_signature(), "cache");
+  define_box_static_field("jeandle.box.IntegerCache.klass",
+                          "jeandle.box.IntegerCache.low_offset",
+                          vmSymbols::java_lang_Integer_IntegerCache(),
+                          vmSymbols::int_signature(), "low");
+  define_box_static_field("jeandle.box.IntegerCache.klass",
+                          "jeandle.box.IntegerCache.high_offset",
+                          vmSymbols::java_lang_Integer_IntegerCache(),
+                          vmSymbols::int_signature(), "high");
+  define_box_static_field("jeandle.box.LongCache.klass",
+                          "jeandle.box.LongCache.cache_offset",
+                          vmSymbols::java_lang_Long_LongCache(),
+                          vmSymbols::java_lang_Long_array_signature(), "cache");
+
   define_global("KlassArray.base_offset_in_bytes",                  int32_type, static_cast<uint64_t>(Array<Klass*>::base_offset_in_bytes()));
   define_global("KlassArray.length_offset_in_bytes",                int32_type, static_cast<uint64_t>(Array<Klass*>::length_offset_in_bytes()));
   define_global("arrayOopDesc.length_offset_in_bytes",              int32_type, static_cast<uint64_t>(arrayOopDesc::length_offset_in_bytes()));
@@ -1198,6 +2003,7 @@ void RuntimeDefinedJavaOps::define_global_variables(llvm::Module& template_modul
   define_global("arrayOopDesc.base_offset_in_bytes.float",          int32_type, static_cast<uint64_t>(arrayOopDesc::base_offset_in_bytes(T_FLOAT)));
   define_global("arrayOopDesc.base_offset_in_bytes.double",         int32_type, static_cast<uint64_t>(arrayOopDesc::base_offset_in_bytes(T_DOUBLE)));
   define_global("arrayOopDesc.base_offset_in_bytes.object",         int32_type, static_cast<uint64_t>(arrayOopDesc::base_offset_in_bytes(T_OBJECT)));
+  define_global("heapOopSize",                                      int32_type, static_cast<uint64_t>(heapOopSize));
   // Per-element-type array element size in bytes. Same delivery model.
   define_global("arrayOopDesc.element_size.boolean",                int32_type, static_cast<uint64_t>(type2aelembytes(T_BOOLEAN)));
   define_global("arrayOopDesc.element_size.byte",                   int32_type, static_cast<uint64_t>(type2aelembytes(T_BYTE)));
@@ -1219,6 +2025,8 @@ void RuntimeDefinedJavaOps::define_global_variables(llvm::Module& template_modul
   define_global("InstanceKlass.fully_initialized",                  int8_type,  static_cast<uint64_t>(InstanceKlass::fully_initialized));
   define_global("oopDesc.klass_offset_in_bytes",                    int32_type, static_cast<uint64_t>(oopDesc::klass_offset_in_bytes()));
   define_global("oopDesc.mark_offset_in_bytes",                     int32_type, static_cast<uint64_t>(oopDesc::mark_offset_in_bytes()));
+  define_global("java_lang_boxing_object.value_offset",             int32_type, static_cast<uint64_t>(java_lang_boxing_object::value_offset(T_INT)));
+  define_global("java_lang_boxing_object.long_value_offset",        int32_type, static_cast<uint64_t>(java_lang_boxing_object::value_offset(T_LONG)));
   define_global("java_lang_ref_Reference.referent_offset",          int32_type, static_cast<uint64_t>(java_lang_ref_Reference::referent_offset()));
   define_global("java_lang_Class.klass_offset",                     int32_type, static_cast<uint64_t>(java_lang_Class::klass_offset()));
   define_global("java_lang_Class.array_klass_offset",               int32_type, static_cast<uint64_t>(java_lang_Class::array_klass_offset()));

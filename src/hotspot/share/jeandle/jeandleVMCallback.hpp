@@ -61,6 +61,7 @@ class JeandleVMCallback : public AllStatic {
   static uintptr_t array_element_klass(uintptr_t klass_ptr);
   static bool      is_value_based(uintptr_t klass_ptr);
   static int       is_boxed(uintptr_t klass_ptr);
+  static int       get_box_cache_status(uintptr_t klass_ptr, int64_t value);
   static bool      has_finalizer(uintptr_t klass_ptr);
   static bool      can_virtualize(uintptr_t klass_ptr);
 

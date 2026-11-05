@@ -42,14 +42,13 @@ class JeandleProfile : public StackObj {
   ciMethod*     _method;
   ciMethodData* _mdo;
 
-  // C2-compatible speculation failure gates. Keep them private so callers use
-  // devirtualization_at() as the single receiver-profile policy entry point.
+ public:
+  // C2-compatible speculation failure gates. Boxing uses the same policy for
+  // cache-hit speculation at a caller BCI.
   bool has_trap_at(int bci, Deoptimization::DeoptReason reason) const;
   bool has_too_many_traps(Deoptimization::DeoptReason reason) const;
   bool has_too_many_recompiles(int bci,
                                Deoptimization::DeoptReason reason) const;
-
- public:
   struct DevirtualizationInfo {
     ciKlass* receiver = nullptr;
     ciMethod* target = nullptr;

@@ -44,6 +44,7 @@ import java.lang.reflect.Method;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
+import java.util.Comparator;
 import java.util.List;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
@@ -161,23 +162,47 @@ public class TestDeoptLiveness {
     }
 
 
-    // The method's only uncommon_trap is the implicit null check on
-    // arr.length, which sits at a bci where x (%1) and y (%2) are already
-    // dead. Assert neither appears as a deopt argument anywhere in the IR.
-    private static void assertDeadParamsAbsentFromTrapDeopt(String dir, Method m,
-                                                            String... deadParams) throws Exception {
+    private static List<String> targetMethodBody(String dir, Method m) throws Exception {
         String prefix = m.getDeclaringClass().getName().replace('.', '_') + "_" + m.getName();
         Path ll;
         try (Stream<Path> s = Files.list(Paths.get(dir))) {
             ll = s.filter(p -> {
                     String n = p.getFileName().toString();
-                    return n.startsWith(prefix) && n.endsWith(".ll") && !n.endsWith("_optimized.ll");
-                }).findFirst().orElseThrow(() -> new RuntimeException("no pre-opt dump"));
+                    return n.startsWith(prefix) && n.endsWith(".ll")
+                            && !n.endsWith("_optimized.ll");
+                })
+                .max(Comparator.comparing(p -> p.getFileName().toString()))
+                .orElseThrow(() -> new RuntimeException("no pre-opt dump"));
         }
 
+        List<String> body = new java.util.ArrayList<>();
+        boolean inTarget = false;
+        boolean foundEnd = false;
+        for (String line : Files.readAllLines(ll)) {
+            if (!inTarget) {
+                inTarget = line.startsWith("define ") && line.contains(prefix);
+                if (!inTarget) continue;
+            }
+            body.add(line);
+            if (line.trim().equals("}")) {
+                foundEnd = true;
+                break;
+            }
+        }
+        if (!foundEnd) {
+            throw new RuntimeException("target function body is missing for " + m.getName());
+        }
+        return body;
+    }
+
+    // The method's only uncommon_trap is the implicit null check on
+    // arr.length, which sits at a bci where x (%1) and y (%2) are already
+    // dead. Assert neither appears in the target method's deopt arguments.
+    private static void assertDeadParamsAbsentFromTrapDeopt(String dir, Method m,
+                                                            String... deadParams) throws Exception {
         Pattern trapDeoptStart = Pattern.compile("call.*@llvm\\.experimental\\.deoptimize.*\\[\\s*\"deopt\"\\((.*?)\\)\\s*\\]");
         int trapsScanned = 0;
-        for (String line : Files.readAllLines(ll)) {
+        for (String line : targetMethodBody(dir, m)) {
             Matcher mm = trapDeoptStart.matcher(line);
             if (!mm.find()) continue;
             trapsScanned++;
@@ -201,20 +226,11 @@ public class TestDeoptLiveness {
     // index i for both, which this check would catch.
     private static void assertIllegalLocalSlots(String dir, Method m,
                                                 long... expectedIndices) throws Exception {
-        String prefix = m.getDeclaringClass().getName().replace('.', '_') + "_" + m.getName();
-        Path ll;
-        try (Stream<Path> s = Files.list(Paths.get(dir))) {
-            ll = s.filter(p -> {
-                    String n = p.getFileName().toString();
-                    return n.startsWith(prefix) && n.endsWith(".ll") && !n.endsWith("_optimized.ll");
-                }).findFirst().orElseThrow(() -> new RuntimeException("no pre-opt dump"));
-        }
-
         Pattern trapDeoptStart = Pattern.compile("call.*@llvm\\.experimental\\.deoptimize.*\\[\\s*\"deopt\"\\((.*?)\\)\\s*\\]");
         Pattern i64Const = Pattern.compile("i64 (-?\\d+)");
         List<Long> illegal = null;
         int trapsScanned = 0;
-        for (String line : Files.readAllLines(ll)) {
+        for (String line : targetMethodBody(dir, m)) {
             Matcher mm = trapDeoptStart.matcher(line);
             if (!mm.find()) continue;
             trapsScanned++;
