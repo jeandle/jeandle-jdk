@@ -57,10 +57,8 @@ public class TestRound {
         String dumpDir = Files.createTempDirectory("jeandle_test_round").toString();
         OutputAnalyzer output = runSubprocess(dumpDir, extraFlags);
         output.shouldHaveExitValue(0)
-              .shouldContain("TestRound PASSED")
-              .shouldMatch("ROUND_CPU_SUPPORTED=(true|false)");
-        boolean intrinsic = !disabled
-                && output.getOutput().contains("ROUND_CPU_SUPPORTED=true");
+              .shouldContain("TestRound PASSED");
+        boolean doubleSupported = output.getOutput().contains("ROUND_D_CPU_SUPPORTED=true");
 
         FileCheck intChecker = new FileCheck(dumpDir,
                 TestWrapper.class.getMethod("int_round", float.class), false);
@@ -68,25 +66,28 @@ public class TestRound {
         FileCheck longChecker = new FileCheck(dumpDir,
                 TestWrapper.class.getMethod("long_round", double.class), false);
         longChecker.checkPattern("define hotspotcc i64 .*TestRound.*long_round.*");
-        if (intrinsic) {
-            intChecker.check("call float @llvm.floor.f32");
+        if (!disabled) {
+            intChecker.check("bitcast float");
+            intChecker.check("ashr i32");
             intChecker.check("call i32 @llvm.fptosi.sat.i32.f32");
+            intChecker.checkNot("llvm.floor");
             intChecker.checkNot("java_lang_Math_round");
+            output.shouldContain("java.lang.Math.round(jfloat)` is parsed as intrinsic");
+        } else {
+            intChecker.checkPattern("(?:call|invoke) hotspotcc i32 .*java_lang_Math_round");
+            intChecker.checkNot("llvm.fptosi.sat");
+            output.shouldNotContain("java.lang.Math.round(jfloat)` is parsed as intrinsic");
+        }
+        if (!disabled && doubleSupported) {
             longChecker.check("call double @llvm.floor.f64");
             longChecker.check("call i64 @llvm.fptosi.sat.i64.f64");
             longChecker.checkNot("java_lang_Math_round");
-            output.shouldContain("java.lang.Math.round(jfloat)` is parsed as intrinsic")
-                  .shouldContain("java.lang.Math.round(jdouble)` is parsed as intrinsic");
+            output.shouldContain("java.lang.Math.round(jdouble)` is parsed as intrinsic");
         } else {
-            // Check the raw frontend call as well as the absence of the
-            // intrinsic: both flag and CPU gating must keep the Java fallback.
-            intChecker.checkPattern("(?:call|invoke) hotspotcc i32 .*java_lang_Math_round");
             longChecker.checkPattern("(?:call|invoke) hotspotcc i64 .*java_lang_Math_round");
-            intChecker.checkNot("llvm.floor");
-            intChecker.checkNot("llvm.fptosi.sat");
             longChecker.checkNot("llvm.floor");
             longChecker.checkNot("llvm.fptosi.sat");
-            output.shouldNotContain("java.lang.Math.round");
+            output.shouldNotContain("java.lang.Math.round(jdouble)` is parsed as intrinsic");
         }
     }
 
@@ -124,12 +125,10 @@ public class TestRound {
         }
 
         public static void main(String[] args) {
-            // Use the child VM's effective flag, including hardware detection
-            // and command-line overrides, just like cpu_supports_rounding().
-            boolean supported = !Platform.isX64()
+            boolean doubleSupported = !Platform.isX64()
                     || Integer.parseInt(ManagementFactory.getPlatformMXBean(
                             HotSpotDiagnosticMXBean.class).getVMOption("UseSSE").getValue()) >= 4;
-            System.out.println("ROUND_CPU_SUPPORTED=" + supported);
+            System.out.println("ROUND_D_CPU_SUPPORTED=" + doubleSupported);
 
             // --- ties round toward positive infinity ---
             checkF("round(2.5f) -> 3", 2.5f, 3);
@@ -220,7 +219,30 @@ public class TestRound {
             checkD("round(Double.MIN_VALUE) -> 0", Double.MIN_VALUE, 0L);
 
             // --- random values vs interpreted execution, compared exactly ---
-            Random random = new Random();
+            // Cover every exponent, including both sides of the guarded shift
+            // range, with significand edges and both signs.
+            int[] floatFractions = {0, 1, 0x003fffff, 0x00400000, 0x007ffffe, 0x007fffff};
+            for (int exponent = 0; exponent < 256; exponent++) {
+                for (int fraction : floatFractions) {
+                    for (int sign : new int[] {0, Integer.MIN_VALUE}) {
+                        float f = Float.intBitsToFloat(sign | (exponent << 23) | fraction);
+                        Asserts.assertEquals(int_round(f), ref_int_round(f),
+                                "float exponent " + exponent + " fraction " + fraction + " sign " + sign);
+                    }
+                }
+            }
+            long[] doubleFractions = {0, 1, 0x0007ffffffffffffL,
+                    0x0008000000000000L, 0x000ffffffffffffeL, 0x000fffffffffffffL};
+            for (int exponent = 0; exponent < 2048; exponent++) {
+                for (long fraction : doubleFractions) {
+                    for (long sign : new long[] {0, Long.MIN_VALUE}) {
+                        double d = Double.longBitsToDouble(sign | ((long) exponent << 52) | fraction);
+                        Asserts.assertEquals(long_round(d), ref_long_round(d),
+                                "double exponent " + exponent + " fraction " + fraction + " sign " + sign);
+                    }
+                }
+            }
+            Random random = new Random(0x662);
             for (int i = 0; i < 1000; i++) {
                 float f = randomFloat(random);
                 Asserts.assertEquals(int_round(f), ref_int_round(f),

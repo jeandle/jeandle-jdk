@@ -105,14 +105,6 @@ bool JeandleIntrinsicLowering::is_supported(vmIntrinsics::ID id) {
     case vmIntrinsics::_floor:
     case vmIntrinsics::_ceil:
     case vmIntrinsics::_rint:
-    // Math.round reuses llvm.floor for its exact tie decision (see
-    // lower_round), so it shares floor's dependency: without SSE4.1 x86 would
-    // lower every round into a floorf/floor libcall. There is no dedicated
-    // VM flag for these two IDs (no case in
-    // vmIntrinsics::disabled_by_jvm_flags()), so a user opt-out goes through
-    // -XX:DisableIntrinsic=_roundF,_roundD, which
-    // vmIntrinsics::is_disabled_by_flags() honors in try_lower_intrinsic().
-    case vmIntrinsics::_roundF:
     case vmIntrinsics::_roundD:
       return cpu_supports_rounding();
 
@@ -208,6 +200,10 @@ bool JeandleIntrinsicLowering::is_supported(vmIntrinsics::ID id) {
     // (see lower_signum). Gated by InlineMathNatives && UseSignumIntrinsic.
     case vmIntrinsics::_dsignum:
     case vmIntrinsics::_fsignum:
+
+    // Math.round(float) uses integer significand rounding and a saturating cast,
+    // neither of which requires SSE4.1. Opt-out uses DisableIntrinsic.
+    case vmIntrinsics::_roundF:
 
     // min/max: no CPU gating needed. llvm.smin/smax always lower to a
     // compare+select/cmov sequence and llvm.minimum/maximum always lower to
@@ -458,8 +454,8 @@ bool JeandleIntrinsicLowering::lower(vmIntrinsics::ID id, const ciMethod* target
     case vmIntrinsics::_fsignum:
       return lower_signum(id);
 
-    // Math.round: exact floor/select chain plus Java's saturating fp->int
-    // conversion (see lower_round).
+    // Math.round: exact ties toward +infinity and Java's saturating
+    // fp->int conversion (see lower_round).
     case vmIntrinsics::_roundF:
     case vmIntrinsics::_roundD:
       return lower_round(id);
@@ -1555,60 +1551,77 @@ bool JeandleIntrinsicLowering::lower_signum(vmIntrinsics::ID id) {
 }
 
 // ---- lower_round ----
-// Math.round(float)->int / Math.round(double)->long is specified as Java's
-// saturating floating-point-to-integer conversion of the exact mathematical
-// floor(a + 0.5) (ties toward +infinity): NaN converts to 0, out-of-range
-// values to MIN/MAX. Emitting the literal floor(a + 0.5) would be wrong,
-// because the addition rounds to the floating-point precision first and so
-// double-rounds whenever a + 0.5 crosses a binade boundary:
-//   Math.round(0.49999999999999994d) must be 0, but a + 0.5d rounds-to-even
-//   to 1.0d (the exact sum 1 - 2^-54 is the tie between 1.0d and its next
-//   lower neighbour);
-//   Math.round(8388609.0f) must be 8388609, but 8388609.0f + 0.5f
-//   rounds-to-even to 8388610.0f (ulp = 1 above 2^23).
-// The tie is therefore decided with exact operations only:
-//   t    = llvm.floor(a)     exact: IEEE floor is an exact operation
-//   frac = a - t             exact everywhere except a in (-0.5, 0): |a| >= 1
-//                            is Sterbenz' range (t lies within a factor of 2
-//                            of a), a in [0, 1) has t = 0, and a in [-1, -0.5]
-//                            has t = -1, also within a factor of 2 of a. In
-//                            the exceptional window the exact a + 1 already
-//                            exceeds 0.5 and rounding to nearest cannot move
-//                            it below the representable 0.5 (up to 1.0 at
-//                            most), so the compare below decides exactly.
-//   ge   = frac >= 0.5       ordered compare, so it is false for NaN and the
-//                            NaN falls through to the final conversion as 0
-//   t1   = t + 1.0           exact whenever this branch is taken: frac >= 0.5
-//                            implies ulp(a) <= 0.5 (a < 2^23 for f32,
-//                            a < 2^52 for f64), so the integer t + 1 is still
-//                            representable at that magnitude
-//   r    = ge ? t1 : t       the exact floor(a + 0.5) as a floating-point value
-//   res  = llvm.fptosi.sat.iN.fM(r)
-//                            Java's saturating NaN->0 integer conversion
+// For float, round the signed IEEE significand using the same integer algorithm as
+// java.lang.Math.round. Adding 0.5 in floating-point would double-round near
+// half-integers and at large magnitudes. A valid shift gives
+// ((signed_significand >> shift) + 1) >> 1, with ties toward +infinity.
+// Outside that range the value is tiny (rounds to zero), already integral,
+// or non-finite; Java's saturating cast handles all three cases exactly.
 bool JeandleIntrinsicLowering::lower_round(vmIntrinsics::ID id) {
   llvm::LLVMContext& ctx = *_interp->_context;
   llvm::IRBuilder<>& builder = _interp->_ir_builder;
-  bool is_double = (id == vmIntrinsics::_roundD);
-
-  llvm::Value* a = is_double ? _interp->_jvm->dpop() : _interp->_jvm->fpop();
-  llvm::Type* fp_ty = a->getType();
-  llvm::Type* int_ty = JeandleType::java2llvm(
-      is_double ? BasicType::T_LONG : BasicType::T_INT, ctx);
-
-  llvm::Value* t = builder.CreateIntrinsic(llvm::Intrinsic::floor, {fp_ty}, {a});
-  llvm::Value* frac = builder.CreateFSub(a, t);
-  llvm::Value* ge = builder.CreateFCmp(llvm::CmpInst::FCMP_OGE, frac,
+  if (id == vmIntrinsics::_roundD) {
+    // Decide the tie before adding one to floor(a), keeping that increment
+    // exact even where adding 0.5 to a would double-round. NaN reaches the
+    // saturating conversion as NaN and becomes zero.
+    llvm::Value* a = _interp->_jvm->dpop();
+    llvm::Type* fp_ty = builder.getDoubleTy();
+    llvm::Value* t = builder.CreateIntrinsic(llvm::Intrinsic::floor, {fp_ty}, {a});
+    llvm::Value* frac = builder.CreateFSub(a, t);
+    llvm::Value* ge = builder.CreateFCmp(llvm::CmpInst::FCMP_OGE, frac,
                                        llvm::ConstantFP::get(fp_ty, 0.5));
-  llvm::Value* t1 = builder.CreateFAdd(t, llvm::ConstantFP::get(fp_ty, 1.0));
-  llvm::Value* r = builder.CreateSelect(ge, t1, t);
-  llvm::Value* res = builder.CreateIntrinsic(
-      llvm::Intrinsic::fptosi_sat, {int_ty, fp_ty}, {r});
-
-  if (is_double) {
+    llvm::Value* t1 = builder.CreateFAdd(t, llvm::ConstantFP::get(fp_ty, 1.0));
+    llvm::Value* r = builder.CreateSelect(ge, t1, t);
+    llvm::Value* res = builder.CreateIntrinsic(
+        llvm::Intrinsic::fptosi_sat, {builder.getInt64Ty(), fp_ty}, {r});
     _interp->_jvm->lpush(res);
-  } else {
-    _interp->_jvm->ipush(res);
+    return true;
   }
+
+  llvm::Value* a = _interp->_jvm->fpop();
+  llvm::Type* fp_ty = builder.getFloatTy();
+  llvm::Type* int_ty = builder.getInt32Ty();
+  llvm::Value* bits = builder.CreateBitCast(a, int_ty, "round.bits");
+  llvm::Value* exponent = builder.CreateAnd(
+      builder.CreateLShr(bits, 23), 0xff);
+  llvm::Value* shift = builder.CreateSub(
+      llvm::ConstantInt::get(int_ty, 149),
+      exponent, "round.shift");
+  llvm::Value* in_range = builder.CreateICmpULT(
+      shift, llvm::ConstantInt::get(int_ty, 32));
+
+  llvm::BasicBlock* round_bb =
+      llvm::BasicBlock::Create(ctx, "round_significand", _interp->_llvm_func);
+  llvm::BasicBlock* cast_bb =
+      llvm::BasicBlock::Create(ctx, "round_cast", _interp->_llvm_func);
+  llvm::BasicBlock* merge_bb =
+      llvm::BasicBlock::Create(ctx, "round_merge", _interp->_llvm_func);
+  builder.CreateCondBr(in_range, round_bb, cast_bb);
+
+  builder.SetInsertPoint(round_bb);
+  llvm::Value* significand = builder.CreateOr(
+      builder.CreateAnd(bits, 0x007fffff), 0x00800000);
+  llvm::Value* negative = builder.CreateICmpSLT(
+      bits, llvm::ConstantInt::get(int_ty, 0));
+  significand = builder.CreateSelect(negative, builder.CreateNeg(significand), significand);
+  // Only evaluate the variable shift under the unsigned range guard:
+  // LLVM shifts by the bit width or more produce poison, unlike Java shifts.
+  llvm::Value* rounded = builder.CreateAShr(
+      builder.CreateAdd(builder.CreateAShr(significand, shift),
+                        llvm::ConstantInt::get(int_ty, 1)), 1);
+  builder.CreateBr(merge_bb);
+
+  builder.SetInsertPoint(cast_bb);
+  llvm::Value* converted = builder.CreateIntrinsic(
+      llvm::Intrinsic::fptosi_sat, {int_ty, fp_ty}, {a});
+  builder.CreateBr(merge_bb);
+
+  builder.SetInsertPoint(merge_bb);
+  _interp->_block->set_tail_llvm_block(merge_bb);
+  llvm::PHINode* res = builder.CreatePHI(int_ty, 2, "round.result");
+  res->addIncoming(rounded, round_bb);
+  res->addIncoming(converted, cast_bb);
+  _interp->_jvm->ipush(res);
   return true;
 }
 
