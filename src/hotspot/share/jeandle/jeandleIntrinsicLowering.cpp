@@ -25,6 +25,7 @@
 #include "llvm/IR/Jeandle/Attributes.h"
 #include "llvm/IR/Jeandle/GCStrategy.h"
 #include "llvm/IR/Jeandle/JavaType.h"
+#include "llvm/IR/Jeandle/Metadata.h"
 #include "llvm/IR/CFG.h"
 #include "llvm/IR/Constants.h"
 #include "llvm/IR/DerivedTypes.h"
@@ -2534,14 +2535,14 @@ bool JeandleIntrinsicLowering::lower_string_char_access(bool is_store) {
 
   _interp->null_check(array);
 
-  llvm::Value* data = b.CreateInBoundsGEP(
-      i8, array, b.getInt32(arrayOopDesc::base_offset_in_bytes(T_BYTE)),
-      is_store ? "string_putchar_data" : "string_getchar_data");
-  llvm::Value* addr = b.CreateInBoundsGEP(
-      i16, data, index,
-      is_store ? "string_putchar_addr" : "string_getchar_addr");
-
   if (is_store) {
+    llvm::Value* data = b.CreateInBoundsGEP(
+        i8, array, b.getInt32(arrayOopDesc::base_offset_in_bytes(T_BYTE)),
+        "string_putchar_data");
+    llvm::Value* addr = b.CreateInBoundsGEP(
+        i16, data, index,
+        "string_putchar_addr");
+
     llvm::Value* ch = _interp->_jvm->peek_value(0).value();
     llvm::Value* ch16 = b.CreateTrunc(ch, i16, "string_putchar_value");
     llvm::StoreInst* store = b.CreateStore(ch16, addr);
@@ -2552,9 +2553,11 @@ bool JeandleIntrinsicLowering::lower_string_char_access(bool is_store) {
     _interp->_jvm->ipop(); // index
     _interp->_jvm->apop(); // value
   } else {
-    llvm::LoadInst* loaded = b.CreateLoad(i16, addr, "string_getchar_result");
-    loaded->setAlignment(llvm::Align(2));
-    loaded->setAtomic(llvm::AtomicOrdering::Unordered);
+    llvm::CallInst* loaded = _interp->call_java_op("jeandle.string_getchar", {array, index});
+    loaded->setDoesNotThrow();
+    const CallSiteAttributeMetadata attrs = {CTRL_NONE, MEM_READ};
+    annotate_call(loaded, attrs);
+    apply_memory_attr(loaded, attrs);
     llvm::Value* result = b.CreateZExt(
         loaded, b.getInt32Ty(), "string_getchar_result_i32");
 

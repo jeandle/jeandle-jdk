@@ -90,12 +90,16 @@ public class TestStringIntrinsicDeoptimization {
                         + " = \\{[^\n]*\"no-realign-stack\"[^\n]*\\}").matcher(ir).find()) {
                     throw new AssertionError("Comparison frame permits stack realignment: " + methodIR);
                 }
-                // Wide comparison kernels reload the mismatching characters as
-                // scalars at the lane offset; the narrow 8/4-lane tails still
-                // extract from the vector. Either shape proves the kernel
-                // recovers the exact mismatch character.
-                if (!Pattern.compile("extractelement <\\d+ x i\\d+>").matcher(ir).find()) {
-                    throw new AssertionError("Missing vector mismatch character extraction: " + methodIR);
+                // Mismatch masks locate the first unequal lane; scalar source
+                // reloads recover its exact code units without a vector spill.
+                if (!ir.contains("@llvm.cttz.")
+                        || !Pattern.compile("load (?:atomic )?i(?:8|16), ptr addrspace\\(1\\)")
+                                .matcher(ir).find()) {
+                    throw new AssertionError("Missing scalar mismatch character recovery: " + methodIR);
+                }
+                if (Pattern.compile("extractelement <\\d+ x i\\d+>[^\\n]*, i\\d+ %")
+                        .matcher(ir).find()) {
+                    throw new AssertionError("Variable mismatch extraction requires a vector spill: " + methodIR);
                 }
             }
             Path latinIR = optimized.stream().filter(path -> path.getFileName().toString()

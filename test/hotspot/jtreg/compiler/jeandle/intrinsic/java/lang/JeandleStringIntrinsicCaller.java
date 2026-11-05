@@ -146,4 +146,24 @@ public final class JeandleStringIntrinsicCaller {
         StringLatin1.inflate(src, off, dst, dstOff, n);
     }
 
+    public static char getCharStringU(byte[] src, int index) {
+        return StringUTF16.getChar(src, index);
+    }
+
+    public static int lateGetCharStringU(byte[][] holder, byte[] src, int index) {
+        holder[0] = src;
+        byte[] array = holder[0];
+        return StringUTF16.getChar(array, index) + StringUTF16.getChar(array, index);
+    }
+
+    public static int virtualDefaultGetCharStringU() {
+        return StringUTF16.getChar(new byte[4], 1);
+    }
+
+    public static int virtualStoredGetCharStringU(char value) {
+        byte[] array = new byte[4];
+        StringUTF16.putChar(array, 1, value);
+        return StringUTF16.getChar(array, 1);
+    }
+
 }

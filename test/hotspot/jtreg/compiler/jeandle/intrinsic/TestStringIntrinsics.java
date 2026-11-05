@@ -524,7 +524,8 @@ public class TestStringIntrinsics {
     }
 
     private static void conversions() throws Exception {
-        for (int n : new int[]{0, 1, 7, 8, 9, 15, 16, 17, 23, 24, 31, 32, 33, 48, 49, 80, 129,
+        for (int n : new int[]{0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16,
+                17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 48, 49, 80, 129,
                 // Sizes around the copy kernel's inline-vector/libcall boundary.
                 511, 512, 513, 4095, 4096, 4097}) {
             char[] source = new char[n + 4];
@@ -579,27 +580,31 @@ public class TestStringIntrinsics {
             equal(expectedBytes, dstBytes, "inflate byte destination");
         }
         // Conversion loops are sequential when the byte arrays overlap.
-        for (int srcOff : new int[]{0, 1, 2}) {
-            for (int dstOff : new int[]{0, 1, 2}) {
-                byte[] initial = utf(1, 2, 3, 4, 5, 6, 7, 8);
-                byte[] actual = initial.clone();
-                byte[] expected = initial.clone();
-                int compressed = 4;
-                for (int i = 0; i < 4; i++) {
-                    int c = unit(expected, srcOff + i, true);
-                    if (c > 255) {
-                        compressed = 0;
-                        break;
+        for (int count : new int[]{4, 8, 12, 16, 17, 32}) {
+            for (int srcOff : new int[]{0, 1, 2}) {
+                for (int dstOff : new int[]{0, 1, 2}) {
+                    char[] chars = new char[36];
+                    for (int i = 0; i < chars.length; i++) chars[i] = (char) (i + 1);
+                    byte[] initial = utf(chars);
+                    byte[] actual = initial.clone();
+                    byte[] expected = initial.clone();
+                    int compressed = count;
+                    for (int i = 0; i < count; i++) {
+                        int c = unit(expected, srcOff + i, true);
+                        if (c > 255) {
+                            compressed = 0;
+                            break;
+                        }
+                        expected[dstOff + i] = (byte) c;
                     }
-                    expected[dstOff + i] = (byte) c;
+                    check("compressStringB", compressed, actual, srcOff, actual, dstOff, count);
+                    equal(expected, actual, "aliased compress complete destination");
+                    actual = initial.clone();
+                    expected = initial.clone();
+                    for (int i = 0; i < count; i++) put(expected, dstOff + i, expected[srcOff + i] & 255);
+                    check("inflateStringB", null, actual, srcOff, actual, dstOff, count);
+                    equal(expected, actual, "aliased inflate complete destination");
                 }
-                check("compressStringB", compressed, actual, srcOff, actual, dstOff, 4);
-                equal(expected, actual, "aliased compress complete destination");
-                actual = initial.clone();
-                expected = initial.clone();
-                for (int i = 0; i < 4; i++) put(expected, dstOff + i, expected[srcOff + i] & 255);
-                check("inflateStringB", null, actual, srcOff, actual, dstOff, 4);
-                equal(expected, actual, "aliased inflate complete destination");
             }
         }
     }
