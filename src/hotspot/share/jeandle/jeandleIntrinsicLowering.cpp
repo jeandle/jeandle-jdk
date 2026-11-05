@@ -25,20 +25,27 @@
 #include "llvm/IR/Jeandle/Attributes.h"
 #include "llvm/IR/Jeandle/GCStrategy.h"
 #include "llvm/IR/Jeandle/JavaType.h"
+#include "llvm/IR/Jeandle/Metadata.h"
 #include "llvm/IR/CFG.h"
 #include "llvm/IR/Constants.h"
 #include "llvm/IR/DerivedTypes.h"
 #include "llvm/IR/MDBuilder.h"
 
 #include "jeandle/jeandleAbstractInterpreter.hpp"
+#include "jeandle/jeandleCompilation.hpp"
+#include "jeandle/jeandleProfile.hpp"
 #include "jeandle/jeandleRuntimeRoutine.hpp"
 #include "jeandle/jeandleType.hpp"
 #include "jeandle/jeandleUtils.hpp"
 
 #include "jeandle/__hotspotHeadersBegin__.hpp"
 #include "ci/ciField.hpp"
+#include "ci/ciEnv.hpp"
+#include "ci/ciInstance.hpp"
 #include "ci/ciInstanceKlass.hpp"
+#include "ci/ciKlass.hpp"
 #include "ci/ciMethod.hpp"
+#include "ci/ciObjArray.hpp"
 #include "ci/ciSignature.hpp"
 #include "ci/ciSymbol.hpp"
 #include "classfile/javaClasses.hpp"
@@ -139,6 +146,28 @@ bool JeandleIntrinsicLowering::is_supported(vmIntrinsics::ID id) {
 
   // Always-supported intrinsics — no CPU feature dependency
   switch (id) {
+    // java.lang primitive wrapper unboxing. These are kept as a semantic
+    // JavaOp so PEA can fold them against a virtual box before phase 2
+    // lowering exposes the value-field load.
+    case vmIntrinsics::_booleanValue:
+    case vmIntrinsics::_byteValue:
+    case vmIntrinsics::_charValue:
+    case vmIntrinsics::_shortValue:
+    case vmIntrinsics::_intValue:
+    case vmIntrinsics::_longValue:
+    case vmIntrinsics::_floatValue:
+    case vmIntrinsics::_doubleValue:
+    // java.lang primitive wrapper boxing. These are represented by one
+    // phase-2 semantic JavaOp so PEA can virtualize the payload while
+    // escaping paths retain the complete cache/allocation body.
+    case vmIntrinsics::_Boolean_valueOf:
+    case vmIntrinsics::_Byte_valueOf:
+    case vmIntrinsics::_Character_valueOf:
+    case vmIntrinsics::_Short_valueOf:
+    case vmIntrinsics::_Integer_valueOf:
+    case vmIntrinsics::_Long_valueOf:
+    case vmIntrinsics::_Float_valueOf:
+    case vmIntrinsics::_Double_valueOf:
     // math
     case vmIntrinsics::_dabs:
     case vmIntrinsics::_fabs:
@@ -334,6 +363,28 @@ bool JeandleIntrinsicLowering::is_supported(vmIntrinsics::ID id) {
 bool JeandleIntrinsicLowering::lower(vmIntrinsics::ID id, const ciMethod* target) {
   _target = target;
   switch (id) {
+    // Wrapper unboxing is emitted as one typed semantic JavaOp. PEA sees it
+    // before JavaOperationLower(2) exposes the value-field load.
+    case vmIntrinsics::_booleanValue:
+    case vmIntrinsics::_byteValue:
+    case vmIntrinsics::_charValue:
+    case vmIntrinsics::_shortValue:
+    case vmIntrinsics::_intValue:
+    case vmIntrinsics::_longValue:
+    case vmIntrinsics::_floatValue:
+    case vmIntrinsics::_doubleValue:
+      return lower_boxed_unbox(id);
+    // Wrapper boxing is one semantic JavaOp. Its phase-2 body contains the
+    // complete cache/allocation behavior for escaping paths.
+    case vmIntrinsics::_Boolean_valueOf:
+    case vmIntrinsics::_Byte_valueOf:
+    case vmIntrinsics::_Character_valueOf:
+    case vmIntrinsics::_Short_valueOf:
+    case vmIntrinsics::_Integer_valueOf:
+    case vmIntrinsics::_Long_valueOf:
+    case vmIntrinsics::_Float_valueOf:
+    case vmIntrinsics::_Double_valueOf:
+      return lower_boxed_box(id);
     // Simple LLVM builtins (grouped by llvm intrinsic)
     case vmIntrinsics::_dabs:
     case vmIntrinsics::_fabs:
@@ -908,6 +959,642 @@ bool JeandleIntrinsicLowering::lower_java_op(const char* java_op_name,
   if (result_type != T_VOID) {
     _interp->_jvm->push(result_type, site);
   }
+  return true;
+}
+
+
+namespace {
+
+// Keep this mapping explicit. HotSpot BasicType values are not the LLVM-side
+// JBasicType wire values used by the JavaOp ABI.
+static bool boxed_unbox_spec(vmIntrinsics::ID id, int* kind,
+                             BasicType* result_type) {
+  switch (id) {
+    case vmIntrinsics::_booleanValue:
+      *kind = 0; *result_type = T_BOOLEAN; return true;
+    case vmIntrinsics::_byteValue:
+      *kind = 1; *result_type = T_BYTE; return true;
+    case vmIntrinsics::_charValue:
+      *kind = 2; *result_type = T_CHAR; return true;
+    case vmIntrinsics::_shortValue:
+      *kind = 3; *result_type = T_SHORT; return true;
+    case vmIntrinsics::_intValue:
+      *kind = 4; *result_type = T_INT; return true;
+    case vmIntrinsics::_longValue:
+      *kind = 5; *result_type = T_LONG; return true;
+    case vmIntrinsics::_floatValue:
+      *kind = 6; *result_type = T_FLOAT; return true;
+    case vmIntrinsics::_doubleValue:
+      *kind = 7; *result_type = T_DOUBLE; return true;
+    default:
+      return false;
+  }
+}
+
+// Keep the boxing mapping adjacent to unboxing so the frontend and PEA use
+// the same eight-value wire convention.
+static bool boxed_box_spec(vmIntrinsics::ID id, int* kind,
+                           BasicType* input_type) {
+  switch (id) {
+    case vmIntrinsics::_Boolean_valueOf:
+      *kind = 0; *input_type = T_BOOLEAN; return true;
+    case vmIntrinsics::_Byte_valueOf:
+      *kind = 1; *input_type = T_BYTE; return true;
+    case vmIntrinsics::_Character_valueOf:
+      *kind = 2; *input_type = T_CHAR; return true;
+    case vmIntrinsics::_Short_valueOf:
+      *kind = 3; *input_type = T_SHORT; return true;
+    case vmIntrinsics::_Integer_valueOf:
+      *kind = 4; *input_type = T_INT; return true;
+    case vmIntrinsics::_Long_valueOf:
+      *kind = 5; *input_type = T_LONG; return true;
+    case vmIntrinsics::_Float_valueOf:
+      *kind = 6; *input_type = T_FLOAT; return true;
+    case vmIntrinsics::_Double_valueOf:
+      *kind = 7; *input_type = T_DOUBLE; return true;
+    default:
+      return false;
+  }
+}
+
+struct BoxCacheBranchWeights {
+  uint32_t hit = 0;
+  uint32_t miss = 0;
+  bool valid = false;
+  bool speculate_cache_hit = false;
+};
+
+// Read the ordinary valueOf range-check profile. The current JDK valueOf
+// bodies branch directly to `new` on every failed bound check; pinning that
+// shape also prevents a future bytecode rewrite from silently reversing the
+// weights. A mature strict-zero miss profile may additionally prune the miss
+// path, provided this caller BCI has not already deoptimized for that
+// speculation. The shared valueOf MDO makes this conservative: zero misses
+// means no profiled valueOf caller has observed one. Unlike pruning a branch
+// from the OSR caller itself, this decision does not depend on a partially
+// warmed caller profile, so OSR compilations may use the same speculation.
+static BoxCacheBranchWeights box_cache_branch_weights(
+    const ciMethod* target, BasicType input_type,
+    const JeandleProfile& caller_profile, int caller_bci) {
+  int expected_branches = 0;
+  switch (input_type) {
+    case T_CHAR:
+      expected_branches = 1;
+      break;
+    case T_SHORT:
+    case T_INT:
+    case T_LONG:
+      expected_branches = 2;
+      break;
+    default:
+      return {};
+  }
+
+  ciMethod* profile_method = const_cast<ciMethod*>(target);
+  JeandleProfile profile(profile_method);
+  uint64_t hit = 0;
+  uint64_t miss = 0;
+  int observed_branches = 0;
+  ciBytecodeStream stream(profile_method);
+  for (Bytecodes::Code code = stream.next();
+       code != ciBytecodeStream::EOBC(); code = stream.next()) {
+    const bool is_conditional =
+        (code >= Bytecodes::_ifeq && code <= Bytecodes::_if_acmpne) ||
+        code == Bytecodes::_ifnull || code == Bytecodes::_ifnonnull;
+    if (!is_conditional) {
+      continue;
+    }
+    if (stream.get_dest() <= stream.cur_bci() ||
+        profile_method->java_code_at_bci(stream.get_dest()) !=
+            Bytecodes::_new) {
+      return {};
+    }
+
+    JeandleProfile::BranchCounts counts =
+        profile.branch_at(stream.cur_bci());
+    if (!profile.is_mature() || !counts.valid) {
+      return {};
+    }
+    miss += static_cast<uint32_t>(counts.taken);
+    // The last fallthrough reaches the cache load. For the two-check shape,
+    // the first not-taken count still includes executions of the second check.
+    hit = static_cast<uint32_t>(counts.not_taken);
+    ++observed_branches;
+  }
+  if (observed_branches != expected_branches) {
+    return {};
+  }
+
+  const bool speculate_cache_hit =
+      UseInterpreter && hit != 0 && miss == 0 &&
+      !caller_profile.has_trap_at(
+          caller_bci, Deoptimization::Reason_unstable_if) &&
+      !caller_profile.has_too_many_traps(
+          Deoptimization::Reason_unstable_if) &&
+      !caller_profile.has_too_many_recompiles(
+          caller_bci, Deoptimization::Reason_unstable_if);
+
+  // MD_prof branch weights are uint32_t. Preserve their ratio if two scaled
+  // miss counters together exceed that range, and keep zero-count edges rare
+  // rather than impossible.
+  while (hit > max_juint || miss > max_juint) {
+    hit = (hit + 1) >> 1;
+    miss = (miss + 1) >> 1;
+  }
+  return {static_cast<uint32_t>(MAX2<uint64_t>(hit, 1)),
+          static_cast<uint32_t>(MAX2<uint64_t>(miss, 1)), true,
+          speculate_cache_hit};
+}
+
+struct BoxCacheConstants {
+  ciObject* primary = nullptr;
+  ciObject* secondary = nullptr;
+  int64_t low = 0;
+  int64_t length = 0;
+};
+
+static bool box_metadata_constant(llvm::Module& module, const char* name,
+                                  uint64_t* value) {
+  llvm::GlobalVariable* global =
+      module.getGlobalVariable(name, /*AllowInternal=*/true);
+  if (global == nullptr || !global->hasInitializer()) {
+    return false;
+  }
+  auto* constant = llvm::dyn_cast<llvm::ConstantInt>(global->getInitializer());
+  if (constant == nullptr || constant->isZero()) {
+    return false;
+  }
+  *value = constant->getZExtValue();
+  return true;
+}
+
+// Resolve one initialized static-final wrapper/cache field through CI. The
+// returned ciObject is later registered as an nmethod oop handle; no movable
+// raw oop is embedded in LLVM IR.
+static ciObject* box_static_object(llvm::Module& module,
+                                   const char* klass_name,
+                                   const char* offset_global) {
+  uint64_t offset_value = 0;
+  if (!box_metadata_constant(module, offset_global, &offset_value)) {
+    return nullptr;
+  }
+  ciKlass* resolved =
+      ciEnv::current()->find_system_klass(ciSymbol::make(klass_name));
+  if (resolved == nullptr || !resolved->is_loaded() ||
+      !resolved->is_instance_klass()) {
+    return nullptr;
+  }
+  ciInstanceKlass* ci_klass = resolved->as_instance_klass();
+  if (!ci_klass->is_initialized()) {
+    return nullptr;
+  }
+  ciField* field = ci_klass->get_field_by_offset(
+      static_cast<int>(offset_value), /*is_static=*/true);
+  if (field == nullptr || !field->is_static() || !field->is_constant()) {
+    return nullptr;
+  }
+  ciConstant constant = field->constant_value();
+  if (!constant.is_valid() || !is_reference_type(constant.basic_type())) {
+    return nullptr;
+  }
+  ciObject* object = constant.as_object();
+  return object->is_null_object() ? nullptr : object;
+}
+
+static bool box_static_int(llvm::Module& module,
+                           const char* klass_name,
+                           const char* offset_global,
+                           int32_t* result) {
+  uint64_t offset_value = 0;
+  if (!box_metadata_constant(module, offset_global, &offset_value)) {
+    return false;
+  }
+  ciKlass* resolved =
+      ciEnv::current()->find_system_klass(ciSymbol::make(klass_name));
+  if (resolved == nullptr || !resolved->is_loaded() ||
+      !resolved->is_instance_klass()) {
+    return false;
+  }
+  ciInstanceKlass* ci_klass = resolved->as_instance_klass();
+  if (!ci_klass->is_initialized()) {
+    return false;
+  }
+  ciField* field = ci_klass->get_field_by_offset(
+      static_cast<int>(offset_value), /*is_static=*/true);
+  if (field == nullptr || !field->is_static() || !field->is_constant()) {
+    return false;
+  }
+  ciConstant constant = field->constant_value();
+  if (!constant.is_valid() || constant.basic_type() != T_INT) {
+    return false;
+  }
+  *result = constant.as_int();
+  return true;
+}
+
+static bool resolve_box_cache_constants(llvm::Module& module,
+                                        BasicType input_type,
+                                        const char* klass_name,
+                                        const char* offset0_global,
+                                        const char* offset1_global,
+                                        const char* low_offset_global,
+                                        const char* high_offset_global,
+                                        BoxCacheConstants* result) {
+  result->primary =
+      box_static_object(module, klass_name, offset0_global);
+  if (result->primary == nullptr) {
+    return false;
+  }
+  if (input_type == T_BOOLEAN) {
+    result->secondary =
+        box_static_object(module, klass_name, offset1_global);
+    return result->secondary != nullptr;
+  }
+
+  if (!result->primary->is_obj_array()) {
+    return false;
+  }
+  ciObjArray* cache = result->primary->as_obj_array();
+  if (cache->length() <= 0) {
+    return false;
+  }
+  ciObject* first = cache->obj_at(0);
+  if (first == nullptr || !first->is_instance() || first->is_null_object()) {
+    return false;
+  }
+  ciConstant first_value = first->as_instance()->field_value_by_offset(
+      java_lang_boxing_object::value_offset(input_type));
+  if (!first_value.is_valid() || first_value.basic_type() != input_type) {
+    return false;
+  }
+
+  const int64_t array_low = input_type == T_LONG
+      ? first_value.as_long()
+      : static_cast<int64_t>(first_value.as_int());
+  if (input_type == T_INT) {
+    int32_t low = 0;
+    int32_t high = 0;
+    if (!box_static_int(module, klass_name, low_offset_global, &low) ||
+        !box_static_int(module, klass_name, high_offset_global, &high) ||
+        low > high || array_low != low) {
+      return false;
+    }
+    const int64_t length = static_cast<int64_t>(high) - low + 1;
+    if (length > cache->length()) {
+      return false;
+    }
+    result->low = low;
+    result->length = length;
+  } else {
+    result->low = array_low;
+    result->length = cache->length();
+  }
+  return true;
+}
+} // namespace
+
+llvm::Value* JeandleIntrinsicLowering::constant_klass_value(
+    ciKlass* klass) const {
+  assert(klass != nullptr && klass->is_loaded(), "klass must be loaded");
+  ciEnv* env = ciEnv::current();
+  assert(env != nullptr && env->oop_recorder() != nullptr,
+         "constant klass requires an active oop recorder");
+  env->oop_recorder()->find_index(klass->constant_encoding());
+  llvm::PointerType* klass_type = llvm::PointerType::get(
+      *_interp->_context, llvm::jeandle::AddrSpace::CHeapAddrSpace);
+  return _interp->_ir_builder.CreateIntToPtr(
+      _interp->_ir_builder.getInt64(
+          reinterpret_cast<intptr_t>(klass->constant_encoding())),
+      klass_type, "class.constant.klass");
+}
+
+bool JeandleIntrinsicLowering::lower_boxed_unbox(vmIntrinsics::ID id) {
+  // Boxing JavaOps exist solely for Jeandle's PEA model. Keep the product
+  // switch isolated at the frontend boundary so disabling the optimization
+  // leaves ordinary valueOf/xxxValue invokes for the regular inline pipeline.
+  if (!JeandleOptBoxing) {
+    return false;
+  }
+
+  int kind = 0;
+  BasicType result_type = T_ILLEGAL;
+  if (!boxed_unbox_spec(id, &kind, &result_type)) {
+    return false;
+  }
+
+  llvm::Function* java_op = _interp->_module.getFunction("jeandle.unbox");
+  if (java_op == nullptr) {
+    return false;
+  }
+
+  // Preserve the Java NPE point before changing the abstract JVM stack. The
+  // JavaOp itself is deliberately a raw value read and has no exception edge.
+  llvm::Value* receiver = _interp->_jvm->peek_value(0).value();
+  _interp->null_check(receiver);
+  receiver = _interp->_jvm->apop();
+
+  llvm::IRBuilder<>& builder = _interp->_ir_builder;
+  llvm::CallBase* encoded = emit_callsite(
+      java_op, llvm::CallingConv::Hotspot_JIT,
+      {builder.getInt32(kind), receiver},
+      {CTRL_NONE, MEM_READ});
+
+  llvm::Value* result = nullptr;
+  switch (result_type) {
+    case T_BOOLEAN:
+    case T_BYTE:
+    case T_CHAR:
+    case T_SHORT:
+    case T_INT:
+      // The JavaOp returns the sign/zero-extended payload in i64. Truncation
+      // preserves the Java computational i32 representation for all int-like
+      // wrapper values.
+      result = builder.CreateTrunc(encoded, builder.getInt32Ty(),
+                                   "unbox.int");
+      break;
+    case T_LONG:
+      result = encoded;
+      break;
+    case T_FLOAT: {
+      llvm::Value* bits = builder.CreateTrunc(encoded, builder.getInt32Ty(),
+                                              "unbox.float.bits");
+      result = builder.CreateBitCast(bits, builder.getFloatTy(),
+                                     "unbox.float");
+      break;
+    }
+    case T_DOUBLE:
+      result = builder.CreateBitCast(encoded, builder.getDoubleTy(),
+                                     "unbox.double");
+      break;
+    default:
+      return false;
+  }
+
+  _interp->_jvm->push(result_type, result);
+  return true;
+}
+
+// Lower a static wrapper valueOf into one semantic box operation. The
+// original invoke remains the fallback when the wrapper class is not
+// initialized; the JavaOp itself carries complete cache/allocation semantics
+// and remains opaque until PEA has run.
+bool JeandleIntrinsicLowering::lower_boxed_box(vmIntrinsics::ID id) {
+  if (!JeandleOptBoxing) {
+    return false;
+  }
+
+  int kind = 0;
+  BasicType input_type = T_ILLEGAL;
+  if (!boxed_box_spec(id, &kind, &input_type)) {
+    return false;
+  }
+  const bool needs_raw_narrow_guard =
+      input_type == T_BYTE || input_type == T_CHAR ||
+      input_type == T_SHORT;
+  if (needs_raw_narrow_guard &&
+      _interp->too_many_traps(_interp->_method,
+                              _interp->_bytecodes.cur_bci(),
+                              Deoptimization::Reason_intrinsic)) {
+    // A repeatedly failing speculative guard must eventually fall back to
+    // the original valueOf body instead of deoptimizing forever.
+    return false;
+  }
+  if (_target == nullptr || !_target->holder()->is_initialized()) {
+    return false;
+  }
+  auto metadata_available = [&](const char *Name) {
+    llvm::GlobalVariable *Global =
+        _interp->_module.getGlobalVariable(Name, /*AllowInternal=*/true);
+    if (Global == nullptr || !Global->hasInitializer())
+      return false;
+    auto *Value = llvm::dyn_cast<llvm::ConstantInt>(Global->getInitializer());
+    return Value != nullptr && !Value->isZero();
+  };
+  const char *CacheKlass = nullptr;
+  const char *CacheClassName = nullptr;
+  const char *CacheOffset = nullptr;
+  const char *CacheLowOffset = nullptr;
+  const char *CacheHighOffset = nullptr;
+  const char *BooleanTrueOffset = nullptr;
+  const char *BooleanFalseOffset = nullptr;
+  switch (kind) {
+    case 0:
+      CacheKlass = "jeandle.box.Boolean.klass";
+      CacheClassName = "java/lang/Boolean";
+      BooleanTrueOffset = "jeandle.box.Boolean.true_offset";
+      BooleanFalseOffset = "jeandle.box.Boolean.false_offset";
+      break;
+    case 1:
+      CacheKlass = "jeandle.box.ByteCache.klass";
+      CacheClassName = "java/lang/Byte$ByteCache";
+      CacheOffset = "jeandle.box.ByteCache.cache_offset";
+      break;
+    case 2:
+      CacheKlass = "jeandle.box.CharacterCache.klass";
+      CacheClassName = "java/lang/Character$CharacterCache";
+      CacheOffset = "jeandle.box.CharacterCache.cache_offset";
+      break;
+    case 3:
+      CacheKlass = "jeandle.box.ShortCache.klass";
+      CacheClassName = "java/lang/Short$ShortCache";
+      CacheOffset = "jeandle.box.ShortCache.cache_offset";
+      break;
+    case 4:
+      CacheKlass = "jeandle.box.IntegerCache.klass";
+      CacheClassName = "java/lang/Integer$IntegerCache";
+      CacheOffset = "jeandle.box.IntegerCache.cache_offset";
+      CacheLowOffset = "jeandle.box.IntegerCache.low_offset";
+      CacheHighOffset = "jeandle.box.IntegerCache.high_offset";
+      break;
+    case 5:
+      CacheKlass = "jeandle.box.LongCache.klass";
+      CacheClassName = "java/lang/Long$LongCache";
+      CacheOffset = "jeandle.box.LongCache.cache_offset";
+      break;
+    default:
+      break;
+  }
+  if (kind <= 5) {
+    if (!metadata_available(CacheKlass)) {
+      return false;
+    }
+    if (kind == 0 &&
+        (!metadata_available(BooleanTrueOffset) ||
+         !metadata_available(BooleanFalseOffset))) {
+      return false;
+    }
+    if (kind != 0 && !metadata_available(CacheOffset)) {
+      return false;
+    }
+    if (kind == 4 &&
+        (!metadata_available(CacheLowOffset) ||
+         !metadata_available(CacheHighOffset))) {
+      return false;
+    }
+  }
+
+  BoxCacheConstants cache_constants;
+  bool have_cache_constants = false;
+  if (kind <= 5) {
+    const char* primary_offset =
+        kind == 0 ? BooleanTrueOffset : CacheOffset;
+    have_cache_constants = resolve_box_cache_constants(
+        _interp->_module, input_type, CacheClassName, primary_offset,
+        BooleanFalseOffset, CacheLowOffset, CacheHighOffset,
+        &cache_constants);
+  }
+
+  llvm::Function* java_op = _interp->_module.getFunction("jeandle.box");
+  if (java_op == nullptr) {
+    return false;
+  }
+
+  llvm::IRBuilder<>& builder = _interp->_ir_builder;
+  BasicType stack_type = JeandleType::actual2computational(input_type);
+  if (needs_raw_narrow_guard) {
+    // The verifier represents byte/char/short arguments as i32. Hand-written
+    // bytecode can pass non-canonical high bits, while the JDK valueOf bodies
+    // test cache membership before a constructor field store truncates them.
+    // PEA can recover cache identity from the tracked payload only when the
+    // raw argument is the canonical extension of that payload. Guard this
+    // invariant before creating the semantic box. Keep the JVM operand live
+    // so the uncommon trap can reexecute the original invocation.
+    llvm::Value* value = _interp->_jvm->peek_value(0).value();
+    llvm::Value* valid = nullptr;
+    if (input_type == T_BYTE) {
+      llvm::Value* narrowed =
+          builder.CreateTrunc(value, builder.getInt8Ty(), "box.byte.narrow");
+      valid = builder.CreateICmpEQ(
+          value, builder.CreateSExt(narrowed, builder.getInt32Ty()),
+          "box.byte.canonical");
+    } else {
+      llvm::Value* narrowed = builder.CreateTrunc(
+          value, builder.getInt16Ty(), "box.narrow16");
+      if (input_type == T_CHAR) {
+        valid = builder.CreateICmpEQ(
+            value, builder.CreateZExt(narrowed, builder.getInt32Ty()),
+            "box.char.canonical");
+      } else {
+        assert(input_type == T_SHORT, "unexpected narrow boxing type");
+        valid = builder.CreateICmpEQ(
+            value, builder.CreateSExt(narrowed, builder.getInt32Ty()),
+            "box.short.canonical");
+      }
+    }
+
+    llvm::LLVMContext& context = *_interp->_context;
+    llvm::BasicBlock* pass = llvm::BasicBlock::Create(
+        context, "box.raw_narrow.pass", _interp->_llvm_func);
+    llvm::BasicBlock* fail = llvm::BasicBlock::Create(
+        context, "box.raw_narrow.fail", _interp->_llvm_func);
+    builder.CreateCondBr(valid, pass, fail);
+    _interp->uncommon_trap(Deoptimization::Reason_intrinsic,
+                           Deoptimization::Action_make_not_entrant, fail);
+    builder.SetInsertPoint(pass);
+    _interp->_block->set_tail_llvm_block(pass);
+  }
+
+  BoxCacheBranchWeights weights = box_cache_branch_weights(
+      _target, input_type, _interp->_profile,
+      _interp->_bytecodes.cur_bci());
+
+  llvm::Value* value = _interp->_jvm->peek_value(0).value();
+  llvm::Value* raw_value = nullptr;
+  switch (input_type) {
+    case T_BOOLEAN:
+    case T_CHAR:
+      raw_value = builder.CreateZExt(value, builder.getInt64Ty(),
+                                     "box.raw.zext");
+      break;
+    case T_BYTE:
+    case T_SHORT:
+    case T_INT:
+      raw_value = builder.CreateSExt(value, builder.getInt64Ty(),
+                                     "box.raw.sext");
+      break;
+    case T_LONG:
+      raw_value = value;
+      break;
+    case T_FLOAT: {
+      llvm::Value* bits = builder.CreateBitCast(value, builder.getInt32Ty(),
+                                               "box.raw.float.bits");
+      raw_value = builder.CreateZExt(bits, builder.getInt64Ty(),
+                                     "box.raw.float");
+      break;
+    }
+    case T_DOUBLE:
+      raw_value = builder.CreateBitCast(value, builder.getInt64Ty(),
+                                        "box.raw.double");
+      break;
+    default:
+      return false;
+  }
+
+  llvm::Value* klass = constant_klass_value(_target->holder());
+  llvm::PointerType* oop_type = llvm::cast<llvm::PointerType>(
+      JeandleType::java2llvm(T_OBJECT, *_interp->_context));
+  auto load_constant_oop = [&](ciObject* object,
+                               const char* name) -> llvm::Value* {
+    if (object == nullptr) {
+      return llvm::ConstantPointerNull::get(oop_type);
+    }
+    llvm::Value* handle =
+        JeandleCompilation::current()->find_or_insert_oop(object);
+    auto* load = builder.CreateLoad(oop_type, handle, name);
+    load->setMetadata(llvm::LLVMContext::MD_nonnull,
+                      llvm::MDNode::get(*_interp->_context, {}));
+    return load;
+  };
+  llvm::Value* primary = load_constant_oop(
+      have_cache_constants ? cache_constants.primary : nullptr,
+      "box.cache.constant");
+  llvm::Value* secondary = load_constant_oop(
+      have_cache_constants ? cache_constants.secondary : nullptr,
+      "box.false.constant");
+
+  static constexpr CallSiteAttributeMetadata generic_attrs = {
+      CTRL_NEEDS_EXCEPTION_EDGE,
+      MEM_READ | MEM_WRITE | MEM_NEEDS_GC_STATE};
+  auto emit_box = [&]() -> llvm::CallBase* {
+    return emit_callsite(
+        java_op, llvm::CallingConv::Hotspot_JIT,
+        {builder.getInt32(kind), klass, raw_value, primary, secondary,
+         builder.getInt64(have_cache_constants ? cache_constants.low : 0),
+         builder.getInt64(have_cache_constants ? cache_constants.length : 0),
+         builder.getInt1(have_cache_constants)},
+        generic_attrs);
+  };
+
+  llvm::CallBase* result = nullptr;
+  const bool may_allocate =
+      input_type != T_BOOLEAN && input_type != T_BYTE;
+  if (may_allocate) {
+    // Keep the invoke operand in the deopt state until the semantic box has
+    // been emitted. Besides the speculative cache-miss trap, an allocation
+    // safepoint inside a materialized box can deopt before the payload store
+    // and result are available. Reexecute the original valueOf bytecode from
+    // its complete pre-invoke state in either case.
+    JeandlePreserveReexecuteState reexecute_scope(_interp);
+    _interp->_should_reexecute = true;
+    result = emit_box();
+    _interp->_jvm->pop(stack_type);
+  } else {
+    // Boolean and canonical Byte boxes are cache-only and contain no
+    // allocation safepoint, so retain the ordinary post-invoke state.
+    _interp->_jvm->pop(stack_type);
+    result = emit_box();
+  }
+
+  if (weights.valid) {
+    llvm::Metadata* operands[] = {
+        llvm::ConstantAsMetadata::get(builder.getInt32(weights.hit)),
+        llvm::ConstantAsMetadata::get(builder.getInt32(weights.miss)),
+        llvm::ConstantAsMetadata::get(
+            builder.getInt1(weights.speculate_cache_hit))};
+    result->setMetadata(llvm::jeandle::Metadata::BoxCacheBranchWeights,
+                        llvm::MDNode::get(*_interp->_context, operands));
+  }
+  _interp->_jvm->apush(result);
   return true;
 }
 

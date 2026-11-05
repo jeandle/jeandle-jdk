@@ -56,10 +56,11 @@
 #include "jeandle/jeandleCallVM.hpp"
 #include "jeandle/jeandleCompilation.hpp"
 #include "jeandle/jeandleCompiler.hpp"
-#include "jeandle/jeandle_globals.hpp"
 #include "jeandle/jeandleType.hpp"
 #include "jeandle/jeandleUtils.hpp"
 #include "jeandle/jeandleVMCallback.hpp"
+#include "jeandle/jeandle_globals.hpp"
+#include "jeandle/templatemodule/jeandleRuntimeDefinedJavaOps.hpp"
 
 #include "jeandle/__hotspotHeadersBegin__.hpp"
 #include "ci/ciCallProfile.hpp"
@@ -1322,6 +1323,11 @@ void JeandleCompilation::setup_llvm_module(llvm::MemoryBuffer* template_buffer) 
   JEANDLE_ERROR_ASSERT_AND_RET_VOID_ON_FAIL(module_or_error, "Failed to parse template bitcode");
   _llvm_module = std::move(module_or_error.get());
   assert(_llvm_module != nullptr, "invalid llvm module");
+
+  // The template may have been materialized before the lazy boxing cache
+  // classes were initialized. Refresh only the current compilation module;
+  // successful VM lookups are cached by RuntimeDefinedJavaOps.
+  RuntimeDefinedJavaOps::refresh_boxing_metadata(*_llvm_module);
 
   _llvm_module->setModuleIdentifier(JeandleFuncSig::method_name(_method));
   _llvm_module->setDataLayout(*_data_layout);

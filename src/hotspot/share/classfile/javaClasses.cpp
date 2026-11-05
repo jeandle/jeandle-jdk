@@ -4941,13 +4941,17 @@ bool vector_VectorPayload::is_instance(oop obj) {
 }
 
 int java_lang_Integer_IntegerCache::_static_cache_offset;
+int java_lang_Integer_IntegerCache::_static_low_offset;
+int java_lang_Integer_IntegerCache::_static_high_offset;
 int java_lang_Long_LongCache::_static_cache_offset;
 int java_lang_Character_CharacterCache::_static_cache_offset;
 int java_lang_Short_ShortCache::_static_cache_offset;
 int java_lang_Byte_ByteCache::_static_cache_offset;
 
 #define INTEGER_CACHE_FIELDS_DO(macro) \
-  macro(_static_cache_offset, k, "cache", java_lang_Integer_array_signature, true)
+  macro(_static_cache_offset, k, "cache", java_lang_Integer_array_signature, true); \
+  macro(_static_low_offset, k, "low", int_signature, true); \
+  macro(_static_high_offset, k, "high", int_signature, true)
 
 void java_lang_Integer_IntegerCache::compute_offsets(InstanceKlass *k) {
   guarantee(k != nullptr && k->is_initialized(), "must be loaded and initialized");
@@ -4957,6 +4961,16 @@ void java_lang_Integer_IntegerCache::compute_offsets(InstanceKlass *k) {
 objArrayOop java_lang_Integer_IntegerCache::cache(InstanceKlass *ik) {
   oop base = ik->static_field_base_raw();
   return objArrayOop(base->obj_field(_static_cache_offset));
+}
+
+jint java_lang_Integer_IntegerCache::low(InstanceKlass *ik) {
+  oop base = ik->static_field_base_raw();
+  return base->int_field(_static_low_offset);
+}
+
+jint java_lang_Integer_IntegerCache::high(InstanceKlass *ik) {
+  oop base = ik->static_field_base_raw();
+  return base->int_field(_static_high_offset);
 }
 
 Symbol* java_lang_Integer_IntegerCache::symbol() {

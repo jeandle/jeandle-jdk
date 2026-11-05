@@ -42,6 +42,7 @@ import java.lang.reflect.Method;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
+import java.util.Comparator;
 import java.util.List;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
@@ -142,8 +143,8 @@ public class TestBranchWeights {
         System.out.println("[await-dump] done in " + (System.currentTimeMillis() - start) + "ms");
     }
 
-    // Parse the first branch_weights node in the method's pre-opt dump and assert the
-    // first weight (taken / successor-0) is strictly less than the second (not-taken).
+    // Parse the profiled branch in the target method and assert the first weight
+    // (taken / successor-0) is strictly less than the second (not-taken).
     private static void assertBranchPolarityTakenLess(String dir, Method m) throws Exception {
         String prefix = m.getDeclaringClass().getName().replace('.', '_') + "_" + m.getName();
         Path ll;
@@ -151,10 +152,36 @@ public class TestBranchWeights {
             ll = s.filter(p -> {
                     String n = p.getFileName().toString();
                     return n.startsWith(prefix) && n.endsWith(".ll") && !n.endsWith("_optimized.ll");
-                }).findFirst().orElseThrow(() -> new RuntimeException("no pre-opt dump for " + m.getName()));
+                }).max(Comparator.comparing(p -> p.getFileName().toString()))
+                .orElseThrow(() -> new RuntimeException("no pre-opt dump for " + m.getName()));
         }
-        Pattern bw = Pattern.compile("branch_weights\",\\s*i32\\s*(\\d+),\\s*i32\\s*(\\d+)");
-        for (String line : Files.readAllLines(ll)) {
+
+        List<String> lines = Files.readAllLines(ll);
+        Pattern branchProfile = Pattern.compile("\\bbr i1\\b.*!prof !(\\d+)");
+        String profileId = null;
+        boolean inTarget = false;
+        for (String line : lines) {
+            if (!inTarget) {
+                inTarget = line.startsWith("define ") && line.contains(prefix);
+                continue;
+            }
+            Matcher mm = branchProfile.matcher(line);
+            if (mm.find()) {
+                profileId = mm.group(1);
+                break;
+            }
+            if (line.trim().equals("}")) {
+                break;
+            }
+        }
+        if (profileId == null) {
+            throw new RuntimeException("no profiled branch found in " + m.getName());
+        }
+
+        Pattern bw = Pattern.compile("^!" + Pattern.quote(profileId)
+                + " = (?:distinct )?!\\{!\\\"branch_weights\\\",\\s*i32\\s*(\\d+),"
+                + "\\s*i32\\s*(\\d+)");
+        for (String line : lines) {
             Matcher mm = bw.matcher(line);
             if (mm.find()) {
                 long taken = Long.parseLong(mm.group(1));
@@ -166,7 +193,8 @@ public class TestBranchWeights {
                 return;
             }
         }
-        throw new RuntimeException("no branch_weights node found for " + m.getName());
+        throw new RuntimeException("branch_weights node !" + profileId + " is missing for "
+                + m.getName());
     }
 
     private static boolean dumpPresent(String dir, String prefix, long since) throws Exception {

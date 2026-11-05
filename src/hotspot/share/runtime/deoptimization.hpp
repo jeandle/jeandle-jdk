@@ -185,6 +185,9 @@ class Deoptimization : AllStatic {
 
 #if INCLUDE_JVMCI
   static address deoptimize_for_missing_exception_handler(CompiledMethod* cm);
+#endif
+
+#if INCLUDE_JVMCI || INCLUDE_JEANDLE
   static oop get_cached_box(AutoBoxObjectValue* bv, frame* fr, RegisterMap* reg_map, bool& cache_init_error, TRAPS);
 #endif
 
@@ -192,7 +195,7 @@ class Deoptimization : AllStatic {
   // Does the actual work for deoptimizing a single frame
   static void deoptimize_single_frame(JavaThread* thread, frame fr, DeoptReason reason);
 
-#if COMPILER2_OR_JVMCI
+#if COMPILER2_OR_JVMCI || INCLUDE_JEANDLE
   // Deoptimize objects, that is reallocate and relock them, just before they
   // escape through JVMTI.  The given vframes cover one physical frame.
   static bool deoptimize_objects_internal(JavaThread* thread, GrowableArray<compiledVFrame*>* chunk,
@@ -208,7 +211,7 @@ class Deoptimization : AllStatic {
   static bool relock_objects(JavaThread* thread, GrowableArray<MonitorInfo*>* monitors,
                              JavaThread* deoptee_thread, frame& fr, int exec_mode, bool realloc_failures);
   static void pop_frames_failed_reallocs(JavaThread* thread, vframeArray* array);
-#endif // COMPILER2_OR_JVMCI
+#endif // COMPILER2_OR_JVMCI || INCLUDE_JEANDLE
 
   public:
   static vframeArray* create_vframeArray(JavaThread* thread, frame fr, RegisterMap *reg_map, GrowableArray<compiledVFrame*>* chunk, bool realloc_failures);

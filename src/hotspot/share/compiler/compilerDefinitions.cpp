@@ -655,6 +655,13 @@ void CompilerConfig::ergo_initialize() {
     }
 #endif // COMPILER2
 
+    // Boxing JavaOps are an implementation detail of Jeandle PEA. Without
+    // PEA there is no consumer for their semantic form, so keep the ordinary
+    // valueOf/xxxValue invoke path instead of lowering them late at phase 2.
+    if (!JeandleDoPEA && JeandleOptBoxing) {
+      FLAG_SET_ERGO(JeandleOptBoxing, false);
+    }
+
 #ifndef PRODUCT
     if (FLAG_IS_CMDLINE(StackPrintLimit) && StackPrintLimit >= 200) {
       warning("StackPrintLimit is set to 200 due to avoid allocating too much stack memory during LLVM's assertion failure handling.");

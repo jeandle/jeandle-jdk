@@ -289,7 +289,7 @@ JRT_BLOCK_ENTRY(Deoptimization::UnrollBlock*, Deoptimization::fetch_unroll_info(
   return fetch_unroll_info_helper(current, exec_mode);
 JRT_END
 
-#if COMPILER2_OR_JVMCI
+#if COMPILER2_OR_JVMCI || INCLUDE_JEANDLE
 // print information about reallocated objects
 static void print_objects(JavaThread* deoptee_thread,
                           GrowableArray<ScopeValue*>* objects, bool realloc_failures) {
@@ -443,10 +443,18 @@ bool Deoptimization::deoptimize_objects_internal(JavaThread* thread, GrowableArr
   bool deoptimized_objects = false;
 
   bool const jvmci_enabled = JVMCI_ONLY(UseJVMCICompiler) NOT_JVMCI(false);
+  bool const jeandle_pea_enabled =
+      JEANDLE_PRESENT(cm != nullptr && cm->is_compiled_by_jeandle() &&
+                      JeandleDoPEA)
+      NOT_JEANDLE(false);
+  bool const jeandle_lock_elimination_enabled =
+      JEANDLE_PRESENT(jeandle_pea_enabled && JeandleEliminateLocks)
+      NOT_JEANDLE(false);
 
   // Reallocate the non-escaping objects and restore their fields.
-  if (jvmci_enabled COMPILER2_PRESENT(|| (DoEscapeAnalysis && EliminateAllocations)
-                                      || EliminateAutoBox || EnableVectorAggressiveReboxing)) {
+  if (jeandle_pea_enabled ||
+      jvmci_enabled COMPILER2_PRESENT(|| (DoEscapeAnalysis && EliminateAllocations)
+                                     || EliminateAutoBox || EnableVectorAggressiveReboxing)) {
     realloc_failures = rematerialize_objects(thread, Unpack_none, cm, deoptee, map, chunk, deoptimized_objects);
   }
 
@@ -454,12 +462,13 @@ bool Deoptimization::deoptimize_objects_internal(JavaThread* thread, GrowableArr
   NoSafepointVerifier no_safepoint;
 
   // Now relock objects if synchronization on them was eliminated.
-  if (jvmci_enabled COMPILER2_PRESENT(|| ((DoEscapeAnalysis || EliminateNestedLocks) && EliminateLocks))) {
+  if (jeandle_lock_elimination_enabled ||
+      jvmci_enabled COMPILER2_PRESENT(|| ((DoEscapeAnalysis || EliminateNestedLocks) && EliminateLocks))) {
     restore_eliminated_locks(thread, chunk, realloc_failures, deoptee, Unpack_none, deoptimized_objects);
   }
   return deoptimized_objects;
 }
-#endif // COMPILER2_OR_JVMCI
+#endif // COMPILER2_OR_JVMCI || INCLUDE_JEANDLE
 
 // This is factored, since it is both called from a JRT_LEAF (deoptimization) and a JRT_ENTRY (uncommon_trap)
 Deoptimization::UnrollBlock* Deoptimization::fetch_unroll_info_helper(JavaThread* current, int exec_mode) {
@@ -513,17 +522,25 @@ Deoptimization::UnrollBlock* Deoptimization::fetch_unroll_info_helper(JavaThread
 
   bool realloc_failures = false;
 
-#if COMPILER2_OR_JVMCI
+#if COMPILER2_OR_JVMCI || INCLUDE_JEANDLE
   bool const jvmci_enabled = JVMCI_ONLY(EnableJVMCI) NOT_JVMCI(false);
+  bool const jeandle_pea_enabled =
+      JEANDLE_PRESENT(cm != nullptr && cm->is_compiled_by_jeandle() &&
+                      JeandleDoPEA)
+      NOT_JEANDLE(false);
+  bool const jeandle_lock_elimination_enabled =
+      JEANDLE_PRESENT(jeandle_pea_enabled && JeandleEliminateLocks)
+      NOT_JEANDLE(false);
 
   // Reallocate the non-escaping objects and restore their fields. Then
   // relock objects if synchronization on them was eliminated.
-  if (jvmci_enabled COMPILER2_PRESENT( || (DoEscapeAnalysis && EliminateAllocations)
-                                       || EliminateAutoBox || EnableVectorAggressiveReboxing )) {
+  if (jeandle_pea_enabled ||
+      jvmci_enabled COMPILER2_PRESENT( || (DoEscapeAnalysis && EliminateAllocations)
+                                      || EliminateAutoBox || EnableVectorAggressiveReboxing )) {
     bool unused;
     realloc_failures = rematerialize_objects(current, exec_mode, cm, deoptee, map, chunk, unused);
   }
-#endif // COMPILER2_OR_JVMCI
+#endif // COMPILER2_OR_JVMCI || INCLUDE_JEANDLE
 
   // Ensure that no safepoint is taken after pointers have been stored
   // in fields of rematerialized objects.  If a safepoint occurs from here on
@@ -531,13 +548,14 @@ Deoptimization::UnrollBlock* Deoptimization::fetch_unroll_info_helper(JavaThread
   // Locks may be rebaised in a safepoint.
   NoSafepointVerifier no_safepoint;
 
-#if COMPILER2_OR_JVMCI
-  if ((jvmci_enabled COMPILER2_PRESENT( || ((DoEscapeAnalysis || EliminateNestedLocks) && EliminateLocks) ))
+#if COMPILER2_OR_JVMCI || INCLUDE_JEANDLE
+  if ((jeandle_lock_elimination_enabled ||
+       jvmci_enabled COMPILER2_PRESENT( || ((DoEscapeAnalysis || EliminateNestedLocks) && EliminateLocks) ))
       && !EscapeBarrier::objs_are_deoptimized(current, deoptee.id())) {
     bool unused = false;
     restore_eliminated_locks(current, chunk, realloc_failures, deoptee, exec_mode, unused);
   }
-#endif // COMPILER2_OR_JVMCI
+#endif // COMPILER2_OR_JVMCI || INCLUDE_JEANDLE
 
   ScopeDesc* trap_scope = chunk->at(0)->scope();
   Handle exceptionObject;
@@ -556,7 +574,7 @@ Deoptimization::UnrollBlock* Deoptimization::fetch_unroll_info_helper(JavaThread
   }
 
   vframeArray* array = create_vframeArray(current, deoptee, &map, chunk, realloc_failures);
-#if COMPILER2_OR_JVMCI
+#if COMPILER2_OR_JVMCI || INCLUDE_JEANDLE
   if (realloc_failures) {
     // This destroys all ScopedValue bindings.
     current->clear_scopedValueBindings();
@@ -1049,7 +1067,7 @@ void Deoptimization::deoptimize_all_marked() {
 Deoptimization::DeoptAction Deoptimization::_unloaded_action
   = Deoptimization::Action_reinterpret;
 
-#if INCLUDE_JVMCI
+#if INCLUDE_JVMCI || INCLUDE_JEANDLE
 template<typename CacheType>
 class BoxCacheBase : public CHeapObj<mtCompiler> {
 protected:
@@ -1081,8 +1099,20 @@ protected:
     } else {
       objArrayOop cache = CacheType::cache(ik);
       assert(cache->length() > 0, "Empty cache");
-      _low = BoxType::value(cache->obj_at(0));
-      _high = _low + cache->length() - 1;
+      if (CacheType::symbol() == java_lang_Integer_IntegerCache::symbol()) {
+        jint low = java_lang_Integer_IntegerCache::low(ik);
+        jint high = java_lang_Integer_IntegerCache::high(ik);
+        assert(low <= high, "invalid Integer cache bounds");
+        assert(static_cast<jlong>(high) - low + 1 <= cache->length(),
+               "Integer cache bounds exceed backing array");
+        assert(java_lang_Integer::value(cache->obj_at(0)) == low,
+               "Integer cache low does not match backing array");
+        _low = static_cast<PrimitiveType>(low);
+        _high = static_cast<PrimitiveType>(high);
+      } else {
+        _low = BoxType::value(cache->obj_at(0));
+        _high = _low + cache->length() - 1;
+      }
       _cache = JNIHandles::make_global(Handle(thread, cache));
     }
   }
@@ -1198,9 +1228,9 @@ oop Deoptimization::get_cached_box(AutoBoxObjectValue* bv, frame* fr, RegisterMa
    }
    return nullptr;
 }
-#endif // INCLUDE_JVMCI
+#endif // INCLUDE_JVMCI || INCLUDE_JEANDLE
 
-#if COMPILER2_OR_JVMCI
+#if COMPILER2_OR_JVMCI || INCLUDE_JEANDLE
 bool Deoptimization::realloc_objects(JavaThread* thread, frame* fr, RegisterMap* reg_map, GrowableArray<ScopeValue*>* objects, TRAPS) {
   Handle pending_exception(THREAD, thread->pending_exception());
   const char* exception_file = thread->exception_file();
@@ -1218,9 +1248,10 @@ bool Deoptimization::realloc_objects(JavaThread* thread, frame* fr, RegisterMap*
 
     bool cache_init_error = false;
     if (k->is_instance_klass()) {
-#if INCLUDE_JVMCI
+#if INCLUDE_JVMCI || INCLUDE_JEANDLE
       CompiledMethod* cm = fr->cb()->as_compiled_method_or_null();
-      if (cm->is_compiled_by_jvmci() && sv->is_auto_box()) {
+      if ((cm->is_compiled_by_jvmci() || cm->is_compiled_by_jeandle()) &&
+          sv->is_auto_box()) {
         AutoBoxObjectValue* abv = (AutoBoxObjectValue*) sv;
         obj = get_cached_box(abv, fr, reg_map, cache_init_error, THREAD);
         if (obj != nullptr) {
@@ -1232,7 +1263,7 @@ bool Deoptimization::realloc_objects(JavaThread* thread, frame* fr, RegisterMap*
           failures = true;
         }
       }
-#endif // INCLUDE_JVMCI
+#endif // INCLUDE_JVMCI || INCLUDE_JEANDLE
 
       InstanceKlass* ik = InstanceKlass::cast(k);
       if (obj == nullptr && !cache_init_error) {
@@ -1579,12 +1610,13 @@ void Deoptimization::reassign_fields(frame* fr, RegisterMap* reg_map, GrowableAr
       continue;
     }
 
-#if INCLUDE_JVMCI
-    // Don't reassign fields of boxes that came from a cache. Caches may be in CDS.
+#if INCLUDE_JVMCI || INCLUDE_JEANDLE
+    // Don't reassign fields of cached boxes reconstructed for JVMCI or
+    // Jeandle. Caches may be in CDS.
     if (sv->is_auto_box() && ((AutoBoxObjectValue*) sv)->is_cached()) {
       continue;
     }
-#endif // INCLUDE_JVMCI
+#endif // INCLUDE_JVMCI || INCLUDE_JEANDLE
 #ifdef COMPILER2
     if (EnableVectorSupport && VectorSupport::is_vector(k)) {
       assert(sv->field_size() == 1, "%s not a vector", k->name()->as_C_string());
@@ -1672,7 +1704,7 @@ bool Deoptimization::relock_objects(JavaThread* thread, GrowableArray<MonitorInf
   }
   return relocked_objects;
 }
-#endif // COMPILER2_OR_JVMCI
+#endif // COMPILER2_OR_JVMCI || INCLUDE_JEANDLE
 
 vframeArray* Deoptimization::create_vframeArray(JavaThread* thread, frame fr, RegisterMap *reg_map, GrowableArray<compiledVFrame*>* chunk, bool realloc_failures) {
   Events::log_deopt_message(thread, "DEOPT PACKING pc=" INTPTR_FORMAT " sp=" INTPTR_FORMAT, p2i(fr.pc()), p2i(fr.sp()));
@@ -1724,7 +1756,7 @@ vframeArray* Deoptimization::create_vframeArray(JavaThread* thread, frame fr, Re
   return array;
 }
 
-#if COMPILER2_OR_JVMCI
+#if COMPILER2_OR_JVMCI || INCLUDE_JEANDLE
 void Deoptimization::pop_frames_failed_reallocs(JavaThread* thread, vframeArray* array) {
   // Reallocation of some scalar replaced objects failed. Record
   // that we need to pop all the interpreter frames for the

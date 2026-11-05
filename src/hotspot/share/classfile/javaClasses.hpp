@@ -1799,10 +1799,14 @@ class java_lang_Boolean : AllStatic {
 class java_lang_Integer_IntegerCache : AllStatic {
  private:
   static int _static_cache_offset;
+  static int _static_low_offset;
+  static int _static_high_offset;
  public:
   static Symbol* symbol();
   static void compute_offsets(InstanceKlass* k);
   static objArrayOop  cache(InstanceKlass *k);
+  static jint low(InstanceKlass *k);
+  static jint high(InstanceKlass *k);
   static void serialize_offsets(SerializeClosure* f) NOT_CDS_RETURN;
 };
 

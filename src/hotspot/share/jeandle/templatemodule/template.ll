@@ -53,6 +53,7 @@
 @arrayOopDesc.base_offset_in_bytes.float   = external global i32
 @arrayOopDesc.base_offset_in_bytes.double  = external global i32
 @arrayOopDesc.base_offset_in_bytes.object  = external global i32
+@heapOopSize = external global i32
 ; Per-element-type array element size in bytes. Same delivery model; consumed
 ; by VMConstants::fromModule alongside the base offsets.
 @arrayOopDesc.element_size.boolean = external global i32
@@ -64,6 +65,26 @@
 @arrayOopDesc.element_size.float   = external global i32
 @arrayOopDesc.element_size.double  = external global i32
 @arrayOopDesc.element_size.object  = external global i32
+
+; Metadata used by the generic jeandle.box JavaOp. Integer uses its live
+; IntegerCache.low/high fields because a CDS-restored backing array can be
+; larger than the current runtime range. Other integral cache ranges are
+; derived from their live arrays.
+@jeandle.box.Boolean.klass = external global i64
+@jeandle.box.Boolean.true_offset = external global i32
+@jeandle.box.Boolean.false_offset = external global i32
+@jeandle.box.ByteCache.klass = external global i64
+@jeandle.box.ByteCache.cache_offset = external global i32
+@jeandle.box.CharacterCache.klass = external global i64
+@jeandle.box.CharacterCache.cache_offset = external global i32
+@jeandle.box.ShortCache.klass = external global i64
+@jeandle.box.ShortCache.cache_offset = external global i32
+@jeandle.box.IntegerCache.klass = external global i64
+@jeandle.box.IntegerCache.cache_offset = external global i32
+@jeandle.box.IntegerCache.low_offset = external global i32
+@jeandle.box.IntegerCache.high_offset = external global i32
+@jeandle.box.LongCache.klass = external global i64
+@jeandle.box.LongCache.cache_offset = external global i32
 
 ; Byte offsets for Klass structure fields.
 @Klass.access_flags_offset = external global i32
@@ -82,6 +103,8 @@
 @oopDesc.klass_offset_in_bytes = external global i32
 @oopDesc.mark_offset_in_bytes = external global i32
 @instanceOopDesc.base_offset_in_bytes = external global i32
+@java_lang_boxing_object.value_offset = external global i32
+@java_lang_boxing_object.long_value_offset = external global i32
 
 ; Byte offsets for JavaThread structure fields.
 @JavaThread.tlab_end_offset = external global i64

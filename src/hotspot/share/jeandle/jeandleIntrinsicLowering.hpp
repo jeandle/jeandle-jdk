@@ -36,6 +36,7 @@
 #define PROB_FAIR               (0.5f)
 
 class JeandleAbstractInterpreter;
+class ciKlass;
 class ciMethod;
 
 // =============================================================================
@@ -257,6 +258,12 @@ class JeandleIntrinsicLowering : public StackObj {
                                                llvm::Value* byte_length,
                                                llvm::Value* scale);
   bool lower_hash_code(vmIntrinsics::ID id);
+  // Wrapper xxxValue/valueOf intrinsic. The single JavaOp carries the wrapper
+  // kind explicitly and returns an i64 payload encoding; the frontend decodes
+  // it back to the Java computational type after the null check.
+  bool lower_boxed_unbox(vmIntrinsics::ID id);
+  bool lower_boxed_box(vmIntrinsics::ID id);
+  llvm::Value* constant_klass_value(ciKlass* klass) const;
 
   };
 

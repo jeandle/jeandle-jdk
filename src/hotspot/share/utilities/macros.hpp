@@ -279,6 +279,15 @@
 #define NOT_JVMCI_RETURN {}
 #endif // INCLUDE_JVMCI
 
+// Derive a numeric feature guard from the legacy Jeandle build define.
+#ifndef INCLUDE_JEANDLE
+#ifdef JEANDLE
+#define INCLUDE_JEANDLE 1
+#else
+#define INCLUDE_JEANDLE 0
+#endif
+#endif // INCLUDE_JEANDLE
+
 // COMPILER1 variant
 #ifdef COMPILER1
 #define COMPILER1_PRESENT(code) code

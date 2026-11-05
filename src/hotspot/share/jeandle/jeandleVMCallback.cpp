@@ -51,7 +51,11 @@
 #include "ci/ciType.hpp"
 #include "ci/ciUtilities.inline.hpp"
 #include "code/oopRecorder.hpp"
+#include "classfile/javaClasses.inline.hpp"
+#include "classfile/symbolTable.hpp"
 #include "logging/log.hpp"
+#include "oops/objArrayOop.inline.hpp"
+#include "runtime/fieldDescriptor.inline.hpp"
 #include "oops/fieldInfo.inline.hpp"
 #include "oops/fieldStreams.inline.hpp"
 #include "oops/instanceMirrorKlass.hpp"
@@ -363,6 +367,105 @@ int JeandleVMCallback::is_boxed(uintptr_t klass_ptr) {
   if (k == vmClasses::Float_klass())     return 6;
   if (k == vmClasses::Double_klass())    return 7;
   return 9; // JBasicType::Count
+}
+
+namespace {
+template <typename CacheType, typename BoxType, typename PrimitiveType>
+int get_box_cache_status_for(JavaThread* thread, int64_t raw_value,
+                             Symbol* cache_signature) {
+  InstanceKlass* cache_klass = SystemDictionary::find_instance_klass(
+      thread, CacheType::symbol(), Handle(), Handle());
+  if (cache_klass == nullptr || !cache_klass->is_initialized()) {
+    return -1;
+  }
+  // The java_lang_*Cache accessors use offsets initialized by JVMCI. Jeandle
+  // must not depend on that optional initialization, so resolve the static
+  // cache field directly from the initialized cache class.
+  fieldDescriptor cache_field;
+  if (!cache_klass->find_local_field(vmSymbols::cache_field_name(),
+                                     cache_signature, &cache_field) ||
+      !cache_field.is_static()) {
+    return -1;
+  }
+  oop base = cache_klass->static_field_base_raw();
+  objArrayHandle cache(thread,
+                       objArrayOop(base->obj_field(cache_field.offset())));
+  if (cache.is_null() || cache->length() == 0) {
+    return -1;
+  }
+  Handle first(thread, cache->obj_at(0));
+  Handle last(thread, cache->obj_at(cache->length() - 1));
+  PrimitiveType value = static_cast<PrimitiveType>(raw_value);
+  PrimitiveType low = BoxType::value(first());
+  PrimitiveType high = BoxType::value(last());
+  return low <= value && value <= high ? 1 : 0;
+}
+
+int get_integer_box_cache_status(JavaThread* thread, int64_t raw_value) {
+  InstanceKlass* cache_klass = SystemDictionary::find_instance_klass(
+      thread, java_lang_Integer_IntegerCache::symbol(), Handle(), Handle());
+  if (cache_klass == nullptr || !cache_klass->is_initialized()) {
+    return -1;
+  }
+  auto find_int_field = [&](const char* name, fieldDescriptor* field) {
+    TempNewSymbol field_name = SymbolTable::new_symbol(name);
+    return cache_klass->find_local_field(field_name, vmSymbols::int_signature(),
+                                         field) &&
+           field->is_static();
+  };
+  fieldDescriptor low_field;
+  fieldDescriptor high_field;
+  if (!find_int_field("low", &low_field) ||
+      !find_int_field("high", &high_field)) {
+    return -1;
+  }
+  oop base = cache_klass->static_field_base_raw();
+  jint low = base->int_field(low_field.offset());
+  jint high = base->int_field(high_field.offset());
+  jint value = static_cast<jint>(raw_value);
+  return low <= value && value <= high ? 1 : 0;
+}
+} // anonymous namespace
+
+// Whether valueOf returns a shared cache object for this exact integral
+// payload. Integer uses its live low/high fields because a CDS-restored
+// backing array may be larger than the cache range selected for this run.
+// A negative status means the cache was unavailable and must be treated
+// conservatively by the caller.
+int JeandleVMCallback::get_box_cache_status(uintptr_t klass_ptr, int64_t value) {
+  VM_ENTRY_MARK;
+  Klass* klass = reinterpret_cast<Klass*>(klass_ptr);
+  if (klass == vmClasses::Boolean_klass()) {
+    return 1;
+  }
+  if (klass == vmClasses::Byte_klass()) {
+    return get_box_cache_status_for<java_lang_Byte_ByteCache,
+                                    java_lang_Byte, jbyte>(
+        THREAD, value, vmSymbols::java_lang_Byte_array_signature());
+  }
+  if (klass == vmClasses::Character_klass()) {
+    return get_box_cache_status_for<java_lang_Character_CharacterCache,
+                                    java_lang_Character, jchar>(
+        THREAD, value, vmSymbols::java_lang_Character_array_signature());
+  }
+  if (klass == vmClasses::Short_klass()) {
+    return get_box_cache_status_for<java_lang_Short_ShortCache,
+                                    java_lang_Short, jshort>(
+        THREAD, value, vmSymbols::java_lang_Short_array_signature());
+  }
+  if (klass == vmClasses::Integer_klass()) {
+    return get_integer_box_cache_status(THREAD, value);
+  }
+  if (klass == vmClasses::Long_klass()) {
+    return get_box_cache_status_for<java_lang_Long_LongCache,
+                                    java_lang_Long, jlong>(
+        THREAD, value, vmSymbols::java_lang_Long_array_signature());
+  }
+  if (klass == vmClasses::Float_klass() ||
+      klass == vmClasses::Double_klass()) {
+    return 0;
+  }
+  return -1;
 }
 
 // True iff the klass declares/inherits a non-trivial finalize(). PEA refuses
@@ -1116,6 +1219,7 @@ void JeandleVMCallback::register_callbacks() {
   callbacks.ArrayElementKlass = &JeandleVMCallback::array_element_klass;
   callbacks.IsValueBased = &JeandleVMCallback::is_value_based;
   callbacks.IsBoxed = &JeandleVMCallback::is_boxed;
+  callbacks.GetBoxCacheStatus = &JeandleVMCallback::get_box_cache_status;
   callbacks.HasFinalizer = &JeandleVMCallback::has_finalizer;
   callbacks.CanVirtualize = &JeandleVMCallback::can_virtualize;
   callbacks.GetConstantField = &JeandleVMCallback::get_constant_field;

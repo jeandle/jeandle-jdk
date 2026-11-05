@@ -31,6 +31,10 @@
 class RuntimeDefinedJavaOps : public AllStatic {
  public:
   static bool define_all(llvm::Module& template_module);
+  // Populate boxing metadata in a per-compilation module from the live VM
+  // state. The template may have been created before lazy cache classes were
+  // initialized.
+  static void refresh_boxing_metadata(llvm::Module& target_module);
 
   static void reset_state() { _error_msg = nullptr; }
   static void set_failed(const char* error_msg) { assert(error_msg != nullptr, "why we failed?"); _error_msg = error_msg; }
