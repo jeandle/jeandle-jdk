@@ -1159,34 +1159,18 @@ bool JeandleIntrinsicLowering::lower_digestBase_implCompressMB() {
   llvm::LLVMContext& ctx = *_interp->_context;
 
   llvm::Value* src_start = array_data_pointer(src, T_BYTE, ofs);
-  // The assembler may consume full registers. Extend the Java offsets and
-  // limits to native width while preserving their signed interpretation.
   llvm::IntegerType* word_type = builder.getIntPtrTy(_interp->_module.getDataLayout());
-  llvm::Value* stub_ofs = builder.CreateSExtOrTrunc(ofs, word_type);
-  llvm::Value* stub_limit = builder.CreateSExtOrTrunc(limit, word_type);
 
   llvm::BasicBlock* merge_bb =
       llvm::BasicBlock::Create(ctx, "digestMB_merge", _interp->_llvm_func);
   llvm::SmallVector<llvm::Value*, 6> results;
   llvm::SmallVector<llvm::BasicBlock*, 6> result_blocks;
 
-  llvm::Value* receiver_klass = nullptr;
   for (const ResolvedMB& branch : branches) {
-    // Final digest classes have no subtypes. A failed exact-class check
-    // can proceed directly to the next algorithm without a supertype walk.
-    // SHA2/SHA5/SHA3 are abstract bases and still require subtype checks.
-    llvm::Value* hit;
-    if (branch.klass->is_final()) {
-      if (receiver_klass == nullptr) {
-        receiver_klass = _interp->call_java_op("jeandle.load_klass", {receiver});
-      }
-      hit = builder.CreateICmpEQ(receiver_klass, klass_constant_pointer(branch.klass));
-    } else {
-      // invoke() has already checked the receiver for null.
-      hit = _interp->call_java_op(
-          "jeandle.check_instanceof",
-          {klass_constant_pointer(branch.klass), receiver});
-    }
+    // invoke() has already checked the receiver for null.
+    llvm::Value* hit = _interp->call_java_op(
+        "jeandle.check_instanceof",
+        {klass_constant_pointer(branch.klass), receiver});
 
     llvm::BasicBlock* hit_bb = llvm::BasicBlock::Create(
         ctx, std::string("digestMB_") + branch.spec->label + "_hit",
@@ -1201,6 +1185,12 @@ bool JeandleIntrinsicLowering::lower_digestBase_implCompressMB() {
         load_instance_object_field(receiver, branch.state_field);
     llvm::Value* state_base =
         array_element0_pointer(state_array, branch.spec->state_elem);
+    // Match each entry's register contract directly from the Java values.
+    // x86 MD5 uses 32-bit offsets; the other entries consume native words.
+    llvm::FunctionType* stub_type = branch.spec->callee(_interp->_module).getFunctionType();
+    llvm::Type* offset_type = stub_type->getParamType(branch.spec->has_block_size ? 3 : 2);
+    llvm::Value* stub_ofs = builder.CreateSExtOrTrunc(ofs, offset_type);
+    llvm::Value* stub_limit = builder.CreateSExtOrTrunc(limit, offset_type);
     llvm::CallBase* call;
     if (branch.block_size_field == nullptr) {
       call = emit_crypto_stub(branch.spec->callee,

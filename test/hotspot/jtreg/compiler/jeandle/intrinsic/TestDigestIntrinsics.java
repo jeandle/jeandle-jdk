@@ -30,6 +30,7 @@ import java.util.List;
 import com.sun.management.HotSpotDiagnosticMXBean;
 
 import jdk.test.lib.Asserts;
+import jdk.test.lib.Platform;
 import jdk.test.lib.process.OutputAnalyzer;
 import jdk.test.lib.process.ProcessTools;
 
@@ -115,15 +116,25 @@ public class TestDigestIntrinsics {
         assertRoutineMatchesFlag(output, ir, "UseSHA3Intrinsics",
                 "StubRoutines_sha3_implCompressMB", "SHA-3 multi-block");
 
-        // Native digest stubs may read the full argument register. LLVM's
-        // C ABI does not define its upper bits for an i32 parameter.
+        // Match the integer widths consumed by each assembler entry. x86 MD5
+        // saves ofs/limit with movl; other digest entries read full registers.
         var declarations = java.util.regex.Pattern.compile(
-                "(?m)^declare [^\\n]*@StubRoutines_(?:md5|sha)[^(]*\\(([^\\n]*)\\)")
+                "(?m)^declare [^\\n]*@(StubRoutines_(?:md5|sha)[^(]*)\\(([^\\n]*)\\)")
                 .matcher(ir);
         while (declarations.find()) {
-            Asserts.assertFalse(declarations.group(1).contains("i32"),
-                    "digest stub integer arguments must have native width: "
-                            + declarations.group());
+            String routine = declarations.group(1);
+            String[] parameters = declarations.group(2).split(", ");
+            boolean multiBlock = routine.endsWith("implCompressMB");
+            boolean sha3 = routine.startsWith("StubRoutines_sha3_");
+            int integerCount = (multiBlock ? 2 : 0) + (sha3 ? 1 : 0);
+            Asserts.assertEquals(parameters.length, 2 + integerCount,
+                    "unexpected digest stub arity: " + declarations.group());
+            String integerType = Platform.isX64()
+                    && routine.equals("StubRoutines_md5_implCompressMB") ? "i32" : "i64";
+            for (int i = 2; i < parameters.length; i++) {
+                Asserts.assertEquals(parameters[i], integerType,
+                        "unexpected digest stub argument width: " + declarations.group());
+            }
         }
     }
 

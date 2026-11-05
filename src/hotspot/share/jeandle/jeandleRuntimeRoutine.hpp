@@ -364,6 +364,7 @@
       llvm::PointerType::get(context, llvm::jeandle::AddrSpace::JavaHeapAddrSpace), \
       llvm::PointerType::get(context, llvm::jeandle::AddrSpace::JavaHeapAddrSpace)) \
                                                                                     \
+  /* x86 MD5 stores ofs/limit with movl; other platforms consume native words. */    \
   def(StubRoutines_md5_implCompressMB,                                              \
       StubRoutines::md5_implCompressMB(),                                           \
       true,                                                                         \
@@ -371,8 +372,8 @@
       llvm::Type::getInt32Ty(context),                                              \
       llvm::PointerType::get(context, llvm::jeandle::AddrSpace::JavaHeapAddrSpace), \
       llvm::PointerType::get(context, llvm::jeandle::AddrSpace::JavaHeapAddrSpace), \
-      llvm::IntegerType::get(context, BitsPerWord),                                 \
-      llvm::IntegerType::get(context, BitsPerWord))                                 \
+      llvm::IntegerType::get(context, X86_ONLY(32) NOT_X86(BitsPerWord)),             \
+      llvm::IntegerType::get(context, X86_ONLY(32) NOT_X86(BitsPerWord)))             \
                                                                                     \
   def(StubRoutines_sha1_implCompressMB,                                             \
       StubRoutines::sha1_implCompressMB(),                                          \
