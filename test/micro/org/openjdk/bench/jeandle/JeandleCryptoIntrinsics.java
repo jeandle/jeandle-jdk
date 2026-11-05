@@ -84,11 +84,14 @@ import javax.crypto.spec.SecretKeySpec;
 @Measurement(iterations = 5, time = 1)
 public class JeandleCryptoIntrinsics {
 
-    @Param({"64", "1024", "16384"})
+    @Param({"16", "64", "1024", "16384", "65536"})
     int size;
 
     MessageDigest md5;
+    MessageDigest sha1;
     MessageDigest sha256;
+    MessageDigest sha512;
+    MessageDigest sha3;
 
     SecretKeySpec aesKey;
     SecretKeySpec chachaKey;
@@ -99,7 +102,12 @@ public class JeandleCryptoIntrinsics {
     Cipher cbcDec;
     Cipher ctr;
     Cipher gcmEnc;
+    Cipher gcmDec;
     Cipher chachaEnc;
+    Cipher chachaStream;
+    Cipher chachaAead;
+    IvParameterSpec[] chachaAeadSpecs = new IvParameterSpec[CHACHA_WINDOWS];
+    byte[][] gcmCiphertexts;
 
     // ChaCha20 re-init per op with a nonce that differs from the previous
     // init: 12 twelve-byte windows over a 24-byte source, preallocated (it
@@ -121,7 +129,10 @@ public class JeandleCryptoIntrinsics {
     @Setup
     public void setup() throws Exception {
         md5 = MessageDigest.getInstance("MD5", "SUN");
+        sha1 = MessageDigest.getInstance("SHA-1", "SUN");
         sha256 = MessageDigest.getInstance("SHA-256", "SUN");
+        sha512 = MessageDigest.getInstance("SHA-512", "SUN");
+        sha3 = MessageDigest.getInstance("SHA3-256", "SUN");
 
         byte[] aesKeyBytes = new byte[16];
         for (int i = 0; i < aesKeyBytes.length; i++) {
@@ -148,6 +159,7 @@ public class JeandleCryptoIntrinsics {
         for (int i = 0; i < CHACHA_WINDOWS; i++) {
             chachaSpecs[i] = new ChaCha20ParameterSpec(
                     Arrays.copyOfRange(chachaNonceSource, i, i + 12), 1);
+            chachaAeadSpecs[i] = new IvParameterSpec(chachaNonceSource, i, 12);
         }
 
         byte[] gcmIvSource = new byte[32];
@@ -178,7 +190,17 @@ public class JeandleCryptoIntrinsics {
         // gcmEnc and chachaEnc are initialized inside their benchmarks;
         // initializing here would just be thrown away on the first op.
         gcmEnc = Cipher.getInstance("AES/GCM/NoPadding", "SunJCE");
+        gcmDec = Cipher.getInstance("AES/GCM/NoPadding", "SunJCE");
+        gcmCiphertexts = new byte[GCM_WINDOWS][];
+        Cipher prepare = Cipher.getInstance("AES/GCM/NoPadding", "SunJCE");
+        for (int i = 0; i < GCM_WINDOWS; i++) {
+            prepare.init(Cipher.ENCRYPT_MODE, aesKey, gcmSpecs[i]);
+            gcmCiphertexts[i] = prepare.doFinal(plain);
+        }
         chachaEnc = Cipher.getInstance("ChaCha20", "SunJCE");
+        chachaStream = Cipher.getInstance("ChaCha20", "SunJCE");
+        chachaStream.init(Cipher.ENCRYPT_MODE, chachaKey, chachaSpecs[0]);
+        chachaAead = Cipher.getInstance("ChaCha20-Poly1305", "SunJCE");
     }
 
     @Benchmark
@@ -193,6 +215,21 @@ public class JeandleCryptoIntrinsics {
         sha256.reset();
         sha256.update(plain, 0, plain.length);
         return sha256.digest();
+    }
+
+    @Benchmark
+    public byte[] digestSha1() {
+        return sha1.digest(plain);
+    }
+
+    @Benchmark
+    public byte[] digestSha512() {
+        return sha512.digest(plain);
+    }
+
+    @Benchmark
+    public byte[] digestSha3() {
+        return sha3.digest(plain);
     }
 
     @Benchmark
@@ -234,5 +271,27 @@ public class JeandleCryptoIntrinsics {
         chachaSpecIndex = (chachaSpecIndex + 1) % CHACHA_WINDOWS;
         chachaEnc.init(Cipher.ENCRYPT_MODE, chachaKey, spec);
         return chachaEnc.doFinal(plain, 0, plain.length, out, 0);
+    }
+
+    @Benchmark
+    public int aesGcmDecrypt() throws Exception {
+        int index = gcmSpecIndex;
+        gcmSpecIndex = (index + 1) % GCM_WINDOWS;
+        gcmDec.init(Cipher.DECRYPT_MODE, aesKey, gcmSpecs[index]);
+        byte[] ciphertext = gcmCiphertexts[index];
+        return gcmDec.doFinal(ciphertext, 0, ciphertext.length, out, 0);
+    }
+
+    @Benchmark
+    public int chacha20Update() throws Exception {
+        return chachaStream.update(plain, 0, plain.length, out, 0);
+    }
+
+    @Benchmark
+    public int chacha20Poly1305() throws Exception {
+        IvParameterSpec spec = chachaAeadSpecs[chachaSpecIndex];
+        chachaSpecIndex = (chachaSpecIndex + 1) % CHACHA_WINDOWS;
+        chachaAead.init(Cipher.ENCRYPT_MODE, chachaKey, spec);
+        return chachaAead.doFinal(plain, 0, plain.length, out, 0);
     }
 }

@@ -442,7 +442,7 @@
       llvm::PointerType::get(context, llvm::jeandle::AddrSpace::JavaHeapAddrSpace), \
       llvm::PointerType::get(context, llvm::jeandle::AddrSpace::JavaHeapAddrSpace), \
       llvm::PointerType::get(context, llvm::jeandle::AddrSpace::JavaHeapAddrSpace), \
-      llvm::Type::getInt32Ty(context))                                              \
+      llvm::IntegerType::get(context, BitsPerWord))                                              \
                                                                                     \
   def(StubRoutines_cipherBlockChaining_decryptAESCrypt,                             \
       StubRoutines::cipherBlockChaining_decryptAESCrypt(),                          \
@@ -453,7 +453,7 @@
       llvm::PointerType::get(context, llvm::jeandle::AddrSpace::JavaHeapAddrSpace), \
       llvm::PointerType::get(context, llvm::jeandle::AddrSpace::JavaHeapAddrSpace), \
       llvm::PointerType::get(context, llvm::jeandle::AddrSpace::JavaHeapAddrSpace), \
-      llvm::Type::getInt32Ty(context))                                              \
+      llvm::IntegerType::get(context, BitsPerWord))                                              \
                                                                                     \
   def(StubRoutines_electronicCodeBook_encryptAESCrypt,                              \
       StubRoutines::electronicCodeBook_encryptAESCrypt(),                           \
@@ -463,7 +463,7 @@
       llvm::PointerType::get(context, llvm::jeandle::AddrSpace::JavaHeapAddrSpace), \
       llvm::PointerType::get(context, llvm::jeandle::AddrSpace::JavaHeapAddrSpace), \
       llvm::PointerType::get(context, llvm::jeandle::AddrSpace::JavaHeapAddrSpace), \
-      llvm::Type::getInt32Ty(context))                                              \
+      llvm::IntegerType::get(context, BitsPerWord))                                              \
                                                                                     \
   def(StubRoutines_electronicCodeBook_decryptAESCrypt,                              \
       StubRoutines::electronicCodeBook_decryptAESCrypt(),                           \
@@ -473,7 +473,7 @@
       llvm::PointerType::get(context, llvm::jeandle::AddrSpace::JavaHeapAddrSpace), \
       llvm::PointerType::get(context, llvm::jeandle::AddrSpace::JavaHeapAddrSpace), \
       llvm::PointerType::get(context, llvm::jeandle::AddrSpace::JavaHeapAddrSpace), \
-      llvm::Type::getInt32Ty(context))                                              \
+      llvm::IntegerType::get(context, BitsPerWord))                                              \
                                                                                     \
   def(StubRoutines_counterMode_AESCrypt,                                            \
       StubRoutines::counterMode_AESCrypt(),                                         \
@@ -484,7 +484,7 @@
       llvm::PointerType::get(context, llvm::jeandle::AddrSpace::JavaHeapAddrSpace), \
       llvm::PointerType::get(context, llvm::jeandle::AddrSpace::JavaHeapAddrSpace), \
       llvm::PointerType::get(context, llvm::jeandle::AddrSpace::JavaHeapAddrSpace), \
-      llvm::Type::getInt32Ty(context),                                              \
+      llvm::IntegerType::get(context, BitsPerWord),                                              \
       llvm::PointerType::get(context, llvm::jeandle::AddrSpace::JavaHeapAddrSpace), \
       llvm::PointerType::get(context, llvm::jeandle::AddrSpace::JavaHeapAddrSpace)) \
                                                                                     \

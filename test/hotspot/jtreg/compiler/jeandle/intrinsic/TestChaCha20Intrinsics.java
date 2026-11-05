@@ -56,7 +56,8 @@ public class TestChaCha20Intrinsics {
     public static void main(String[] args) throws Exception {
         OutputAnalyzer reference = ProcessTools.executeCommand(
                 ProcessTools.createLimitedTestJavaProcessBuilder(
-                        "-XX:+UnlockDiagnosticVMOptions",
+                        "-XX:+UnlockDiagnosticVMOptions", "-XX:+WhiteBoxAPI",
+                        "-Xbootclasspath/a:.",
                         "-XX:-UseChaCha20Intrinsics", "-XX:-UsePoly1305Intrinsics",
                         TestWrapper.class.getName()));
         reference.shouldHaveExitValue(0).shouldContain("TestChaCha20Intrinsics PASSED");
@@ -64,8 +65,9 @@ public class TestChaCha20Intrinsics {
         Path dumpPath = Files.createTempDirectory("jeandle_chacha_intrinsics");
         List<String> commandArgs = new java.util.ArrayList<>(List.of(
                 "-Xbatch", "-XX:-TieredCompilation", "-XX:+UseJeandleCompiler",
+                "-XX:+UnlockDiagnosticVMOptions", "-XX:+WhiteBoxAPI", "-Xbootclasspath/a:.",
                 "-XX:CompileThreshold=1000",
-                "-XX:+UnlockDiagnosticVMOptions", "-XX:+UseChaCha20Intrinsics",
+                "-XX:+UseChaCha20Intrinsics",
                 "-XX:+UsePoly1305Intrinsics",
                 "-Xlog:jeandle=debug", "-XX:+JeandleDumpIR",
                 "-XX:JeandleDumpDirectory=" + dumpPath,
@@ -102,7 +104,7 @@ public class TestChaCha20Intrinsics {
         // UsePoly1305Intrinsics only stays enabled with AVX512 IFMA + BW/VL,
         // the feature set StubGenerator's poly1305 vector loop requires.
         boolean polyFlag = effectiveFlag(output, "UsePoly1305Intrinsics");
-        boolean polyStubExpected = polyFlag && hasAvx512IfmaVlbw();
+        boolean polyStubExpected = polyFlag && effectiveFlag(output, "AVX512IFMA");
         Asserts.assertEquals(polyStubExpected,
                 ir.contains("StubRoutines_poly1305_processBlocks("),
                 "Poly1305 routine presence must match UsePoly1305Intrinsics && avx512ifma");
@@ -165,6 +167,7 @@ public class TestChaCha20Intrinsics {
         static final int WARMUP = 2000;
 
         public static void main(String[] args) throws Exception {
+            System.out.println("FLAG AVX512IFMA=" + hasAvx512IfmaVlbw());
             System.out.println("FLAG UseChaCha20Intrinsics=" + flag("UseChaCha20Intrinsics"));
             System.out.println("FLAG UsePoly1305Intrinsics=" + flag("UsePoly1305Intrinsics"));
 

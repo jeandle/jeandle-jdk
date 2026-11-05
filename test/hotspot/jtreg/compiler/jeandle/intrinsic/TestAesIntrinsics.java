@@ -53,7 +53,8 @@ public class TestAesIntrinsics {
         OutputAnalyzer reference = ProcessTools.executeCommand(
                 ProcessTools.createLimitedTestJavaProcessBuilder(
                         "--add-opens", "java.base/com.sun.crypto.provider=ALL-UNNAMED",
-                        "-XX:+UnlockDiagnosticVMOptions",
+                        "-XX:+UnlockDiagnosticVMOptions", "-XX:+WhiteBoxAPI",
+                        "-Xbootclasspath/a:.",
                         "-XX:-UseAESIntrinsics", "-XX:-UseAESCTRIntrinsics",
                         "-XX:-UseGHASHIntrinsics",
                         TestWrapper.class.getName()));
@@ -62,9 +63,10 @@ public class TestAesIntrinsics {
         Path dumpPath = Files.createTempDirectory("jeandle_aes_intrinsics");
         List<String> commandArgs = new java.util.ArrayList<>(List.of(
                 "-Xbatch", "-XX:-TieredCompilation", "-XX:+UseJeandleCompiler",
+                "-XX:+UnlockDiagnosticVMOptions", "-XX:+WhiteBoxAPI", "-Xbootclasspath/a:.",
                 "-XX:CompileThreshold=1000",
                 "--add-opens", "java.base/com.sun.crypto.provider=ALL-UNNAMED",
-                "-XX:+UnlockDiagnosticVMOptions", "-XX:+UseAESIntrinsics",
+                "-XX:+UseAESIntrinsics",
                 "-XX:+UseAESCTRIntrinsics", "-XX:+UseGHASHIntrinsics",
                 "-Xlog:jeandle=debug", "-XX:+JeandleDumpIR",
                 "-XX:JeandleDumpDirectory=" + dumpPath,
@@ -110,7 +112,7 @@ public class TestAesIntrinsics {
         Asserts.assertEquals(aesFlag, ir.contains("StubRoutines_cipherBlockChaining_decryptAESCrypt("),
                 "CBC decrypt routine presence must match UseAESIntrinsics");
         // ECB stubs are only generated with AVX512 VAES on x86.
-        boolean ecbStubExpected = aesFlag && hasAvx512Vaes();
+        boolean ecbStubExpected = aesFlag && effectiveFlag(output, "AVX512VAES");
         Asserts.assertEquals(ecbStubExpected, ir.contains("StubRoutines_electronicCodeBook_encryptAESCrypt("),
                 "ECB encrypt routine presence must match UseAESIntrinsics && avx512vaes");
         Asserts.assertEquals(ecbStubExpected, ir.contains("StubRoutines_electronicCodeBook_decryptAESCrypt("),
@@ -119,7 +121,7 @@ public class TestAesIntrinsics {
         Asserts.assertEquals(ctrFlag, ir.contains("StubRoutines_counterMode_AESCrypt("),
                 "CTR routine presence must match UseAESCTRIntrinsics");
         // The combined GCM stub is only generated with AVX512 VAES on x86.
-        boolean gcmStubExpected = aesFlag && hasAvx512Vaes();
+        boolean gcmStubExpected = aesFlag && effectiveFlag(output, "AVX512VAES");
         Asserts.assertEquals(gcmStubExpected,
                 ir.contains("StubRoutines_galoisCounterMode_AESCrypt("),
                 "GCM routine presence must match UseAESIntrinsics && avx512vaes");
@@ -174,6 +176,7 @@ public class TestAesIntrinsics {
         static final int WARMUP = 2000;
 
         public static void main(String[] args) throws Exception {
+            System.out.println("FLAG AVX512VAES=" + hasAvx512Vaes());
             System.out.println("FLAG UseAESIntrinsics=" + flag("UseAESIntrinsics"));
             System.out.println("FLAG UseAESCTRIntrinsics=" + flag("UseAESCTRIntrinsics"));
             System.out.println("FLAG UseGHASHIntrinsics=" + flag("UseGHASHIntrinsics"));

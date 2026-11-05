@@ -29,6 +29,7 @@
 #include "llvm/IR/Constants.h"
 #include "llvm/IR/DerivedTypes.h"
 #include "llvm/IR/MDBuilder.h"
+#include "llvm/Support/ModRef.h"
 
 #include "jeandle/jeandleAbstractInterpreter.hpp"
 #include "jeandle/jeandleRuntimeRoutine.hpp"
@@ -896,20 +897,14 @@ bool JeandleIntrinsicLowering::lower_digestBase_implCompress(vmIntrinsics::ID id
                                                    state_element_type,
                                                    "sha_state_base");
 
-  static constexpr CallSiteAttributeMetadata attrs = {
-      CTRL_NONE, MEM_READ | MEM_WRITE};
   if (block_size_field == nullptr) {
-    emit_callsite(callee_fn(_interp->_module), llvm::CallingConv::C,
-                  {src_start, state_base}, attrs,
-                  /*is_gc_leaf_entry=*/true);
+    emit_crypto_stub(callee_fn, {src_start, state_base});
   } else {
     llvm::Value* block_size_addr = _interp->compute_instance_field_address(
         receiver, block_size_field->offset_in_bytes());
     llvm::Value* block_size = _interp->load_from_address(block_size_addr,
                                                          T_INT, false);
-    emit_callsite(callee_fn(_interp->_module), llvm::CallingConv::C,
-                  {src_start, state_base, block_size}, attrs,
-                  /*is_gc_leaf_entry=*/true);
+    emit_crypto_stub(callee_fn, {src_start, state_base, block_size});
   }
   return true;
 }
@@ -917,6 +912,20 @@ bool JeandleIntrinsicLowering::lower_digestBase_implCompress(vmIntrinsics::ID id
 // =============================================================================
 // Shared crypto-intrinsic helpers
 // =============================================================================
+
+llvm::CallBase* JeandleIntrinsicLowering::emit_crypto_stub(
+    JeandleRuntimeCalleeFn callee, llvm::ArrayRef<llvm::Value*> args) {
+  static constexpr CallSiteAttributeMetadata attrs = {
+      CTRL_NONE, MEM_READ | MEM_WRITE};
+  llvm::CallBase* call = emit_callsite(callee(_interp->_module), llvm::CallingConv::C,
+                                      args, attrs, /*is_gc_leaf_entry=*/true);
+  // Crypto stubs update only the buffers and state passed by address. Their
+  // masks and round constants are VM-owned tables inaccessible to LLVM IR.
+  // Keep argument memory read/write: input and output buffers may alias.
+  call->setMemoryEffects(llvm::MemoryEffects::inaccessibleOrArgMemOnly()
+      .getWithModRef(llvm::MemoryEffects::Location::InaccessibleMem, llvm::ModRefInfo::Ref));
+  return call;
+}
 
 bool JeandleIntrinsicLowering::expect_signature(
     const ciSignature* sig, llvm::ArrayRef<SigKind> params, BasicType ret) {
@@ -972,10 +981,14 @@ llvm::Value* JeandleIntrinsicLowering::array_data_pointer(
     llvm::Value* array, BasicType elem_type, llvm::Value* byte_offset,
     const char* name) {
   llvm::IRBuilder<>& builder = _interp->_ir_builder;
-  llvm::Value* offset = builder.getInt32(
-      arrayOopDesc::base_offset_in_bytes(elem_type));
+  llvm::IntegerType* offset_type = builder.getIntPtrTy(
+      _interp->_module.getDataLayout(), llvm::jeandle::AddrSpace::JavaHeapAddrSpace);
+  llvm::Value* offset = llvm::ConstantInt::get(
+      offset_type, arrayOopDesc::base_offset_in_bytes(elem_type));
   if (byte_offset != nullptr) {
-    offset = builder.CreateAdd(offset, byte_offset);
+    // Array offsets can approach Integer.MAX_VALUE. Add the header only
+    // after extending the Java offset to the native address width.
+    offset = builder.CreateAdd(offset, builder.CreateSExtOrTrunc(byte_offset, offset_type));
   }
   return builder.CreateInBoundsPtrAdd(array, offset, name);
 }
@@ -1149,15 +1162,23 @@ bool JeandleIntrinsicLowering::lower_digestBase_implCompressMB() {
   llvm::SmallVector<llvm::Value*, 6> results;
   llvm::SmallVector<llvm::BasicBlock*, 6> result_blocks;
 
-  static constexpr CallSiteAttributeMetadata STUB_ATTRS = {
-      CTRL_NONE, MEM_READ | MEM_WRITE};
-
+  llvm::Value* receiver_klass = nullptr;
   for (const ResolvedMB& branch : branches) {
-    // Receiver null check already happened in invoke(), so the non-null
-    // jeandle.check_instanceof contract holds.
-    llvm::CallInst* hit = _interp->call_java_op(
-        "jeandle.check_instanceof",
-        {klass_constant_pointer(branch.klass), receiver});
+    // Final digest classes have no subtypes. A failed exact-class check
+    // can proceed directly to the next algorithm without a supertype walk.
+    // SHA2/SHA5/SHA3 are abstract bases and still require subtype checks.
+    llvm::Value* hit;
+    if (branch.klass->is_final()) {
+      if (receiver_klass == nullptr) {
+        receiver_klass = _interp->call_java_op("jeandle.load_klass", {receiver});
+      }
+      hit = builder.CreateICmpEQ(receiver_klass, klass_constant_pointer(branch.klass));
+    } else {
+      // invoke() has already checked the receiver for null.
+      hit = _interp->call_java_op(
+          "jeandle.check_instanceof",
+          {klass_constant_pointer(branch.klass), receiver});
+    }
 
     llvm::BasicBlock* hit_bb = llvm::BasicBlock::Create(
         ctx, std::string("digestMB_") + branch.spec->label + "_hit",
@@ -1174,19 +1195,15 @@ bool JeandleIntrinsicLowering::lower_digestBase_implCompressMB() {
         array_element0_pointer(state_array, branch.spec->state_elem);
     llvm::CallBase* call;
     if (branch.block_size_field == nullptr) {
-      call = emit_callsite(branch.spec->callee(_interp->_module),
-                           llvm::CallingConv::C,
-                           {src_start, state_base, ofs, limit}, STUB_ATTRS,
-                           /*is_gc_leaf_entry=*/true);
+      call = emit_crypto_stub(branch.spec->callee,
+                           {src_start, state_base, ofs, limit});
     } else {
       llvm::Value* block_size_addr = _interp->compute_instance_field_address(
           receiver, branch.block_size_field->offset_in_bytes());
       llvm::Value* block_size =
           _interp->load_from_address(block_size_addr, T_INT, false);
-      call = emit_callsite(branch.spec->callee(_interp->_module),
-                           llvm::CallingConv::C,
-                           {src_start, state_base, block_size, ofs, limit},
-                           STUB_ATTRS, /*is_gc_leaf_entry=*/true);
+      call = emit_crypto_stub(branch.spec->callee,
+                           {src_start, state_base, block_size, ofs, limit});
     }
     builder.CreateBr(merge_bb);
     results.push_back(call);
@@ -1270,11 +1287,7 @@ bool JeandleIntrinsicLowering::lower_aescrypt_block(vmIntrinsics::ID id) {
   llvm::Value* k_array = load_instance_object_field(receiver, k_field);
   llvm::Value* k_start = array_element0_pointer(k_array, T_INT);
 
-  static constexpr CallSiteAttributeMetadata attrs = {
-      CTRL_NONE, MEM_READ | MEM_WRITE};
-  emit_callsite(callee_fn(_interp->_module), llvm::CallingConv::C,
-                {src_start, dst_start, k_start}, attrs,
-                /*is_gc_leaf_entry=*/true);
+  emit_crypto_stub(callee_fn, {src_start, dst_start, k_start});
   return true;
 }
 
@@ -1428,19 +1441,17 @@ bool JeandleIntrinsicLowering::lower_block_cipher_mode(vmIntrinsics::ID id) {
   builder.SetInsertPoint(stub_bb);
   llvm::Value* k_array = load_instance_object_field(embedded, k_field);
   llvm::Value* k_start = array_element0_pointer(k_array, T_INT);
-  static constexpr CallSiteAttributeMetadata STUB_ATTRS = {
-      CTRL_NONE, MEM_READ | MEM_WRITE};
+  // Some stubs consume the full native register even though Java lengths
+  // are ints. Make the non-negative byte count explicit in the native ABI.
+  llvm::Value* stub_len = builder.CreateZExtOrTrunc(
+      len, builder.getIntPtrTy(_interp->_module.getDataLayout()));
   llvm::CallBase* stub_call;
   if (has_r_vector) {
     llvm::Value* r_array = load_instance_object_field(receiver, r_field);
     llvm::Value* r_start = array_element0_pointer(r_array, T_BYTE);
-    stub_call = emit_callsite(callee_fn(_interp->_module), llvm::CallingConv::C,
-                              {src_start, dst_start, k_start, r_start, len},
-                              STUB_ATTRS, /*is_gc_leaf_entry=*/true);
+    stub_call = emit_crypto_stub(callee_fn, {src_start, dst_start, k_start, r_start, stub_len});
   } else {
-    stub_call = emit_callsite(callee_fn(_interp->_module), llvm::CallingConv::C,
-                              {src_start, dst_start, k_start, len},
-                              STUB_ATTRS, /*is_gc_leaf_entry=*/true);
+    stub_call = emit_crypto_stub(callee_fn, {src_start, dst_start, k_start, stub_len});
   }
   builder.CreateBr(merge_bb);
   llvm::BasicBlock* stub_tail_bb = builder.GetInsertBlock();
@@ -1574,14 +1585,11 @@ bool JeandleIntrinsicLowering::lower_counter_mode() {
       array_element0_pointer(enc_counter_array, T_BYTE);
   llvm::Value* used_addr = _interp->compute_instance_field_address(
       receiver, used_field->offset_in_bytes());
-  static constexpr CallSiteAttributeMetadata STUB_ATTRS = {
-      CTRL_NONE, MEM_READ | MEM_WRITE};
-  llvm::CallBase* stub_call = emit_callsite(
-      callee_fn(_interp->_module),
-      llvm::CallingConv::C,
-      {src_start, dst_start, k_start, cnt_start, len,
-       enc_counter_start, used_addr},
-      STUB_ATTRS, /*is_gc_leaf_entry=*/true);
+  llvm::Value* stub_len = builder.CreateZExtOrTrunc(
+      len, builder.getIntPtrTy(_interp->_module.getDataLayout()));
+  llvm::CallBase* stub_call = emit_crypto_stub(callee_fn,
+      {src_start, dst_start, k_start, cnt_start, stub_len,
+       enc_counter_start, used_addr});
   builder.CreateBr(merge_bb);
   llvm::BasicBlock* stub_tail_bb = builder.GetInsertBlock();
 
@@ -1729,14 +1737,9 @@ bool JeandleIntrinsicLowering::lower_galois_counter_mode() {
   llvm::Value* state_start = array_element0_pointer(state_array, T_LONG);
   llvm::Value* subkey_array = load_instance_object_field(ghash, subkey_field);
   llvm::Value* subkey_start = array_element0_pointer(subkey_array, T_LONG);
-  static constexpr CallSiteAttributeMetadata STUB_ATTRS = {
-      CTRL_NONE, MEM_READ | MEM_WRITE};
-  llvm::CallBase* stub_call = emit_callsite(
-      callee_fn(_interp->_module),
-      llvm::CallingConv::C,
+  llvm::CallBase* stub_call = emit_crypto_stub(callee_fn,
       {in_start, in_len, ct_start, out_start, k_start,
-       state_start, subkey_start, cnt_start},
-      STUB_ATTRS, /*is_gc_leaf_entry=*/true);
+       state_start, subkey_start, cnt_start});
   builder.CreateBr(merge_bb);
   llvm::BasicBlock* stub_tail_bb = builder.GetInsertBlock();
 
@@ -1803,13 +1806,7 @@ bool JeandleIntrinsicLowering::lower_ghash_process_blocks() {
   llvm::Value* state_start = array_element0_pointer(st, T_LONG);
   llvm::Value* subkey_start = array_element0_pointer(sub_h, T_LONG);
 
-  static constexpr CallSiteAttributeMetadata attrs = {
-      CTRL_NONE, MEM_READ | MEM_WRITE};
-  emit_callsite(
-      callee_fn(_interp->_module),
-      llvm::CallingConv::C,
-      {state_start, subkey_start, data_start, blocks},
-      attrs, /*is_gc_leaf_entry=*/true);
+  emit_crypto_stub(callee_fn, {state_start, subkey_start, data_start, blocks});
   return true;
 }
 
@@ -1858,13 +1855,7 @@ bool JeandleIntrinsicLowering::lower_chacha20_block() {
   llvm::Value* state_start = array_element0_pointer(state, T_INT);
   llvm::Value* result_start = array_element0_pointer(result, T_BYTE);
 
-  static constexpr CallSiteAttributeMetadata attrs = {
-      CTRL_NONE, MEM_READ | MEM_WRITE};
-  llvm::CallBase* keystream_len = emit_callsite(
-      callee_fn(_interp->_module),
-      llvm::CallingConv::C,
-      {state_start, result_start},
-      attrs, /*is_gc_leaf_entry=*/true);
+  llvm::CallBase* keystream_len = emit_crypto_stub(callee_fn, {state_start, result_start});
   _interp->_jvm->ipush(keystream_len);
   return true;
 }
@@ -1925,13 +1916,7 @@ bool JeandleIntrinsicLowering::lower_poly1305_process_blocks() {
   llvm::Value* acc_start = array_element0_pointer(a_limbs, T_LONG);
   llvm::Value* r_start = array_element0_pointer(r_limbs, T_LONG);
 
-  static constexpr CallSiteAttributeMetadata attrs = {
-      CTRL_NONE, MEM_READ | MEM_WRITE};
-  emit_callsite(
-      callee_fn(_interp->_module),
-      llvm::CallingConv::C,
-      {input_start, length, acc_start, r_start},
-      attrs, /*is_gc_leaf_entry=*/true);
+  emit_crypto_stub(callee_fn, {input_start, length, acc_start, r_start});
   return true;
 }
 
