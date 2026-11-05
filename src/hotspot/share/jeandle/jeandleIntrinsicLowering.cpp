@@ -904,6 +904,9 @@ bool JeandleIntrinsicLowering::lower_digestBase_implCompress(vmIntrinsics::ID id
         receiver, block_size_field->offset_in_bytes());
     llvm::Value* block_size = _interp->load_from_address(block_size_addr,
                                                          T_INT, false);
+    llvm::IRBuilder<>& builder = _interp->_ir_builder;
+    block_size = builder.CreateZExtOrTrunc(
+        block_size, builder.getIntPtrTy(_interp->_module.getDataLayout()));
     emit_crypto_stub(callee_fn, {src_start, state_base, block_size});
   }
   return true;
@@ -1156,6 +1159,11 @@ bool JeandleIntrinsicLowering::lower_digestBase_implCompressMB() {
   llvm::LLVMContext& ctx = *_interp->_context;
 
   llvm::Value* src_start = array_data_pointer(src, T_BYTE, ofs);
+  // The assembler may consume full registers. Extend the Java offsets and
+  // limits to native width while preserving their signed interpretation.
+  llvm::IntegerType* word_type = builder.getIntPtrTy(_interp->_module.getDataLayout());
+  llvm::Value* stub_ofs = builder.CreateSExtOrTrunc(ofs, word_type);
+  llvm::Value* stub_limit = builder.CreateSExtOrTrunc(limit, word_type);
 
   llvm::BasicBlock* merge_bb =
       llvm::BasicBlock::Create(ctx, "digestMB_merge", _interp->_llvm_func);
@@ -1196,14 +1204,15 @@ bool JeandleIntrinsicLowering::lower_digestBase_implCompressMB() {
     llvm::CallBase* call;
     if (branch.block_size_field == nullptr) {
       call = emit_crypto_stub(branch.spec->callee,
-                           {src_start, state_base, ofs, limit});
+                           {src_start, state_base, stub_ofs, stub_limit});
     } else {
       llvm::Value* block_size_addr = _interp->compute_instance_field_address(
           receiver, branch.block_size_field->offset_in_bytes());
       llvm::Value* block_size =
           _interp->load_from_address(block_size_addr, T_INT, false);
+      block_size = builder.CreateZExtOrTrunc(block_size, word_type);
       call = emit_crypto_stub(branch.spec->callee,
-                           {src_start, state_base, block_size, ofs, limit});
+                           {src_start, state_base, block_size, stub_ofs, stub_limit});
     }
     builder.CreateBr(merge_bb);
     results.push_back(call);
@@ -1737,8 +1746,10 @@ bool JeandleIntrinsicLowering::lower_galois_counter_mode() {
   llvm::Value* state_start = array_element0_pointer(state_array, T_LONG);
   llvm::Value* subkey_array = load_instance_object_field(ghash, subkey_field);
   llvm::Value* subkey_start = array_element0_pointer(subkey_array, T_LONG);
+  llvm::Value* stub_len = builder.CreateZExtOrTrunc(
+      in_len, builder.getIntPtrTy(_interp->_module.getDataLayout()));
   llvm::CallBase* stub_call = emit_crypto_stub(callee_fn,
-      {in_start, in_len, ct_start, out_start, k_start,
+      {in_start, stub_len, ct_start, out_start, k_start,
        state_start, subkey_start, cnt_start});
   builder.CreateBr(merge_bb);
   llvm::BasicBlock* stub_tail_bb = builder.GetInsertBlock();
@@ -1806,7 +1817,10 @@ bool JeandleIntrinsicLowering::lower_ghash_process_blocks() {
   llvm::Value* state_start = array_element0_pointer(st, T_LONG);
   llvm::Value* subkey_start = array_element0_pointer(sub_h, T_LONG);
 
-  emit_crypto_stub(callee_fn, {state_start, subkey_start, data_start, blocks});
+  llvm::IRBuilder<>& builder = _interp->_ir_builder;
+  llvm::Value* stub_blocks = builder.CreateZExtOrTrunc(
+      blocks, builder.getIntPtrTy(_interp->_module.getDataLayout()));
+  emit_crypto_stub(callee_fn, {state_start, subkey_start, data_start, stub_blocks});
   return true;
 }
 
@@ -1916,7 +1930,10 @@ bool JeandleIntrinsicLowering::lower_poly1305_process_blocks() {
   llvm::Value* acc_start = array_element0_pointer(a_limbs, T_LONG);
   llvm::Value* r_start = array_element0_pointer(r_limbs, T_LONG);
 
-  emit_crypto_stub(callee_fn, {input_start, length, acc_start, r_start});
+  llvm::IRBuilder<>& builder = _interp->_ir_builder;
+  llvm::Value* stub_len = builder.CreateZExtOrTrunc(
+      length, builder.getIntPtrTy(_interp->_module.getDataLayout()));
+  emit_crypto_stub(callee_fn, {input_start, stub_len, acc_start, r_start});
   return true;
 }
 

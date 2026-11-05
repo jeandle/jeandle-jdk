@@ -114,6 +114,17 @@ public class TestDigestIntrinsics {
                 "StubRoutines_sha512_implCompressMB", "SHA-512 multi-block");
         assertRoutineMatchesFlag(output, ir, "UseSHA3Intrinsics",
                 "StubRoutines_sha3_implCompressMB", "SHA-3 multi-block");
+
+        // Native digest stubs may read the full argument register. LLVM's
+        // C ABI does not define its upper bits for an i32 parameter.
+        var declarations = java.util.regex.Pattern.compile(
+                "(?m)^declare [^\\n]*@StubRoutines_(?:md5|sha)[^(]*\\(([^\\n]*)\\)")
+                .matcher(ir);
+        while (declarations.find()) {
+            Asserts.assertFalse(declarations.group(1).contains("i32"),
+                    "digest stub integer arguments must have native width: "
+                            + declarations.group());
+        }
     }
 
     private static List<String> digestLines(OutputAnalyzer output) {
