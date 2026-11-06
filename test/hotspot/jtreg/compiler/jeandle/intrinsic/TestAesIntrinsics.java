@@ -128,6 +128,19 @@ public class TestAesIntrinsics {
         boolean ghashFlag = effectiveFlag(output, "UseGHASHIntrinsics");
         Asserts.assertEquals(ghashFlag, ir.contains("StubRoutines_ghash_processBlocks("),
                 "GHASH routine presence must match UseGHASHIntrinsics");
+
+        // Whenever a guarded mode intrinsic (CBC/ECB/CTR/GCM) was lowered,
+        // its embeddedCipher instanceof guard must carry C2-style PROB_MIN
+        // miss weights: C2 marks every inline_*_AESCrypt_predicate failure
+        // edge PROB_MIN (1e-6), which is 999999 : 1 in LLVM integer weights.
+        if (ir.contains("StubRoutines_cipherBlockChaining_encryptAESCrypt(")
+                || ir.contains("StubRoutines_cipherBlockChaining_decryptAESCrypt(")
+                || ir.contains("StubRoutines_counterMode_AESCrypt(")
+                || ir.contains("StubRoutines_galoisCounterMode_AESCrypt(")) {
+            Asserts.assertTrue(
+                    ir.contains("!{!\"branch_weights\", i32 999999, i32 1}"),
+                    "AES mode guard branches must carry PROB_MIN miss weights");
+        }
     }
 
     // The x86 ECB stubs require the same feature set that

@@ -90,6 +90,25 @@ void apply_memory_attr(llvm::CallBase* call, const CallSiteAttributeMetadata& at
   }
 }
 
+// Native word width of the crypto/digest stub ABI. jeandleRuntimeRoutine.hpp
+// declares integer arguments with BitsPerWord, so conversions from Java ints
+// target that exact type rather than a data-layout pointer width; a mismatch
+// between the two would be caught by the IR builder at the call site.
+static llvm::IntegerType* native_word_type(llvm::LLVMContext& context) {
+  return llvm::IntegerType::get(context, BitsPerWord);
+}
+
+// Branch weights for crypto-intrinsic guards: the stub edge is hot, every
+// guard-miss edge is cold. C2 marks all crypto predicate failure edges
+// PROB_MIN (1e-6, LibraryCallKit inline_*_predicate guards); with
+// generate_guard's scale of 1e6 that ratio is expressed as 999999 : 1.
+static llvm::MDNode* guard_miss_weights(llvm::LLVMContext& context) {
+  constexpr uint32_t BranchWeightScale = 1000000;
+  constexpr uint32_t MissWeight = 1;
+  return llvm::MDBuilder(context).createBranchWeights(BranchWeightScale - MissWeight,
+                                                      MissWeight);
+}
+
 // =============================================================================
 // JeandleIntrinsicLowering — construction
 // =============================================================================
@@ -906,7 +925,7 @@ bool JeandleIntrinsicLowering::lower_digestBase_implCompress(vmIntrinsics::ID id
                                                          T_INT, false);
     llvm::IRBuilder<>& builder = _interp->_ir_builder;
     block_size = builder.CreateZExtOrTrunc(
-        block_size, builder.getIntPtrTy(_interp->_module.getDataLayout()));
+        block_size, native_word_type(*_interp->_context));
     emit_crypto_stub(callee_fn, {src_start, state_base, block_size});
   }
   return true;
@@ -1159,7 +1178,7 @@ bool JeandleIntrinsicLowering::lower_digestBase_implCompressMB() {
   llvm::LLVMContext& ctx = *_interp->_context;
 
   llvm::Value* src_start = array_data_pointer(src, T_BYTE, ofs);
-  llvm::IntegerType* word_type = builder.getIntPtrTy(_interp->_module.getDataLayout());
+  llvm::IntegerType* word_type = native_word_type(ctx);
 
   llvm::BasicBlock* merge_bb =
       llvm::BasicBlock::Create(ctx, "digestMB_merge", _interp->_llvm_func);
@@ -1167,7 +1186,10 @@ bool JeandleIntrinsicLowering::lower_digestBase_implCompressMB() {
   llvm::SmallVector<llvm::BasicBlock*, 6> result_blocks;
 
   for (const ResolvedMB& branch : branches) {
-    // invoke() has already checked the receiver for null.
+    // invoke() has already checked the receiver for null. Each branch
+    // assumes it is the receiver's algorithm, so its miss edge (the next
+    // guard, and finally the Java fallback) stays cold like C2's PROB_MIN
+    // predicates.
     llvm::Value* hit = _interp->call_java_op(
         "jeandle.check_instanceof",
         {klass_constant_pointer(branch.klass), receiver});
@@ -1178,7 +1200,7 @@ bool JeandleIntrinsicLowering::lower_digestBase_implCompressMB() {
     llvm::BasicBlock* next_bb = llvm::BasicBlock::Create(
         ctx, std::string("digestMB_") + branch.spec->label + "_next",
         _interp->_llvm_func);
-    builder.CreateCondBr(hit, hit_bb, next_bb);
+    builder.CreateCondBr(hit, hit_bb, next_bb, guard_miss_weights(ctx));
 
     builder.SetInsertPoint(hit_bb);
     llvm::Value* state_array =
@@ -1414,7 +1436,8 @@ bool JeandleIntrinsicLowering::lower_block_cipher_mode(vmIntrinsics::ID id) {
 
   // Guard: the embedded cipher must be an AESCrypt at runtime. The
   // jeandle.instanceof JavaOp is null-safe, so a null embeddedCipher simply
-  // takes the Java path like any other non-AES cipher.
+  // takes the Java path like any other non-AES cipher. Like C2's predicates
+  // the guard-miss (Java fallback) edge stays cold.
   llvm::Value* embedded = load_instance_object_field(receiver, embedded_field);
   llvm::CallInst* is_aes = _interp->call_java_op(
       "jeandle.instanceof", {klass_constant_pointer(aes_klass), embedded});
@@ -1422,17 +1445,20 @@ bool JeandleIntrinsicLowering::lower_block_cipher_mode(vmIntrinsics::ID id) {
       is_aes, builder.getInt32(0), std::string(label) + "_embedded_is_aes");
 
   if (!decrypting) {
-    builder.CreateCondBr(embedded_ok, stub_bb, fallback_bb);
+    builder.CreateCondBr(embedded_ok, stub_bb, fallback_bb,
+                         guard_miss_weights(ctx));
   } else {
     // Decrypt also rejects conjoint src==dst buffers; the Java loop produces
     // the right plaintext for them, the block-at-a-time stubs do not.
     llvm::BasicBlock* embedded_aes_bb = llvm::BasicBlock::Create(
         ctx, std::string(label) + "_embedded_aes", _interp->_llvm_func);
-    builder.CreateCondBr(embedded_ok, embedded_aes_bb, fallback_bb);
+    builder.CreateCondBr(embedded_ok, embedded_aes_bb, fallback_bb,
+                         guard_miss_weights(ctx));
     builder.SetInsertPoint(embedded_aes_bb);
     llvm::Value* disjoint = builder.CreateICmpNE(
         src, dst, std::string(label) + "_disjoint");
-    builder.CreateCondBr(disjoint, stub_bb, fallback_bb);
+    builder.CreateCondBr(disjoint, stub_bb, fallback_bb,
+                         guard_miss_weights(ctx));
   }
 
   // Stub fast path: the guard proved the embedded cipher is an AESCrypt, so
@@ -1443,7 +1469,7 @@ bool JeandleIntrinsicLowering::lower_block_cipher_mode(vmIntrinsics::ID id) {
   // Some stubs consume the full native register even though Java lengths
   // are ints. Make the non-negative byte count explicit in the native ABI.
   llvm::Value* stub_len = builder.CreateZExtOrTrunc(
-      len, builder.getIntPtrTy(_interp->_module.getDataLayout()));
+      len, native_word_type(ctx));
   llvm::CallBase* stub_call;
   if (has_r_vector) {
     llvm::Value* r_array = load_instance_object_field(receiver, r_field);
@@ -1560,13 +1586,15 @@ bool JeandleIntrinsicLowering::lower_counter_mode() {
 
   // Guard: the embedded cipher must be an AESCrypt at runtime. The
   // jeandle.instanceof JavaOp is null-safe, so a null embeddedCipher simply
-  // takes the Java path like any other non-AES cipher.
+  // takes the Java path like any other non-AES cipher. Like C2's predicates
+  // the guard-miss (Java fallback) edge stays cold.
   llvm::Value* embedded = load_instance_object_field(receiver, embedded_field);
   llvm::CallInst* is_aes = _interp->call_java_op(
       "jeandle.instanceof", {klass_constant_pointer(aes_klass), embedded});
   llvm::Value* embedded_ok = builder.CreateICmpNE(
       is_aes, builder.getInt32(0), "ctr_embedded_is_aes");
-  builder.CreateCondBr(embedded_ok, stub_bb, fallback_bb);
+  builder.CreateCondBr(embedded_ok, stub_bb, fallback_bb,
+                       guard_miss_weights(ctx));
 
   // Stub fast path: the guard proved the embedded cipher is an AESCrypt, so
   // loading its key schedule and the mode state is safe. The stub updates
@@ -1585,7 +1613,7 @@ bool JeandleIntrinsicLowering::lower_counter_mode() {
   llvm::Value* used_addr = _interp->compute_instance_field_address(
       receiver, used_field->offset_in_bytes());
   llvm::Value* stub_len = builder.CreateZExtOrTrunc(
-      len, builder.getIntPtrTy(_interp->_module.getDataLayout()));
+      len, native_word_type(ctx));
   llvm::CallBase* stub_call = emit_crypto_stub(callee_fn,
       {src_start, dst_start, k_start, cnt_start, stub_len,
        enc_counter_start, used_addr});
@@ -1716,13 +1744,15 @@ bool JeandleIntrinsicLowering::lower_galois_counter_mode() {
 
   // Guard: the gctr's embedded cipher must be an AESCrypt at runtime. The
   // jeandle.instanceof JavaOp is null-safe, so a null embeddedCipher simply
-  // takes the Java path like any other non-AES cipher.
+  // takes the Java path like any other non-AES cipher. Like C2's predicates
+  // the guard-miss (Java fallback) edge stays cold.
   llvm::Value* embedded = load_instance_object_field(gctr, embedded_field);
   llvm::CallInst* is_aes = _interp->call_java_op(
       "jeandle.instanceof", {klass_constant_pointer(aes_klass), embedded});
   llvm::Value* embedded_ok = builder.CreateICmpNE(
       is_aes, builder.getInt32(0), "gcm_embedded_is_aes");
-  builder.CreateCondBr(embedded_ok, stub_bb, fallback_bb);
+  builder.CreateCondBr(embedded_ok, stub_bb, fallback_bb,
+                       guard_miss_weights(ctx));
 
   // Stub fast path: the guard proved the embedded cipher is an AESCrypt, so
   // loading its key schedule and the GCTR/GHASH state is safe. The stub
@@ -1737,7 +1767,7 @@ bool JeandleIntrinsicLowering::lower_galois_counter_mode() {
   llvm::Value* subkey_array = load_instance_object_field(ghash, subkey_field);
   llvm::Value* subkey_start = array_element0_pointer(subkey_array, T_LONG);
   llvm::Value* stub_len = builder.CreateZExtOrTrunc(
-      in_len, builder.getIntPtrTy(_interp->_module.getDataLayout()));
+      in_len, native_word_type(ctx));
   llvm::CallBase* stub_call = emit_crypto_stub(callee_fn,
       {in_start, stub_len, ct_start, out_start, k_start,
        state_start, subkey_start, cnt_start});
@@ -1809,7 +1839,7 @@ bool JeandleIntrinsicLowering::lower_ghash_process_blocks() {
 
   llvm::IRBuilder<>& builder = _interp->_ir_builder;
   llvm::Value* stub_blocks = builder.CreateZExtOrTrunc(
-      blocks, builder.getIntPtrTy(_interp->_module.getDataLayout()));
+      blocks, native_word_type(*_interp->_context));
   emit_crypto_stub(callee_fn, {state_start, subkey_start, data_start, stub_blocks});
   return true;
 }
@@ -1922,7 +1952,7 @@ bool JeandleIntrinsicLowering::lower_poly1305_process_blocks() {
 
   llvm::IRBuilder<>& builder = _interp->_ir_builder;
   llvm::Value* stub_len = builder.CreateZExtOrTrunc(
-      length, builder.getIntPtrTy(_interp->_module.getDataLayout()));
+      length, native_word_type(*_interp->_context));
   emit_crypto_stub(callee_fn, {input_start, stub_len, acc_start, r_start});
   return true;
 }

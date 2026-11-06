@@ -136,6 +136,16 @@ public class TestDigestIntrinsics {
                         "unexpected digest stub argument width: " + declarations.group());
             }
         }
+
+        // Whenever a multi-block branch was lowered, its receiver-type guard
+        // must carry C2-style PROB_MIN miss weights: C2 marks every
+        // inline_digestBase_implCompressMB_predicate failure edge PROB_MIN
+        // (1e-6), which is 999999 : 1 in LLVM integer weights.
+        if (ir.contains("implCompressMB(")) {
+            Asserts.assertTrue(
+                    ir.contains("!{!\"branch_weights\", i32 999999, i32 1}"),
+                    "digest MB guard branches must carry PROB_MIN miss weights");
+        }
     }
 
     private static List<String> digestLines(OutputAnalyzer output) {
