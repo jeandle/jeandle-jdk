@@ -77,10 +77,16 @@ public class TestStringSearchRefinement {
                             && path.toString().endsWith("_optimized.ll")).findFirst()
                             .orElseThrow(() -> new AssertionError("Missing search IR: " + method));
                     String ir = Files.readString(irFile);
-                    // The one-shot learning budget survives across vector
+                    // The delayed learning budget survives across vector
                     // windows; a fixed third-character probe has no budget.
                     if (!Pattern.compile("phi i32 [^\\n]*\\[ -4, ").matcher(ir).find()) {
                         throw new AssertionError("Missing delayed filter-learning state: " + method);
+                    }
+                    // A nonempty learned mask contributes a new budget to
+                    // the candidate entry; empty masks retain the filter.
+                    if (!Pattern.compile("%refinement\\.initial[^=\\n]* = phi i32 [^\\n]*\\[ -4, ")
+                            .matcher(ir).find()) {
+                        throw new AssertionError("Missing filter-learning budget refresh: " + method);
                     }
                 }
             }
@@ -136,6 +142,26 @@ public class TestStringSearchRefinement {
             }
             for (int from : new int[] {0, 1, 96, 97, 98, 160, 162, 258}) {
                 check(method, source, needle, from, sourceWide, targetWide);
+            }
+            // An irregular prefix can select a position that ceases to
+            // reject candidates in the regular suffix. Refreshing that
+            // position must preserve both bounds and earliest-match order.
+            for (int period : new int[] {1, 2, 3}) {
+                source = periodic(2048, period, base);
+                needle = periodic(129, period, base);
+                for (int i : new int[] {2, 5, 8, 11, 14, 17, 20, 23}) {
+                    source[i] = (char) (base + 4);
+                }
+                needle[64] = (char) (base + 5);
+                for (int hit : new int[] {-1, 97, 385, 1919}) {
+                    char[] input = source.clone();
+                    if (hit >= 0) {
+                        System.arraycopy(needle, 0, input, hit, needle.length);
+                    }
+                    for (int from : new int[] {0, 1, 22, 23, 24, 31, 32, 96, 98, 384, 386, 1918, 1920}) {
+                        check(method, input, needle, from, sourceWide, targetWide);
+                    }
+                }
             }
         }
     }

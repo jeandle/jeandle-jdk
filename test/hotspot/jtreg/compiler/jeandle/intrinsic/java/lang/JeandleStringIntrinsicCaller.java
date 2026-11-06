@@ -32,6 +32,22 @@ import jdk.internal.org.objectweb.asm.Opcodes;
 public final class JeandleStringIntrinsicCaller {
     private JeandleStringIntrinsicCaller() {}
 
+    // Keep the length proof next to the intrinsic, after any MethodHandle
+    // adapter calls made by a microbenchmark entering this wrapper.
+    public static boolean equalsKnown16(byte[] a, byte[] b) {
+        if (a.length != 16 || b.length != 16) {
+            throw new IllegalArgumentException();
+        }
+        return StringLatin1.equals(a, b);
+    }
+
+    public static int compareKnown16(byte[] a, byte[] b) {
+        if (a.length != 16 || b.length != 16) {
+            throw new IllegalArgumentException();
+        }
+        return StringLatin1.compareTo(a, b);
+    }
+
     private static final MethodHandle LATIN_CHAR = charSearch(StringLatin1.class);
     private static final MethodHandle UTF_CHAR = charSearch(StringUTF16.class);
 

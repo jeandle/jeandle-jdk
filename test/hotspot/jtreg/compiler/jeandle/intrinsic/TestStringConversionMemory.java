@@ -113,12 +113,12 @@ public class TestStringConversionMemory {
             sink = capture(source);
             extract((i & 1) == 0 ? latin : wide, destination);
         }
-        source[0] = '\u0100';
+        source[0] = '\u00ff';
         stop = false;
         Thread writer = new Thread(() -> {
             while (!stop) {
-                source[0] = '\u0100';
-                source[0] = '\u0200';
+                source[0] = '\u00ff';
+                source[0] = '\u0300';
             }
         });
         writer.start();
@@ -126,7 +126,7 @@ public class TestStringConversionMemory {
             for (int i = 0; i < 10000; i++) {
                 String value = capture(source);
                 char first = value.charAt(0);
-                require(value.length() == source.length && (first == '\u0100' || first == '\u0200'),
+                require(value.length() == source.length && (first == '\u00ff' || first == '\u0300'),
                         "constructor observed a torn char: " + (int) first);
                 sink = value;
             }

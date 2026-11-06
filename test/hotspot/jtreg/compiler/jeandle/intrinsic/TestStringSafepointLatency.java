@@ -35,12 +35,12 @@ import jdk.test.lib.process.ProcessTools;
 /**
  * The substring-search kernel is a leaf routine without safepoint polls, so
  * the duration of one search call bounds its contribution to time-to-safepoint
- * (the caller's loop polls between calls). The needle below matches the
- * haystack on every filter character and differs only in the middle, which is
- * the densest candidate pattern: every haystack position reaches the full
- * needle comparison. This test characterizes that worst case by timing single
- * calls and full-GC pauses while a worker thread repeats the search, and
- * guards against gross regressions of either duration.
+ * (the caller's loop polls between calls). Repetitive text initially matches
+ * the fixed filter characters and differs in the middle of the needle.
+ * An adaptive filter can reject whole groups of candidates after learning
+ * the mismatch position. This case guards against gross regressions in
+ * search and GC pause durations; it does not establish a worst-case
+ * complexity bound.
  */
 public class TestStringSafepointLatency {
     // Generous upper bounds; measured values are printed for inspection and

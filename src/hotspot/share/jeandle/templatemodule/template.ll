@@ -1547,19 +1547,15 @@ filter:
   %prepared.filter.char = phi i32 [ %last, %pair ], [ %second.char, %second ]
   br label %scan.header
 ; The scan filters candidate positions in vector windows, then confirms each
-; surviving lane with a full needle comparison. Repetitive inputs whose
-; endpoint characters match everywhere (e.g. periodic haystacks) degrade to
-; the same quadratic worst case as the C2 pcmpestri stub and the Graal
-; two-character-plus-regionEquals snippet; no mainstream VM substring
-; intrinsic uses a bounded algorithm. The kernel is a leaf routine without
-; safepoint polls, like the HotSpot substring stubs, so the duration of a
-; single call bounds its time-to-safepoint contribution (measured by
-; TestStringSafepointLatency).
+; surviving lane with a full needle comparison. Adaptive filtering reduces
+; repeated comparisons but does not establish a linear worst-case bound.
+; The kernel is a leaf routine without safepoint polls, so a long search can
+; delay a safepoint until the call returns.
 scan.header:
-  %pos = phi i32 [ %from, %unprepared ], [ %from, %filter ], [ %next, %vector.next ], [ %l64.next.pos, %latin64.next ], [ %empty32.pos, %vector.empty32.next ], [ %empty16.pos, %vector.empty16.next ]
-  %refinement.state = phi i32 [ -4, %unprepared ], [ -4, %filter ], [ %refinement.exit, %vector.next ], [ %refinement.state, %latin64.next ], [ %refinement.state, %vector.empty32.next ], [ %refinement.state, %vector.empty16.next ]
-  %filter.offset = phi i32 [ 0, %unprepared ], [ %prepared.filter.offset, %filter ], [ %filter.offset, %vector.next ], [ %filter.offset, %latin64.next ], [ %filter.offset, %vector.empty32.next ], [ %filter.offset, %vector.empty16.next ]
-  %filter.char = phi i32 [ %first, %unprepared ], [ %prepared.filter.char, %filter ], [ %filter.char, %vector.next ], [ %filter.char, %latin64.next ], [ %filter.char, %vector.empty32.next ], [ %filter.char, %vector.empty16.next ]
+  %pos = phi i32 [ %from, %unprepared ], [ %from, %filter ], [ %next, %vector.next ], [ %l64.next.pos, %latin64.next ], [ %empty32.pos, %vector.empty32.next ], [ %empty16.pos, %vector.empty16.next ], [ %empty4.pos, %vector.empty4.next ]
+  %refinement.state = phi i32 [ -4, %unprepared ], [ -4, %filter ], [ %refinement.exit, %vector.next ], [ %refinement.state, %latin64.next ], [ %refinement.state, %vector.empty32.next ], [ %refinement.state, %vector.empty16.next ], [ %refinement.state, %vector.empty4.next ]
+  %filter.offset = phi i32 [ 0, %unprepared ], [ %prepared.filter.offset, %filter ], [ %filter.offset, %vector.next ], [ %filter.offset, %latin64.next ], [ %filter.offset, %vector.empty32.next ], [ %filter.offset, %vector.empty16.next ], [ %filter.offset, %vector.empty4.next ]
+  %filter.char = phi i32 [ %first, %unprepared ], [ %prepared.filter.char, %filter ], [ %filter.char, %vector.next ], [ %filter.char, %latin64.next ], [ %filter.char, %vector.empty32.next ], [ %filter.char, %vector.empty16.next ], [ %filter.char, %vector.empty4.next ]
   %remaining = sub i32 %limit, %pos
   %more.candidates = icmp sge i32 %remaining, 0
   br i1 %more.candidates, label %scan.width, label %miss
@@ -1663,7 +1659,11 @@ short.first.bytes:
 short.first.mask:
   %short.first.bits = phi i4 [ %short.first.word.bits, %short.first.words ], [ %short.first.byte.mask, %short.first.bytes ]
   %short.any.first = icmp ne i4 %short.first.bits, 0
-  br i1 %short.any.first, label %short.filter.prepare, label %short.done
+  br i1 %short.any.first, label %short.filter.prepare, label %vector.empty4.next
+vector.empty4.next:
+  ; Empty four-lane scans carry the filter state directly to the next window.
+  %empty4.pos = add i32 %pos, 4
+  br label %scan.header, !llvm.loop !1
 short.filter.prepare:
   %short.last = call hotspotcc i32 @jeandle.string_load_char(ptr addrspace(1) %tp, i32 %last.offset, i1 %tu)
   %short.last.index = add i32 %pos, %last.offset
@@ -1692,7 +1692,7 @@ short.filter.bytes:
   %short.byte.mask = select i1 %short.last.fits, i4 %short.byte.matches, i4 0
   br label %short.done
 short.done:
-  %short.matches = phi i4 [ 0, %short.first.mask ], [ %short.word.matches, %short.filter.words ], [ %short.byte.mask, %short.filter.bytes ]
+  %short.matches = phi i4 [ %short.word.matches, %short.filter.words ], [ %short.byte.mask, %short.filter.bytes ]
   %short.bits32 = zext i4 %short.matches to i32
   %short.reverse = call i32 @llvm.bitreverse.i32(i32 %short.bits32)
   %short.reverse4 = lshr i32 %short.reverse, 28
@@ -2008,13 +2008,18 @@ third.words:
 third.done:
   %third.mask = phi i32 [ %third.mask32, %third.bytes ], [ %third.mask16, %third.words ], [ %third.mask32w, %third.words32 ]
   %refined.mask = and i32 %fixed.mask, %third.mask
-  br label %block.filtered
+  ; Empty learned masks preserve the current filter without resetting it.
+  %third.empty = icmp eq i32 %refined.mask, 0
+  br i1 %third.empty, label %vector.next, label %block.filtered
 block.filtered:
   %candidate.mask = phi i32 [ %mask, %refine.check ], [ %fixed.mask, %refine.fixed.nonempty ], [ %fixed.mask, %refine.learned.check ], [ %fixed.mask, %refine.learned.bounds ], [ %refined.mask, %third.done ]
+  ; A surviving learned mask starts a fresh failure budget. A filter
+  ; learned while draining this mask remains intact until a later window.
+  %refinement.initial = phi i32 [ %refinement.state, %refine.check ], [ %refinement.state, %refine.fixed.nonempty ], [ %refinement.state, %refine.learned.check ], [ %refinement.state, %refine.learned.bounds ], [ -4, %third.done ]
   br label %candidate.check
 candidate.check:
   %pending = phi i32 [ %candidate.mask, %block.filtered ], [ %cleared, %candidate.next ]
-  %refinement.candidate = phi i32 [ %refinement.state, %block.filtered ], [ %refinement.after.failure, %candidate.next ]
+  %refinement.candidate = phi i32 [ %refinement.initial, %block.filtered ], [ %refinement.after.failure, %candidate.next ]
   %any = icmp ne i32 %pending, 0
   br i1 %any, label %candidate, label %vector.next
 candidate:
@@ -2051,8 +2056,8 @@ candidate.budget:
   %learning.fourth = icmp eq i32 %refinement.candidate, -1
   br i1 %learning.fourth, label %learning.check, label %candidate.next
 learning.check:
-  ; Learn at most once after four full failures. Skip sparse filtered blocks
-  ; and inputs without another full vector window.
+  ; Amortize a new mismatch probe over repeated full failures. Sparse blocks
+  ; defer learning until a later dense window can benefit from the filter.
   %learning.mask.minus.one = sub i32 %candidate.mask, 1
   %learning.other = and i32 %candidate.mask, %learning.mask.minus.one
   %learning.dense = icmp ne i32 %learning.other, 0
@@ -2107,7 +2112,7 @@ learning.found:
   %learning.offset = select i1 %learning.keep, i32 %learning.mismatch, i32 0
   br label %learning.done
 learning.done:
-  %learning.result = phi i32 [ 0, %learning.check ], [ 0, %learning.header ], [ %learning.offset, %learning.found ]
+  %learning.result = phi i32 [ -4, %learning.check ], [ 0, %learning.header ], [ %learning.offset, %learning.found ]
   br label %candidate.next
 candidate.next:
   %refinement.after.failure = phi i32 [ %refinement.candidate, %candidate.failed ], [ %learning.budget.next, %candidate.budget ], [ %learning.result, %learning.done ]
@@ -2117,7 +2122,7 @@ candidate.next:
 hit:
   ret i32 %index
 vector.next:
-  %refinement.exit = phi i32 [ %refinement.state, %block.ready ], [ %refinement.candidate, %candidate.check ], [ %refinement.state, %refine.fixed.done ]
+  %refinement.exit = phi i32 [ %refinement.state, %block.ready ], [ %refinement.candidate, %candidate.check ], [ %refinement.state, %refine.fixed.done ], [ %refinement.state, %third.done ]
   %next = add i32 %block.pos, %block.size
   ; Keep vector preparation behind the width dispatch for scalar searches.
   br label %scan.header, !llvm.loop !1
