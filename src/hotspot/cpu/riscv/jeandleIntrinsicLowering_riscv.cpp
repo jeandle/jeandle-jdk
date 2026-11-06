@@ -47,6 +47,14 @@ bool JeandleIntrinsicLowering::cpu_supports_popcount() {
   return false;
 }
 
+bool JeandleIntrinsicLowering::cpu_supports_bit_shuffle() {
+  // C2 has no riscv lowering for compress/expand either, and Jeandle has
+  // none wired (Graal is x86-only here too). Declining falls back to a
+  // normal invoke of the inlinable Java implementation, which has the exact
+  // same bit semantics.
+  return false;
+}
+
 bool JeandleIntrinsicLowering::cpu_supports_cache_writeback() {
   return false;
 }
@@ -82,5 +90,12 @@ bool JeandleIntrinsicLowering::lower_writeback0() {
 }
 
 bool JeandleIntrinsicLowering::lower_writeback_sync(vmIntrinsics::ID) {
+  return false;
+}
+
+bool JeandleIntrinsicLowering::lower_bit_shuffle(vmIntrinsics::ID) {
+  // Unreachable today: is_supported() gates all four bit-shuffle IDs on
+  // cpu_supports_bit_shuffle(), which returns false above. Defined so the
+  // shared translation unit's reference to this function resolves on riscv.
   return false;
 }
