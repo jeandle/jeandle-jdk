@@ -36,7 +36,11 @@
 #define PROB_FAIR               (0.5f)
 
 class JeandleAbstractInterpreter;
+class ciField;
+class ciInstanceKlass;
+class ciKlass;
 class ciMethod;
+class ciSignature;
 
 // =============================================================================
 // Control-flow facts for a lowered intrinsic call site. Combined into
@@ -231,6 +235,66 @@ class JeandleIntrinsicLowering : public StackObj {
   bool lower_remainder_unsigned(vmIntrinsics::ID id);
   bool lower_multiply_high(vmIntrinsics::ID id);
   bool lower_digestBase_implCompress(vmIntrinsics::ID id);
+  bool lower_digestBase_implCompressMB();
+
+  // ---- shared crypto-intrinsic helpers ----
+  llvm::CallBase* emit_crypto_stub(JeandleRuntimeCalleeFn callee,
+                                   llvm::ArrayRef<llvm::Value*> args);
+  // Descriptor for one Java parameter slot in expect_signature.
+  enum class SigKind { ByteArray, IntArray, LongArray, Int, Object };
+  // Validate that sig's parameters match `params` in arity and per-slot
+  // kinds, and that the return basic type is `ret`. Array kinds also require
+  // the exact array element signature name ("[B"/"[I"/"[J"); a T_ILLEGAL
+  // return skips the return-type check. Returns false on any mismatch.
+  bool expect_signature(const ciSignature* sig, llvm::ArrayRef<SigKind> params,
+                        BasicType ret);
+  // Resolve a class by binary name relative to the intrinsic target holder.
+  // Returns nullptr unless the class is loaded; guarded fast paths must
+  // close when it is not (mirrors C2's predicate klass check).
+  ciInstanceKlass* resolve_loaded_instance_klass(const char* klass_name);
+  // Find a non-static field by name/signature (searches superclasses);
+  // nullptr when unresolvable.
+  ciField* find_instance_field(ciInstanceKlass* holder, const char* name,
+                               const char* signature);
+  // Pointer to the first element of an array (header + base offset).
+  llvm::Value* array_element0_pointer(llvm::Value* array, BasicType elem_type,
+                                      const char* name = "");
+  // Pointer to array element data at the given byte offset.
+  llvm::Value* array_data_pointer(llvm::Value* array, BasicType elem_type,
+                                  llvm::Value* byte_offset,
+                                  const char* name = "");
+  // Load a reference-typed instance field, decoding compressed oops.
+  llvm::Value* load_instance_object_field(llvm::Value* obj, ciField* field,
+                                          const char* name = "");
+  // Klass* constant as a C-heap pointer value for jeandle.instanceof guards.
+  llvm::Value* klass_constant_pointer(ciKlass* klass);
+  // Emit the fallback Java call for a guarded intrinsic in the block the
+  // builder is currently parked at, branch to merge_bb, and PHI-merge the
+  // i32 results of the guarded stub paths with the call result. Returns the
+  // PHI, or nullptr when emit_java_call recorded a compilation error (the
+  // caller returns true so the error aborts the compilation). On success the
+  // builder is left positioned at merge_bb with the tail block recorded, so
+  // the caller must only ipush the result and emit no further IR of its own.
+  llvm::Value* merge_with_java_fallback(llvm::ArrayRef<llvm::Value*> stub_results,
+                                        llvm::ArrayRef<llvm::BasicBlock*> stub_blocks,
+                                        llvm::BasicBlock* merge_bb,
+                                        llvm::ArrayRef<llvm::Value*> java_args,
+                                        bool has_receiver,
+                                        const llvm::Twine& phi_name);
+  // ---- crypto intrinsic handlers ----
+  bool lower_aescrypt_block(vmIntrinsics::ID id);
+  // Guarded AES block-cipher modes (CBC and ECB); the intrinsic id selects
+  // the stub, its callee, the CBC r-vector argument and the encrypt/decrypt
+  // direction, so one shared lowering covers all four intrinsics.
+  bool lower_block_cipher_mode(vmIntrinsics::ID id);
+  bool lower_counter_mode();
+  bool lower_galois_counter_mode();
+  bool lower_ghash_process_blocks();
+  // ChaCha20 block keystream and Poly1305 multi-block MAC: direct stub
+  // bridges with no receiver-type guard (the limb arrays are explicit
+  // arguments and the ChaCha20 block is a static method).
+  bool lower_chacha20_block();
+  bool lower_poly1305_process_blocks();
   bool lower_new_array();
   bool lower_unsafe_allocate_instance();
   bool lower_object_notify(vmIntrinsics::ID id);
@@ -257,7 +321,6 @@ class JeandleIntrinsicLowering : public StackObj {
                                                llvm::Value* byte_length,
                                                llvm::Value* scale);
   bool lower_hash_code(vmIntrinsics::ID id);
-
-  };
+};
 
 #endif // SHARE_JEANDLE_INTRINSIC_LOWERING_HPP
