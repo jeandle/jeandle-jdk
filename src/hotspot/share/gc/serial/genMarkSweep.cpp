@@ -91,7 +91,7 @@ void GenMarkSweep::invoke_at_safepoint(bool clear_all_softrefs) {
   mark_sweep_phase2();
 
   // Don't add any more derived pointers during phase3
-#if COMPILER2_OR_JVMCI
+#if COMPILER2_OR_JVMCI_OR_JEANDLE
   assert(DerivedPointerTable::is_active(), "Sanity");
   DerivedPointerTable::set_active(false);
 #endif
