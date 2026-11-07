@@ -86,7 +86,7 @@ public class TestRecursiveRootReceiverNoPoison {
         fileCheck.checkPattern(
                 "define.*TestRecursiveRootReceiverNoPoison_root.*\\.root");
 
-        // DAE must not have replaced any call operand with poison.
-        fileCheck.checkNot("poison");
+        // DAE must not have replaced any call operand with the poison value.
+        fileCheck.checkNotPattern("\\bpoison\\b");
     }
 }

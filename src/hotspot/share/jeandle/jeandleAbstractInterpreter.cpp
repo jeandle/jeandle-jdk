@@ -3631,7 +3631,10 @@ llvm::InvokeInst* JeandleAbstractInterpreter::new_instance(
 //-------------------------------new_array-------------------------------------
 llvm::InvokeInst* JeandleAbstractInterpreter::emit_jeandle_newarray(
     llvm::Value* array_klass, llvm::Value* length,
-    llvm::Value** return_size_val, bool deoptimize_on_exception) {
+    llvm::Value** return_size_val, bool deoptimize_on_exception,
+    bool uninitialized, bool defer_initialization_membar) {
+  assert(!defer_initialization_membar || uninitialized,
+         "deferred array publication requires uninitialized allocation");
   jint layout_con = Klass::_lh_neutral_value;
   llvm::Value* layout_val = get_layout_helper(array_klass, layout_con);
   bool layout_is_con = layout_val == nullptr;
@@ -3719,7 +3722,9 @@ llvm::InvokeInst* JeandleAbstractInterpreter::emit_jeandle_newarray(
 
   return call_java_op_ex(
       "jeandle.new_array",
-      {array_klass, length, size_in_bytes, header_size, length_limit},
+      {array_klass, length, size_in_bytes, header_size, length_limit,
+       _ir_builder.getInt1(uninitialized),
+       _ir_builder.getInt1(defer_initialization_membar)},
       {create_current_deopt_bundle()}, deoptimize_on_exception);
 }
 
