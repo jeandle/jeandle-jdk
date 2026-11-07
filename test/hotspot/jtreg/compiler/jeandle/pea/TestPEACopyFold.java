@@ -42,23 +42,38 @@ public class TestPEACopyFold {
         Method largeClone = TestWrapper.class.getMethod("testLargeVirtualClone");
         Method largeEscape = TestWrapper.class.getMethod("testLargeVirtualEscape");
         Method denseEscape = TestWrapper.class.getMethod("testDenseReferenceEscape");
+        Method cloneInstanceConcrete =
+                TestWrapper.class.getMethod("testConcreteCloneInstance");
+        Method cloneManyFields =
+                TestWrapper.class.getMethod("testConcreteCloneManyFields");
         Method requestDeopt = TestWrapper.class.getDeclaredMethod("requestDeopt");
         Method[] targets = {v2vInt, v2vRef, copyOf, copyOfRange, overlap,
                             escape, deoptV2V, deoptConcrete, cloneRef, cloneInt,
-                            cloneInstance, exceptions, largeCopy, largeOverlap, largeClone,
+                            cloneInstance, cloneInstanceConcrete, cloneManyFields,
+                            exceptions,
+                            largeCopy, largeOverlap, largeClone,
                             largeEscape, denseEscape};
 
+        Method manyClone;
+        try {
+            manyClone = TestWrapper.ManyFields.class.getDeclaredMethod("clone");
+        } catch (NoSuchMethodException e) {
+            throw new AssertionError(e);
+        }
         PEATestUtils.behaviorRun(WRAPPER, targets)
                 .dontinline(requestDeopt)
+                .inline(manyClone)
                 .runPEAOnOffEquivalent();
 
         // Each copy kind must fold through the real frontend and execute
         // with the same configuration as the behavior comparison.
         try (PEATestUtils.RunResult run = PEATestUtils.shapeRun(WRAPPER, v2vInt, cloneRef, cloneInt, deoptConcrete,
                                                               copyOf, copyOfRange, cloneInstance,
+                                                              cloneInstanceConcrete, cloneManyFields,
                                                               largeCopy, largeOverlap, largeClone,
                                                               largeEscape, denseEscape)
                 .dontinline(requestDeopt)
+                .inline(manyClone)
                 .run()) {
             assertFold(run, v2vInt, 2);
             assertFold(run, cloneRef, 2);
@@ -81,6 +96,16 @@ public class TestPEACopyFold {
             assertFold(run, cloneInstance, 0);
             Asserts.assertEquals(run.report(cloneInstance).round(0).partiallyEscapes(), 2,
                     "instance clone source and destination replay at the slow-path join");
+            // A CONCRETE source folds by per-field semantic loads of the
+            // source's declared fields; only the destination is virtual, and
+            // the slow-path join keeps it partially escaping.
+            assertFold(run, cloneInstanceConcrete, 0);
+            Asserts.assertEquals(
+                    run.report(cloneInstanceConcrete).round(0).partiallyEscapes(), 1,
+                    "concrete clone destination replays at the slow-path join");
+            // Ten declared fields — beyond C2's ArrayCopyLoadStoreMaxElem —
+            // still fold: the PEA query takes the complete layout.
+            assertFold(run, cloneManyFields, 0);
         }
     }
 
@@ -99,13 +124,20 @@ public class TestPEACopyFold {
         run.finalIR(target).assertAbsent("@jeandle.copy");
     }
 
-    public static class TestWrapper implements Cloneable {
+    // final so the concrete-source clone test gets exact receiver types: the
+    // clone's class load only folds to a constant for a final (effectively
+    // final) receiver klass, which the whole copy-fold chain builds on.
+    public static final class TestWrapper implements Cloneable {
         private static final String[] SRC_STRINGS = {"aa", "bb", "cc", "dd"};
         private static final int[] SRC_INTS = {10, 20, 30, 40, 50, 60};
         private static int[] sinkInt;
         private static String[] sinkRef;
 
         private static Method deoptTarget;
+        // A pre-existing source object: only its exact type is known at the
+        // clone site (no constant oop), so the clone's destination folds by
+        // per-field loads of the source instead of entry transfer.
+        private static TestWrapper concreteSrc = new TestWrapper();
         private int x;
         private int y;
         private Object ref;
@@ -116,6 +148,9 @@ public class TestPEACopyFold {
             Arrays.copyOf(SRC_STRINGS, 4, String[].class);
             Arrays.copyOfRange(SRC_STRINGS, 1, 3, String[].class);
             new TestWrapper().clone();
+            concreteSrc.x = 13;
+            concreteSrc.y = 29;
+            concreteSrc.ref = SRC_STRINGS;
             PEATestUtils.compileConfiguredTargetsAtLevel4();
 
             long payload = 0x6A09E667F3BCC909L;
@@ -159,6 +194,14 @@ public class TestPEACopyFold {
             if (configured("testCloneInstance")) {
                 deoptTarget = TestWrapper.class.getMethod("testCloneInstance");
                 payload = mix(payload, testCloneInstance());
+            }
+            if (configured("testConcreteCloneInstance")) {
+                deoptTarget = TestWrapper.class.getMethod("testConcreteCloneInstance");
+                payload = mix(payload, testConcreteCloneInstance());
+            }
+            if (configured("testConcreteCloneManyFields")) {
+                deoptTarget = TestWrapper.class.getMethod("testConcreteCloneManyFields");
+                payload = mix(payload, testConcreteCloneManyFields());
             }
             if (configured("testExceptions")) {
                 payload = mix(payload, testExceptions());
@@ -273,6 +316,65 @@ public class TestPEACopyFold {
                 throw new AssertionError("clone has independent storage");
             }
             return result;
+        }
+
+        // Instance clone over a CONCRETE source: the receiver comes from a
+        // static field of final type, so load_object_klass reuses its exact
+        // constant Klass and the fold loads each declared field from the
+        // source (the concrete-instance path of Graal's ObjectClone
+        // virtualize). The source stays live after the clone — the identity
+        // compare and the later read exercise the constant-klass path that
+        // keeps the clone size static.
+        public static long testConcreteCloneInstance() throws CloneNotSupportedException {
+            TestWrapper p = concreteSrc;
+            TestWrapper q = (TestWrapper) p.clone();
+            requestDeopt();
+            if (q == p || q.x != 13 || q.y != 29 || q.ref != SRC_STRINGS) {
+                throw new AssertionError("concrete clone fields and identity after deopt");
+            }
+            long result = q.x * 31 + q.y;
+            q.x = 41;
+            if (p.x != 13) {
+                throw new AssertionError("concrete clone has independent storage");
+            }
+            return result;
+        }
+
+        // A ten-field final class — beyond C2's ArrayCopyLoadStoreMaxElem
+        // bound that the callback applies to CopySpecialization's per-element
+        // expansion — folds through the PEA query's complete layout. The
+        // target method lives in the class itself so the inherited protected
+        // clone() is accessible.
+        public static final class ManyFields implements Cloneable {
+            int f0; int f1; int f2; int f3; int f4;
+            int f5; int f6; int f7; int f8; int f9;
+
+            // The trivial override only widens access; the intrinsic fires
+            // on the inlined super.clone() with the exact receiver type.
+            @Override
+            public ManyFields clone() {
+                try {
+                    return (ManyFields) super.clone();
+                } catch (CloneNotSupportedException e) {
+                    throw new AssertionError(e);
+                }
+            }
+        }
+
+        private static final ManyFields MANY_SRC = new ManyFields();
+        static {
+            MANY_SRC.f0 = 3; MANY_SRC.f1 = 3; MANY_SRC.f2 = 3; MANY_SRC.f3 = 3;
+            MANY_SRC.f4 = 3; MANY_SRC.f5 = 3; MANY_SRC.f6 = 3; MANY_SRC.f7 = 3;
+            MANY_SRC.f8 = 3; MANY_SRC.f9 = 3;
+        }
+
+        public static long testConcreteCloneManyFields() throws CloneNotSupportedException {
+            ManyFields q = (ManyFields) MANY_SRC.clone();
+            requestDeopt();
+            if (q == MANY_SRC || q.f0 != 3 || q.f9 != 3) {
+                throw new AssertionError("many-field clone entries after deopt");
+            }
+            return q.f0 * 31 + q.f9;
         }
 
         // Arrays.copyOf over a VIRTUAL source: the source's arraylength is

@@ -116,8 +116,9 @@ public class TestObjectClone {
             if (gcOption.equals("+UseSerialGC") && reduceInitialCardMarks) {
                 FileCheck mixed = new FileCheck(dumpPath.toString(),
                         MixedCloneable.class.getDeclaredMethod("copy"), true);
-                // Prove the real VM callback's field list reached scalar copy.
-                mixed.checkPatternAnywhere("clone\\.instance\\.load");
+                // Prove the real VM callback's field list reached the
+                // per-field semantic loads of the copy fold.
+                mixed.checkPatternAnywhere("pea\\.copy\\.elem");
                 mixed.checkNotPattern("call.*@JeandleRuntime_clone");
                 mixed.checkNotPattern("call.*@StubRoutines_jlong_disjoint_arraycopy");
             }
@@ -226,7 +227,12 @@ public class TestObjectClone {
                 TestMethods.class.getDeclaredMethod(methodName, arrayClass), false);
         raw.checkNotPattern("new_array\\.object_array_layout_matches");
         raw.checkNotPattern("new_array\\.class_check_deopt");
-        raw.checkPatternAnywhere("new_array\\.log2_element_size = and i32");
+        // The inline allocation fast path must be present. With an exact
+        // static receiver type (every primitive-array parameter) the
+        // frontend pins the constant klass and the layout decode folds to
+        // constants; only metadata-less shapes (e.g. an aaload result) keep
+        // the dynamic new_array.log2_element_size decode.
+        raw.checkPatternAnywhere("invoke.*@jeandle\\.new_array");
         raw.checkNotPattern("clone\\.virtual_target_mismatch");
         raw.checkNotPattern(
                 "__jeandle_dynamic_call.*java_lang_Object_clone");
