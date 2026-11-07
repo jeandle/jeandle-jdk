@@ -112,7 +112,7 @@ class JeandleVMCallback : public AllStatic {
   // klass it delegates to is reachable because JeandleVMCallback is a friend of
   // ciEnv.
   static ciInstanceKlass* get_ci_instance_klass(Klass* klass);
-  static llvm::jeandle::CloneInstanceInfoResult get_clone_instance_info(uintptr_t klass_ptr, bool klass_exact);
+  static llvm::jeandle::CloneInstanceInfoResult get_clone_instance_info(uintptr_t klass_ptr, bool klass_exact, bool expansion_bound);
 };
 
 #endif // SHARE_JEANDLE_VM_CALLBACK_HPP
