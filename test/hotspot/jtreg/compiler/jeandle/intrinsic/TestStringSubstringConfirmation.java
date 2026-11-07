@@ -56,45 +56,94 @@ public class TestStringSubstringConfirmation {
                 "-XX:+UnlockDiagnosticVMOptions", "-XX:+LogCompilation", "-XX:LogFile=" + log,
                 "-XX:+JeandleDumpIR", "-XX:JeandleDumpDirectory=" + dumps,
                 "-XX:CompileCommand=compileonly," + CALLER + "::indexOfIU*",
+                "-XX:CompileCommand=compileonly," + CALLER + "::indexOfIL",
                 TestStringSubstringConfirmation.class.getName(), "child")
                 .shouldHaveExitValue(0).shouldContain("String substring confirmation PASSED");
         String xml = Files.readString(log);
-        if (!xml.lines().anyMatch(line -> line.contains("<nmethod") && line.contains("compiler='jeandle'")
-                && line.contains(CALLER + " indexOfIUL "))) {
-            throw new AssertionError("Missing executed Jeandle mixed-width search");
-        }
-        try (var files = Files.list(dumps)) {
-            Path file = files.filter(path -> path.getFileName().toString()
-                    .startsWith("java_lang_JeandleStringIntrinsicCaller_indexOfIUL_")
-                    && path.toString().endsWith("_optimized.ll")).findFirst()
-                    .orElseThrow(() -> new AssertionError("Missing mixed-width search IR"));
-            String ir = Files.readString(file);
-            if (!ir.contains("zext <8 x i8>")
-                    || !Pattern.compile("icmp (?:eq|ne) <8 x i16>").matcher(ir).find()) {
-                throw new AssertionError("Missing live mixed-width vector equality confirmation");
+        for (String name : new String[]{"indexOfIL", "indexOfIU", "indexOfIUL"}) {
+            if (!xml.lines().anyMatch(line -> line.contains("<nmethod") && line.contains("compiler='jeandle'")
+                    && line.contains(CALLER + " " + name + " "))) {
+                throw new AssertionError("Missing executed Jeandle search: " + name);
             }
-            // The scan needs mask indices, but equality confirmation never
-            // needs to subtract two unsigned character values.
-            Set<String> characters = new HashSet<>();
-            Matcher widen = Pattern.compile("(%[\\w.]+) = zext (?:nneg )?i(?:8|16) [^\\n]+ to i32")
-                    .matcher(ir);
-            while (widen.find()) characters.add(widen.group(1));
-            Matcher difference = Pattern.compile("= sub (?:nuw |nsw )*i32 (%[\\w.]+), (%[\\w.]+)")
-                    .matcher(ir);
-            while (difference.find()) {
-                if (characters.contains(difference.group(1)) && characters.contains(difference.group(2))) {
-                    throw new AssertionError("Substring confirmation computes an ordered character difference");
+            try (var files = Files.list(dumps)) {
+                Path file = files.filter(path -> path.getFileName().toString()
+                        .startsWith("java_lang_JeandleStringIntrinsicCaller_" + name + "_")
+                        && path.toString().endsWith("_optimized.ll")).findFirst()
+                        .orElseThrow(() -> new AssertionError("Missing search IR: " + name));
+                String ir = Files.readString(file);
+                if (!ir.contains("packed.")) {
+                    throw new AssertionError("Missing bounded short-needle confirmation");
                 }
-            }
-            if (Pattern.compile("extractelement <(?:4|8) x i16>[^\\n]*, i\\d+ %")
-                            .matcher(ir).find()) {
-                throw new AssertionError("Substring confirmation recovers an ordered mismatch lane");
+                if (!ir.contains("packed.filter.aligned") || !ir.contains("packed.filter.pending")) {
+                    throw new AssertionError("Missing bounded ordered endpoint filter: " + name);
+                }
+                if (!name.equals("indexOfIUL")) continue;
+                if (!ir.contains("zext <8 x i8>")
+                        || !Pattern.compile("icmp (?:eq|ne) <8 x i16>").matcher(ir).find()) {
+                    throw new AssertionError("Missing live mixed-width vector equality confirmation");
+                }
+                // The scan needs mask indices, but equality confirmation never
+                // needs to subtract two unsigned character values.
+                Set<String> characters = new HashSet<>();
+                Matcher widen = Pattern.compile("(%[\\w.]+) = zext (?:nneg )?i(?:8|16) [^\\n]+ to i32")
+                        .matcher(ir);
+                while (widen.find()) characters.add(widen.group(1));
+                Matcher difference = Pattern.compile("= sub (?:nuw |nsw )*i32 (%[\\w.]+), (%[\\w.]+)")
+                        .matcher(ir);
+                while (difference.find()) {
+                    if (characters.contains(difference.group(1)) && characters.contains(difference.group(2))) {
+                        throw new AssertionError("Substring confirmation computes an ordered character difference");
+                    }
+                }
+                if (Pattern.compile("extractelement <(?:4|8) x i16>[^\\n]*, i\\d+ %")
+                                .matcher(ir).find()) {
+                    throw new AssertionError("Substring confirmation recovers an ordered mismatch lane");
+                }
             }
         }
     }
 
     private static void exercise() throws Exception {
         Class<?> caller = Class.forName(CALLER);
+        for (int encoding : new int[]{0, 1, 3}) {
+            boolean sourceWide = (encoding & 1) != 0;
+            boolean targetWide = (encoding & 2) != 0;
+            Method method = caller.getMethod(encoding == 0 ? "indexOfIL"
+                            : encoding == 1 ? "indexOfIUL" : "indexOfIU",
+                    byte[].class, int.class, byte[].class, int.class, int.class);
+            for (int count : new int[]{2, 3, 4}) {
+                char[] needle = new char[count];
+                Arrays.fill(needle, targetWide ? '\u12ff' : '\u00ff');
+                needle[count - 1]--;
+                for (int candidates : new int[]{1, 2, 3, 4, 7, 8, 15, 16, 17, 1024}) {
+                    for (int at : new int[]{-1, 0, candidates / 2, candidates - 1}) {
+                        char[] source = new char[count + candidates - 1];
+                        Arrays.fill(source, needle[0]);
+                        if (at >= 0) System.arraycopy(needle, 0, source, at, count);
+                        for (int from : new int[]{0, 1, candidates - 1, candidates}) {
+                            check(method, source, needle, sourceWide, targetWide, from);
+                        }
+                    }
+                }
+                {
+                    char[] marked = new char[count];
+                    Arrays.fill(marked, targetWide ? '\u1280' : '\u0080');
+                    marked[0] = targetWide ? '\u12ff' : '\u00ff';
+                    for (int length : new int[]{15, 16, 17, 18, 19, 20}) {
+                        for (int at : new int[]{-1, 0, length - count, length - count + 1}) {
+                            char[] source = new char[length];
+                            Arrays.fill(source, marked[1]);
+                            // A marker after the last complete candidate may
+                            // set a filter lane but cannot establish a match.
+                            if (at >= 0) source[at] = marked[0];
+                            for (int from : new int[]{0, 1, 2, length - count, length}) {
+                                check(method, source, marked, sourceWide, targetWide, from);
+                            }
+                        }
+                    }
+                }
+            }
+        }
         for (boolean targetWide : new boolean[]{false, true}) {
             Method method = caller.getMethod(targetWide ? "indexOfIU" : "indexOfIUL",
                     byte[].class, int.class, byte[].class, int.class, int.class);
@@ -125,6 +174,11 @@ public class TestStringSubstringConfirmation {
 
     private static void check(Method method, char[] source, char[] needle, boolean targetWide, int from)
             throws Exception {
+        check(method, source, needle, true, targetWide, from);
+    }
+
+    private static void check(Method method, char[] source, char[] needle,
+                              boolean sourceWide, boolean targetWide, int from) throws Exception {
         int expected = -1;
         for (int i = from; i <= source.length - needle.length; i++) {
             int j = 0;
@@ -134,7 +188,7 @@ public class TestStringSubstringConfirmation {
                 break;
             }
         }
-        byte[] sourceBytes = encode(source, true);
+        byte[] sourceBytes = encode(source, sourceWide);
         byte[] targetBytes = encode(needle, targetWide);
         int actual = (int) method.invoke(null, sourceBytes, source.length, targetBytes, needle.length, from);
         if (actual != expected || new String(source).indexOf(new String(needle), from) != expected) {

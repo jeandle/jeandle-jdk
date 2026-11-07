@@ -71,7 +71,11 @@ public class TestStringIntrinsicIntegration {
         Method inlineRoot = Wrapper.class.getMethod("inlineRoot", char[].class);
         Method allocation = Wrapper.class.getMethod("allocation", char[].class, int.class, int.class);
         Method checkpoint = Wrapper.class.getDeclaredMethod("checkpoint");
-        Method[] targets = {stable, stableIndex, mutable, virtual, pressure, inlineRoot, allocation};
+        Method roundTrip = Wrapper.class.getMethod("roundTrip", char.class);
+        Method compareLocal = Wrapper.class.getMethod("compareLocal", byte.class, byte[].class);
+        Method roundTripDeopt = Wrapper.class.getMethod("roundTripDeopt", char.class);
+        Method[] targets = {stable, stableIndex, mutable, virtual, pressure, inlineRoot, allocation,
+                            roundTrip, compareLocal, roundTripDeopt};
         try (var run = builder(true, targets, checkpoint, args[0], "G1", true)
                 .keepDumps().run()) {
             Asserts.assertTrue(run.finalIR(stableIndex).lines().contains("ret i32 -1"),
@@ -86,6 +90,12 @@ public class TestStringIntrinsicIntegration {
                     "short string operations eliminate virtual arrays");
             Asserts.assertEquals(run.finalIR(virtual).loweredAllocCount(), 0,
                     "no removed array survives as a lowered allocation");
+            for (Method target : List.of(roundTrip, compareLocal, roundTripDeopt)) {
+                Asserts.assertTrue(run.report(target).round0Before().peaAllocCount() > 0,
+                        "String scalarization reaches PEA: " + target.getName());
+                Asserts.assertEquals(run.finalIR(target).loweredAllocCount(), 0,
+                        "String scalarization removes temporary arrays: " + target.getName());
+            }
             String callee = PEATestUtils.MethodId.of(checkpoint).llvmFunctionName();
             var bundle = report.finalAfter().deoptBundleAtCall(callee, 0);
             Asserts.assertTrue(bundle.virtualObjects().size() >= 3,
@@ -93,6 +103,9 @@ public class TestStringIntrinsicIntegration {
             var inlineBundle = run.report(inlineRoot).finalAfter().deoptBundleAtCall(callee, 0);
             Asserts.assertTrue(!inlineBundle.inlineScopes().isEmpty(),
                     "active deoptimization retains the inlined pressure scope");
+            Asserts.assertTrue(!run.report(roundTripDeopt).finalAfter()
+                    .deoptBundleAtCall(callee, 0).virtualObjects().isEmpty(),
+                    "byte-backed UTF16 values retain reconstruction descriptors");
             for (Method target : targets) {
                 PEATestUtils.assertStructuralSoundness(run.finalIR(target), target.getName());
             }
@@ -148,7 +161,15 @@ public class TestStringIntrinsicIntegration {
             pressure(input);
             inlineRoot(input);
             allocation(input, 1, 255);
+            roundTrip('a');
+            compareLocal((byte) 3, new byte[]{2});
+            roundTripDeopt('a');
             PEATestUtils.compileConfiguredTargetsAtLevel4();
+            for (int value : new int[]{0, 1, 127, 128, 255, 256, 0x1234, 0x8000, 0xffff}) {
+                Asserts.assertEquals(roundTrip((char) value), value);
+                Asserts.assertEquals(compareLocal((byte) value, new byte[]{17}),
+                        (value & 255) - 17);
+            }
             Asserts.assertEquals(stable(), -1);
             Asserts.assertEquals(stableIndex(), -1);
             Asserts.assertEquals(mutable(), -1);
@@ -161,6 +182,8 @@ public class TestStringIntrinsicIntegration {
             Asserts.assertEquals(pressure(input), checksum(input));
             active = Wrapper.class.getMethod("inlineRoot", char[].class);
             Asserts.assertEquals(inlineRoot(input), checksum(input) + 17);
+            active = Wrapper.class.getMethod("roundTripDeopt", char.class);
+            Asserts.assertEquals(roundTripDeopt('\uabcd'), 0xabcd);
             active = null;
             // Resolve the verifier before creating the young source. Once the
             // source exists, only the compiled copy allocates pressure objects;
@@ -209,7 +232,7 @@ public class TestStringIntrinsicIntegration {
             } catch (IndexOutOfBoundsException expected) {
                 Asserts.assertTrue(allocationSink == invalidSource, "guard replay retains source identity");
             }
-            Asserts.assertEquals(checkpoints, 3, "root, virtual, and inlinee active frames");
+            Asserts.assertEquals(checkpoints, 4, "root, virtual, inlinee and UTF16 active frames");
             System.out.println("PEA-RESULT:stable-mutable-virtual-pressure-allocation");
         }
 
@@ -223,6 +246,23 @@ public class TestStringIntrinsicIntegration {
 
         public static int mutable() {
             return JeandleStringIntrinsicCaller.compareToL(MUTABLE_A, MUTABLE_B);
+        }
+
+        public static int roundTrip(char value) {
+            byte[] bytes = JeandleStringIntrinsicCaller.toBytesStringU(new char[]{value}, 0, 1);
+            return JeandleStringIntrinsicCaller.getCharStringU(bytes, 0);
+        }
+
+        public static int compareLocal(byte value, byte[] other) {
+            if (other.length != 1) throw new IllegalArgumentException();
+            return JeandleStringIntrinsicCaller.compareToL(new byte[]{value}, other);
+        }
+
+        public static int roundTripDeopt(char value) {
+            byte[] bytes = JeandleStringIntrinsicCaller.toBytesStringU(new char[]{value}, 0, 1);
+            int first = JeandleStringIntrinsicCaller.getCharStringU(bytes, 0);
+            checkpoint();
+            return JeandleStringIntrinsicCaller.getCharStringU(bytes, 0) == first ? first : -1;
         }
 
         public static int virtual(int seed) {

@@ -47,6 +47,7 @@ public class TestStringCompressionTiers {
             return;
         }
         for (List<String> features : List.of(
+                List.<String>of(),
                 List.of("-XX:UseAVX=0"),
                 List.of("-XX:UseAVX=1"),
                 List.of("-XX:UseAVX=2", "-XX:MaxVectorSize=16"),

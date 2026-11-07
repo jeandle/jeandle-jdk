@@ -109,12 +109,12 @@ public class StringMixedWorkloads {
             right = Arrays.copyOf(left, length + 1);
         } else if (shape >= 5 && shape <= 10 && length != 0) {
             int at = shape <= 6 ? 0 : shape <= 8 ? length / 2 : length - 1;
-            right[at] += wide ? 0x100 : 1;
+            right[at] = (char) (right[at] + (wide ? 0x100 : 1));
         } else if (shape >= 12 && length != 0) {
             left = text(length, seed, false);
             right = left.clone();
             int at = shape < 14 ? 0 : length - 1;
-            right[at] += wide ? 0x4000 : 1;
+            right[at] = (char) (right[at] + (wide ? 0x4000 : 1));
         }
         if (shape == 4 || shape == 6 || shape == 8 || shape == 10
                 || shape == 13 || shape == 15) {

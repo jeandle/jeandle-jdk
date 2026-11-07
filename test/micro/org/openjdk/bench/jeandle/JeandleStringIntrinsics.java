@@ -20,8 +20,6 @@
 package org.openjdk.bench.jeandle;
 
 import java.lang.invoke.MethodHandle;
-import java.lang.invoke.MethodHandles;
-import java.lang.invoke.MethodType;
 import java.nio.ByteOrder;
 import java.nio.charset.StandardCharsets;
 import java.util.Arrays;
@@ -50,7 +48,9 @@ import org.openjdk.jmh.annotations.Warmup;
 @State(Scope.Thread)
 @Warmup(iterations = 5, time = 1)
 @Measurement(iterations = 5, time = 1)
-@Fork(value = 3, jvmArgsAppend = {"--add-opens=java.base/java.lang=ALL-UNNAMED"})
+@Fork(value = 3, jvmArgsAppend = {
+        "--add-opens=java.base/java.lang=ALL-UNNAMED",
+        "--add-exports=java.base/jdk.internal.org.objectweb.asm=ALL-UNNAMED"})
 public class JeandleStringIntrinsics {
     @Param({"7", "16", "80", "1024"})
     public int length;
@@ -68,15 +68,17 @@ public class JeandleStringIntrinsics {
     private int needleLength;
 
     private static final class Fixture {
-        final byte[] latinA, latinB, utfA, utfB, latinNeedle, utfNeedle;
+        final byte[] latinA, latinB, utfA, utfB, mixedA, mixedB, latinNeedle, utfNeedle;
         final int character;
 
         Fixture(byte[] latinA, byte[] latinB, byte[] utfA, byte[] utfB,
-                byte[] latinNeedle, byte[] utfNeedle, int character) {
+                byte[] mixedA, byte[] mixedB, byte[] latinNeedle, byte[] utfNeedle, int character) {
             this.latinA = latinA;
             this.latinB = latinB;
             this.utfA = utfA;
             this.utfB = utfB;
+            this.mixedA = mixedA;
+            this.mixedB = mixedB;
             this.latinNeedle = latinNeedle;
             this.utfNeedle = utfNeedle;
             this.character = character;
@@ -131,9 +133,15 @@ public class JeandleStringIntrinsics {
         }
         byte[] latinB = latin.clone();
         char[] different = wide.clone();
+        char[] mixed = new char[length];
+        for (int i = 0; i < length; i++) {
+            mixed[i] = (char) (latin[i] & 0xff);
+        }
+        char[] mixedDifferent = mixed.clone();
         if (at >= 0) {
             latinB[at]++;
             different[at]++;
+            mixedDifferent[at]++;
         }
         byte[] needle = new byte[needleLength];
         Arrays.fill(needle, (byte) base);
@@ -142,7 +150,7 @@ public class JeandleStringIntrinsics {
         Arrays.fill(wideNeedle, base);
         wideNeedle[0] = marker;
         Fixture fixture = new Fixture(latin, latinB, utf16(wide), utf16(different),
-                needle, utf16(wideNeedle), marker);
+                utf16(mixed), utf16(mixedDifferent), needle, utf16(wideNeedle), marker);
         verifyFixture(fixture, new String(latin, StandardCharsets.ISO_8859_1),
                 new String(latinB, StandardCharsets.ISO_8859_1),
                 new String(wide), new String(different), at);
@@ -155,8 +163,16 @@ public class JeandleStringIntrinsics {
         verify((boolean) EQUALSU.invokeExact(f.utfA, f.utfB) == (at < 0));
         verify((int) COMPAREL.invokeExact(f.latinA, f.latinB) == latinA.compareTo(latinB));
         verify((int) COMPAREU.invokeExact(f.utfA, f.utfB) == utfA.compareTo(utfB));
-        verify((int) COMPARELU.invokeExact(f.latinA, f.utfB) == latinA.compareTo(utfB));
-        verify((int) COMPAREUL.invokeExact(f.utfA, f.latinB) == utfA.compareTo(latinB));
+        var charset = ByteOrder.nativeOrder() == ByteOrder.BIG_ENDIAN
+                ? StandardCharsets.UTF_16BE : StandardCharsets.UTF_16LE;
+        String mixedA = new String(f.mixedA, charset);
+        String mixedB = new String(f.mixedB, charset);
+        verify(firstMismatch(latinA, latinB) == at);
+        verify(firstMismatch(utfA, utfB) == at);
+        verify(firstMismatch(latinA, mixedB) == at);
+        verify(firstMismatch(mixedA, latinB) == at);
+        verify((int) COMPARELU.invokeExact(f.latinA, f.mixedB) == latinA.compareTo(mixedB));
+        verify((int) COMPAREUL.invokeExact(f.mixedA, f.latinB) == mixedA.compareTo(latinB));
         verify((int) INDEXL.invokeExact(f.latinA, f.latinNeedle) == at);
         verify((int) INDEXU.invokeExact(f.utfA, f.utfNeedle) == at);
         verify((int) INDEXUL.invokeExact(f.utfA, f.latinNeedle) == at);
@@ -171,6 +187,15 @@ public class JeandleStringIntrinsics {
         if (!correct) {
             throw new IllegalStateException("Invalid string fixture");
         }
+    }
+
+    private static int firstMismatch(String a, String b) {
+        for (int i = 0; i < a.length(); i++) {
+            if (a.charAt(i) != b.charAt(i)) {
+                return i;
+            }
+        }
+        return -1;
     }
 
     private Fixture nextFixture() {
@@ -200,12 +225,12 @@ public class JeandleStringIntrinsics {
     @Benchmark
     public int compareLU() throws Throwable {
         Fixture f = nextFixture();
-        return (int) COMPARELU.invokeExact(f.latinA, f.utfB);
+        return (int) COMPARELU.invokeExact(f.latinA, f.mixedB);
     }
     @Benchmark
     public int compareUL() throws Throwable {
         Fixture f = nextFixture();
-        return (int) COMPAREUL.invokeExact(f.utfA, f.latinB);
+        return (int) COMPAREUL.invokeExact(f.mixedA, f.latinB);
     }
     @Benchmark
     public int indexL() throws Throwable {
@@ -268,15 +293,7 @@ public class JeandleStringIntrinsics {
             case "inflate" -> args[2] == char[].class ? "inflateStringC" : "inflateStringB";
             default -> throw new IllegalArgumentException("Unknown string helper: " + name);
         };
-        try {
-            // The ordinary wrapper exposes the registered invokestatic to
-            // both compilers when the constant MethodHandle is inlined.
-            Class<?> type = Class.forName("java.lang.JeandleStringIntrinsicCaller");
-            return MethodHandles.publicLookup().findStatic(type, wrapper,
-                    MethodType.methodType(result, args));
-        } catch (ReflectiveOperationException e) {
-            throw new ExceptionInInitializerError(e);
-        }
+        return StringIntrinsicBridge.find(wrapper, result, args);
     }
 
     private static byte[] utf16(char[] chars) {

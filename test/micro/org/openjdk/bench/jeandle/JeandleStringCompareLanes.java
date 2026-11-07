@@ -19,8 +19,6 @@
 package org.openjdk.bench.jeandle;
 
 import java.lang.invoke.MethodHandle;
-import java.lang.invoke.MethodHandles;
-import java.lang.invoke.MethodType;
 import java.nio.ByteOrder;
 import java.util.concurrent.TimeUnit;
 
@@ -41,7 +39,9 @@ import org.openjdk.jmh.annotations.Warmup;
 @State(Scope.Thread)
 @Warmup(iterations = 5, time = 1)
 @Measurement(iterations = 5, time = 1)
-@Fork(value = 3, jvmArgsAppend = {"--add-opens=java.base/java.lang=ALL-UNNAMED"})
+@Fork(value = 3, jvmArgsAppend = {
+        "--add-opens=java.base/java.lang=ALL-UNNAMED",
+        "--add-exports=java.base/jdk.internal.org.objectweb.asm=ALL-UNNAMED"})
 public class JeandleStringCompareLanes {
     @Param({"32", "256"})
     public int length;
@@ -162,13 +162,6 @@ public class JeandleStringCompareLanes {
     }
 
     private static MethodHandle find(String name) {
-        try {
-            // The wrapper exposes an ordinary invokestatic to both compilers.
-            Class<?> type = Class.forName("java.lang.JeandleStringIntrinsicCaller");
-            return MethodHandles.publicLookup().findStatic(type, name,
-                    MethodType.methodType(int.class, byte[].class, byte[].class));
-        } catch (ReflectiveOperationException e) {
-            throw new ExceptionInInitializerError(e);
-        }
+        return StringIntrinsicBridge.find(name, int.class, byte[].class, byte[].class);
     }
 }

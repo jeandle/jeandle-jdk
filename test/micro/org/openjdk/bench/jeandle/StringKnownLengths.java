@@ -19,8 +19,6 @@
 package org.openjdk.bench.jeandle;
 
 import java.lang.invoke.MethodHandle;
-import java.lang.invoke.MethodHandles;
-import java.lang.invoke.MethodType;
 import java.util.concurrent.TimeUnit;
 import org.openjdk.jmh.annotations.Benchmark;
 import org.openjdk.jmh.annotations.BenchmarkMode;
@@ -40,7 +38,9 @@ import org.openjdk.jmh.annotations.Warmup;
 @OutputTimeUnit(TimeUnit.NANOSECONDS)
 @Warmup(iterations = 5, time = 1)
 @Measurement(iterations = 5, time = 1)
-@Fork(value = 3, jvmArgsAppend = {"--add-opens=java.base/java.lang=ALL-UNNAMED"})
+@Fork(value = 3, jvmArgsAppend = {
+        "--add-opens=java.base/java.lang=ALL-UNNAMED",
+        "--add-exports=java.base/jdk.internal.org.objectweb.asm=ALL-UNNAMED"})
 public class StringKnownLengths {
     @Param({"FIRST", "LAST", "EQUAL"})
     public String mismatch;
@@ -51,13 +51,7 @@ public class StringKnownLengths {
     private static final MethodHandle COMPARE = find("compareKnown16", int.class);
 
     private static MethodHandle find(String name, Class<?> result) {
-        try {
-            return MethodHandles.publicLookup().findStatic(
-                    Class.forName("java.lang.JeandleStringIntrinsicCaller"), name,
-                    MethodType.methodType(result, byte[].class, byte[].class));
-        } catch (ReflectiveOperationException e) {
-            throw new ExceptionInInitializerError(e);
-        }
+        return StringIntrinsicBridge.find(name, result, byte[].class, byte[].class);
     }
 
     @Setup

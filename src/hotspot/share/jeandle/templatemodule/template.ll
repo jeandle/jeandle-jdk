@@ -1481,6 +1481,48 @@ entry:
 
 declare ptr addrspace(1) @memchr(ptr addrspace(1) readonly, i32, i64) #0 nofree willreturn memory(argmem: read)
 
+; Read exactly two complete code units. Mixed-width comparisons widen the
+; Latin1 lanes in native order; same-width byte pairs need no widening.
+define private hotspotcc i32 @jeandle.string_load_pair(ptr addrspace(1) %data, i32 %index, i1 %utf16, i1 %mixed) noinline optnone "lower-phase"="1" #0 memory(argmem: read) {
+entry:
+  %offset = zext i32 %index to i64
+  br i1 %utf16, label %words, label %bytes
+words:
+  %wp = getelementptr i16, ptr addrspace(1) %data, i64 %offset
+  %word = load i32, ptr addrspace(1) %wp, align 1
+  ret i32 %word
+bytes:
+  %bp = getelementptr i8, ptr addrspace(1) %data, i64 %offset
+  br i1 %mixed, label %widen, label %narrow
+widen:
+  %lanes = load <2 x i8>, ptr addrspace(1) %bp, align 1
+  %wide = zext <2 x i8> %lanes to <2 x i16>
+  %packed = bitcast <2 x i16> %wide to i32
+  ret i32 %packed
+narrow:
+  %pair = load i16, ptr addrspace(1) %bp, align 1
+  %result = zext i16 %pair to i32
+  ret i32 %result
+}
+
+; Four UTF16 code units fit in one scalar register. Latin1 input is widened
+; in native order when confirming a wide-source candidate.
+define private hotspotcc i64 @jeandle.string_load_quad(ptr addrspace(1) %data, i32 %index, i1 %utf16) noinline optnone "lower-phase"="1" #0 memory(argmem: read) {
+entry:
+  %offset = zext i32 %index to i64
+  br i1 %utf16, label %words, label %bytes
+words:
+  %wp = getelementptr i16, ptr addrspace(1) %data, i64 %offset
+  %word = load i64, ptr addrspace(1) %wp, align 1
+  ret i64 %word
+bytes:
+  %bp = getelementptr i8, ptr addrspace(1) %data, i64 %offset
+  %lanes = load <4 x i8>, ptr addrspace(1) %bp, align 1
+  %wide = zext <4 x i8> %lanes to <4 x i16>
+  %packed = bitcast <4 x i16> %wide to i64
+  ret i64 %packed
+}
+
 define private hotspotcc i32 @jeandle.string_indexof(ptr addrspace(1) nocapture readonly %src, i32 %srcCount, ptr addrspace(1) nocapture readonly %tgt, i32 %tgtCount, i32 %from, i32 %encoding) noinline optnone "lower-phase"="1" #0 memory(read) {
 entry:
   %base = load i32, ptr @arrayOopDesc.base_offset_in_bytes.byte
@@ -1502,7 +1544,7 @@ entry:
 prepare:
   %first = call hotspotcc i32 @jeandle.string_load_char(ptr addrspace(1) %tp, i32 0, i1 %tu)
   %single = icmp eq i32 %tgtCount, 1
-  br i1 %single, label %one, label %pair.dispatch
+  br i1 %single, label %one, label %packed.check
 one:
   %outside.latin1 = icmp ugt i32 %first, 255
   %source.latin1 = xor i1 %su, true
@@ -1526,6 +1568,166 @@ one.byte:
   %one.index = trunc i64 %one.offset to i32
   %one.answer = select i1 %one.missed, i32 -1, i32 %one.index
   ret i32 %one.answer
+packed.check:
+  %packed.small = icmp ule i32 %tgtCount, 4
+  br i1 %packed.small, label %packed.width, label %pair.dispatch
+packed.width:
+  %packed.mixed = xor i1 %su, %tu
+  %packed.candidates = sub i32 %limit, %from
+  %packed.short = icmp ult i32 %packed.candidates, 16
+  %packed.available = sub i32 %srcCount, %from
+  %packed.full.window = icmp uge i32 %packed.available, 16
+  %packed.use.filter = and i1 %packed.short, %packed.full.window
+  ; Wide four-unit candidates use one full register. Narrow candidates keep
+  ; the pair confirmation shared with the two- and three-unit cases.
+  %packed.four.units = icmp eq i32 %tgtCount, 4
+  %packed.four = and i1 %packed.four.units, %su
+  br i1 %packed.four, label %packed.quad.prepare, label %packed.prepare
+packed.quad.prepare:
+  %packed.needle = call hotspotcc i64 @jeandle.string_load_quad(ptr addrspace(1) %tp, i32 0, i1 %tu)
+  br label %packed.quad.loop
+packed.quad.loop:
+  %packed.quad.pos = phi i32 [ %from, %packed.quad.prepare ], [ %packed.quad.next, %packed.quad.advance ]
+  %packed.quad.value = call hotspotcc i64 @jeandle.string_load_quad(ptr addrspace(1) %sp, i32 %packed.quad.pos, i1 %su)
+  %packed.quad.equal = icmp eq i64 %packed.quad.value, %packed.needle
+  br i1 %packed.quad.equal, label %packed.quad.found, label %packed.quad.failed
+packed.quad.found:
+  ret i32 %packed.quad.pos
+packed.quad.failed:
+  br i1 %packed.use.filter, label %packed.filter, label %packed.quad.continue
+packed.quad.continue:
+  br i1 %packed.short, label %packed.quad.advance, label %pair.dispatch
+packed.quad.advance:
+  %packed.quad.next = add i32 %packed.quad.pos, 1
+  %packed.quad.more = icmp sle i32 %packed.quad.next, %limit
+  br i1 %packed.quad.more, label %packed.quad.loop, label %miss, !llvm.loop !1
+packed.prepare:
+  ; The first and last pairs cover every character of a 2..4-unit needle.
+  ; The validated complete candidate bounds both loads, even at array ends.
+  %packed.tail = sub i32 %tgtCount, 2
+  %packed.first = call hotspotcc i32 @jeandle.string_load_pair(ptr addrspace(1) %tp, i32 0, i1 %tu, i1 %packed.mixed)
+  %packed.last = call hotspotcc i32 @jeandle.string_load_pair(ptr addrspace(1) %tp, i32 %packed.tail, i1 %tu, i1 %packed.mixed)
+  %packed.probe.end = add i32 %from, %packed.tail
+  %packed.probe.a = call hotspotcc i32 @jeandle.string_load_pair(ptr addrspace(1) %sp, i32 %from, i1 %su, i1 %packed.mixed)
+  %packed.probe.b = call hotspotcc i32 @jeandle.string_load_pair(ptr addrspace(1) %sp, i32 %packed.probe.end, i1 %su, i1 %packed.mixed)
+  %packed.probe.eq0 = icmp eq i32 %packed.probe.a, %packed.first
+  %packed.probe.eq1 = icmp eq i32 %packed.probe.b, %packed.last
+  %packed.probe.equal = and i1 %packed.probe.eq0, %packed.probe.eq1
+  br i1 %packed.probe.equal, label %packed.probe.found, label %packed.probe.failed
+packed.probe.found:
+  ret i32 %from
+packed.probe.failed:
+  br i1 %packed.short, label %packed.filter.check, label %pair.dispatch
+packed.filter.check:
+  br i1 %packed.full.window, label %packed.filter, label %packed.loop.check
+packed.filter:
+  ; At most sixteen complete starts remain. Both sixteen-unit windows are
+  ; inside the source: the first starts at from and the second ends at
+  ; srcCount. Align endpoint bits with start bits before confirming a lane.
+  br i1 %su, label %packed.filter.words, label %packed.filter.bytes
+packed.filter.bytes:
+  %packed.filter.ptr = getelementptr i8, ptr addrspace(1) %sp, i32 %from
+  %packed.filter.data = load <16 x i8>, ptr addrspace(1) %packed.filter.ptr, align 1
+  %packed.filter.char = trunc i32 %first to i8
+  %packed.filter.seed = insertelement <16 x i8> poison, i8 %packed.filter.char, i32 0
+  %packed.filter.splat = shufflevector <16 x i8> %packed.filter.seed, <16 x i8> poison, <16 x i32> zeroinitializer
+  %packed.filter.matches = icmp eq <16 x i8> %packed.filter.data, %packed.filter.splat
+  %packed.filter.byte.mask = bitcast <16 x i1> %packed.filter.matches to i16
+  br label %packed.filter.first
+packed.filter.words:
+  %packed.filter.word.data = call hotspotcc <16 x i16> @jeandle.string_load_vector(ptr addrspace(1) %sp, i32 %from, i1 true)
+  %packed.filter.word.char = trunc i32 %first to i16
+  %packed.filter.word.seed = insertelement <16 x i16> poison, i16 %packed.filter.word.char, i32 0
+  %packed.filter.word.splat = shufflevector <16 x i16> %packed.filter.word.seed, <16 x i16> poison, <16 x i32> zeroinitializer
+  %packed.filter.word.matches = icmp eq <16 x i16> %packed.filter.word.data, %packed.filter.word.splat
+  %packed.filter.word.mask = bitcast <16 x i1> %packed.filter.word.matches to i16
+  br label %packed.filter.first
+packed.filter.first:
+  %packed.filter.first.bits = phi i16 [ %packed.filter.byte.mask, %packed.filter.bytes ], [ %packed.filter.word.mask, %packed.filter.words ]
+  %packed.filter.first.reverse = call i16 @llvm.bitreverse.i16(i16 %packed.filter.first.bits)
+  %packed.filter.first.ordered = select i1 %little, i16 %packed.filter.first.bits, i16 %packed.filter.first.reverse
+  %packed.filter.first.wide = zext i16 %packed.filter.first.ordered to i32
+  %packed.filter.valid.count = add i32 %packed.candidates, 1
+  %packed.filter.valid.one = shl i32 1, %packed.filter.valid.count
+  %packed.filter.valid.mask = sub i32 %packed.filter.valid.one, 1
+  %packed.filter.valid.first = and i32 %packed.filter.first.wide, %packed.filter.valid.mask
+  ; The initial complete packed probe has already rejected the first start.
+  %packed.filter.starts = and i32 %packed.filter.valid.first, -2
+  %packed.filter.any.first = icmp ne i32 %packed.filter.starts, 0
+  br i1 %packed.filter.any.first, label %packed.filter.last.prepare, label %miss
+packed.filter.last.prepare:
+  %packed.filter.last.offset = sub i32 %tgtCount, 1
+  %packed.filter.last.char = call hotspotcc i32 @jeandle.string_load_char(ptr addrspace(1) %tp, i32 %packed.filter.last.offset, i1 %tu)
+  %packed.filter.end = sub i32 %srcCount, 16
+  br i1 %su, label %packed.filter.last.words, label %packed.filter.last.bytes
+packed.filter.last.bytes:
+  %packed.filter.last.ptr = getelementptr i8, ptr addrspace(1) %sp, i32 %packed.filter.end
+  %packed.filter.last.data = load <16 x i8>, ptr addrspace(1) %packed.filter.last.ptr, align 1
+  %packed.filter.last.byte = trunc i32 %packed.filter.last.char to i8
+  %packed.filter.last.seed = insertelement <16 x i8> poison, i8 %packed.filter.last.byte, i32 0
+  %packed.filter.last.splat = shufflevector <16 x i8> %packed.filter.last.seed, <16 x i8> poison, <16 x i32> zeroinitializer
+  %packed.filter.last.matches = icmp eq <16 x i8> %packed.filter.last.data, %packed.filter.last.splat
+  %packed.filter.last.byte.mask = bitcast <16 x i1> %packed.filter.last.matches to i16
+  br label %packed.filter.done
+packed.filter.last.words:
+  %packed.filter.last.word.data = call hotspotcc <16 x i16> @jeandle.string_load_vector(ptr addrspace(1) %sp, i32 %packed.filter.end, i1 true)
+  %packed.filter.last.word = trunc i32 %packed.filter.last.char to i16
+  %packed.filter.last.word.seed = insertelement <16 x i16> poison, i16 %packed.filter.last.word, i32 0
+  %packed.filter.last.word.splat = shufflevector <16 x i16> %packed.filter.last.word.seed, <16 x i16> poison, <16 x i32> zeroinitializer
+  %packed.filter.last.word.matches = icmp eq <16 x i16> %packed.filter.last.word.data, %packed.filter.last.word.splat
+  %packed.filter.last.word.mask = bitcast <16 x i1> %packed.filter.last.word.matches to i16
+  br label %packed.filter.done
+packed.filter.done:
+  %packed.filter.last.bits = phi i16 [ %packed.filter.last.byte.mask, %packed.filter.last.bytes ], [ %packed.filter.last.word.mask, %packed.filter.last.words ]
+  %packed.filter.last.reverse = call i16 @llvm.bitreverse.i16(i16 %packed.filter.last.bits)
+  %packed.filter.last.ordered = select i1 %little, i16 %packed.filter.last.bits, i16 %packed.filter.last.reverse
+  %packed.filter.last.wide = zext i16 %packed.filter.last.ordered to i32
+  %packed.filter.shift = sub i32 15, %packed.candidates
+  %packed.filter.aligned = lshr i32 %packed.filter.last.wide, %packed.filter.shift
+  %packed.filter.mask = and i32 %packed.filter.starts, %packed.filter.aligned
+  %packed.filter.two = icmp eq i32 %tgtCount, 2
+  br label %packed.filter.loop
+packed.filter.loop:
+  %packed.filter.pending = phi i32 [ %packed.filter.mask, %packed.filter.done ], [ %packed.filter.rest, %packed.filter.next ]
+  %packed.filter.any = icmp ne i32 %packed.filter.pending, 0
+  br i1 %packed.filter.any, label %packed.filter.candidate, label %miss
+packed.filter.candidate:
+  %packed.filter.lane = call i32 @llvm.cttz.i32(i32 %packed.filter.pending, i1 true)
+  %packed.filter.pos = add i32 %from, %packed.filter.lane
+  br i1 %packed.filter.two, label %packed.filter.found, label %packed.filter.middle
+packed.filter.middle:
+  ; Endpoints prove a two-unit match. For three or four units, the middle
+  ; pair plus those endpoints covers every unit of the complete candidate.
+  %packed.filter.middle.pos = add i32 %packed.filter.pos, 1
+  %packed.filter.middle.source = call hotspotcc i32 @jeandle.string_load_pair(ptr addrspace(1) %sp, i32 %packed.filter.middle.pos, i1 %su, i1 %packed.mixed)
+  %packed.filter.middle.target = call hotspotcc i32 @jeandle.string_load_pair(ptr addrspace(1) %tp, i32 1, i1 %tu, i1 %packed.mixed)
+  %packed.filter.middle.equal = icmp eq i32 %packed.filter.middle.source, %packed.filter.middle.target
+  br i1 %packed.filter.middle.equal, label %packed.filter.found, label %packed.filter.next
+packed.filter.found:
+  ret i32 %packed.filter.pos
+packed.filter.next:
+  %packed.filter.minus.one = sub i32 %packed.filter.pending, 1
+  %packed.filter.rest = and i32 %packed.filter.pending, %packed.filter.minus.one
+  br label %packed.filter.loop, !llvm.loop !1
+packed.loop.check:
+  %packed.start = add i32 %from, 1
+  %packed.has.next = icmp sle i32 %packed.start, %limit
+  br i1 %packed.has.next, label %packed.loop, label %miss
+packed.loop:
+  %packed.pos = phi i32 [ %packed.start, %packed.loop.check ], [ %packed.next, %packed.advance ]
+  %packed.end = add i32 %packed.pos, %packed.tail
+  %packed.a = call hotspotcc i32 @jeandle.string_load_pair(ptr addrspace(1) %sp, i32 %packed.pos, i1 %su, i1 %packed.mixed)
+  %packed.eq0 = icmp eq i32 %packed.a, %packed.first
+  %packed.b = call hotspotcc i32 @jeandle.string_load_pair(ptr addrspace(1) %sp, i32 %packed.end, i1 %su, i1 %packed.mixed)
+  %packed.eq1 = icmp eq i32 %packed.b, %packed.last
+  %packed.equal = and i1 %packed.eq0, %packed.eq1
+  br i1 %packed.equal, label %packed.found, label %packed.advance
+packed.found:
+  ret i32 %packed.pos
+packed.advance:
+  %packed.next = add i32 %packed.pos, 1
+  %packed.more = icmp sle i32 %packed.next, %limit
+  br i1 %packed.more, label %packed.loop, label %miss, !llvm.loop !1
 pair.dispatch:
   %pair.only = icmp eq i32 %tgtCount, 2
   %last.offset = sub i32 %tgtCount, 1
