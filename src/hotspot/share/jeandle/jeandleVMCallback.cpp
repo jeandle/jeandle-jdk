@@ -1041,7 +1041,8 @@ uintptr_t JeandleVMCallback::get_signature_arg_type_klass(uintptr_t method, int 
 
 llvm::jeandle::CloneInstanceInfoResult
 JeandleVMCallback::get_clone_instance_info(uintptr_t klass_ptr,
-                                           bool klass_exact) {
+                                           bool klass_exact,
+                                           bool expansion_bound) {
   VM_ENTRY_MARK;
   using llvm::jeandle::CloneInstanceFieldInfo;
   using llvm::jeandle::CloneInstanceInfoStatus;
@@ -1057,15 +1058,18 @@ JeandleVMCallback::get_clone_instance_info(uintptr_t klass_ptr,
   }
   ciInstanceKlass* ik = meta->as_instance_klass();
 
-  // Match ArrayCopyNode::get_count(). Injected fields are not represented by
-  // nof_nonstatic_fields(), so C2 declines rather than copying an incomplete
-  // instance layout.
+  // Injected fields are not represented by nof_nonstatic_fields(), so the
+  // layout would be incomplete — decline for every caller.
   if ((!klass_exact && (ik->is_interface() || ik->has_subklass())) ||
       ik->has_injected_fields()) {
     return {static_cast<int>(CloneInstanceInfoStatus::NotApplicable), -1, {}};
   }
   const int field_count = ik->nof_nonstatic_fields();
-  if (field_count > ArrayCopyLoadStoreMaxElem) {
+  // Match ArrayCopyNode::get_count() for callers that expand the copy into
+  // per-element load/store IR (C2's macro-expansion bound). A PEA fold that
+  // only carries field state asks for the complete layout — Graal's
+  // ObjectClone virtualize has no instance field-count bound.
+  if (expansion_bound && field_count > ArrayCopyLoadStoreMaxElem) {
     return {static_cast<int>(CloneInstanceInfoStatus::NotApplicable),
             field_count, {}};
   }
