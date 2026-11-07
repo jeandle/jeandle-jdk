@@ -70,9 +70,12 @@ public class TestPEACopyFold {
             assertFold(run, largeOverlap, 1);
             assertFold(run, largeClone, 2);
             assertFold(run, largeEscape, 1);
-            Asserts.assertEquals(run.report(denseEscape).round(0).copyFolds(), 0,
-                    "dense reference replay keeps bulk copy");
-            run.report(denseEscape).round(0).after().assertPresent("@jeandle.copy");
+            // Dense reference clones fold too: the destination's length is
+            // bounded by the array-virtualization cap, and the whole entry
+            // set replays at the escape point.
+            assertFold(run, denseEscape, 1);
+            Asserts.assertEquals(run.report(denseEscape).round(0).partiallyEscapes(), 1,
+                    "dense clone destination replays at the publish");
             // The clone fast path folds, then joins the native slow path.
             // Both identities remain real across that join, exercising replay.
             assertFold(run, cloneInstance, 0);
