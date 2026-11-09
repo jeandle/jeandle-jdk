@@ -23,6 +23,7 @@
 #include "llvm/ADT/FloatingPointMode.h"
 #include "llvm/Analysis/ConstantFolding.h"
 #include "llvm/IR/Jeandle/Attributes.h"
+#include "llvm/IR/Jeandle/MemoryBarrier.h"
 #include "llvm/IR/Jeandle/GCStrategy.h"
 #include "llvm/IR/Jeandle/JavaType.h"
 #include "llvm/IR/CFG.h"
@@ -488,11 +489,11 @@ bool JeandleIntrinsicLowering::lower(vmIntrinsics::ID id, const ciMethod* target
     // Reference*
     case vmIntrinsics::_Reference_get:
       return lower_java_op("jeandle.reference_get",
-                           {CTRL_NONE, MEM_READ});
+                           {CTRL_NONE, MEM_READ | MEM_WRITE});
     case vmIntrinsics::_Reference_refersTo0:
     case vmIntrinsics::_PhantomReference_refersTo0:
       return lower_java_op("jeandle.reference_refers_to",
-                           {CTRL_NONE, MEM_READ});
+                           {CTRL_NONE, MEM_READ | MEM_WRITE});
 
     case vmIntrinsics::_vectorizedMismatch:
       return lower_vectorized_mismatch();
@@ -1055,17 +1056,18 @@ bool JeandleIntrinsicLowering::lower_float16_convert(vmIntrinsics::ID id) {
 // ---- lower_llvm_fence ----
 bool JeandleIntrinsicLowering::lower_llvm_fence(vmIntrinsics::ID id) {
   llvm::IRBuilder<>& builder = _interp->_ir_builder;
-  llvm::AtomicOrdering ordering;
+  using llvm::jeandle::MemoryBarrierKind;
+  MemoryBarrierKind kind;
   switch (id) {
-    case vmIntrinsics::_loadFence:  ordering = llvm::AtomicOrdering::Acquire;                break;
-    case vmIntrinsics::_storeFence: ordering = llvm::AtomicOrdering::Release;                break;
-    case vmIntrinsics::_fullFence:  ordering = llvm::AtomicOrdering::SequentiallyConsistent; break;
+    case vmIntrinsics::_loadFence:  kind = MemoryBarrierKind::Acquire; break;
+    case vmIntrinsics::_storeFence: kind = MemoryBarrierKind::Release; break;
+    case vmIntrinsics::_fullFence:  kind = MemoryBarrierKind::Full; break;
     default:
       ShouldNotReachHere();
       return false;
   }
   _interp->_jvm->apop(); // Unsafe receiver
-  builder.CreateFence(ordering);
+  llvm::jeandle::createMemoryBarrier(builder, kind);
   return true;
 }
 
@@ -2607,9 +2609,6 @@ void JeandleIntrinsicLowering::copy_clone_payload(llvm::Value* obj,
   emit_clone_copy(obj, alloc_obj, obj_size, is_array);
   RETURN_VOID_ON_JEANDLE_ERROR();
 
-  // Payload stores happen after the allocation's initialization fence. Order
-  // them before publishing the clone, including final fields copied here.
-  _interp->call_java_op("jeandle.membar_storestore", {});
 }
 
 // Follow C2 LibraryCallKit::inline_native_clone() control order. LLVM control
@@ -2653,8 +2652,8 @@ bool JeandleIntrinsicLowering::lower_object_clone() {
 
   // C2 MemBarCPUOrder prevents compiler reordering but has no AArch64 machine
   // instruction. LLVM singlethread scope provides the same compiler-only fence.
-  b.CreateFence(llvm::AtomicOrdering::SequentiallyConsistent,
-                llvm::SyncScope::SingleThread);
+  llvm::jeandle::createMemoryBarrier(
+      b, llvm::jeandle::MemoryBarrierKind::CloneSource, obj);
 
   llvm::BasicBlock* result_bb =
       llvm::BasicBlock::Create(ctx, "clone_result", f);

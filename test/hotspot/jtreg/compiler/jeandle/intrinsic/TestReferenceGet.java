@@ -80,7 +80,7 @@ public class TestReferenceGet {
                 false);
 
         // Verify the jeandle.reference_get function definition is present.
-        // IR order: load -> barrier_call -> fence -> ret
+        // IR order: load -> keepalive barrier -> CPUOrder JavaOp -> ret
         fc.checkPattern("define.*jeandle.reference_get");
 
         // Verify the load is unordered atomic (appears first in the function)
@@ -89,7 +89,11 @@ public class TestReferenceGet {
         // Verify G1 pre-barrier call is present (under G1GC)
         fc.checkPattern("jeandle.g1_pre_barrier_loaded");
 
-        // Verify a fence with seq_cst ordering is present (CPUOrder fence)
-        fc.checkPattern("fence.*seq_cst");
+        // The owner retains semantic CPU ordering until phase 1
+        fc.checkPattern("call hotspotcc void @jeandle\\.membar_cpuorder\\(\\)");
+
+        FileCheck optimized = new FileCheck(currentDir,
+                TestReferenceGet.class.getDeclaredMethod("testReferenceGet", WeakReference.class), true);
+        optimized.checkPattern("fence syncscope\\(\"singlethread\"\\) seq_cst");
     }
 }

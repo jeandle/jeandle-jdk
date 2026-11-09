@@ -60,6 +60,10 @@ public class TestCompressedOopPhiPEA {
             assertNarrowCaseCMaterialization(run, distinctIdentity);
             assertReplayedAS1CaseC(run, replayedValueMerge);
             assertNarrowCaseCElimination(run, selfLoaded);
+            for (Method target : new Method[] {sameIdentity, distinctIdentity,
+                    replayedValueMerge, selfLoaded, mixedVirtualAndReal}) {
+                run.finalIR(target).assertPresent("fence acquire");
+            }
         }
         PEATestUtils.behaviorRun(
                 WRAPPER, sameIdentity, distinctIdentity, replayedValueMerge,
@@ -213,7 +217,7 @@ public class TestCompressedOopPhiPEA {
             throws Exception {
         before.assertLineCount("phi ptr addrspace(3)", 1);
         before.assertPresent("addrspacecast ptr addrspace(3)");
-        before.assertPresent("fence acquire");
+        before.assertPresent("@jeandle.membar_acquire");
     }
 
     public static class TestWrapper {

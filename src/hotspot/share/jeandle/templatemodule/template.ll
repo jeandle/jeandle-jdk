@@ -168,10 +168,12 @@
 ; baked absolute address (load + inttoptr + indirect call) rather than a PC-relative branch.
 @SharedRuntime.complete_monitor_unlocking_C = external global i64
 
+declare hotspotcc void @jeandle.membar_allocation_init(ptr addrspace(1)) nounwind "gc-leaf-function"
+
 declare hotspotcc void @jeandle.clone_payload(ptr addrspace(1), i64, ptr addrspace(1), i64, i64, i1)
 
 ; Keep use to lately-used java operations, until it is lowered.
-@llvm.used = appending addrspace(1) global [9 x ptr] [
+@llvm.used = appending addrspace(1) global [8 x ptr] [
   ptr @jeandle.card_table_barrier,
   ptr @jeandle.g1_pre_barrier,
   ptr @jeandle.g1_post_barrier,
@@ -179,8 +181,7 @@ declare hotspotcc void @jeandle.clone_payload(ptr addrspace(1), i64, ptr addrspa
   ptr @jeandle.post_barrier,
   ptr @jeandle.encode_heap_oop,
   ptr @jeandle.decode_heap_oop,
-  ptr @jeandle.clone_payload,
-  ptr @jeandle.membar_storestore
+  ptr @jeandle.clone_payload
 ], section "llvm.metadata"
 
 declare hotspotcc ptr addrspace(0) @jeandle.decode_klass(i32)
@@ -469,7 +470,7 @@ clear_words:
 initialization_membar:
   ; Publish object initialization with a StoreStore barrier. This orders the
   ; header and zeroing stores without imposing the LoadStore part of release.
-  call hotspotcc void @jeandle.membar_storestore()
+  call hotspotcc void @jeandle.membar_allocation_init(ptr addrspace(1) %tlab_old_top)
   br label %return_block
 
 return_block:
@@ -722,7 +723,7 @@ array_clear_memory:
 
 array_init_membar:
   ; Publish array initialization with a StoreStore barrier.
-  call hotspotcc void @jeandle.membar_storestore()
+  call hotspotcc void @jeandle.membar_allocation_init(ptr addrspace(1) %tlab_old_top)
   br label %array_return
 
 array_return:
@@ -858,8 +859,8 @@ val_nullptr_filtered:
   br i1 %is_young, label %post_barrier_done, label %young_card_filtered
 
 young_card_filtered:
-  ; TODO: fence seq_cst is overly strict here. We only need StoreStore
-  ; ordering between the oop store and the card table read/write
+  ; Order the oop store before the following card reload (StoreLoad).
+  ; A release fence would not provide the required ordering.
   fence seq_cst
   %card_val_reload = load atomic i8, ptr %card_adr unordered, align 1
   %dirty_card = load i8, ptr @G1CardTable.dirty_card_val

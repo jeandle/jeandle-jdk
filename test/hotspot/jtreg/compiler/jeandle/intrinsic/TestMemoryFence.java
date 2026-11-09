@@ -60,18 +60,24 @@ public class TestMemoryFence {
         output.shouldHaveExitValue(0)
               .shouldContain("is parsed as intrinsic");
 
-        // Verify fence IR — only check the semantic ordering, not exact syntax
+        // Verify semantic frontend operations and their phase-1 native ordering
         FileCheck loadFenceChecker = new FileCheck(dumpPath,
                 TestWrapper.class.getMethod("testLoadFence"), false);
-        loadFenceChecker.checkPattern("fence acquire");
+        loadFenceChecker.checkPattern("call hotspotcc void @jeandle\\.membar_acquire\\(\\)");
+        new FileCheck(dumpPath, TestWrapper.class.getMethod("testLoadFence"), true)
+                .checkPattern("fence acquire");
 
         FileCheck storeFenceChecker = new FileCheck(dumpPath,
                 TestWrapper.class.getMethod("testStoreFence"), false);
-        storeFenceChecker.checkPattern("fence release");
+        storeFenceChecker.checkPattern("call hotspotcc void @jeandle\\.membar_release\\(\\)");
+        new FileCheck(dumpPath, TestWrapper.class.getMethod("testStoreFence"), true)
+                .checkPattern("fence release");
 
         FileCheck fullFenceChecker = new FileCheck(dumpPath,
                 TestWrapper.class.getMethod("testFullFence"), false);
-        fullFenceChecker.checkPattern("fence seq_cst");
+        fullFenceChecker.checkPattern("call hotspotcc void @jeandle\\.membar_full\\(\\)");
+        new FileCheck(dumpPath, TestWrapper.class.getMethod("testFullFence"), true)
+                .checkPattern("fence seq_cst");
     }
 
     static class TestWrapper {

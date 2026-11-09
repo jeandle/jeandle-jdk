@@ -59,13 +59,17 @@ public class TestReferenceGetSerialGC {
                 false);
 
         // Verify the jeandle.reference_get function definition is present.
-        // Under SerialGC, IR order: load -> fence -> ret (no barrier call)
+        // Under SerialGC, IR order: load -> CPUOrder JavaOp -> ret (no SATB barrier)
         fc.checkPattern("define.*jeandle.reference_get");
 
         // Verify the load is unordered atomic
         fc.checkPattern("load atomic ptr addrspace\\([13]\\).*unordered");
 
-        // CPUOrder fence must still be present (GC-independent)
-        fc.checkPattern("fence.*seq_cst");
+        // Semantic CPU ordering remains present for every collector
+        fc.checkPattern("call hotspotcc void @jeandle\\.membar_cpuorder\\(\\)");
+
+        FileCheck optimized = new FileCheck(currentDir,
+                TestReferenceGetSerialGC.class.getDeclaredMethod("testReferenceGet", WeakReference.class), true);
+        optimized.checkPattern("fence syncscope\\(\"singlethread\"\\) seq_cst");
     }
 }

@@ -324,6 +324,15 @@ class JeandleAbstractInterpreter : public StackObj {
   /* C2 JVMState::should_reexecute equivalent for the current intrinsic scope. */
   bool _should_reexecute = false;
 
+  // Constructor ordering belongs to the entry receiver, even if local 0 changes.
+  llvm::Value* _constructor_receiver = nullptr;
+  bool _wrote_final = false;
+  bool _wrote_fields = false;
+  bool _wrote_stable = false;
+  // Record true bytecode returns, before synchronized unlock, until all writes
+  // have been parsed. Helper returns for exceptions and deopt are excluded.
+  llvm::SmallVector<llvm::Instruction*> _normal_return_anchors;
+
   // The JeandleBasicBlock and its JeandleVMState currently being interpreted.
   JeandleBasicBlock* _block;
   JeandleVMState* _jvm;
