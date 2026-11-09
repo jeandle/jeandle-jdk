@@ -25,6 +25,7 @@
 #include "llvm/IR/Jeandle/Attributes.h"
 #include "llvm/IR/Jeandle/GCStrategy.h"
 #include "llvm/IR/Jeandle/JavaType.h"
+#include "llvm/IR/Jeandle/Metadata.h"
 #include "llvm/IR/CFG.h"
 #include "llvm/IR/Constants.h"
 #include "llvm/IR/DerivedTypes.h"
@@ -325,6 +326,29 @@ bool JeandleIntrinsicLowering::is_supported(vmIntrinsics::ID id) {
     // hash code
     case vmIntrinsics::_hashCode:
     case vmIntrinsics::_identityHashCode:
+
+    // String operations over Latin1 and native-endian UTF16 arrays.
+    case vmIntrinsics::_compareToL:
+    case vmIntrinsics::_compareToU:
+    case vmIntrinsics::_compareToLU:
+    case vmIntrinsics::_compareToUL:
+    case vmIntrinsics::_indexOfL:
+    case vmIntrinsics::_indexOfU:
+    case vmIntrinsics::_indexOfUL:
+    case vmIntrinsics::_indexOfIL:
+    case vmIntrinsics::_indexOfIU:
+    case vmIntrinsics::_indexOfIUL:
+    case vmIntrinsics::_indexOfL_char:
+    case vmIntrinsics::_indexOfU_char:
+    case vmIntrinsics::_equalsL:
+    case vmIntrinsics::_equalsU:
+    case vmIntrinsics::_toBytesStringU:
+    case vmIntrinsics::_getCharsStringU:
+    case vmIntrinsics::_compressStringC:
+    case vmIntrinsics::_compressStringB:
+    case vmIntrinsics::_inflateStringC:
+    case vmIntrinsics::_inflateStringB:
+      return true;
 
     // arrayequals
     case vmIntrinsics::_equalsB:
@@ -650,6 +674,28 @@ bool JeandleIntrinsicLowering::lower(vmIntrinsics::ID id, const ciMethod* target
       return lower_arrays_copy_of(false);
     case vmIntrinsics::_copyOfRange:
       return lower_arrays_copy_of(true);
+
+    case vmIntrinsics::_compareToL:
+    case vmIntrinsics::_compareToU:
+    case vmIntrinsics::_compareToLU:
+    case vmIntrinsics::_compareToUL:
+    case vmIntrinsics::_indexOfL:
+    case vmIntrinsics::_indexOfU:
+    case vmIntrinsics::_indexOfUL:
+    case vmIntrinsics::_indexOfIL:
+    case vmIntrinsics::_indexOfIU:
+    case vmIntrinsics::_indexOfIUL:
+    case vmIntrinsics::_indexOfL_char:
+    case vmIntrinsics::_indexOfU_char:
+    case vmIntrinsics::_equalsL:
+    case vmIntrinsics::_equalsU:
+    case vmIntrinsics::_toBytesStringU:
+    case vmIntrinsics::_getCharsStringU:
+    case vmIntrinsics::_compressStringC:
+    case vmIntrinsics::_compressStringB:
+    case vmIntrinsics::_inflateStringC:
+    case vmIntrinsics::_inflateStringB:
+      return lower_string_intrinsic(id);
 
     // arraycopy
     case vmIntrinsics::_equalsB:
@@ -2462,7 +2508,10 @@ bool JeandleIntrinsicLowering::lower_new_array() {
   llvm::Function* new_array_op = m.getFunction("jeandle.new_array");
   llvm::CallBase* fast_call =
       emit_callsite(new_array_op, llvm::CallingConv::Hotspot_JIT,
-                    {klass, length, size_in_bytes, base_offset, length_limit}, fast_attrs);
+                    {klass, length, size_in_bytes, base_offset, length_limit,
+                     /*uninitialized=*/builder.getFalse(),
+                     /*defer_initialization_membar=*/builder.getFalse()},
+                    fast_attrs);
   // emit_callsite with exception edge moves builder to a new normal_dest block.
   builder.CreateBr(merge_bb);
   llvm::BasicBlock* fast_normal_bb = builder.GetInsertBlock();
@@ -3570,14 +3619,14 @@ bool JeandleIntrinsicLowering::lower_string_char_access(bool is_store) {
 
   _interp->null_check(array);
 
-  llvm::Value* data = b.CreateInBoundsGEP(
-      i8, array, b.getInt32(arrayOopDesc::base_offset_in_bytes(T_BYTE)),
-      is_store ? "string_putchar_data" : "string_getchar_data");
-  llvm::Value* addr = b.CreateInBoundsGEP(
-      i16, data, index,
-      is_store ? "string_putchar_addr" : "string_getchar_addr");
-
   if (is_store) {
+    llvm::Value* data = b.CreateInBoundsGEP(
+        i8, array, b.getInt32(arrayOopDesc::base_offset_in_bytes(T_BYTE)),
+        "string_putchar_data");
+    llvm::Value* addr = b.CreateInBoundsGEP(
+        i16, data, index,
+        "string_putchar_addr");
+
     llvm::Value* ch = _interp->_jvm->peek_value(0).value();
     llvm::Value* ch16 = b.CreateTrunc(ch, i16, "string_putchar_value");
     llvm::StoreInst* store = b.CreateStore(ch16, addr);
@@ -3588,9 +3637,11 @@ bool JeandleIntrinsicLowering::lower_string_char_access(bool is_store) {
     _interp->_jvm->ipop(); // index
     _interp->_jvm->apop(); // value
   } else {
-    llvm::LoadInst* loaded = b.CreateLoad(i16, addr, "string_getchar_result");
-    loaded->setAlignment(llvm::Align(2));
-    loaded->setAtomic(llvm::AtomicOrdering::Unordered);
+    llvm::CallInst* loaded = _interp->call_java_op("jeandle.string_getchar", {array, index});
+    loaded->setDoesNotThrow();
+    const CallSiteAttributeMetadata attrs = {CTRL_NONE, MEM_READ};
+    annotate_call(loaded, attrs);
+    apply_memory_attr(loaded, attrs);
     llvm::Value* result = b.CreateZExt(
         loaded, b.getInt32Ty(), "string_getchar_result_i32");
 

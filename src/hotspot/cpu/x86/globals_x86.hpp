@@ -46,7 +46,17 @@ define_pd_global(uintx, CodeCacheSegmentSize,    64 COMPILER1_AND_COMPILER2_PRES
 // the uep and the vep doesn't get real alignment but just slops on by
 // only assured that the entry instruction meets the 5 byte size requirement.
 #if COMPILER2_OR_JVMCI
+#ifdef AMD64
+// Jeandle installs LLVM-emitted constant sections at the blob content start
+// (JeandleAssembler::emit_consts), and LLVM can require up to 64-byte
+// alignment for AVX-512 constant pools. The absolute alignment of the
+// content start derives from CodeEntryAlignment via
+// CodeBlob::align_code_offset, so it must cover the largest constant
+// alignment the JIT can request.
+define_pd_global(intx, CodeEntryAlignment,       64);
+#else
 define_pd_global(intx, CodeEntryAlignment,       32);
+#endif // AMD64
 #else
 define_pd_global(intx, CodeEntryAlignment,       16);
 #endif // COMPILER2_OR_JVMCI
