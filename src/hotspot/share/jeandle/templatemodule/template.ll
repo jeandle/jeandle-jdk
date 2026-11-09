@@ -2397,6 +2397,128 @@ entry:
   ret void
 }
 
+; Scalar reference form of jdk.internal.util.ArraysSupport.vectorizedHashCode.
+; The frontend only emits calls whose %basicType operand is one of the five
+; constants below, so the switch folds to a single arm once the op inlines.
+; Length semantics follow the Java fallback loops: the signed loop bound makes
+; a negative count a no-op returning %initialValue without touching memory.
+; T_BOOLEAN reads unsigned bytes and T_CHAR unsigned native-order shorts from
+; a byte[] payload, matching StringLatin1/StringUTF16 usage.
+define private hotspotcc i32 @jeandle.vectorized_hashcode(ptr addrspace(1) nocapture readonly %array, i32 %fromIndex, i32 %length, i32 %initialValue, i32 %basicType) noinline optnone "lower-phase"="1" #0 memory(read) {
+entry:
+  switch i32 %basicType, label %unsupported [
+    i32 4, label %boolean.entry
+    i32 5, label %char.entry
+    i32 8, label %byte.entry
+    i32 9, label %short.entry
+    i32 10, label %int.entry
+  ]
+unsupported:
+  unreachable
+boolean.entry:
+  %boolean.base = load i32, ptr @arrayOopDesc.base_offset_in_bytes.byte
+  %boolean.data = getelementptr i8, ptr addrspace(1) %array, i32 %boolean.base
+  %boolean.start = zext i32 %fromIndex to i64
+  %boolean.count = sext i32 %length to i64
+  %boolean.end = add i64 %boolean.start, %boolean.count
+  br label %boolean.loop
+boolean.loop:
+  %boolean.i = phi i64 [ %boolean.start, %boolean.entry ], [ %boolean.next, %boolean.body ]
+  %boolean.h = phi i32 [ %initialValue, %boolean.entry ], [ %boolean.h.next, %boolean.body ]
+  %boolean.more = icmp slt i64 %boolean.i, %boolean.end
+  br i1 %boolean.more, label %boolean.body, label %done
+boolean.body:
+  %boolean.p = getelementptr i8, ptr addrspace(1) %boolean.data, i64 %boolean.i
+  %boolean.e = load i8, ptr addrspace(1) %boolean.p, align 1
+  %boolean.w = zext i8 %boolean.e to i32
+  %boolean.h.mul = mul i32 %boolean.h, 31
+  %boolean.h.next = add i32 %boolean.h.mul, %boolean.w
+  %boolean.next = add i64 %boolean.i, 1
+  br label %boolean.loop
+char.entry:
+  %char.base = load i32, ptr @arrayOopDesc.base_offset_in_bytes.char
+  %char.data = getelementptr i8, ptr addrspace(1) %array, i32 %char.base
+  %char.start = zext i32 %fromIndex to i64
+  %char.count = sext i32 %length to i64
+  %char.end = add i64 %char.start, %char.count
+  br label %char.loop
+char.loop:
+  %char.i = phi i64 [ %char.start, %char.entry ], [ %char.next, %char.body ]
+  %char.h = phi i32 [ %initialValue, %char.entry ], [ %char.h.next, %char.body ]
+  %char.more = icmp slt i64 %char.i, %char.end
+  br i1 %char.more, label %char.body, label %done
+char.body:
+  %char.p = getelementptr i16, ptr addrspace(1) %char.data, i64 %char.i
+  %char.e = load i16, ptr addrspace(1) %char.p, align 2
+  %char.w = zext i16 %char.e to i32
+  %char.h.mul = mul i32 %char.h, 31
+  %char.h.next = add i32 %char.h.mul, %char.w
+  %char.next = add i64 %char.i, 1
+  br label %char.loop
+byte.entry:
+  %byte.base = load i32, ptr @arrayOopDesc.base_offset_in_bytes.byte
+  %byte.data = getelementptr i8, ptr addrspace(1) %array, i32 %byte.base
+  %byte.start = zext i32 %fromIndex to i64
+  %byte.count = sext i32 %length to i64
+  %byte.end = add i64 %byte.start, %byte.count
+  br label %byte.loop
+byte.loop:
+  %byte.i = phi i64 [ %byte.start, %byte.entry ], [ %byte.next, %byte.body ]
+  %byte.h = phi i32 [ %initialValue, %byte.entry ], [ %byte.h.next, %byte.body ]
+  %byte.more = icmp slt i64 %byte.i, %byte.end
+  br i1 %byte.more, label %byte.body, label %done
+byte.body:
+  %byte.p = getelementptr i8, ptr addrspace(1) %byte.data, i64 %byte.i
+  %byte.e = load i8, ptr addrspace(1) %byte.p, align 1
+  %byte.w = sext i8 %byte.e to i32
+  %byte.h.mul = mul i32 %byte.h, 31
+  %byte.h.next = add i32 %byte.h.mul, %byte.w
+  %byte.next = add i64 %byte.i, 1
+  br label %byte.loop
+short.entry:
+  %short.base = load i32, ptr @arrayOopDesc.base_offset_in_bytes.short
+  %short.data = getelementptr i8, ptr addrspace(1) %array, i32 %short.base
+  %short.start = zext i32 %fromIndex to i64
+  %short.count = sext i32 %length to i64
+  %short.end = add i64 %short.start, %short.count
+  br label %short.loop
+short.loop:
+  %short.i = phi i64 [ %short.start, %short.entry ], [ %short.next, %short.body ]
+  %short.h = phi i32 [ %initialValue, %short.entry ], [ %short.h.next, %short.body ]
+  %short.more = icmp slt i64 %short.i, %short.end
+  br i1 %short.more, label %short.body, label %done
+short.body:
+  %short.p = getelementptr i16, ptr addrspace(1) %short.data, i64 %short.i
+  %short.e = load i16, ptr addrspace(1) %short.p, align 2
+  %short.w = sext i16 %short.e to i32
+  %short.h.mul = mul i32 %short.h, 31
+  %short.h.next = add i32 %short.h.mul, %short.w
+  %short.next = add i64 %short.i, 1
+  br label %short.loop
+int.entry:
+  %int.base = load i32, ptr @arrayOopDesc.base_offset_in_bytes.int
+  %int.data = getelementptr i8, ptr addrspace(1) %array, i32 %int.base
+  %int.start = zext i32 %fromIndex to i64
+  %int.count = sext i32 %length to i64
+  %int.end = add i64 %int.start, %int.count
+  br label %int.loop
+int.loop:
+  %int.i = phi i64 [ %int.start, %int.entry ], [ %int.next, %int.body ]
+  %int.h = phi i32 [ %initialValue, %int.entry ], [ %int.h.next, %int.body ]
+  %int.more = icmp slt i64 %int.i, %int.end
+  br i1 %int.more, label %int.body, label %done
+int.body:
+  %int.p = getelementptr i32, ptr addrspace(1) %int.data, i64 %int.i
+  %int.e = load i32, ptr addrspace(1) %int.p, align 4
+  %int.h.mul = mul i32 %int.h, 31
+  %int.h.next = add i32 %int.h.mul, %int.e
+  %int.next = add i64 %int.i, 1
+  br label %int.loop
+done:
+  %result = phi i32 [ %boolean.h, %boolean.loop ], [ %char.h, %char.loop ], [ %byte.h, %byte.loop ], [ %short.h, %short.loop ], [ %int.h, %int.loop ]
+  ret i32 %result
+}
+
 ; Helpers use data pointers only within the leaf kernel. They retain address
 ; space 1 and are lowered with their callers, before GC statepoint rewriting.
 define private hotspotcc i32 @jeandle.string_compare_data(ptr addrspace(1) nocapture readonly %a, i32 %ac, ptr addrspace(1) nocapture readonly %b, i32 %bc, i1 %au, i1 %bu) noinline optnone "lower-phase"="1" #0 memory(argmem: read) {

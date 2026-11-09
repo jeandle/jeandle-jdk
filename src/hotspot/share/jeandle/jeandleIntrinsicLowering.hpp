@@ -299,6 +299,9 @@ class JeandleIntrinsicLowering : public StackObj {
   bool lower_unsafe_allocate_instance();
   bool lower_object_notify(vmIntrinsics::ID id);
   bool lower_vectorized_mismatch();
+  // ArraysSupport.vectorizedHashCode: forwards all five arguments to the
+  // jeandle.vectorized_hashcode JavaOp after validating a constant basicType.
+  bool lower_vectorized_hashcode();
   bool lower_arraycopy();
   // StringUTF16 trusted single-code-unit access. The byte[] backing stores
   // UTF16 values in the platform's native byte order.
