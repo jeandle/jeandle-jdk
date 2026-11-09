@@ -1193,6 +1193,18 @@ void RuntimeDefinedJavaOps::define_global_variables(llvm::Module& template_modul
                 static_cast<uint64_t>(false));
 #endif
 
+  // Widest usable vector width for the array-hash kernels. vpmulld on zmm
+  // registers needs only AVX-512F (supports_evex), so the gate is wider than
+  // the string kernels' AVX-512 VL+BW requirement. The kernels branch on this
+  // constant so LLVM folds away the 16-lane tier where it is unavailable.
+#ifdef X86
+  define_global("VM_Version.hashcode_vector_512bit",                int1_type,
+                static_cast<uint64_t>(VM_Version::supports_evex() && MaxVectorSize >= 64));
+#else
+  define_global("VM_Version.hashcode_vector_512bit",                int1_type,
+                static_cast<uint64_t>(false));
+#endif
+
   define_global("KlassArray.base_offset_in_bytes",                  int32_type, static_cast<uint64_t>(Array<Klass*>::base_offset_in_bytes()));
   define_global("KlassArray.length_offset_in_bytes",                int32_type, static_cast<uint64_t>(Array<Klass*>::length_offset_in_bytes()));
   define_global("arrayOopDesc.length_offset_in_bytes",              int32_type, static_cast<uint64_t>(arrayOopDesc::length_offset_in_bytes()));

@@ -37,6 +37,10 @@
 ; branch on it so the optimizer folds away the unused width.
 @VM_Version.string_vector_512bit = external global i1
 
+; Widest usable vector width for the array-hash kernels (AVX-512F with a 64
+; byte MaxVectorSize on x86, false elsewhere); same constant-folding model.
+@VM_Version.hashcode_vector_512bit = external global i1
+
 ; System word size
 @WordSize = external global i64
 
@@ -2427,12 +2431,42 @@ boolean.entry:
   %boolean.start = zext i32 %fromIndex to i64
   %boolean.count = sext i32 %length to i64
   %boolean.vec.end = add i64 %boolean.count, -7
+  ; 16-lane tier first where the target has AVX-512F vectors; the tier's
+  ; epilogue finalizes its own accumulator, so the 8-lane tier below simply
+  ; continues the scalar chain from the first unprocessed 16-block.
+  %boolean.avx512 = load i1, ptr @VM_Version.hashcode_vector_512bit
+  %boolean.wide.ok = icmp sge i64 %boolean.count, 16
+  %boolean.use.wide = and i1 %boolean.avx512, %boolean.wide.ok
+  br i1 %boolean.use.wide, label %boolean.w16.check, label %boolean.small.check
+boolean.small.check:
   %boolean.small = icmp slt i64 %boolean.count, 8
   br i1 %boolean.small, label %boolean.tail, label %boolean.vec.check
+boolean.w16.check:
+  %boolean.w16.k = phi i64 [ 0, %boolean.entry ], [ %boolean.w16.k.next, %boolean.w16.body ]
+  %boolean.w16.h = phi i32 [ %initialValue, %boolean.entry ], [ %boolean.w16.h.next, %boolean.w16.body ]
+  %boolean.w16.acc = phi <16 x i32> [ zeroinitializer, %boolean.entry ], [ %boolean.w16.acc.next, %boolean.w16.body ]
+  %boolean.w16.end = add i64 %boolean.count, -15
+  %boolean.w16.more = icmp slt i64 %boolean.w16.k, %boolean.w16.end
+  br i1 %boolean.w16.more, label %boolean.w16.body, label %boolean.w16.done
+boolean.w16.body:
+  %boolean.w16.off = add i64 %boolean.start, %boolean.w16.k
+  %boolean.w16.p = getelementptr i8, ptr addrspace(1) %boolean.data, i64 %boolean.w16.off
+  %boolean.w16.raw = load <16 x i8>, ptr addrspace(1) %boolean.w16.p, align 1
+  %boolean.w16.wide = zext <16 x i8> %boolean.w16.raw to <16 x i32>
+  %boolean.w16.acc.mul = mul <16 x i32> %boolean.w16.acc, <i32 1353309697, i32 1353309697, i32 1353309697, i32 1353309697, i32 1353309697, i32 1353309697, i32 1353309697, i32 1353309697, i32 1353309697, i32 1353309697, i32 1353309697, i32 1353309697, i32 1353309697, i32 1353309697, i32 1353309697, i32 1353309697>
+  %boolean.w16.acc.next = add <16 x i32> %boolean.w16.acc.mul, %boolean.w16.wide
+  %boolean.w16.h.next = mul i32 %boolean.w16.h, 1353309697
+  %boolean.w16.k.next = add i64 %boolean.w16.k, 16
+  br label %boolean.w16.check
+boolean.w16.done:
+  %boolean.w16.acc.coef = mul <16 x i32> %boolean.w16.acc, <i32 3784433119, i32 1507551809, i32 3789408671, i32 4001564289, i32 129082719, i32 2498015937, i32 4098453791, i32 2487512833, i32 1742810335, i32 887503681, i32 28629151, i32 923521, i32 29791, i32 961, i32 31, i32 1>
+  %boolean.w16.sum = call i32 @llvm.vector.reduce.add.v16i32(<16 x i32> %boolean.w16.acc.coef)
+  %boolean.w16.h.final = add i32 %boolean.w16.h, %boolean.w16.sum
+  br label %boolean.vec.check
 boolean.vec.check:
-  %boolean.k = phi i64 [ 0, %boolean.entry ], [ %boolean.k.next, %boolean.vec.body ]
-  %boolean.h = phi i32 [ %initialValue, %boolean.entry ], [ %boolean.h.next, %boolean.vec.body ]
-  %boolean.acc = phi <8 x i32> [ zeroinitializer, %boolean.entry ], [ %boolean.acc.next, %boolean.vec.body ]
+  %boolean.k = phi i64 [ 0, %boolean.small.check ], [ %boolean.w16.k, %boolean.w16.done ], [ %boolean.k.next, %boolean.vec.body ]
+  %boolean.h = phi i32 [ %initialValue, %boolean.small.check ], [ %boolean.w16.h.final, %boolean.w16.done ], [ %boolean.h.next, %boolean.vec.body ]
+  %boolean.acc = phi <8 x i32> [ zeroinitializer, %boolean.small.check ], [ zeroinitializer, %boolean.w16.done ], [ %boolean.acc.next, %boolean.vec.body ]
   %boolean.more = icmp slt i64 %boolean.k, %boolean.vec.end
   br i1 %boolean.more, label %boolean.vec.body, label %boolean.vec.done
 boolean.vec.body:
@@ -2451,8 +2485,8 @@ boolean.vec.done:
   %boolean.h.vec = add i32 %boolean.h, %boolean.sum
   br label %boolean.tail
 boolean.tail:
-  %boolean.t = phi i64 [ 0, %boolean.entry ], [ %boolean.k, %boolean.vec.done ], [ %boolean.t.next, %boolean.tail.body ]
-  %boolean.t.h = phi i32 [ %initialValue, %boolean.entry ], [ %boolean.h.vec, %boolean.vec.done ], [ %boolean.t.h.next, %boolean.tail.body ]
+  %boolean.t = phi i64 [ 0, %boolean.small.check ], [ %boolean.k, %boolean.vec.done ], [ %boolean.t.next, %boolean.tail.body ]
+  %boolean.t.h = phi i32 [ %initialValue, %boolean.small.check ], [ %boolean.h.vec, %boolean.vec.done ], [ %boolean.t.h.next, %boolean.tail.body ]
   %boolean.tail.more = icmp slt i64 %boolean.t, %boolean.count
   br i1 %boolean.tail.more, label %boolean.tail.body, label %done
 boolean.tail.body:
@@ -2470,12 +2504,42 @@ char.entry:
   %char.start = zext i32 %fromIndex to i64
   %char.count = sext i32 %length to i64
   %char.vec.end = add i64 %char.count, -7
+  ; 16-lane tier first where the target has AVX-512F vectors; the tier's
+  ; epilogue finalizes its own accumulator, so the 8-lane tier below simply
+  ; continues the scalar chain from the first unprocessed 16-block.
+  %char.avx512 = load i1, ptr @VM_Version.hashcode_vector_512bit
+  %char.wide.ok = icmp sge i64 %char.count, 16
+  %char.use.wide = and i1 %char.avx512, %char.wide.ok
+  br i1 %char.use.wide, label %char.w16.check, label %char.small.check
+char.small.check:
   %char.small = icmp slt i64 %char.count, 8
   br i1 %char.small, label %char.tail, label %char.vec.check
+char.w16.check:
+  %char.w16.k = phi i64 [ 0, %char.entry ], [ %char.w16.k.next, %char.w16.body ]
+  %char.w16.h = phi i32 [ %initialValue, %char.entry ], [ %char.w16.h.next, %char.w16.body ]
+  %char.w16.acc = phi <16 x i32> [ zeroinitializer, %char.entry ], [ %char.w16.acc.next, %char.w16.body ]
+  %char.w16.end = add i64 %char.count, -15
+  %char.w16.more = icmp slt i64 %char.w16.k, %char.w16.end
+  br i1 %char.w16.more, label %char.w16.body, label %char.w16.done
+char.w16.body:
+  %char.w16.off = add i64 %char.start, %char.w16.k
+  %char.w16.p = getelementptr i16, ptr addrspace(1) %char.data, i64 %char.w16.off
+  %char.w16.raw = load <16 x i16>, ptr addrspace(1) %char.w16.p, align 2
+  %char.w16.wide = zext <16 x i16> %char.w16.raw to <16 x i32>
+  %char.w16.acc.mul = mul <16 x i32> %char.w16.acc, <i32 1353309697, i32 1353309697, i32 1353309697, i32 1353309697, i32 1353309697, i32 1353309697, i32 1353309697, i32 1353309697, i32 1353309697, i32 1353309697, i32 1353309697, i32 1353309697, i32 1353309697, i32 1353309697, i32 1353309697, i32 1353309697>
+  %char.w16.acc.next = add <16 x i32> %char.w16.acc.mul, %char.w16.wide
+  %char.w16.h.next = mul i32 %char.w16.h, 1353309697
+  %char.w16.k.next = add i64 %char.w16.k, 16
+  br label %char.w16.check
+char.w16.done:
+  %char.w16.acc.coef = mul <16 x i32> %char.w16.acc, <i32 3784433119, i32 1507551809, i32 3789408671, i32 4001564289, i32 129082719, i32 2498015937, i32 4098453791, i32 2487512833, i32 1742810335, i32 887503681, i32 28629151, i32 923521, i32 29791, i32 961, i32 31, i32 1>
+  %char.w16.sum = call i32 @llvm.vector.reduce.add.v16i32(<16 x i32> %char.w16.acc.coef)
+  %char.w16.h.final = add i32 %char.w16.h, %char.w16.sum
+  br label %char.vec.check
 char.vec.check:
-  %char.k = phi i64 [ 0, %char.entry ], [ %char.k.next, %char.vec.body ]
-  %char.h = phi i32 [ %initialValue, %char.entry ], [ %char.h.next, %char.vec.body ]
-  %char.acc = phi <8 x i32> [ zeroinitializer, %char.entry ], [ %char.acc.next, %char.vec.body ]
+  %char.k = phi i64 [ 0, %char.small.check ], [ %char.w16.k, %char.w16.done ], [ %char.k.next, %char.vec.body ]
+  %char.h = phi i32 [ %initialValue, %char.small.check ], [ %char.w16.h.final, %char.w16.done ], [ %char.h.next, %char.vec.body ]
+  %char.acc = phi <8 x i32> [ zeroinitializer, %char.small.check ], [ zeroinitializer, %char.w16.done ], [ %char.acc.next, %char.vec.body ]
   %char.more = icmp slt i64 %char.k, %char.vec.end
   br i1 %char.more, label %char.vec.body, label %char.vec.done
 char.vec.body:
@@ -2494,8 +2558,8 @@ char.vec.done:
   %char.h.vec = add i32 %char.h, %char.sum
   br label %char.tail
 char.tail:
-  %char.t = phi i64 [ 0, %char.entry ], [ %char.k, %char.vec.done ], [ %char.t.next, %char.tail.body ]
-  %char.t.h = phi i32 [ %initialValue, %char.entry ], [ %char.h.vec, %char.vec.done ], [ %char.t.h.next, %char.tail.body ]
+  %char.t = phi i64 [ 0, %char.small.check ], [ %char.k, %char.vec.done ], [ %char.t.next, %char.tail.body ]
+  %char.t.h = phi i32 [ %initialValue, %char.small.check ], [ %char.h.vec, %char.vec.done ], [ %char.t.h.next, %char.tail.body ]
   %char.tail.more = icmp slt i64 %char.t, %char.count
   br i1 %char.tail.more, label %char.tail.body, label %done
 char.tail.body:
@@ -2513,12 +2577,42 @@ byte.entry:
   %byte.start = zext i32 %fromIndex to i64
   %byte.count = sext i32 %length to i64
   %byte.vec.end = add i64 %byte.count, -7
+  ; 16-lane tier first where the target has AVX-512F vectors; the tier's
+  ; epilogue finalizes its own accumulator, so the 8-lane tier below simply
+  ; continues the scalar chain from the first unprocessed 16-block.
+  %byte.avx512 = load i1, ptr @VM_Version.hashcode_vector_512bit
+  %byte.wide.ok = icmp sge i64 %byte.count, 16
+  %byte.use.wide = and i1 %byte.avx512, %byte.wide.ok
+  br i1 %byte.use.wide, label %byte.w16.check, label %byte.small.check
+byte.small.check:
   %byte.small = icmp slt i64 %byte.count, 8
   br i1 %byte.small, label %byte.tail, label %byte.vec.check
+byte.w16.check:
+  %byte.w16.k = phi i64 [ 0, %byte.entry ], [ %byte.w16.k.next, %byte.w16.body ]
+  %byte.w16.h = phi i32 [ %initialValue, %byte.entry ], [ %byte.w16.h.next, %byte.w16.body ]
+  %byte.w16.acc = phi <16 x i32> [ zeroinitializer, %byte.entry ], [ %byte.w16.acc.next, %byte.w16.body ]
+  %byte.w16.end = add i64 %byte.count, -15
+  %byte.w16.more = icmp slt i64 %byte.w16.k, %byte.w16.end
+  br i1 %byte.w16.more, label %byte.w16.body, label %byte.w16.done
+byte.w16.body:
+  %byte.w16.off = add i64 %byte.start, %byte.w16.k
+  %byte.w16.p = getelementptr i8, ptr addrspace(1) %byte.data, i64 %byte.w16.off
+  %byte.w16.raw = load <16 x i8>, ptr addrspace(1) %byte.w16.p, align 1
+  %byte.w16.wide = sext <16 x i8> %byte.w16.raw to <16 x i32>
+  %byte.w16.acc.mul = mul <16 x i32> %byte.w16.acc, <i32 1353309697, i32 1353309697, i32 1353309697, i32 1353309697, i32 1353309697, i32 1353309697, i32 1353309697, i32 1353309697, i32 1353309697, i32 1353309697, i32 1353309697, i32 1353309697, i32 1353309697, i32 1353309697, i32 1353309697, i32 1353309697>
+  %byte.w16.acc.next = add <16 x i32> %byte.w16.acc.mul, %byte.w16.wide
+  %byte.w16.h.next = mul i32 %byte.w16.h, 1353309697
+  %byte.w16.k.next = add i64 %byte.w16.k, 16
+  br label %byte.w16.check
+byte.w16.done:
+  %byte.w16.acc.coef = mul <16 x i32> %byte.w16.acc, <i32 3784433119, i32 1507551809, i32 3789408671, i32 4001564289, i32 129082719, i32 2498015937, i32 4098453791, i32 2487512833, i32 1742810335, i32 887503681, i32 28629151, i32 923521, i32 29791, i32 961, i32 31, i32 1>
+  %byte.w16.sum = call i32 @llvm.vector.reduce.add.v16i32(<16 x i32> %byte.w16.acc.coef)
+  %byte.w16.h.final = add i32 %byte.w16.h, %byte.w16.sum
+  br label %byte.vec.check
 byte.vec.check:
-  %byte.k = phi i64 [ 0, %byte.entry ], [ %byte.k.next, %byte.vec.body ]
-  %byte.h = phi i32 [ %initialValue, %byte.entry ], [ %byte.h.next, %byte.vec.body ]
-  %byte.acc = phi <8 x i32> [ zeroinitializer, %byte.entry ], [ %byte.acc.next, %byte.vec.body ]
+  %byte.k = phi i64 [ 0, %byte.small.check ], [ %byte.w16.k, %byte.w16.done ], [ %byte.k.next, %byte.vec.body ]
+  %byte.h = phi i32 [ %initialValue, %byte.small.check ], [ %byte.w16.h.final, %byte.w16.done ], [ %byte.h.next, %byte.vec.body ]
+  %byte.acc = phi <8 x i32> [ zeroinitializer, %byte.small.check ], [ zeroinitializer, %byte.w16.done ], [ %byte.acc.next, %byte.vec.body ]
   %byte.more = icmp slt i64 %byte.k, %byte.vec.end
   br i1 %byte.more, label %byte.vec.body, label %byte.vec.done
 byte.vec.body:
@@ -2537,8 +2631,8 @@ byte.vec.done:
   %byte.h.vec = add i32 %byte.h, %byte.sum
   br label %byte.tail
 byte.tail:
-  %byte.t = phi i64 [ 0, %byte.entry ], [ %byte.k, %byte.vec.done ], [ %byte.t.next, %byte.tail.body ]
-  %byte.t.h = phi i32 [ %initialValue, %byte.entry ], [ %byte.h.vec, %byte.vec.done ], [ %byte.t.h.next, %byte.tail.body ]
+  %byte.t = phi i64 [ 0, %byte.small.check ], [ %byte.k, %byte.vec.done ], [ %byte.t.next, %byte.tail.body ]
+  %byte.t.h = phi i32 [ %initialValue, %byte.small.check ], [ %byte.h.vec, %byte.vec.done ], [ %byte.t.h.next, %byte.tail.body ]
   %byte.tail.more = icmp slt i64 %byte.t, %byte.count
   br i1 %byte.tail.more, label %byte.tail.body, label %done
 byte.tail.body:
@@ -2556,12 +2650,42 @@ short.entry:
   %short.start = zext i32 %fromIndex to i64
   %short.count = sext i32 %length to i64
   %short.vec.end = add i64 %short.count, -7
+  ; 16-lane tier first where the target has AVX-512F vectors; the tier's
+  ; epilogue finalizes its own accumulator, so the 8-lane tier below simply
+  ; continues the scalar chain from the first unprocessed 16-block.
+  %short.avx512 = load i1, ptr @VM_Version.hashcode_vector_512bit
+  %short.wide.ok = icmp sge i64 %short.count, 16
+  %short.use.wide = and i1 %short.avx512, %short.wide.ok
+  br i1 %short.use.wide, label %short.w16.check, label %short.small.check
+short.small.check:
   %short.small = icmp slt i64 %short.count, 8
   br i1 %short.small, label %short.tail, label %short.vec.check
+short.w16.check:
+  %short.w16.k = phi i64 [ 0, %short.entry ], [ %short.w16.k.next, %short.w16.body ]
+  %short.w16.h = phi i32 [ %initialValue, %short.entry ], [ %short.w16.h.next, %short.w16.body ]
+  %short.w16.acc = phi <16 x i32> [ zeroinitializer, %short.entry ], [ %short.w16.acc.next, %short.w16.body ]
+  %short.w16.end = add i64 %short.count, -15
+  %short.w16.more = icmp slt i64 %short.w16.k, %short.w16.end
+  br i1 %short.w16.more, label %short.w16.body, label %short.w16.done
+short.w16.body:
+  %short.w16.off = add i64 %short.start, %short.w16.k
+  %short.w16.p = getelementptr i16, ptr addrspace(1) %short.data, i64 %short.w16.off
+  %short.w16.raw = load <16 x i16>, ptr addrspace(1) %short.w16.p, align 2
+  %short.w16.wide = sext <16 x i16> %short.w16.raw to <16 x i32>
+  %short.w16.acc.mul = mul <16 x i32> %short.w16.acc, <i32 1353309697, i32 1353309697, i32 1353309697, i32 1353309697, i32 1353309697, i32 1353309697, i32 1353309697, i32 1353309697, i32 1353309697, i32 1353309697, i32 1353309697, i32 1353309697, i32 1353309697, i32 1353309697, i32 1353309697, i32 1353309697>
+  %short.w16.acc.next = add <16 x i32> %short.w16.acc.mul, %short.w16.wide
+  %short.w16.h.next = mul i32 %short.w16.h, 1353309697
+  %short.w16.k.next = add i64 %short.w16.k, 16
+  br label %short.w16.check
+short.w16.done:
+  %short.w16.acc.coef = mul <16 x i32> %short.w16.acc, <i32 3784433119, i32 1507551809, i32 3789408671, i32 4001564289, i32 129082719, i32 2498015937, i32 4098453791, i32 2487512833, i32 1742810335, i32 887503681, i32 28629151, i32 923521, i32 29791, i32 961, i32 31, i32 1>
+  %short.w16.sum = call i32 @llvm.vector.reduce.add.v16i32(<16 x i32> %short.w16.acc.coef)
+  %short.w16.h.final = add i32 %short.w16.h, %short.w16.sum
+  br label %short.vec.check
 short.vec.check:
-  %short.k = phi i64 [ 0, %short.entry ], [ %short.k.next, %short.vec.body ]
-  %short.h = phi i32 [ %initialValue, %short.entry ], [ %short.h.next, %short.vec.body ]
-  %short.acc = phi <8 x i32> [ zeroinitializer, %short.entry ], [ %short.acc.next, %short.vec.body ]
+  %short.k = phi i64 [ 0, %short.small.check ], [ %short.w16.k, %short.w16.done ], [ %short.k.next, %short.vec.body ]
+  %short.h = phi i32 [ %initialValue, %short.small.check ], [ %short.w16.h.final, %short.w16.done ], [ %short.h.next, %short.vec.body ]
+  %short.acc = phi <8 x i32> [ zeroinitializer, %short.small.check ], [ zeroinitializer, %short.w16.done ], [ %short.acc.next, %short.vec.body ]
   %short.more = icmp slt i64 %short.k, %short.vec.end
   br i1 %short.more, label %short.vec.body, label %short.vec.done
 short.vec.body:
@@ -2580,8 +2704,8 @@ short.vec.done:
   %short.h.vec = add i32 %short.h, %short.sum
   br label %short.tail
 short.tail:
-  %short.t = phi i64 [ 0, %short.entry ], [ %short.k, %short.vec.done ], [ %short.t.next, %short.tail.body ]
-  %short.t.h = phi i32 [ %initialValue, %short.entry ], [ %short.h.vec, %short.vec.done ], [ %short.t.h.next, %short.tail.body ]
+  %short.t = phi i64 [ 0, %short.small.check ], [ %short.k, %short.vec.done ], [ %short.t.next, %short.tail.body ]
+  %short.t.h = phi i32 [ %initialValue, %short.small.check ], [ %short.h.vec, %short.vec.done ], [ %short.t.h.next, %short.tail.body ]
   %short.tail.more = icmp slt i64 %short.t, %short.count
   br i1 %short.tail.more, label %short.tail.body, label %done
 short.tail.body:
@@ -2599,12 +2723,41 @@ int.entry:
   %int.start = zext i32 %fromIndex to i64
   %int.count = sext i32 %length to i64
   %int.vec.end = add i64 %int.count, -7
+  ; 16-lane tier first where the target has AVX-512F vectors; the tier's
+  ; epilogue finalizes its own accumulator, so the 8-lane tier below simply
+  ; continues the scalar chain from the first unprocessed 16-block.
+  %int.avx512 = load i1, ptr @VM_Version.hashcode_vector_512bit
+  %int.wide.ok = icmp sge i64 %int.count, 16
+  %int.use.wide = and i1 %int.avx512, %int.wide.ok
+  br i1 %int.use.wide, label %int.w16.check, label %int.small.check
+int.small.check:
   %int.small = icmp slt i64 %int.count, 8
   br i1 %int.small, label %int.tail, label %int.vec.check
+int.w16.check:
+  %int.w16.k = phi i64 [ 0, %int.entry ], [ %int.w16.k.next, %int.w16.body ]
+  %int.w16.h = phi i32 [ %initialValue, %int.entry ], [ %int.w16.h.next, %int.w16.body ]
+  %int.w16.acc = phi <16 x i32> [ zeroinitializer, %int.entry ], [ %int.w16.acc.next, %int.w16.body ]
+  %int.w16.end = add i64 %int.count, -15
+  %int.w16.more = icmp slt i64 %int.w16.k, %int.w16.end
+  br i1 %int.w16.more, label %int.w16.body, label %int.w16.done
+int.w16.body:
+  %int.w16.off = add i64 %int.start, %int.w16.k
+  %int.w16.p = getelementptr i32, ptr addrspace(1) %int.data, i64 %int.w16.off
+  %int.w16.wide = load <16 x i32>, ptr addrspace(1) %int.w16.p, align 4
+  %int.w16.acc.mul = mul <16 x i32> %int.w16.acc, <i32 1353309697, i32 1353309697, i32 1353309697, i32 1353309697, i32 1353309697, i32 1353309697, i32 1353309697, i32 1353309697, i32 1353309697, i32 1353309697, i32 1353309697, i32 1353309697, i32 1353309697, i32 1353309697, i32 1353309697, i32 1353309697>
+  %int.w16.acc.next = add <16 x i32> %int.w16.acc.mul, %int.w16.wide
+  %int.w16.h.next = mul i32 %int.w16.h, 1353309697
+  %int.w16.k.next = add i64 %int.w16.k, 16
+  br label %int.w16.check
+int.w16.done:
+  %int.w16.acc.coef = mul <16 x i32> %int.w16.acc, <i32 3784433119, i32 1507551809, i32 3789408671, i32 4001564289, i32 129082719, i32 2498015937, i32 4098453791, i32 2487512833, i32 1742810335, i32 887503681, i32 28629151, i32 923521, i32 29791, i32 961, i32 31, i32 1>
+  %int.w16.sum = call i32 @llvm.vector.reduce.add.v16i32(<16 x i32> %int.w16.acc.coef)
+  %int.w16.h.final = add i32 %int.w16.h, %int.w16.sum
+  br label %int.vec.check
 int.vec.check:
-  %int.k = phi i64 [ 0, %int.entry ], [ %int.k.next, %int.vec.body ]
-  %int.h = phi i32 [ %initialValue, %int.entry ], [ %int.h.next, %int.vec.body ]
-  %int.acc = phi <8 x i32> [ zeroinitializer, %int.entry ], [ %int.acc.next, %int.vec.body ]
+  %int.k = phi i64 [ 0, %int.small.check ], [ %int.w16.k, %int.w16.done ], [ %int.k.next, %int.vec.body ]
+  %int.h = phi i32 [ %initialValue, %int.small.check ], [ %int.w16.h.final, %int.w16.done ], [ %int.h.next, %int.vec.body ]
+  %int.acc = phi <8 x i32> [ zeroinitializer, %int.small.check ], [ zeroinitializer, %int.w16.done ], [ %int.acc.next, %int.vec.body ]
   %int.more = icmp slt i64 %int.k, %int.vec.end
   br i1 %int.more, label %int.vec.body, label %int.vec.done
 int.vec.body:
@@ -2622,8 +2775,8 @@ int.vec.done:
   %int.h.vec = add i32 %int.h, %int.sum
   br label %int.tail
 int.tail:
-  %int.t = phi i64 [ 0, %int.entry ], [ %int.k, %int.vec.done ], [ %int.t.next, %int.tail.body ]
-  %int.t.h = phi i32 [ %initialValue, %int.entry ], [ %int.h.vec, %int.vec.done ], [ %int.t.h.next, %int.tail.body ]
+  %int.t = phi i64 [ 0, %int.small.check ], [ %int.k, %int.vec.done ], [ %int.t.next, %int.tail.body ]
+  %int.t.h = phi i32 [ %initialValue, %int.small.check ], [ %int.h.vec, %int.vec.done ], [ %int.t.h.next, %int.tail.body ]
   %int.tail.more = icmp slt i64 %int.t, %int.count
   br i1 %int.tail.more, label %int.tail.body, label %done
 int.tail.body:
@@ -3280,6 +3433,7 @@ entry:
 declare i1 @llvm.vector.reduce.or.v16i1(<16 x i1>)
 declare i1 @llvm.vector.reduce.or.v32i1(<32 x i1>)
 declare i32 @llvm.vector.reduce.add.v8i32(<8 x i32>)
+declare i32 @llvm.vector.reduce.add.v16i32(<16 x i32>)
 declare i8 @llvm.bitreverse.i8(i8)
 declare i4 @llvm.bitreverse.i4(i4)
 declare i64 @llvm.bitreverse.i64(i64)

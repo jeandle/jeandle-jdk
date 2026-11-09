@@ -385,13 +385,58 @@ public class TestVectorizedHashCode {
     }
 
     private static void verifyIntrinsicLowering() throws Exception {
-        java.nio.file.Path dumpDirectory =
-                java.nio.file.Files.createTempDirectory("jeandle_vectorized_hashcode");
+        // Fork A pins UseAVX=2 so only the 256-bit tier is live; fork B pins
+        // UseAVX=3 to exercise the 16-lane tier where the host has AVX-512.
+        // IgnoreUnrecognizedVMOptions keeps the forks bootable on other archs.
+        java.nio.file.Path dirA = java.nio.file.Files.createTempDirectory("jeandle_vhc_avx2");
+        jdk.test.lib.process.OutputAnalyzer outA = runForensicsFork(dirA, "-XX:UseAVX=2");
+        java.util.List<java.nio.file.Path> dumpsA = optimizedDumps(dirA);
+        // The op call is visible in the pre-optimization dump; phase-1
+        // lowering has inlined (and deleted) it by the optimized dump.
+        try (java.util.stream.Stream<java.nio.file.Path> all =
+                     java.nio.file.Files.walk(dirA)) {
+            boolean foundOpCall = all.filter(p -> p.getFileName().toString().endsWith(".ll"))
+                                     .anyMatch(TestVectorizedHashCode::dumpContainsOpCall);
+            if (!foundOpCall) {
+                throw new AssertionError("compiled IR does not call jeandle.vectorized_hashcode");
+            }
+        }
+        if (!dynDumpContains(dumpsA, "mul <8 x i32>")) {
+            throw new AssertionError("UseAVX=2 IR has no 8-lane hash vector multiply");
+        }
+        if (dynDumpContains(dumpsA, "<16 x i32>")) {
+            throw new AssertionError("UseAVX=2 IR unexpectedly retains 16-lane hash IR");
+        }
+        // The trailing underscore matters: "hashByteConst1" is a prefix of the
+        // Const15/16/17 dumps, which legitimately keep vector IR.
+        boolean constSmallHasVector = dumpsA.stream()
+                .filter(p -> p.getFileName().toString().contains("hashByteConst1_"))
+                .anyMatch(p -> dumpText(p).contains("<8 x i32>"));
+        if (constSmallHasVector) {
+            throw new AssertionError("constant length 1 unexpectedly retains vector hash IR");
+        }
+
+        if (hostHasAvx512()) {
+            java.nio.file.Path dirB = java.nio.file.Files.createTempDirectory("jeandle_vhc_avx512");
+            runForensicsFork(dirB, "-XX:UseAVX=3");
+            java.util.List<java.nio.file.Path> dumpsB = optimizedDumps(dirB);
+            if (!dynDumpContains(dumpsB, "mul <16 x i32>")) {
+                throw new AssertionError("UseAVX=3 IR has no 16-lane hash vector multiply");
+            }
+            if (!dynDumpContains(dumpsB, "mul <8 x i32>")) {
+                throw new AssertionError("UseAVX=3 IR lost the 8-lane remainder tier");
+            }
+        }
+    }
+
+    private static jdk.test.lib.process.OutputAnalyzer runForensicsFork(java.nio.file.Path dumpDirectory,
+                                                                        String avxFlag) throws Exception {
         java.util.List<String> command = java.util.List.of(
                 "--add-exports=java.base/jdk.internal.misc=ALL-UNNAMED",
                 "--add-exports=java.base/jdk.internal.util=ALL-UNNAMED",
                 "-Xbatch", "-XX:-TieredCompilation",
-                "-XX:+UnlockDiagnosticVMOptions", "-XX:+UseJeandleCompiler",
+                "-XX:+UnlockDiagnosticVMOptions", "-XX:+IgnoreUnrecognizedVMOptions",
+                "-XX:+UseJeandleCompiler", avxFlag,
                 "-Xlog:jeandle=debug", "-XX:+JeandleDumpIR",
                 "-XX:JeandleDumpDirectory=" + dumpDirectory,
                 "-XX:CompileCommand=quiet",
@@ -404,38 +449,32 @@ public class TestVectorizedHashCode {
         jdk.test.lib.process.OutputAnalyzer output = jdk.test.lib.process.ProcessTools.executeCommand(
                 jdk.test.lib.process.ProcessTools.createLimitedTestJavaProcessBuilder(
                         command.toArray(new String[0])));
-        output.shouldHaveExitValue(0)
-              .shouldContain("jdk.internal.util.ArraysSupport.vectorizedHashCode")
-              .shouldContain("is parsed as intrinsic");
-        try (java.util.stream.Stream<java.nio.file.Path> files = java.nio.file.Files.walk(dumpDirectory)) {
-            java.util.List<java.nio.file.Path> dumps = files.filter(p -> p.toString().endsWith(".ll")).toList();
-            boolean foundOpCall = dumps.stream().anyMatch(TestVectorizedHashCode::dumpContainsOpCall);
-            if (!foundOpCall) {
-                throw new AssertionError("compiled IR does not call jeandle.vectorized_hashcode");
-            }
-            // Shape checks read the final optimized IR only: the pre-optimization
-            // dump contains the op body verbatim with every basic-type cluster.
-            // A dynamic-length wrapper must keep the 8-lane Horner block; a
-            // constant length below the block size folds the vector path away
-            // entirely. Constant lengths of exactly one block keep vector IR
-            // in optimizer-dependent shape and are not asserted here.
-            boolean dynHasVectorMul = dumps.stream()
-                    .filter(p -> p.getFileName().toString().endsWith("_optimized.ll"))
-                    .filter(p -> p.getFileName().toString().contains("hashByteDyn"))
-                    .anyMatch(p -> dumpText(p).contains("mul <8 x i32>"));
-            if (!dynHasVectorMul) {
-                throw new AssertionError("dynamic-length IR has no 8-lane hash vector multiply");
-            }
-            boolean constSmallHasVector = dumps.stream()
-                    .filter(p -> p.getFileName().toString().endsWith("_optimized.ll"))
-                    // The trailing underscore matters: "hashByteConst1" is a
-                    // prefix of the Const15/16/17 dumps, which legitimately
-                    // keep vector IR.
-                    .filter(p -> p.getFileName().toString().contains("hashByteConst1_"))
-                    .anyMatch(p -> dumpText(p).contains("<8 x i32>"));
-            if (constSmallHasVector) {
-                throw new AssertionError("constant length 1 unexpectedly retains vector hash IR");
-            }
+        return output.shouldHaveExitValue(0)
+                     .shouldContain("jdk.internal.util.ArraysSupport.vectorizedHashCode")
+                     .shouldContain("is parsed as intrinsic");
+    }
+
+    // Shape checks read the final optimized IR only: the pre-optimization dump
+    // contains the op body verbatim with every basic-type cluster.
+    private static java.util.List<java.nio.file.Path> optimizedDumps(java.nio.file.Path dir) throws Exception {
+        try (java.util.stream.Stream<java.nio.file.Path> files = java.nio.file.Files.walk(dir)) {
+            return files.filter(p -> p.getFileName().toString().endsWith("_optimized.ll")).toList();
+        }
+    }
+
+    private static boolean dynDumpContains(java.util.List<java.nio.file.Path> dumps, String needle) {
+        return dumps.stream()
+                .filter(p -> p.getFileName().toString().contains("hashByteDyn"))
+                .anyMatch(p -> dumpText(p).contains(needle));
+    }
+
+    private static boolean hostHasAvx512() {
+        java.nio.file.Path cpuinfo = java.nio.file.Path.of("/proc/cpuinfo");
+        try {
+            return java.nio.file.Files.exists(cpuinfo)
+                    && java.nio.file.Files.readString(cpuinfo).contains("avx512f");
+        } catch (java.io.IOException e) {
+            return false;
         }
     }
 
