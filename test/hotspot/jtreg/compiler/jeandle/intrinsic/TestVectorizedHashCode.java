@@ -396,6 +396,10 @@ public class TestVectorizedHashCode {
                 "-XX:JeandleDumpDirectory=" + dumpDirectory,
                 "-XX:CompileCommand=quiet",
                 "-XX:CompileCommand=compileonly,compiler.jeandle.intrinsic.TestVectorizedHashCode::hash*",
+                // The one-line wrappers inline into the driver otherwise and
+                // never become dumpable compilation roots of their own.
+                "-XX:CompileCommand=dontinline,compiler.jeandle.intrinsic.TestVectorizedHashCode::hashByteDyn",
+                "-XX:CompileCommand=dontinline,compiler.jeandle.intrinsic.TestVectorizedHashCode::hashByteConst1",
                 TestVectorizedHashCode.class.getName(), "functional");
         jdk.test.lib.process.OutputAnalyzer output = jdk.test.lib.process.ProcessTools.executeCommand(
                 jdk.test.lib.process.ProcessTools.createLimitedTestJavaProcessBuilder(
@@ -404,17 +408,44 @@ public class TestVectorizedHashCode {
               .shouldContain("jdk.internal.util.ArraysSupport.vectorizedHashCode")
               .shouldContain("is parsed as intrinsic");
         try (java.util.stream.Stream<java.nio.file.Path> files = java.nio.file.Files.walk(dumpDirectory)) {
-            boolean foundOpCall = files.filter(p -> p.toString().endsWith(".ll"))
-                                       .anyMatch(TestVectorizedHashCode::dumpContainsOpCall);
+            java.util.List<java.nio.file.Path> dumps = files.filter(p -> p.toString().endsWith(".ll")).toList();
+            boolean foundOpCall = dumps.stream().anyMatch(TestVectorizedHashCode::dumpContainsOpCall);
             if (!foundOpCall) {
                 throw new AssertionError("compiled IR does not call jeandle.vectorized_hashcode");
+            }
+            // Shape checks read the final optimized IR only: the pre-optimization
+            // dump contains the op body verbatim with every basic-type cluster.
+            // A dynamic-length wrapper must keep the 8-lane Horner block; a
+            // constant length below the block size folds the vector path away
+            // entirely. Constant lengths of exactly one block keep vector IR
+            // in optimizer-dependent shape and are not asserted here.
+            boolean dynHasVectorMul = dumps.stream()
+                    .filter(p -> p.getFileName().toString().endsWith("_optimized.ll"))
+                    .filter(p -> p.getFileName().toString().contains("hashByteDyn"))
+                    .anyMatch(p -> dumpText(p).contains("mul <8 x i32>"));
+            if (!dynHasVectorMul) {
+                throw new AssertionError("dynamic-length IR has no 8-lane hash vector multiply");
+            }
+            boolean constSmallHasVector = dumps.stream()
+                    .filter(p -> p.getFileName().toString().endsWith("_optimized.ll"))
+                    // The trailing underscore matters: "hashByteConst1" is a
+                    // prefix of the Const15/16/17 dumps, which legitimately
+                    // keep vector IR.
+                    .filter(p -> p.getFileName().toString().contains("hashByteConst1_"))
+                    .anyMatch(p -> dumpText(p).contains("<8 x i32>"));
+            if (constSmallHasVector) {
+                throw new AssertionError("constant length 1 unexpectedly retains vector hash IR");
             }
         }
     }
 
     private static boolean dumpContainsOpCall(java.nio.file.Path path) {
+        return dumpText(path).contains("@jeandle.vectorized_hashcode");
+    }
+
+    private static String dumpText(java.nio.file.Path path) {
         try {
-            return java.nio.file.Files.readString(path).contains("@jeandle.vectorized_hashcode");
+            return java.nio.file.Files.readString(path);
         } catch (java.io.IOException e) {
             throw new RuntimeException(e);
         }

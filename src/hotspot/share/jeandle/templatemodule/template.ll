@@ -2397,13 +2397,19 @@ entry:
   ret void
 }
 
-; Scalar reference form of jdk.internal.util.ArraysSupport.vectorizedHashCode.
-; The frontend only emits calls whose %basicType operand is one of the five
-; constants below, so the switch folds to a single arm once the op inlines.
-; Length semantics follow the Java fallback loops: the signed loop bound makes
-; a negative count a no-op returning %initialValue without touching memory.
-; T_BOOLEAN reads unsigned bytes and T_CHAR unsigned native-order shorts from
-; a byte[] payload, matching StringLatin1/StringUTF16 usage.
+; jdk.internal.util.ArraysSupport.vectorizedHashCode as an 8-lane block Horner
+; scheme. The frontend only emits calls whose %basicType operand is one of the
+; five constants below, so the switch folds to a single arm once the op
+; inlines. Per 8-element block (all arithmetic wraps mod 2^32 like Java int):
+;   acc = acc * 31^8 + widen(elements)   ; lane j accumulates partial sums
+;   h   = h   * 31^8                     ; scalar chain advances one block
+; and the loop epilogue applies the lane coefficients 31^7..31^0 plus a
+; wrapping horizontal add, which reproduces the element-wise Horner update
+; exactly. Length semantics follow the Java fallback loops: signed compares
+; make a negative count a no-op returning %initialValue without touching
+; memory, and lengths below 8 skip straight to the scalar tail. T_BOOLEAN
+; reads unsigned bytes and T_CHAR unsigned native-order shorts from a byte[]
+; payload, matching StringLatin1/StringUTF16 usage.
 define private hotspotcc i32 @jeandle.vectorized_hashcode(ptr addrspace(1) nocapture readonly %array, i32 %fromIndex, i32 %length, i32 %initialValue, i32 %basicType) noinline optnone "lower-phase"="1" #0 memory(read) {
 entry:
   switch i32 %basicType, label %unsupported [
@@ -2420,102 +2426,216 @@ boolean.entry:
   %boolean.data = getelementptr i8, ptr addrspace(1) %array, i32 %boolean.base
   %boolean.start = zext i32 %fromIndex to i64
   %boolean.count = sext i32 %length to i64
-  %boolean.end = add i64 %boolean.start, %boolean.count
-  br label %boolean.loop
-boolean.loop:
-  %boolean.i = phi i64 [ %boolean.start, %boolean.entry ], [ %boolean.next, %boolean.body ]
-  %boolean.h = phi i32 [ %initialValue, %boolean.entry ], [ %boolean.h.next, %boolean.body ]
-  %boolean.more = icmp slt i64 %boolean.i, %boolean.end
-  br i1 %boolean.more, label %boolean.body, label %done
-boolean.body:
-  %boolean.p = getelementptr i8, ptr addrspace(1) %boolean.data, i64 %boolean.i
-  %boolean.e = load i8, ptr addrspace(1) %boolean.p, align 1
-  %boolean.w = zext i8 %boolean.e to i32
-  %boolean.h.mul = mul i32 %boolean.h, 31
-  %boolean.h.next = add i32 %boolean.h.mul, %boolean.w
-  %boolean.next = add i64 %boolean.i, 1
-  br label %boolean.loop
+  %boolean.vec.end = add i64 %boolean.count, -7
+  %boolean.small = icmp slt i64 %boolean.count, 8
+  br i1 %boolean.small, label %boolean.tail, label %boolean.vec.check
+boolean.vec.check:
+  %boolean.k = phi i64 [ 0, %boolean.entry ], [ %boolean.k.next, %boolean.vec.body ]
+  %boolean.h = phi i32 [ %initialValue, %boolean.entry ], [ %boolean.h.next, %boolean.vec.body ]
+  %boolean.acc = phi <8 x i32> [ zeroinitializer, %boolean.entry ], [ %boolean.acc.next, %boolean.vec.body ]
+  %boolean.more = icmp slt i64 %boolean.k, %boolean.vec.end
+  br i1 %boolean.more, label %boolean.vec.body, label %boolean.vec.done
+boolean.vec.body:
+  %boolean.off = add i64 %boolean.start, %boolean.k
+  %boolean.vec.p = getelementptr i8, ptr addrspace(1) %boolean.data, i64 %boolean.off
+  %boolean.vec.raw = load <8 x i8>, ptr addrspace(1) %boolean.vec.p, align 1
+  %boolean.vec.wide = zext <8 x i8> %boolean.vec.raw to <8 x i32>
+  %boolean.acc.mul = mul <8 x i32> %boolean.acc, <i32 2487512833, i32 2487512833, i32 2487512833, i32 2487512833, i32 2487512833, i32 2487512833, i32 2487512833, i32 2487512833>
+  %boolean.acc.next = add <8 x i32> %boolean.acc.mul, %boolean.vec.wide
+  %boolean.h.next = mul i32 %boolean.h, 2487512833
+  %boolean.k.next = add i64 %boolean.k, 8
+  br label %boolean.vec.check
+boolean.vec.done:
+  %boolean.acc.coef = mul <8 x i32> %boolean.acc, <i32 1742810335, i32 887503681, i32 28629151, i32 923521, i32 29791, i32 961, i32 31, i32 1>
+  %boolean.sum = call i32 @llvm.vector.reduce.add.v8i32(<8 x i32> %boolean.acc.coef)
+  %boolean.h.vec = add i32 %boolean.h, %boolean.sum
+  br label %boolean.tail
+boolean.tail:
+  %boolean.t = phi i64 [ 0, %boolean.entry ], [ %boolean.k, %boolean.vec.done ], [ %boolean.t.next, %boolean.tail.body ]
+  %boolean.t.h = phi i32 [ %initialValue, %boolean.entry ], [ %boolean.h.vec, %boolean.vec.done ], [ %boolean.t.h.next, %boolean.tail.body ]
+  %boolean.tail.more = icmp slt i64 %boolean.t, %boolean.count
+  br i1 %boolean.tail.more, label %boolean.tail.body, label %done
+boolean.tail.body:
+  %boolean.tail.off = add i64 %boolean.start, %boolean.t
+  %boolean.tail.p = getelementptr i8, ptr addrspace(1) %boolean.data, i64 %boolean.tail.off
+  %boolean.tail.e = load i8, ptr addrspace(1) %boolean.tail.p, align 1
+  %boolean.tail.w = zext i8 %boolean.tail.e to i32
+  %boolean.t.h.mul = mul i32 %boolean.t.h, 31
+  %boolean.t.h.next = add i32 %boolean.t.h.mul, %boolean.tail.w
+  %boolean.t.next = add i64 %boolean.t, 1
+  br label %boolean.tail
 char.entry:
   %char.base = load i32, ptr @arrayOopDesc.base_offset_in_bytes.char
   %char.data = getelementptr i8, ptr addrspace(1) %array, i32 %char.base
   %char.start = zext i32 %fromIndex to i64
   %char.count = sext i32 %length to i64
-  %char.end = add i64 %char.start, %char.count
-  br label %char.loop
-char.loop:
-  %char.i = phi i64 [ %char.start, %char.entry ], [ %char.next, %char.body ]
-  %char.h = phi i32 [ %initialValue, %char.entry ], [ %char.h.next, %char.body ]
-  %char.more = icmp slt i64 %char.i, %char.end
-  br i1 %char.more, label %char.body, label %done
-char.body:
-  %char.p = getelementptr i16, ptr addrspace(1) %char.data, i64 %char.i
-  %char.e = load i16, ptr addrspace(1) %char.p, align 2
-  %char.w = zext i16 %char.e to i32
-  %char.h.mul = mul i32 %char.h, 31
-  %char.h.next = add i32 %char.h.mul, %char.w
-  %char.next = add i64 %char.i, 1
-  br label %char.loop
+  %char.vec.end = add i64 %char.count, -7
+  %char.small = icmp slt i64 %char.count, 8
+  br i1 %char.small, label %char.tail, label %char.vec.check
+char.vec.check:
+  %char.k = phi i64 [ 0, %char.entry ], [ %char.k.next, %char.vec.body ]
+  %char.h = phi i32 [ %initialValue, %char.entry ], [ %char.h.next, %char.vec.body ]
+  %char.acc = phi <8 x i32> [ zeroinitializer, %char.entry ], [ %char.acc.next, %char.vec.body ]
+  %char.more = icmp slt i64 %char.k, %char.vec.end
+  br i1 %char.more, label %char.vec.body, label %char.vec.done
+char.vec.body:
+  %char.off = add i64 %char.start, %char.k
+  %char.vec.p = getelementptr i16, ptr addrspace(1) %char.data, i64 %char.off
+  %char.vec.raw = load <8 x i16>, ptr addrspace(1) %char.vec.p, align 2
+  %char.vec.wide = zext <8 x i16> %char.vec.raw to <8 x i32>
+  %char.acc.mul = mul <8 x i32> %char.acc, <i32 2487512833, i32 2487512833, i32 2487512833, i32 2487512833, i32 2487512833, i32 2487512833, i32 2487512833, i32 2487512833>
+  %char.acc.next = add <8 x i32> %char.acc.mul, %char.vec.wide
+  %char.h.next = mul i32 %char.h, 2487512833
+  %char.k.next = add i64 %char.k, 8
+  br label %char.vec.check
+char.vec.done:
+  %char.acc.coef = mul <8 x i32> %char.acc, <i32 1742810335, i32 887503681, i32 28629151, i32 923521, i32 29791, i32 961, i32 31, i32 1>
+  %char.sum = call i32 @llvm.vector.reduce.add.v8i32(<8 x i32> %char.acc.coef)
+  %char.h.vec = add i32 %char.h, %char.sum
+  br label %char.tail
+char.tail:
+  %char.t = phi i64 [ 0, %char.entry ], [ %char.k, %char.vec.done ], [ %char.t.next, %char.tail.body ]
+  %char.t.h = phi i32 [ %initialValue, %char.entry ], [ %char.h.vec, %char.vec.done ], [ %char.t.h.next, %char.tail.body ]
+  %char.tail.more = icmp slt i64 %char.t, %char.count
+  br i1 %char.tail.more, label %char.tail.body, label %done
+char.tail.body:
+  %char.tail.off = add i64 %char.start, %char.t
+  %char.tail.p = getelementptr i16, ptr addrspace(1) %char.data, i64 %char.tail.off
+  %char.tail.e = load i16, ptr addrspace(1) %char.tail.p, align 2
+  %char.tail.w = zext i16 %char.tail.e to i32
+  %char.t.h.mul = mul i32 %char.t.h, 31
+  %char.t.h.next = add i32 %char.t.h.mul, %char.tail.w
+  %char.t.next = add i64 %char.t, 1
+  br label %char.tail
 byte.entry:
   %byte.base = load i32, ptr @arrayOopDesc.base_offset_in_bytes.byte
   %byte.data = getelementptr i8, ptr addrspace(1) %array, i32 %byte.base
   %byte.start = zext i32 %fromIndex to i64
   %byte.count = sext i32 %length to i64
-  %byte.end = add i64 %byte.start, %byte.count
-  br label %byte.loop
-byte.loop:
-  %byte.i = phi i64 [ %byte.start, %byte.entry ], [ %byte.next, %byte.body ]
-  %byte.h = phi i32 [ %initialValue, %byte.entry ], [ %byte.h.next, %byte.body ]
-  %byte.more = icmp slt i64 %byte.i, %byte.end
-  br i1 %byte.more, label %byte.body, label %done
-byte.body:
-  %byte.p = getelementptr i8, ptr addrspace(1) %byte.data, i64 %byte.i
-  %byte.e = load i8, ptr addrspace(1) %byte.p, align 1
-  %byte.w = sext i8 %byte.e to i32
-  %byte.h.mul = mul i32 %byte.h, 31
-  %byte.h.next = add i32 %byte.h.mul, %byte.w
-  %byte.next = add i64 %byte.i, 1
-  br label %byte.loop
+  %byte.vec.end = add i64 %byte.count, -7
+  %byte.small = icmp slt i64 %byte.count, 8
+  br i1 %byte.small, label %byte.tail, label %byte.vec.check
+byte.vec.check:
+  %byte.k = phi i64 [ 0, %byte.entry ], [ %byte.k.next, %byte.vec.body ]
+  %byte.h = phi i32 [ %initialValue, %byte.entry ], [ %byte.h.next, %byte.vec.body ]
+  %byte.acc = phi <8 x i32> [ zeroinitializer, %byte.entry ], [ %byte.acc.next, %byte.vec.body ]
+  %byte.more = icmp slt i64 %byte.k, %byte.vec.end
+  br i1 %byte.more, label %byte.vec.body, label %byte.vec.done
+byte.vec.body:
+  %byte.off = add i64 %byte.start, %byte.k
+  %byte.vec.p = getelementptr i8, ptr addrspace(1) %byte.data, i64 %byte.off
+  %byte.vec.raw = load <8 x i8>, ptr addrspace(1) %byte.vec.p, align 1
+  %byte.vec.wide = sext <8 x i8> %byte.vec.raw to <8 x i32>
+  %byte.acc.mul = mul <8 x i32> %byte.acc, <i32 2487512833, i32 2487512833, i32 2487512833, i32 2487512833, i32 2487512833, i32 2487512833, i32 2487512833, i32 2487512833>
+  %byte.acc.next = add <8 x i32> %byte.acc.mul, %byte.vec.wide
+  %byte.h.next = mul i32 %byte.h, 2487512833
+  %byte.k.next = add i64 %byte.k, 8
+  br label %byte.vec.check
+byte.vec.done:
+  %byte.acc.coef = mul <8 x i32> %byte.acc, <i32 1742810335, i32 887503681, i32 28629151, i32 923521, i32 29791, i32 961, i32 31, i32 1>
+  %byte.sum = call i32 @llvm.vector.reduce.add.v8i32(<8 x i32> %byte.acc.coef)
+  %byte.h.vec = add i32 %byte.h, %byte.sum
+  br label %byte.tail
+byte.tail:
+  %byte.t = phi i64 [ 0, %byte.entry ], [ %byte.k, %byte.vec.done ], [ %byte.t.next, %byte.tail.body ]
+  %byte.t.h = phi i32 [ %initialValue, %byte.entry ], [ %byte.h.vec, %byte.vec.done ], [ %byte.t.h.next, %byte.tail.body ]
+  %byte.tail.more = icmp slt i64 %byte.t, %byte.count
+  br i1 %byte.tail.more, label %byte.tail.body, label %done
+byte.tail.body:
+  %byte.tail.off = add i64 %byte.start, %byte.t
+  %byte.tail.p = getelementptr i8, ptr addrspace(1) %byte.data, i64 %byte.tail.off
+  %byte.tail.e = load i8, ptr addrspace(1) %byte.tail.p, align 1
+  %byte.tail.w = sext i8 %byte.tail.e to i32
+  %byte.t.h.mul = mul i32 %byte.t.h, 31
+  %byte.t.h.next = add i32 %byte.t.h.mul, %byte.tail.w
+  %byte.t.next = add i64 %byte.t, 1
+  br label %byte.tail
 short.entry:
   %short.base = load i32, ptr @arrayOopDesc.base_offset_in_bytes.short
   %short.data = getelementptr i8, ptr addrspace(1) %array, i32 %short.base
   %short.start = zext i32 %fromIndex to i64
   %short.count = sext i32 %length to i64
-  %short.end = add i64 %short.start, %short.count
-  br label %short.loop
-short.loop:
-  %short.i = phi i64 [ %short.start, %short.entry ], [ %short.next, %short.body ]
-  %short.h = phi i32 [ %initialValue, %short.entry ], [ %short.h.next, %short.body ]
-  %short.more = icmp slt i64 %short.i, %short.end
-  br i1 %short.more, label %short.body, label %done
-short.body:
-  %short.p = getelementptr i16, ptr addrspace(1) %short.data, i64 %short.i
-  %short.e = load i16, ptr addrspace(1) %short.p, align 2
-  %short.w = sext i16 %short.e to i32
-  %short.h.mul = mul i32 %short.h, 31
-  %short.h.next = add i32 %short.h.mul, %short.w
-  %short.next = add i64 %short.i, 1
-  br label %short.loop
+  %short.vec.end = add i64 %short.count, -7
+  %short.small = icmp slt i64 %short.count, 8
+  br i1 %short.small, label %short.tail, label %short.vec.check
+short.vec.check:
+  %short.k = phi i64 [ 0, %short.entry ], [ %short.k.next, %short.vec.body ]
+  %short.h = phi i32 [ %initialValue, %short.entry ], [ %short.h.next, %short.vec.body ]
+  %short.acc = phi <8 x i32> [ zeroinitializer, %short.entry ], [ %short.acc.next, %short.vec.body ]
+  %short.more = icmp slt i64 %short.k, %short.vec.end
+  br i1 %short.more, label %short.vec.body, label %short.vec.done
+short.vec.body:
+  %short.off = add i64 %short.start, %short.k
+  %short.vec.p = getelementptr i16, ptr addrspace(1) %short.data, i64 %short.off
+  %short.vec.raw = load <8 x i16>, ptr addrspace(1) %short.vec.p, align 2
+  %short.vec.wide = sext <8 x i16> %short.vec.raw to <8 x i32>
+  %short.acc.mul = mul <8 x i32> %short.acc, <i32 2487512833, i32 2487512833, i32 2487512833, i32 2487512833, i32 2487512833, i32 2487512833, i32 2487512833, i32 2487512833>
+  %short.acc.next = add <8 x i32> %short.acc.mul, %short.vec.wide
+  %short.h.next = mul i32 %short.h, 2487512833
+  %short.k.next = add i64 %short.k, 8
+  br label %short.vec.check
+short.vec.done:
+  %short.acc.coef = mul <8 x i32> %short.acc, <i32 1742810335, i32 887503681, i32 28629151, i32 923521, i32 29791, i32 961, i32 31, i32 1>
+  %short.sum = call i32 @llvm.vector.reduce.add.v8i32(<8 x i32> %short.acc.coef)
+  %short.h.vec = add i32 %short.h, %short.sum
+  br label %short.tail
+short.tail:
+  %short.t = phi i64 [ 0, %short.entry ], [ %short.k, %short.vec.done ], [ %short.t.next, %short.tail.body ]
+  %short.t.h = phi i32 [ %initialValue, %short.entry ], [ %short.h.vec, %short.vec.done ], [ %short.t.h.next, %short.tail.body ]
+  %short.tail.more = icmp slt i64 %short.t, %short.count
+  br i1 %short.tail.more, label %short.tail.body, label %done
+short.tail.body:
+  %short.tail.off = add i64 %short.start, %short.t
+  %short.tail.p = getelementptr i16, ptr addrspace(1) %short.data, i64 %short.tail.off
+  %short.tail.e = load i16, ptr addrspace(1) %short.tail.p, align 2
+  %short.tail.w = sext i16 %short.tail.e to i32
+  %short.t.h.mul = mul i32 %short.t.h, 31
+  %short.t.h.next = add i32 %short.t.h.mul, %short.tail.w
+  %short.t.next = add i64 %short.t, 1
+  br label %short.tail
 int.entry:
   %int.base = load i32, ptr @arrayOopDesc.base_offset_in_bytes.int
   %int.data = getelementptr i8, ptr addrspace(1) %array, i32 %int.base
   %int.start = zext i32 %fromIndex to i64
   %int.count = sext i32 %length to i64
-  %int.end = add i64 %int.start, %int.count
-  br label %int.loop
-int.loop:
-  %int.i = phi i64 [ %int.start, %int.entry ], [ %int.next, %int.body ]
-  %int.h = phi i32 [ %initialValue, %int.entry ], [ %int.h.next, %int.body ]
-  %int.more = icmp slt i64 %int.i, %int.end
-  br i1 %int.more, label %int.body, label %done
-int.body:
-  %int.p = getelementptr i32, ptr addrspace(1) %int.data, i64 %int.i
-  %int.e = load i32, ptr addrspace(1) %int.p, align 4
-  %int.h.mul = mul i32 %int.h, 31
-  %int.h.next = add i32 %int.h.mul, %int.e
-  %int.next = add i64 %int.i, 1
-  br label %int.loop
+  %int.vec.end = add i64 %int.count, -7
+  %int.small = icmp slt i64 %int.count, 8
+  br i1 %int.small, label %int.tail, label %int.vec.check
+int.vec.check:
+  %int.k = phi i64 [ 0, %int.entry ], [ %int.k.next, %int.vec.body ]
+  %int.h = phi i32 [ %initialValue, %int.entry ], [ %int.h.next, %int.vec.body ]
+  %int.acc = phi <8 x i32> [ zeroinitializer, %int.entry ], [ %int.acc.next, %int.vec.body ]
+  %int.more = icmp slt i64 %int.k, %int.vec.end
+  br i1 %int.more, label %int.vec.body, label %int.vec.done
+int.vec.body:
+  %int.off = add i64 %int.start, %int.k
+  %int.vec.p = getelementptr i32, ptr addrspace(1) %int.data, i64 %int.off
+  %int.vec.wide = load <8 x i32>, ptr addrspace(1) %int.vec.p, align 4
+  %int.acc.mul = mul <8 x i32> %int.acc, <i32 2487512833, i32 2487512833, i32 2487512833, i32 2487512833, i32 2487512833, i32 2487512833, i32 2487512833, i32 2487512833>
+  %int.acc.next = add <8 x i32> %int.acc.mul, %int.vec.wide
+  %int.h.next = mul i32 %int.h, 2487512833
+  %int.k.next = add i64 %int.k, 8
+  br label %int.vec.check
+int.vec.done:
+  %int.acc.coef = mul <8 x i32> %int.acc, <i32 1742810335, i32 887503681, i32 28629151, i32 923521, i32 29791, i32 961, i32 31, i32 1>
+  %int.sum = call i32 @llvm.vector.reduce.add.v8i32(<8 x i32> %int.acc.coef)
+  %int.h.vec = add i32 %int.h, %int.sum
+  br label %int.tail
+int.tail:
+  %int.t = phi i64 [ 0, %int.entry ], [ %int.k, %int.vec.done ], [ %int.t.next, %int.tail.body ]
+  %int.t.h = phi i32 [ %initialValue, %int.entry ], [ %int.h.vec, %int.vec.done ], [ %int.t.h.next, %int.tail.body ]
+  %int.tail.more = icmp slt i64 %int.t, %int.count
+  br i1 %int.tail.more, label %int.tail.body, label %done
+int.tail.body:
+  %int.tail.off = add i64 %int.start, %int.t
+  %int.tail.p = getelementptr i32, ptr addrspace(1) %int.data, i64 %int.tail.off
+  %int.tail.e = load i32, ptr addrspace(1) %int.tail.p, align 4
+  %int.t.h.mul = mul i32 %int.t.h, 31
+  %int.t.h.next = add i32 %int.t.h.mul, %int.tail.e
+  %int.t.next = add i64 %int.t, 1
+  br label %int.tail
 done:
-  %result = phi i32 [ %boolean.h, %boolean.loop ], [ %char.h, %char.loop ], [ %byte.h, %byte.loop ], [ %short.h, %short.loop ], [ %int.h, %int.loop ]
+  %result = phi i32 [ %boolean.t.h, %boolean.tail ], [ %char.t.h, %char.tail ], [ %byte.t.h, %byte.tail ], [ %short.t.h, %short.tail ], [ %int.t.h, %int.tail ]
   ret i32 %result
 }
 
@@ -3159,6 +3279,7 @@ entry:
 
 declare i1 @llvm.vector.reduce.or.v16i1(<16 x i1>)
 declare i1 @llvm.vector.reduce.or.v32i1(<32 x i1>)
+declare i32 @llvm.vector.reduce.add.v8i32(<8 x i32>)
 declare i8 @llvm.bitreverse.i8(i8)
 declare i4 @llvm.bitreverse.i4(i4)
 declare i64 @llvm.bitreverse.i64(i64)
