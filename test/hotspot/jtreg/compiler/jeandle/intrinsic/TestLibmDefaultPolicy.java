@@ -145,8 +145,8 @@ public class TestLibmDefaultPolicy {
         // Force java.lang.Math to be loaded/initialized BEFORE anything is
         // compiled: without this the first Jeandle compile of the wrapper
         // happens while Math is uninitialized, the intrinsic is not applied,
-        // and the wrapper compiles to an immediate deoptimize (observed in
-        // Task 1's baseline runs). Same trick as TestFpMinMax.TestWrapper.
+        // and the wrapper compiles to an immediate deoptimize. Same trick as
+        // TestFpMinMax.TestWrapper.
         static final double FORCE_MATH_LOAD = Math.log(1.0);
 
         static long sink; // keeps both call paths alive
@@ -263,10 +263,10 @@ public class TestLibmDefaultPolicy {
             }
         }
 
-        // --- the full Task 1 baseline sweep, re-run against the fixed build ---
+        // --- the full pre-change baseline sweep, re-run against the fixed build ---
         //
-        // Same input generator and seed (20261102) as Task 1's temporary
-        // BaselineLibmBits driver: 478671 inputs covering specials, every
+        // The same input generator and seed (20261102) as the pre-change
+        // baseline driver: 478671 inputs covering specials, every
         // biased exponent, power-of-two and power-of-ten neighbors, values
         // near 1.0, random normals, subnormals and raw bit patterns. The
         // baseline measured 14 + 88941 raw-bit mismatches (log / log10);

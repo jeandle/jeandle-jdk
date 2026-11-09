@@ -31,13 +31,10 @@
 package compiler.jeandle.intrinsic;
 
 import compiler.jeandle.fileCheck.FileCheck;
-import java.lang.management.ManagementFactory;
 import java.nio.file.Files;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Random;
-
-import com.sun.management.HotSpotDiagnosticMXBean;
 
 import jdk.test.lib.Asserts;
 import jdk.test.lib.Platform;
@@ -58,7 +55,6 @@ public class TestRound {
         OutputAnalyzer output = runSubprocess(dumpDir, extraFlags);
         output.shouldHaveExitValue(0)
               .shouldContain("TestRound PASSED");
-        boolean doubleSupported = output.getOutput().contains("ROUND_D_CPU_SUPPORTED=true");
 
         FileCheck intChecker = new FileCheck(dumpDir,
                 TestWrapper.class.getMethod("int_round", float.class), false);
@@ -73,17 +69,21 @@ public class TestRound {
             intChecker.checkNot("llvm.floor");
             intChecker.checkNot("java_lang_Math_round");
             output.shouldContain("java.lang.Math.round(jfloat)` is parsed as intrinsic");
+            // The double path is the guarded-branch integer significand
+            // algorithm: a bitcast to the raw bits, arithmetic shifts in the
+            // in-range block, and a saturating conversion for out-of-range
+            // inputs. No rounding intrinsic and no SSE4.1 dependency, which
+            // is what the -XX:UseSSE=2 run below also verifies.
+            longChecker.check("bitcast double");
+            longChecker.check("ashr i64");
+            longChecker.check("call i64 @llvm.fptosi.sat.i64.f64");
+            longChecker.checkNot("llvm.floor");
+            longChecker.checkNot("java_lang_Math_round");
+            output.shouldContain("java.lang.Math.round(jdouble)` is parsed as intrinsic");
         } else {
             intChecker.checkPattern("(?:call|invoke) hotspotcc i32 .*java_lang_Math_round");
             intChecker.checkNot("llvm.fptosi.sat");
             output.shouldNotContain("java.lang.Math.round(jfloat)` is parsed as intrinsic");
-        }
-        if (!disabled && doubleSupported) {
-            longChecker.check("call double @llvm.floor.f64");
-            longChecker.check("call i64 @llvm.fptosi.sat.i64.f64");
-            longChecker.checkNot("java_lang_Math_round");
-            output.shouldContain("java.lang.Math.round(jdouble)` is parsed as intrinsic");
-        } else {
             longChecker.checkPattern("(?:call|invoke) hotspotcc i64 .*java_lang_Math_round");
             longChecker.checkNot("llvm.floor");
             longChecker.checkNot("llvm.fptosi.sat");
@@ -125,11 +125,6 @@ public class TestRound {
         }
 
         public static void main(String[] args) {
-            boolean doubleSupported = !Platform.isX64()
-                    || Integer.parseInt(ManagementFactory.getPlatformMXBean(
-                            HotSpotDiagnosticMXBean.class).getVMOption("UseSSE").getValue()) >= 4;
-            System.out.println("ROUND_D_CPU_SUPPORTED=" + doubleSupported);
-
             // --- ties round toward positive infinity ---
             checkF("round(2.5f) -> 3", 2.5f, 3);
             checkF("round(-2.5f) -> -2", -2.5f, -2);

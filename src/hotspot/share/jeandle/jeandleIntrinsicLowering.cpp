@@ -127,7 +127,6 @@ bool JeandleIntrinsicLowering::is_supported(vmIntrinsics::ID id) {
     case vmIntrinsics::_floor:
     case vmIntrinsics::_ceil:
     case vmIntrinsics::_rint:
-    case vmIntrinsics::_roundD:
       return cpu_supports_rounding();
 
     case vmIntrinsics::_bitCount_i:
@@ -136,9 +135,13 @@ bool JeandleIntrinsicLowering::is_supported(vmIntrinsics::ID id) {
 
     // Integer/Long.compress/expand lower to BMI2 PEXT/PDEP (see
     // lower_bit_shuffle). There is no dedicated VM flag gate for these IDs
-    // in vmIntrinsics::disabled_by_jvm_flags() -- like C2, whose x86 match
-    // rules predicate the CompressBits/ExpandBits nodes on BMI2 support at
-    // instruction selection, the BMI2 decision is made here. With
+    // in vmIntrinsics::disabled_by_jvm_flags(). C2 gates the
+    // CompressBits/ExpandBits match rules on the raw hardware feature bit
+    // (VM_Version::supports_bmi2() in Matcher::match_rule_supported) and
+    // does not read UseBMI2Instructions; Jeandle instead keys on the flag,
+    // deliberately: apply_vm_flag_feature_overrides() strips the LLVM
+    // "bmi2" target feature whenever the flag is off, so honoring the same
+    // flag here keeps the gate and the emitted intrinsic consistent. With
     // -XX:-UseBMI2Instructions the call falls back to the normal invoke,
     // whose inlinable Java body implements the exact same bit semantics.
     case vmIntrinsics::_compress_i:
@@ -223,9 +226,12 @@ bool JeandleIntrinsicLowering::is_supported(vmIntrinsics::ID id) {
     case vmIntrinsics::_dsignum:
     case vmIntrinsics::_fsignum:
 
-    // Math.round(float) uses integer significand rounding and a saturating cast,
-    // neither of which requires SSE4.1. Opt-out uses DisableIntrinsic.
+    // Math.round(float/double) implement the integer significand algorithm
+    // of java.lang.Math.round with a saturating-cast fallback (see
+    // lower_round); neither requires SSE4.1, matching C2's always-supported
+    // Op_RoundF/Op_RoundD on x86-64. Opt-out uses DisableIntrinsic.
     case vmIntrinsics::_roundF:
+    case vmIntrinsics::_roundD:
 
     // min/max: no CPU gating needed. llvm.smin/smax always lower to a
     // compare+select/cmov sequence and llvm.minimum/maximum always lower to
@@ -2640,29 +2646,66 @@ bool JeandleIntrinsicLowering::lower_signum(vmIntrinsics::ID id) {
 }
 
 // ---- lower_round ----
-// For float, round the signed IEEE significand using the same integer algorithm as
-// java.lang.Math.round. Adding 0.5 in floating-point would double-round near
-// half-integers and at large magnitudes. A valid shift gives
-// ((signed_significand >> shift) + 1) >> 1, with ties toward +infinity.
-// Outside that range the value is tiny (rounds to zero), already integral,
-// or non-finite; Java's saturating cast handles all three cases exactly.
+// Both widths round the signed IEEE significand using the same integer
+// algorithm as java.lang.Math.round -- the same algorithm C2's
+// round_float/round_double implement on x86. Adding 0.5 in floating-point
+// would double-round near half-integers and at large magnitudes. A valid
+// shift gives ((signed_significand >> shift) + 1) >> 1, with ties toward
+// +infinity. The guarded-branch form keeps the in-range fast path free of
+// any conversion instruction: the saturating cast for out-of-range inputs
+// (tiny values that round to zero, already-integral magnitudes, infinities,
+// and NaN, which the cast maps to 0) sits in the rarely-taken block, and
+// neither path needs the SSE4.1 roundsd of a floor-based sequence.
 bool JeandleIntrinsicLowering::lower_round(vmIntrinsics::ID id) {
   llvm::LLVMContext& ctx = *_interp->_context;
   llvm::IRBuilder<>& builder = _interp->_ir_builder;
   if (id == vmIntrinsics::_roundD) {
-    // Decide the tie before adding one to floor(a), keeping that increment
-    // exact even where adding 0.5 to a would double-round. NaN reaches the
-    // saturating conversion as NaN and becomes zero.
+    // shift = 1074 - biasedExp, where 1074 is SIGNIFICAND_WIDTH - 2 +
+    // EXP_BIAS for double. The in-range test matches Java's (shift & -64)
+    // == 0, i.e. 0 <= shift < 64.
     llvm::Value* a = _interp->_jvm->dpop();
     llvm::Type* fp_ty = builder.getDoubleTy();
-    llvm::Value* t = builder.CreateIntrinsic(llvm::Intrinsic::floor, {fp_ty}, {a});
-    llvm::Value* frac = builder.CreateFSub(a, t);
-    llvm::Value* ge = builder.CreateFCmp(llvm::CmpInst::FCMP_OGE, frac,
-                                       llvm::ConstantFP::get(fp_ty, 0.5));
-    llvm::Value* t1 = builder.CreateFAdd(t, llvm::ConstantFP::get(fp_ty, 1.0));
-    llvm::Value* r = builder.CreateSelect(ge, t1, t);
-    llvm::Value* res = builder.CreateIntrinsic(
-        llvm::Intrinsic::fptosi_sat, {builder.getInt64Ty(), fp_ty}, {r});
+    llvm::Type* int_ty = builder.getInt64Ty();
+    llvm::Value* bits = builder.CreateBitCast(a, int_ty, "round.bits");
+    llvm::Value* exponent = builder.CreateAnd(
+        builder.CreateLShr(bits, 52), 0x7ff);
+    llvm::Value* shift = builder.CreateSub(
+        llvm::ConstantInt::get(int_ty, 1074),
+        exponent, "round.shift");
+    llvm::Value* in_range = builder.CreateICmpULT(
+        shift, llvm::ConstantInt::get(int_ty, 64));
+
+    llvm::BasicBlock* round_bb =
+        llvm::BasicBlock::Create(ctx, "round_significand", _interp->_llvm_func);
+    llvm::BasicBlock* cast_bb =
+        llvm::BasicBlock::Create(ctx, "round_cast", _interp->_llvm_func);
+    llvm::BasicBlock* merge_bb =
+        llvm::BasicBlock::Create(ctx, "round_merge", _interp->_llvm_func);
+    builder.CreateCondBr(in_range, round_bb, cast_bb);
+
+    builder.SetInsertPoint(round_bb);
+    llvm::Value* significand = builder.CreateOr(
+        builder.CreateAnd(bits, 0x000fffffffffffffLL), 0x0010000000000000LL);
+    llvm::Value* negative = builder.CreateICmpSLT(
+        bits, llvm::ConstantInt::get(int_ty, 0));
+    significand = builder.CreateSelect(negative, builder.CreateNeg(significand), significand);
+    // Only evaluate the variable shift under the unsigned range guard:
+    // LLVM shifts by the bit width or more produce poison, unlike Java shifts.
+    llvm::Value* rounded = builder.CreateAShr(
+        builder.CreateAdd(builder.CreateAShr(significand, shift),
+                          llvm::ConstantInt::get(int_ty, 1)), 1);
+    builder.CreateBr(merge_bb);
+
+    builder.SetInsertPoint(cast_bb);
+    llvm::Value* converted = builder.CreateIntrinsic(
+        llvm::Intrinsic::fptosi_sat, {int_ty, fp_ty}, {a});
+    builder.CreateBr(merge_bb);
+
+    builder.SetInsertPoint(merge_bb);
+    _interp->_block->set_tail_llvm_block(merge_bb);
+    llvm::PHINode* res = builder.CreatePHI(int_ty, 2, "round.result");
+    res->addIncoming(rounded, round_bb);
+    res->addIncoming(converted, cast_bb);
     _interp->_jvm->lpush(res);
     return true;
   }
