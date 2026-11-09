@@ -61,11 +61,25 @@ public class TestPEACopyPackedSource {
         if (!interpreter) {
             output.shouldContain("store atomic i16");
             output.shouldContain("@jeandle.copy");
-            for (String method : List.of("testInteriorByte", "testLeadingByte", "testWholeValue")) {
+            for (String method : List.of("testInteriorByte", "testLeadingByte")) {
                 output.shouldMatch("PEA stats @java_lang_JeandlePEACopyPackedSource_" + method
                         + "\\(\\)I[^\\r\\n]*: NeverEscapes=0 PartiallyEscapes=2"
                         + " AlwaysEscapes=0 CopyFolds=0");
             }
+            output.shouldMatch("PEA stats @java_lang_JeandlePEACopyPackedSource_testWholeValue"
+                    + "\\(\\)I[^\\r\\n]*: NeverEscapes=" + (fold ? 1 : 0)
+                    + " PartiallyEscapes=" + (fold ? 1 : 2)
+                    + " AlwaysEscapes=0 CopyFolds=" + (fold ? 1 : 0));
+            for (String method : List.of("testReplacedGroupDefault", "testReplacedGroupStore")) {
+                output.shouldMatch("PEA stats @java_lang_JeandlePEACopyPackedSource_" + method
+                        + "\\(\\)I[^\\r\\n]*: NeverEscapes=" + (fold ? 3 : 0)
+                        + " PartiallyEscapes=" + (fold ? 0 : 3)
+                        + " AlwaysEscapes=0 CopyFolds=" + (fold ? 2 : 0));
+            }
+            output.shouldMatch("PEA stats @java_lang_JeandlePEACopyPackedSource_testShiftedGroupReplay"
+                    + "[^\\r\\n]*: NeverEscapes=" + (fold ? 1 : 0)
+                    + " PartiallyEscapes=" + (fold ? 1 : 2)
+                    + " AlwaysEscapes=0 CopyFolds=" + (fold ? 1 : 0));
             output.shouldMatch("PEA stats @java_lang_JeandlePEACopyPackedSource_testDisjointWrite"
                     + "\\(\\)I[^\\r\\n]*CopyFolds=" + (fold ? 1 : 0));
         }

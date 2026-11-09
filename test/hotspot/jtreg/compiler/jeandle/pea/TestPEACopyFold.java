@@ -91,21 +91,20 @@ public class TestPEACopyFold {
             assertFold(run, denseEscape, 1);
             Asserts.assertEquals(run.report(denseEscape).round(0).partiallyEscapes(), 1,
                     "dense clone destination replays at the publish");
-            // The clone fast path folds, then joins the native slow path.
-            // Both identities remain real across that join, exercising replay.
-            assertFold(run, cloneInstance, 0);
-            Asserts.assertEquals(run.report(cloneInstance).round(0).partiallyEscapes(), 2,
-                    "instance clone source and destination replay at the slow-path join");
+            // Exact receiver and immutable Klass facts remove the impossible
+            // native slow path, so both local identities can remain virtual.
+            assertFold(run, cloneInstance, 2);
+            Asserts.assertEquals(run.report(cloneInstance).round(0).partiallyEscapes(), 0,
+                    "local instance clones have no escaping result merge");
             // A CONCRETE source folds by per-field semantic loads of the
-            // source's declared fields; only the destination is virtual, and
-            // the slow-path join keeps it partially escaping.
-            assertFold(run, cloneInstanceConcrete, 0);
+            // source's declared fields; only the destination is virtual.
+            assertFold(run, cloneInstanceConcrete, 1);
             Asserts.assertEquals(
-                    run.report(cloneInstanceConcrete).round(0).partiallyEscapes(), 1,
-                    "concrete clone destination replays at the slow-path join");
+                    run.report(cloneInstanceConcrete).round(0).partiallyEscapes(), 0,
+                    "concrete clone destination remains virtual");
             // Ten declared fields — beyond C2's ArrayCopyLoadStoreMaxElem —
             // still fold: the PEA query takes the complete layout.
-            assertFold(run, cloneManyFields, 0);
+            assertFold(run, cloneManyFields, 1);
         }
     }
 

@@ -55,6 +55,37 @@ public class JeandlePEACopyPackedSource {
         return dst[0] & 0xff;
     }
 
+    public static int testReplacedGroupDefault() {
+        byte[] src = new byte[2];
+        byte[] dst = new byte[2];
+        byte[] last = new byte[1];
+        StringUTF16.putChar(dst, 0, 0x2211);
+        src[0] = 7;
+        System.arraycopy(src, 0, dst, 0, 2);
+        System.arraycopy(dst, 1, last, 0, 1);
+        return last[0];
+    }
+
+    public static int testReplacedGroupStore() {
+        byte[] src = new byte[2];
+        byte[] dst = new byte[2];
+        byte[] last = new byte[1];
+        StringUTF16.putChar(dst, 0, 0x2211);
+        src[0] = 7;
+        System.arraycopy(src, 0, dst, 0, 2);
+        dst[1] = 41;
+        System.arraycopy(dst, 1, last, 0, 1);
+        return last[0];
+    }
+
+    public static byte[] testShiftedGroupReplay() {
+        byte[] src = new byte[2];
+        byte[] dst = new byte[4];
+        StringUTF16.putChar(src, 0, 0x2211);
+        System.arraycopy(src, 0, dst, 1, 2);
+        return dst;
+    }
+
     public static void main(String[] args) throws Exception {
         // Initialize the trusted intrinsic holder before compiling the targets.
         Class.forName("java.lang.StringUTF16", true, null);
@@ -63,6 +94,13 @@ public class JeandlePEACopyPackedSource {
         check(testLeadingByte(), bigEndian ? 0x22 : 0x11);
         check(testWholeValue(), bigEndian ? 0x2211 : 0x1122);
         check(testDisjointWrite(), 0);
+        check(testReplacedGroupDefault(), 0);
+        check(testReplacedGroupStore(), 41);
+        byte[] shifted = testShiftedGroupReplay();
+        check(shifted[0], 0);
+        check(shifted[1] & 0xff, bigEndian ? 0x22 : 0x11);
+        check(shifted[2] & 0xff, bigEndian ? 0x11 : 0x22);
+        check(shifted[3], 0);
         System.out.println("PACKED-COPY-PASSED");
     }
 

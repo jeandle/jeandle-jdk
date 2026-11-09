@@ -157,9 +157,11 @@ public class TestObjectClone {
         if (!reduceInitialCardMarks) {
             FileCheck optimized = new FileCheck(dumpPath.toString(),
                     ExactCloneable.class.getDeclaredMethod("copy"), true);
-            optimized.checkPatternAnywhere(
-                    "call void (?:@JeandleRuntime_clone|inttoptr \\(i64 -?[0-9]+ to ptr\\))"
-                    + "\\(ptr addrspace\\(1\\).*ptr addrspace\\(1\\).*i64 [0-9]+\\)");
+            // Escaping clones replay semantic field state with ordinary GC
+            // barriers even when the raw bulk-copy path requires a runtime call.
+            optimized.checkPatternAnywhere("pea\\.copy\\.elem");
+            optimized.checkPatternAnywhere("store atomic.*pea\\.matslot");
+            optimized.checkNotPattern("call.*@JeandleRuntime_clone");
             optimized.checkNotPattern(
                     "call void @StubRoutines_jlong_disjoint_arraycopy");
         }

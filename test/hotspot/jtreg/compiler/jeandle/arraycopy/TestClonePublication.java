@@ -93,10 +93,11 @@ public class TestClonePublication {
             // into per-field loads: the copy fold carries field state with
             // no instance field-count bound (Graal parity), so a large
             // class no longer keeps the bulk copy by size.
-            optimized.checkPattern("store atomic i32 %pea\\.copy\\.elem");
-            // The clone's memory barrier still follows the copied payload
-            // (not necessarily on the next line: the copy fold's replay
-            // path may interleave a klass-cache barrier store).
+            int fields = holder == Scalar.class ? 1 : 12;
+            for (int field = 0; field < fields; field++) {
+                optimized.checkPattern("store atomic i32 %pea\\.copy\\.elem");
+            }
+            // Publication ordering must cover the final payload write.
             optimized.checkPattern(Platform.isAArch64()
                     ? "call void @llvm\\.aarch64\\.dmb\\(i32 10\\)"
                     : "fence release");

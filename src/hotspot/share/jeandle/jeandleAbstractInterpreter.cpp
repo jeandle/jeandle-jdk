@@ -2900,26 +2900,8 @@ llvm::Value* JeandleAbstractInterpreter::load_object_klass(llvm::Value* obj) {
     return klass;
   }
 
-  // An EXACT static type pins the receiver's runtime klass: reuse the
-  // constant Klass instead of emitting a header load. Like the allocation
-  // shortcut above, this removes the klass load (and every guard that
-  // compares it) before optimization even runs; C2's type system provides
-  // the same fact, and Jeandle's !java-klass-exact metadata carries it.
-  // Without the shortcut the load only folds pre-PEA when later uses of the
-  // receiver do not interfere with ConstantFieldFolding's query, leaving
-  // the clone size dynamic and the whole copy-fold chain conservative.
-  llvm::jeandle::JavaType jt =
-      llvm::jeandle::getJavaType(obj, nullptr, nullptr, nullptr);
-  if (jt.isKnown() && jt.Exact) {
-    uintptr_t klass_ptr = JeandleVMCallback::get_klass_constant(jt.Klass);
-    if (klass_ptr != 0) {
-      return llvm::ConstantExpr::getIntToPtr(
-          llvm::ConstantInt::get(llvm::Type::getInt64Ty(*_context), klass_ptr),
-          llvm::PointerType::get(*_context,
-                                 llvm::jeandle::AddrSpace::CHeapAddrSpace));
-    }
-  }
-
+  // Loop PHIs are completed after their bodies are parsed. Defer type-based
+  // Klass folding to LLVM, where all incoming values and guards are available.
   llvm::CallInst* loaded_klass = call_java_op("jeandle.load_klass", {obj});
   loaded_klass->setName("arraycopy_klass");
   return loaded_klass;
