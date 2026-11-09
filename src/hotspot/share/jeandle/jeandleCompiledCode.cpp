@@ -592,6 +592,19 @@ void JeandleCompiledCode::decide_install_layout(uint64_t elf_text_size,
     // max_alignment, aligning each section's *relative* offset is equivalent to
     // aligning its absolute address.
     _code_buffer.set_const_section_alignment((int)_const_plan.max_alignment());
+    // Publish the same alignment to the compilation. CodeBuffer::expand()
+    // builds its replacement buffer through the CodeBuffer constructor, and
+    // that constructor takes the consts alignment from
+    // jeandle_const_section_alignment(), i.e. from this JeandleCompilation,
+    // not from _code_buffer. The legacy path publishes it inside
+    // JeandleAssembler::emit_consts(); the planned path copies the sections
+    // itself in emit_planned_const_sections() and never goes through there.
+    // Without this, the first expansion of any section (typically stubs)
+    // re-divides the blob with sizeof(jdouble)-aligned consts while
+    // _code_buffer still requires max_alignment: debug builds stop at the
+    // guarantee in CodeBuffer::verify_section_allocation(), product builds
+    // install misaligned vector constants.
+    JeandleCompilation::current()->set_const_section_alignment((int)_const_plan.max_alignment());
 
     layout.consts_payload       = (size_t)_const_plan.total_size();
     layout.used_legacy_fallback = false;
@@ -622,6 +635,15 @@ void JeandleCompiledCode::decide_install_layout(uint64_t elf_text_size,
                       (unsigned long long)entry._consts_offset);
       }
     }
+  }
+
+  // Testing only: start the stubs section empty, so the first stub this
+  // method emits goes through CodeBuffer::expand(). This makes the expansion
+  // path, which re-divides every section including a planned consts section,
+  // reachable on demand instead of only when a workload happens to outgrow
+  // the stubs reservation.
+  if (JeandleStressCodeBufferExpand) {
+    layout.stubs_payload = 0;
   }
 
   // CodeBuffer::initialize(inst_size, locs, stubs, oop_recorder) forwards
@@ -737,6 +759,13 @@ void JeandleCompiledCode::emit_planned_const_sections(JeandleAssembler& assemble
   if (!_const_plan.is_valid() || _const_plan.is_empty()) {
     return;
   }
+
+  // The alignment was published to both _code_buffer and the compilation in
+  // decide_install_layout(). Check the compilation-level value: it is the one
+  // CodeBuffer::expand() reads, so a broken link fails here, next to its
+  // cause, rather than at the first expansion.
+  assert(JeandleCompilation::current()->const_section_alignment() >= (int)_const_plan.max_alignment(),
+         "planned consts alignment must be visible to CodeBuffer::expand()");
 
   address consts_start = _code_buffer.consts()->start();
   // NOTE: set_const_section_alignment() must not be called here. It is too late

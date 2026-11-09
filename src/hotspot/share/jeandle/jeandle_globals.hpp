@@ -98,6 +98,10 @@
           "Force the const section planner to fail so that the legacy "     \
           "6144*wordSize consts reservation is exercised (testing only).")  \
                                                                             \
+  develop(bool, JeandleStressCodeBufferExpand, false,                       \
+          "Start the stubs section of every Jeandle CodeBuffer empty so "   \
+          "that the first emitted stub expands the buffer (testing only).") \
+                                                                            \
                                                                             // end of JEANDLE_FLAGS
 
 DECLARE_FLAGS(JEANDLE_FLAGS)
