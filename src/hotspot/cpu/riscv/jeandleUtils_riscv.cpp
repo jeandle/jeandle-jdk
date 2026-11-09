@@ -93,6 +93,9 @@ void JeandleFuncSig::setup_description(llvm::Function* func, ciMethod* method, b
     func->addFnAttr(llvm::Attribute::get(func->getContext(), llvm::jeandle::Attribute::UseCompressedOops));
   }
 
+  // HotSpot locates caller frames using a fixed stack-pointer adjustment.
+  func->addFnAttr("no-realign-stack");
+
   // Always disable tail call for jeandle, to ensure the correct stack states.
   func->addFnAttr("disable-tail-calls", "true");
 }

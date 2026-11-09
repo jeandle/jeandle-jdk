@@ -244,3 +244,228 @@ void JeandleRuntimeRoutine::generate_zero_heap_words_stub() {
   _routine_entry[_zero_heap_words_stub] = entry;
   _gc_leaf_routines.insert(entry);
 }
+
+// C ABI: (UTF16 source, Latin1 destination, i32 count) -> count or zero.
+// SIMD blocks are committed only after validation. Dirty blocks preserve
+// exactly the legal prefix before the first unencodable character.
+void JeandleRuntimeRoutine::generate_string_compress_stub() {
+  ResourceMark rm;
+  CodeBuffer buffer(_string_compress_stub, 2048, 64);
+  MacroAssembler* masm = new MacroAssembler(&buffer);
+  const Register src = c_rarg0;
+  const Register dst = c_rarg1;
+  const Register count = c_rarg2;
+  // c_rarg3 stays distinct from count under both x64 calling conventions;
+  // a fixed register choice would alias c_rarg2 on Windows.
+  const Register original_count = c_rarg3;
+  Label vector16, vector8, commit8, dirty32, dirty16, dirty8, scalar, scalar_loop, success, failure, done;
+  address start = __ pc();
+
+  __ movl(original_count, count);
+  if (UseAVX >= 2 && MaxVectorSize >= 32) {
+    Label vector_loop;
+    __ cmpl(count, 8);
+    __ jcc(Assembler::less, scalar);
+    __ movl(rax, 0xff00);
+    __ movdl(xmm3, rax);
+    __ vpbroadcastw(xmm3, xmm3, Assembler::AVX_256bit);
+    __ bind(vector_loop);
+    __ cmpl(count, 32);
+    __ jcc(Assembler::less, vector16);
+    __ vmovdqu(xmm0, Address(src, 0));
+    __ vmovdqu(xmm1, Address(src, 32));
+    __ vpor(xmm2, xmm0, xmm1, Assembler::AVX_256bit);
+    __ vptest(xmm2, xmm3, Assembler::AVX_256bit);
+    __ jcc(Assembler::notZero, dirty32);
+    __ vpackuswb(xmm0, xmm0, xmm1, Assembler::AVX_256bit);
+    // Packing is local to 128-bit lanes; restore source character order.
+    __ vpermq(xmm0, xmm0, 0xd8, Assembler::AVX_256bit);
+    __ vmovdqu(Address(dst, 0), xmm0);
+    __ addptr(src, 64);
+    __ addptr(dst, 32);
+    __ subl(count, 32);
+    __ jmp(vector_loop);
+    __ bind(vector16);
+    __ cmpl(count, 16);
+    __ jcc(Assembler::less, vector8);
+    __ vmovdqu(xmm0, Address(src, 0));
+    __ vptest(xmm0, xmm3, Assembler::AVX_256bit);
+    __ jcc(Assembler::notZero, dirty16);
+    __ vpackuswb(xmm0, xmm0, xmm0, Assembler::AVX_256bit);
+    __ vpermq(xmm0, xmm0, 0xd8, Assembler::AVX_256bit);
+    __ movdqu(Address(dst, 0), xmm0);
+    __ addptr(src, 32);
+    __ addptr(dst, 16);
+    __ subl(count, 16);
+  } else if (UseSSE42Intrinsics) {
+    Label vector_loop;
+    __ cmpl(count, 8);
+    __ jcc(Assembler::less, scalar);
+    __ movl(rax, 0xff00ff00);
+    __ movdl(xmm3, rax);
+    __ pshufd(xmm3, xmm3, 0);
+    __ bind(vector_loop);
+    __ cmpl(count, 16);
+    __ jcc(Assembler::less, vector8);
+    __ movdqu(xmm0, Address(src, 0));
+    __ movdqu(xmm1, Address(src, 16));
+    __ movdqu(xmm2, xmm0);
+    __ por(xmm2, xmm1);
+    __ ptest(xmm2, xmm3);
+    __ jcc(Assembler::notZero, dirty16);
+    __ packuswb(xmm0, xmm1);
+    __ movdqu(Address(dst, 0), xmm0);
+    __ addptr(src, 32);
+    __ addptr(dst, 16);
+    __ subl(count, 16);
+    __ jmp(vector_loop);
+  }
+
+  if ((UseAVX >= 2 && MaxVectorSize >= 32) || UseSSE42Intrinsics) {
+    __ bind(vector8);
+    __ cmpl(count, 8);
+    __ jcc(Assembler::less, scalar);
+    __ movdqu(xmm0, Address(src, 0));
+    if (UseAVX > 0) {
+      __ vptest(xmm0, xmm3, Assembler::AVX_128bit);
+    } else {
+      __ ptest(xmm0, xmm3);
+    }
+    __ jcc(Assembler::notZero, dirty8);
+    __ bind(commit8);
+    // Commit exactly eight bytes only after validating all eight words.
+    if (UseAVX > 0) {
+      __ vpackuswb(xmm0, xmm0, xmm0, Assembler::AVX_128bit);
+    } else {
+      __ packuswb(xmm0, xmm0);
+    }
+    __ movq(Address(dst, 0), xmm0);
+    __ addptr(src, 16);
+    __ addptr(dst, 8);
+    __ subl(count, 8);
+    __ jmp(vector8);
+  }
+
+  __ bind(scalar);
+  __ testl(count, count);
+  __ jcc(Assembler::zero, success);
+  // Keep the validity comparison and its branch within a decode block.
+  __ align(16);
+  __ bind(scalar_loop);
+  __ load_unsigned_short(rax, Address(src, 0));
+  __ cmpl(rax, 255);
+  __ jcc(Assembler::above, failure);
+  __ movb(Address(dst, 0), rax);
+  __ addptr(src, 2);
+  __ addptr(dst, 1);
+  __ subl(count, 1);
+  __ jcc(Assembler::notZero, scalar_loop);
+  __ bind(success);
+  __ movl(rax, original_count);
+  __ jmp(done);
+  __ bind(failure);
+  __ xorl(rax, rax);
+  __ bind(done);
+  if (UseAVX > 0) {
+    __ vzeroupper();
+  }
+  __ ret(0);
+
+  // The first eight words are still in xmm0. Locate the first invalid word
+  // and commit only the valid prefix without rereading it one word at a time.
+  if ((UseAVX >= 2 && MaxVectorSize >= 32) || UseSSE42Intrinsics) {
+    __ bind(dirty8);
+    __ movdl(rax, xmm0);
+    __ testl(rax, 0xff00);
+    __ jcc(Assembler::notZero, failure);
+    if (UseAVX > 0) {
+      __ vpsrlw(xmm1, xmm0, 8, Assembler::AVX_128bit);
+      __ vpxor(xmm2, xmm2, xmm2, Assembler::AVX_128bit);
+      __ vpcmpeqw(xmm1, xmm1, xmm2, Assembler::AVX_128bit);
+      __ vpmovmskb(rax, xmm1, Assembler::AVX_128bit);
+      __ vpackuswb(xmm0, xmm0, xmm0, Assembler::AVX_128bit);
+    } else {
+      __ movdqu(xmm1, xmm0);
+      __ psrlw(xmm1, 8);
+      __ pxor(xmm2, xmm2);
+      __ pcmpeqw(xmm1, xmm2);
+      __ pmovmskb(rax, xmm1);
+      __ packuswb(xmm0, xmm0);
+    }
+    __ notl(rax);
+    __ andl(rax, 0xffff);
+    __ bsfl(rax, rax);
+    __ shrl(rax, 1);
+    __ movq(r11, xmm0);
+    Label prefix2, prefix1;
+    __ testl(rax, 4);
+    __ jcc(Assembler::zero, prefix2);
+    __ movl(Address(dst, 0), r11);
+    __ shrq(r11, 32);
+    __ addptr(dst, 4);
+    __ bind(prefix2);
+    __ testl(rax, 2);
+    __ jcc(Assembler::zero, prefix1);
+    __ movw(Address(dst, 0), r11);
+    __ shrq(r11, 16);
+    __ addptr(dst, 2);
+    __ bind(prefix1);
+    __ testl(rax, 1);
+    __ jcc(Assembler::zero, failure);
+    __ movb(Address(dst, 0), r11);
+    __ jmp(failure);
+  }
+  if (UseAVX >= 2 && MaxVectorSize >= 32) {
+    __ bind(dirty32);
+    __ vptest(xmm0, xmm3, Assembler::AVX_128bit);
+    __ jcc(Assembler::notZero, dirty8);
+    __ jmp(vector16);
+  }
+  if ((UseAVX >= 2 && MaxVectorSize >= 32) || UseSSE42Intrinsics) {
+    __ bind(dirty16);
+    if (UseAVX > 0) {
+      __ vptest(xmm0, xmm3, Assembler::AVX_128bit);
+    } else {
+      __ ptest(xmm0, xmm3);
+    }
+    __ jcc(Assembler::notZero, dirty8);
+    __ jmp(commit8);
+  }
+  masm->flush();
+
+  RuntimeStub* stub = RuntimeStub::new_runtime_stub(
+      _string_compress_stub, &buffer, (int)(__ pc() - start),
+      0 /* frame size */, nullptr /* oop maps */, false);
+  address entry = stub->entry_point();
+  _routine_entry[_string_compress_stub] = entry;
+  _gc_leaf_routines.insert(entry);
+}
+
+// C ABI: (Latin1 source, UTF16 destination, i32 count) -> void.
+void JeandleRuntimeRoutine::generate_string_inflate_stub() {
+  ResourceMark rm;
+  CodeBuffer buffer(_string_inflate_stub, 2048, 64);
+  MacroAssembler* masm = new MacroAssembler(&buffer);
+  const Register src = c_rarg0;
+  const Register dst = c_rarg1;
+  const Register len = c_rarg2;
+  // Scratch under both x64 calling conventions; never a C argument register.
+  const Register tmp = r11;
+  address start = __ pc();
+
+  __ movl(len, len);
+  __ byte_array_inflate(src, dst, len, xmm0, tmp,
+                        VM_Version::supports_avx512vlbw() && VM_Version::supports_bmi2() ? k1 : knoreg);
+  if (UseAVX > 0) {
+    __ vzeroupper();
+  }
+  __ ret(0);
+  masm->flush();
+
+  RuntimeStub* stub = RuntimeStub::new_runtime_stub(
+      _string_inflate_stub, &buffer, (int)(__ pc() - start),
+      0 /* frame size */, nullptr /* oop maps */, false);
+  address entry = stub->entry_point();
+  _routine_entry[_string_inflate_stub] = entry;
+  _gc_leaf_routines.insert(entry);
+}

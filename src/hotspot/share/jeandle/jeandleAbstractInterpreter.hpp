@@ -499,10 +499,16 @@ class JeandleAbstractInterpreter : public StackObj {
   // dimensions-array allocation. The reflection path (JeandleIntrinsicLowering::lower_new_array)
   // decodes layout_helper at runtime instead and shares emit_array_size_in_bytes.
   llvm::Value* emit_array_length(llvm::Value* array_oop);
+  // The uninitialized/defer_initialization_membar pair serves tightly coupled
+  // initializers (see the jeandle.new_array template): the caller overwrites
+  // every payload byte before the array escapes and re-issues the publication
+  // barrier itself, so the allocation skips the bulk zeroing.
   llvm::InvokeInst* emit_jeandle_newarray(
       llvm::Value* array_klass, llvm::Value* length,
       llvm::Value** return_size_val = nullptr,
-      bool deoptimize_on_exception = false);
+      bool deoptimize_on_exception = false,
+      bool uninitialized = false,
+      bool defer_initialization_membar = false);
 
   // Builds the array size_in_bytes expression shared by the bytecode and reflection
   // allocation paths. Mirrors C2's GraphKit::new_array size computation.

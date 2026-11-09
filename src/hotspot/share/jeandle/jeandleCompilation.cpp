@@ -21,6 +21,7 @@
 #include "compiler/compilerDefinitions.hpp"
 #include "jeandle/__llvmHeadersBegin__.hpp"
 #include "llvm/ADT/SmallVector.h"
+#include "llvm/Analysis/RuntimeLibcallInfo.h"
 #include "llvm/Bitcode/BitcodeReader.h"
 #include "llvm/Jeandle/Jeandle.h"
 #include "llvm/IR/CallingConv.h"
@@ -1433,6 +1434,10 @@ void JeandleCompilation::compile_module() {
     llvm::raw_svector_ostream obj_stream(obj_buffer);
 
     llvm::legacy::PassManager pm;
+    const llvm::TargetOptions& options = _target_machine->Options;
+    pm.add(new llvm::RuntimeLibraryInfoWrapper(
+        _llvm_module->getTargetTriple(), options.ExceptionModel, options.FloatABIType,
+        options.EABIVersion, options.MCOptions.ABIName, options.VecLib));
     llvm::MCContext *ctx;
 
     bool unsupported = _target_machine->addPassesToEmitMC(pm, ctx, obj_stream);
