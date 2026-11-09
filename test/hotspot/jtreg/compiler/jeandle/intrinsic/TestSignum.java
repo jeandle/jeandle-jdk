@@ -88,14 +88,17 @@ public class TestSignum {
         doubleChecker.checkPattern("define hotspotcc double .*TestSignum.*double_signum.*");
         doubleChecker.checkNot("llvm.copysign");
         doubleChecker.checkNot("fcmp ueq");
-        doubleChecker.checkNot("select i1");
+        // The raw dump embeds the whole template module, whose String JavaOps
+        // contain integer-typed selects; qualify by operand type so only the
+        // signum select-chain shape is rejected.
+        doubleChecker.checkNotPattern("select i1 .* double .* double");
 
         floatChecker = new FileCheck(controlDump,
                 TestWrapper.class.getMethod("float_signum", float.class), false);
         floatChecker.checkPattern("define hotspotcc float .*TestSignum.*float_signum.*");
         floatChecker.checkNot("llvm.copysign");
         floatChecker.checkNot("fcmp ueq");
-        floatChecker.checkNot("select i1");
+        floatChecker.checkNotPattern("select i1 .* float .* float");
     }
 
     private static OutputAnalyzer runSubprocess(String dumpDir, String signumFlag) throws Exception {
