@@ -429,6 +429,23 @@ public class TestVectorizedHashCode {
         if (dynDumpContains(dumpsA, "<16 x i32>")) {
             throw new AssertionError("UseAVX=2 IR unexpectedly retains 16-lane hash IR");
         }
+        // Tier boundaries: 7 stays on the scalar tail, 31 takes the single-
+        // accumulator mid tier (its blocks of eight fit three short chains),
+        // and 32 enters the grouped vector loop.
+        boolean const7HasVector = dumpsA.stream()
+                .filter(p -> p.getFileName().toString().contains("hashByteConst7_"))
+                .anyMatch(q -> dumpText(q).contains("<8 x i32>"));
+        if (const7HasVector) {
+            throw new AssertionError("constant length 7 unexpectedly uses a vector tier");
+        }
+        for (String boundary : new String[]{"hashByteConst31_", "hashByteConst32_"}) {
+            boolean hasVector = dumpsA.stream()
+                    .filter(p -> p.getFileName().toString().contains(boundary))
+                    .anyMatch(q -> dumpText(q).contains("mul <8 x i32>"));
+            if (!hasVector) {
+                throw new AssertionError(boundary + " misses the vector tier");
+            }
+        }
         // The trailing underscore matters: "hashByteConst1" is a prefix of the
         // Const15/16/17 dumps, which legitimately keep vector IR.
         boolean constSmallHasVector = dumpsA.stream()
@@ -461,9 +478,9 @@ public class TestVectorizedHashCode {
             if (!dynDumpContains(dumpsB, "mul <16 x i32>")) {
                 throw new AssertionError("UseAVX=3 IR has no 16-lane hash vector multiply");
             }
-            if (!dynDumpContains(dumpsB, "mul <8 x i32>")) {
-                throw new AssertionError("UseAVX=3 IR lost the 8-lane remainder tier");
-            }
+            // The grouped 8-lane tier folds away under AVX-512 (lengths >= 32
+            // take the 16-lane tier), but the mid tier still serves lengths
+            // 8..31, so an 8-lane multiply may legitimately remain.
         }
     }
 
@@ -483,6 +500,9 @@ public class TestVectorizedHashCode {
                 // never become dumpable compilation roots of their own.
                 "-XX:CompileCommand=dontinline,compiler.jeandle.intrinsic.TestVectorizedHashCode::hashByteDyn",
                 "-XX:CompileCommand=dontinline,compiler.jeandle.intrinsic.TestVectorizedHashCode::hashByteConst1",
+                "-XX:CompileCommand=dontinline,compiler.jeandle.intrinsic.TestVectorizedHashCode::hashByteConst7",
+                "-XX:CompileCommand=dontinline,compiler.jeandle.intrinsic.TestVectorizedHashCode::hashByteConst31",
+                "-XX:CompileCommand=dontinline,compiler.jeandle.intrinsic.TestVectorizedHashCode::hashByteConst32",
                 "-XX:CompileCommand=dontinline,compiler.jeandle.intrinsic.TestVectorizedHashCode::hashFreshConstant",
                 "-XX:CompileCommand=dontinline,compiler.jeandle.intrinsic.TestVectorizedHashCode::hashFreshDynamicLen",
                 TestVectorizedHashCode.class.getName(), "functional");
