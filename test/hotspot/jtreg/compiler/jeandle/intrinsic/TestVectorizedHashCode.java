@@ -414,11 +414,13 @@ public class TestVectorizedHashCode {
         jdk.test.lib.process.OutputAnalyzer outA = runForensicsFork(dirA, "-XX:UseAVX=2");
         java.util.List<java.nio.file.Path> dumpsA = optimizedDumps(dirA);
         // The op call is visible in the pre-optimization dump; phase-1
-        // lowering has inlined (and deleted) it by the optimized dump.
+        // lowering has inlined (and deleted) it by the optimized dump. Match
+        // a call line, not the bare symbol: every module dump carries the
+        // op's definition even where the intrinsic was declined.
         try (java.util.stream.Stream<java.nio.file.Path> all =
                      java.nio.file.Files.walk(dirA)) {
             boolean foundOpCall = all.filter(p -> p.getFileName().toString().endsWith(".ll"))
-                                     .anyMatch(TestVectorizedHashCode::dumpContainsOpCall);
+                                     .anyMatch(TestVectorizedHashCode::dumpCallsOp);
             if (!foundOpCall) {
                 throw new AssertionError("compiled IR does not call jeandle.vectorized_hashcode");
             }
@@ -538,8 +540,8 @@ public class TestVectorizedHashCode {
         }
     }
 
-    private static boolean dumpContainsOpCall(java.nio.file.Path path) {
-        return dumpText(path).contains("@jeandle.vectorized_hashcode");
+    private static boolean dumpCallsOp(java.nio.file.Path path) {
+        return dumpText(path).matches("(?s).*call[^\\n]*@jeandle\\.vectorized_hashcode\\(.*");
     }
 
     private static String dumpText(java.nio.file.Path path) {
