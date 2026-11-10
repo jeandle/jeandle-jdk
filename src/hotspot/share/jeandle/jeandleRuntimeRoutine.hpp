@@ -354,7 +354,182 @@
       llvm::Type::getVoidTy(context),                                               \
       llvm::PointerType::get(context, llvm::jeandle::AddrSpace::JavaHeapAddrSpace), \
       llvm::PointerType::get(context, llvm::jeandle::AddrSpace::JavaHeapAddrSpace), \
-      llvm::Type::getInt32Ty(context))                                              \
+      llvm::IntegerType::get(context, BitsPerWord))                                 \
+                                                                                    \
+  def(StubRoutines_md5_implCompress,                                                \
+      StubRoutines::md5_implCompress(),                                             \
+      true,                                                                         \
+      true,                                                                         \
+      llvm::Type::getVoidTy(context),                                               \
+      llvm::PointerType::get(context, llvm::jeandle::AddrSpace::JavaHeapAddrSpace), \
+      llvm::PointerType::get(context, llvm::jeandle::AddrSpace::JavaHeapAddrSpace)) \
+                                                                                    \
+  /* x86 MD5 stores ofs/limit with movl; other platforms consume native words. */    \
+  def(StubRoutines_md5_implCompressMB,                                              \
+      StubRoutines::md5_implCompressMB(),                                           \
+      true,                                                                         \
+      true,                                                                         \
+      llvm::Type::getInt32Ty(context),                                              \
+      llvm::PointerType::get(context, llvm::jeandle::AddrSpace::JavaHeapAddrSpace), \
+      llvm::PointerType::get(context, llvm::jeandle::AddrSpace::JavaHeapAddrSpace), \
+      llvm::IntegerType::get(context, X86_ONLY(32) NOT_X86(BitsPerWord)),             \
+      llvm::IntegerType::get(context, X86_ONLY(32) NOT_X86(BitsPerWord)))             \
+                                                                                    \
+  def(StubRoutines_sha1_implCompressMB,                                             \
+      StubRoutines::sha1_implCompressMB(),                                          \
+      true,                                                                         \
+      true,                                                                         \
+      llvm::Type::getInt32Ty(context),                                              \
+      llvm::PointerType::get(context, llvm::jeandle::AddrSpace::JavaHeapAddrSpace), \
+      llvm::PointerType::get(context, llvm::jeandle::AddrSpace::JavaHeapAddrSpace), \
+      llvm::IntegerType::get(context, BitsPerWord),                                 \
+      llvm::IntegerType::get(context, BitsPerWord))                                 \
+                                                                                    \
+  def(StubRoutines_sha256_implCompressMB,                                           \
+      StubRoutines::sha256_implCompressMB(),                                        \
+      true,                                                                         \
+      true,                                                                         \
+      llvm::Type::getInt32Ty(context),                                              \
+      llvm::PointerType::get(context, llvm::jeandle::AddrSpace::JavaHeapAddrSpace), \
+      llvm::PointerType::get(context, llvm::jeandle::AddrSpace::JavaHeapAddrSpace), \
+      llvm::IntegerType::get(context, BitsPerWord),                                 \
+      llvm::IntegerType::get(context, BitsPerWord))                                 \
+                                                                                    \
+  def(StubRoutines_sha512_implCompressMB,                                           \
+      StubRoutines::sha512_implCompressMB(),                                        \
+      true,                                                                         \
+      true,                                                                         \
+      llvm::Type::getInt32Ty(context),                                              \
+      llvm::PointerType::get(context, llvm::jeandle::AddrSpace::JavaHeapAddrSpace), \
+      llvm::PointerType::get(context, llvm::jeandle::AddrSpace::JavaHeapAddrSpace), \
+      llvm::IntegerType::get(context, BitsPerWord),                                 \
+      llvm::IntegerType::get(context, BitsPerWord))                                 \
+                                                                                    \
+  def(StubRoutines_sha3_implCompressMB,                                             \
+      StubRoutines::sha3_implCompressMB(),                                          \
+      true,                                                                         \
+      true,                                                                         \
+      llvm::Type::getInt32Ty(context),                                              \
+      llvm::PointerType::get(context, llvm::jeandle::AddrSpace::JavaHeapAddrSpace), \
+      llvm::PointerType::get(context, llvm::jeandle::AddrSpace::JavaHeapAddrSpace), \
+      llvm::IntegerType::get(context, BitsPerWord),                                 \
+      llvm::IntegerType::get(context, BitsPerWord),                                 \
+      llvm::IntegerType::get(context, BitsPerWord))                                 \
+                                                                                    \
+  def(StubRoutines_aescrypt_encryptBlock,                                           \
+      StubRoutines::aescrypt_encryptBlock(),                                        \
+      true,                                                                         \
+      true,                                                                         \
+      llvm::Type::getVoidTy(context),                                               \
+      llvm::PointerType::get(context, llvm::jeandle::AddrSpace::JavaHeapAddrSpace), \
+      llvm::PointerType::get(context, llvm::jeandle::AddrSpace::JavaHeapAddrSpace), \
+      llvm::PointerType::get(context, llvm::jeandle::AddrSpace::JavaHeapAddrSpace)) \
+                                                                                    \
+  def(StubRoutines_aescrypt_decryptBlock,                                           \
+      StubRoutines::aescrypt_decryptBlock(),                                        \
+      true,                                                                         \
+      true,                                                                         \
+      llvm::Type::getVoidTy(context),                                               \
+      llvm::PointerType::get(context, llvm::jeandle::AddrSpace::JavaHeapAddrSpace), \
+      llvm::PointerType::get(context, llvm::jeandle::AddrSpace::JavaHeapAddrSpace), \
+      llvm::PointerType::get(context, llvm::jeandle::AddrSpace::JavaHeapAddrSpace)) \
+                                                                                    \
+  def(StubRoutines_cipherBlockChaining_encryptAESCrypt,                             \
+      StubRoutines::cipherBlockChaining_encryptAESCrypt(),                          \
+      true,                                                                         \
+      true,                                                                         \
+      llvm::Type::getInt32Ty(context),                                              \
+      llvm::PointerType::get(context, llvm::jeandle::AddrSpace::JavaHeapAddrSpace), \
+      llvm::PointerType::get(context, llvm::jeandle::AddrSpace::JavaHeapAddrSpace), \
+      llvm::PointerType::get(context, llvm::jeandle::AddrSpace::JavaHeapAddrSpace), \
+      llvm::PointerType::get(context, llvm::jeandle::AddrSpace::JavaHeapAddrSpace), \
+      llvm::IntegerType::get(context, BitsPerWord))                                 \
+                                                                                    \
+  def(StubRoutines_cipherBlockChaining_decryptAESCrypt,                             \
+      StubRoutines::cipherBlockChaining_decryptAESCrypt(),                          \
+      true,                                                                         \
+      true,                                                                         \
+      llvm::Type::getInt32Ty(context),                                              \
+      llvm::PointerType::get(context, llvm::jeandle::AddrSpace::JavaHeapAddrSpace), \
+      llvm::PointerType::get(context, llvm::jeandle::AddrSpace::JavaHeapAddrSpace), \
+      llvm::PointerType::get(context, llvm::jeandle::AddrSpace::JavaHeapAddrSpace), \
+      llvm::PointerType::get(context, llvm::jeandle::AddrSpace::JavaHeapAddrSpace), \
+      llvm::IntegerType::get(context, BitsPerWord))                                 \
+                                                                                    \
+  def(StubRoutines_electronicCodeBook_encryptAESCrypt,                              \
+      StubRoutines::electronicCodeBook_encryptAESCrypt(),                           \
+      true,                                                                         \
+      true,                                                                         \
+      llvm::Type::getInt32Ty(context),                                              \
+      llvm::PointerType::get(context, llvm::jeandle::AddrSpace::JavaHeapAddrSpace), \
+      llvm::PointerType::get(context, llvm::jeandle::AddrSpace::JavaHeapAddrSpace), \
+      llvm::PointerType::get(context, llvm::jeandle::AddrSpace::JavaHeapAddrSpace), \
+      llvm::IntegerType::get(context, BitsPerWord))                                 \
+                                                                                    \
+  def(StubRoutines_electronicCodeBook_decryptAESCrypt,                              \
+      StubRoutines::electronicCodeBook_decryptAESCrypt(),                           \
+      true,                                                                         \
+      true,                                                                         \
+      llvm::Type::getInt32Ty(context),                                              \
+      llvm::PointerType::get(context, llvm::jeandle::AddrSpace::JavaHeapAddrSpace), \
+      llvm::PointerType::get(context, llvm::jeandle::AddrSpace::JavaHeapAddrSpace), \
+      llvm::PointerType::get(context, llvm::jeandle::AddrSpace::JavaHeapAddrSpace), \
+      llvm::IntegerType::get(context, BitsPerWord))                                 \
+                                                                                    \
+  def(StubRoutines_counterMode_AESCrypt,                                            \
+      StubRoutines::counterMode_AESCrypt(),                                         \
+      true,                                                                         \
+      true,                                                                         \
+      llvm::Type::getInt32Ty(context),                                              \
+      llvm::PointerType::get(context, llvm::jeandle::AddrSpace::JavaHeapAddrSpace), \
+      llvm::PointerType::get(context, llvm::jeandle::AddrSpace::JavaHeapAddrSpace), \
+      llvm::PointerType::get(context, llvm::jeandle::AddrSpace::JavaHeapAddrSpace), \
+      llvm::PointerType::get(context, llvm::jeandle::AddrSpace::JavaHeapAddrSpace), \
+      llvm::IntegerType::get(context, BitsPerWord),                                 \
+      llvm::PointerType::get(context, llvm::jeandle::AddrSpace::JavaHeapAddrSpace), \
+      llvm::PointerType::get(context, llvm::jeandle::AddrSpace::JavaHeapAddrSpace)) \
+                                                                                    \
+  def(StubRoutines_galoisCounterMode_AESCrypt,                                      \
+      StubRoutines::galoisCounterMode_AESCrypt(),                                   \
+      true,                                                                         \
+      true,                                                                         \
+      llvm::Type::getInt32Ty(context),                                              \
+      llvm::PointerType::get(context, llvm::jeandle::AddrSpace::JavaHeapAddrSpace), \
+      llvm::IntegerType::get(context, BitsPerWord),                                 \
+      llvm::PointerType::get(context, llvm::jeandle::AddrSpace::JavaHeapAddrSpace), \
+      llvm::PointerType::get(context, llvm::jeandle::AddrSpace::JavaHeapAddrSpace), \
+      llvm::PointerType::get(context, llvm::jeandle::AddrSpace::JavaHeapAddrSpace), \
+      llvm::PointerType::get(context, llvm::jeandle::AddrSpace::JavaHeapAddrSpace), \
+      llvm::PointerType::get(context, llvm::jeandle::AddrSpace::JavaHeapAddrSpace), \
+      llvm::PointerType::get(context, llvm::jeandle::AddrSpace::JavaHeapAddrSpace)) \
+                                                                                    \
+  def(StubRoutines_ghash_processBlocks,                                             \
+      StubRoutines::ghash_processBlocks(),                                          \
+      true,                                                                         \
+      true,                                                                         \
+      llvm::Type::getVoidTy(context),                                               \
+      llvm::PointerType::get(context, llvm::jeandle::AddrSpace::JavaHeapAddrSpace), \
+      llvm::PointerType::get(context, llvm::jeandle::AddrSpace::JavaHeapAddrSpace), \
+      llvm::PointerType::get(context, llvm::jeandle::AddrSpace::JavaHeapAddrSpace), \
+      llvm::IntegerType::get(context, BitsPerWord))                                 \
+                                                                                    \
+  def(StubRoutines_chacha20Block,                                                   \
+      StubRoutines::chacha20Block(),                                                \
+      true,                                                                         \
+      true,                                                                         \
+      llvm::Type::getInt32Ty(context),                                              \
+      llvm::PointerType::get(context, llvm::jeandle::AddrSpace::JavaHeapAddrSpace), \
+      llvm::PointerType::get(context, llvm::jeandle::AddrSpace::JavaHeapAddrSpace)) \
+                                                                                    \
+  def(StubRoutines_poly1305_processBlocks,                                          \
+      StubRoutines::poly1305_processBlocks(),                                       \
+      true,                                                                         \
+      true,                                                                         \
+      llvm::Type::getVoidTy(context),                                               \
+      llvm::PointerType::get(context, llvm::jeandle::AddrSpace::JavaHeapAddrSpace), \
+      llvm::IntegerType::get(context, BitsPerWord),                                 \
+      llvm::PointerType::get(context, llvm::jeandle::AddrSpace::JavaHeapAddrSpace), \
+      llvm::PointerType::get(context, llvm::jeandle::AddrSpace::JavaHeapAddrSpace)) \
                                                                                     \
   def(SharedRuntime_OSR_migration_end,                                              \
       SharedRuntime::OSR_migration_end,                                             \
@@ -633,7 +808,9 @@ def(StubRoutines_generic_arraycopy,                                             
   def(exceptional_return)                  \
   def(exception_handler)                   \
   def(deopt_blob)                          \
-  def(zero_heap_words_stub)
+  def(zero_heap_words_stub)                \
+  def(string_compress_stub)               \
+  def(string_inflate_stub)
 
 
 // JeandleRuntimeRoutine contains C/C++/Assembly routines and Hotspot routines that can be called from Jeandle compiled code.
