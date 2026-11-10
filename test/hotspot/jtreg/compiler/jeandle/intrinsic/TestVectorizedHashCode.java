@@ -228,6 +228,25 @@ public class TestVectorizedHashCode {
         return ArraysSupport.vectorizedHashCode(a, from, length, init, dynamicType);
     }
 
+    // PEA shapes: a fresh allocation hashed with a constant length folds on
+    // the virtual array (no materialization); a dynamic length keeps the
+    // allocation and the op's vector body.
+    static int hashFreshConstant() {
+        return Arrays.hashCode(new byte[]{1, 2, 3, 4});
+    }
+
+    static int hashFreshEmpty() {
+        return Arrays.hashCode(new byte[0]);
+    }
+
+    static int hashFreshDynamicLen(int n) {
+        byte[] b = new byte[n];
+        for (int i = 0; i < n; i++) {
+            b[i] = (byte) (i * 31 + 0x80);
+        }
+        return Arrays.hashCode(b);
+    }
+
     static int hashStringDyn(String s) {
         return s.hashCode();
     }
@@ -375,6 +394,9 @@ public class TestVectorizedHashCode {
         for (int i = 0; i < 20_000; i++) {
             verifyDynamic();
             verifyConstants();
+            expect(Arrays.hashCode(new byte[]{1, 2, 3, 4}), hashFreshConstant(), "fresh constant");
+            expect(1, hashFreshEmpty(), "fresh empty");
+            expect(refSigned(1, byteData, 0, 64), hashFreshDynamicLen(64), "fresh dynamic 64");
         }
         verifyDynamic();
         verifyConstants();
@@ -415,6 +437,22 @@ public class TestVectorizedHashCode {
         if (constSmallHasVector) {
             throw new AssertionError("constant length 1 unexpectedly retains vector hash IR");
         }
+        // PEA shapes, judged on the expanded (optimized) IR: a constant-length
+        // hash over a fresh allocation folds on the virtual array to the
+        // exact constant (31*(31*(31*(31*1+1)+2)+3)+4 = 955331); a dynamic
+        // length keeps the op, whose expanded 8-lane loop survives.
+        boolean freshFolded = dumpsA.stream()
+                .filter(p -> p.getFileName().toString().contains("hashFreshConstant_"))
+                .anyMatch(p -> dumpText(p).contains("ret i32 955331"));
+        if (!freshFolded) {
+            throw new AssertionError("constant-length fresh-array hash did not fold to 955331");
+        }
+        boolean dynamicMaterialized = dumpsA.stream()
+                .filter(p -> p.getFileName().toString().contains("hashFreshDynamicLen_"))
+                .anyMatch(p -> dumpText(p).contains("mul <8 x i32>"));
+        if (!dynamicMaterialized) {
+            throw new AssertionError("dynamic-length fresh-array hash lost the vector body");
+        }
 
         if (hostHasAvx512()) {
             java.nio.file.Path dirB = java.nio.file.Files.createTempDirectory("jeandle_vhc_avx512");
@@ -445,6 +483,8 @@ public class TestVectorizedHashCode {
                 // never become dumpable compilation roots of their own.
                 "-XX:CompileCommand=dontinline,compiler.jeandle.intrinsic.TestVectorizedHashCode::hashByteDyn",
                 "-XX:CompileCommand=dontinline,compiler.jeandle.intrinsic.TestVectorizedHashCode::hashByteConst1",
+                "-XX:CompileCommand=dontinline,compiler.jeandle.intrinsic.TestVectorizedHashCode::hashFreshConstant",
+                "-XX:CompileCommand=dontinline,compiler.jeandle.intrinsic.TestVectorizedHashCode::hashFreshDynamicLen",
                 TestVectorizedHashCode.class.getName(), "functional");
         jdk.test.lib.process.OutputAnalyzer output = jdk.test.lib.process.ProcessTools.executeCommand(
                 jdk.test.lib.process.ProcessTools.createLimitedTestJavaProcessBuilder(
