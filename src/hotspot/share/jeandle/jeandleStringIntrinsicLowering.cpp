@@ -22,6 +22,7 @@
 #include "jeandle/__llvmHeadersBegin__.hpp"
 #include "llvm/IR/Constants.h"
 #include "llvm/IR/DerivedTypes.h"
+#include "llvm/IR/Jeandle/MemoryBarrier.h"
 #include "jeandle/jeandleAbstractInterpreter.hpp"
 #include "jeandle/jeandleType.hpp"
 #include "jeandle/jeandleUtils.hpp"
@@ -346,8 +347,8 @@ bool JeandleIntrinsicLowering::lower_string_intrinsic(vmIntrinsics::ID id) {
     // barrier names the allocated array so PEA holds it as an ordering
     // obligation on the virtual object and drops it with the scalar-replaced
     // allocation; a materialized array lowers it to a real fence.
-    _interp->call_java_op("jeandle.membar_allocation_init", {allocated});
-    RETURN_ON_JEANDLE_ERROR(true);
+    llvm::jeandle::createMemoryBarrier(
+        b, llvm::jeandle::MemoryBarrierKind::AllocationInit, allocated);
     _interp->_jvm->apush(allocated);
   } else {
     if (done != nullptr) {

@@ -253,6 +253,20 @@ public class TestStringIntrinsics {
                             .contains("\0StubRoutines_jshort_disjoint_arraycopy\0"),
                     "dynamic copy has no element-safe stub symbol in the ELF object: " + object);
             if (wrapper.equals("toBytesStringU")) {
+                Path frontend = object.resolveSibling(name.substring(0, name.length() - 2) + ".ll");
+                String input = Files.readString(frontend);
+                String barrier = input.lines().filter(line -> line.startsWith(
+                        "declare hotspotcc void @jeandle.membar_allocation_init("))
+                        .findFirst().orElseThrow();
+                require(barrier.contains("ptr addrspace(1) captures(none)"),
+                        "initialization barrier must not capture its owner: " + frontend);
+                String group = barrier.substring(barrier.lastIndexOf('#') + 1).trim();
+                String attributes = input.lines().filter(line -> line.startsWith(
+                        "attributes #" + group + " = ")).findFirst().orElseThrow();
+                require(attributes.contains("nounwind") && attributes.contains("willreturn")
+                        && attributes.contains("\"gc-leaf-function\"")
+                        && !attributes.contains("memory("),
+                        "initialization barrier must return and retain unknown memory effects: " + frontend);
                 // The allocation is tightly coupled to the copy: the payload
                 // is written exactly once by the copy, never pre-zeroed.
                 require(ir.lines().noneMatch(line -> line.contains("@jeandle.zero_heap_words")

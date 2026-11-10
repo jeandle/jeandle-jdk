@@ -173,7 +173,7 @@
 ; baked absolute address (load + inttoptr + indirect call) rather than a PC-relative branch.
 @SharedRuntime.complete_monitor_unlocking_C = external global i64
 
-declare hotspotcc void @jeandle.membar_allocation_init(ptr addrspace(1)) nounwind "gc-leaf-function"
+declare hotspotcc void @jeandle.membar_allocation_init(ptr addrspace(1) captures(none)) nounwind willreturn "gc-leaf-function"
 
 declare hotspotcc void @jeandle.clone_payload(ptr addrspace(1), i64, ptr addrspace(1), i64, i64, i1)
 
