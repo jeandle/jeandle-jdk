@@ -42,9 +42,10 @@ public class TestPEAMemoryBarriers {
         Method virtualClone = TestWrapper.class.getMethod("virtualClone", int.class);
         Method concreteClone = TestWrapper.class.getMethod("concreteClone", TestWrapper.class);
         Method stable = TestWrapper.class.getMethod("stableLocal", int.class);
+        Method staticStable = TestWrapper.class.getMethod("staticStable", int.class);
         Method fences = TestWrapper.class.getMethod("unsafeFences", int.class);
         Method reference = TestWrapper.class.getMethod("readReference", WeakReference.class);
-        Method[] targets = {local, escape, virtualClone, concreteClone, stable, fences, reference};
+        Method[] targets = {local, escape, virtualClone, concreteClone, stable, staticStable, fences, reference};
         exports(PEATestUtils.behaviorRun(TestWrapper.class.getName(), targets))
                 .runPEAOnOffEquivalent();
         try (PEATestUtils.RunResult run =
@@ -69,6 +70,10 @@ public class TestPEAMemoryBarriers {
             run.report(concreteClone).finalAfter().assertPresent("load atomic i32");
             run.report(stable).finalAfter().assertAbsent("@jeandle.new_instance");
             run.report(stable).finalAfter().assertPresent("@jeandle.membar_release");
+            // Only INSTANCE @Stable writes order the value's publication at
+            // method exit; a static @Stable store writes no freshly published
+            // instance field, so no release marker may appear.
+            run.report(staticStable).finalAfter().assertAbsent("@jeandle.membar_release");
             for (String kind : new String[] {"acquire", "release", "full"}) {
                 run.report(fences).round0Before().assertPresent("@jeandle.membar_" + kind);
                 run.report(fences).finalAfter().assertPresent("@jeandle.membar_" + kind);
@@ -99,6 +104,10 @@ public class TestPEAMemoryBarriers {
         final int value;
         TestWrapper(int value) { this.value = value; }
         static class StableBox { @Stable int value; }
+        // The static @Stable field is read only by keepStaticStableObserved so
+        // the store in staticStable stays observable; the benchmark path never
+        // reads it back, keeping the test independent of @Stable value folding.
+        static class StaticStableBox { @Stable static int value; }
 
         public static int localFinal(int value) {
             return new TestWrapper(value).value;
@@ -117,6 +126,13 @@ public class TestPEAMemoryBarriers {
             StableBox box = new StableBox();
             box.value = value;
             return box.value;
+        }
+        public static int staticStable(int value) {
+            StaticStableBox.value = value;
+            return value * 2;
+        }
+        static int keepStaticStableObserved() {
+            return StaticStableBox.value;
         }
         public static int unsafeFences(int value) {
             Unsafe unsafe = Unsafe.getUnsafe();
@@ -137,13 +153,21 @@ public class TestPEAMemoryBarriers {
             reference.get();
             Unsafe.getUnsafe();
             new StableBox();
+            // Initialize StaticStableBox before compilation: an uninitialized
+            // holder compiles the putstatic to an entry uncommon trap, whose
+            // body has no store and no barrier to assert on.
+            keepStaticStableObserved();
             PEATestUtils.compileConfiguredTargetsAtLevel4();
             for (int value : new int[] {0, 17, -51}) {
                 Asserts.assertEquals(localFinal(value), value);
                 Asserts.assertEquals(escapeFinal(value).value, value);
                 Asserts.assertEquals(virtualClone(value), value);
                 Asserts.assertEquals(stableLocal(value), value);
+                Asserts.assertEquals(staticStable(value), value * 2);
                 Asserts.assertEquals(unsafeFences(value), value);
+            }
+            if (keepStaticStableObserved() == Integer.MIN_VALUE) {
+                throw new AssertionError("unreachable");
             }
             Asserts.assertEquals(concreteClone(source), 37);
             Asserts.assertEQ(readReference(reference), referent);

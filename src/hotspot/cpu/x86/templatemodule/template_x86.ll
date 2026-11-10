@@ -94,15 +94,4 @@ return_false:
 
 
 
-; Platform-specific memory barriers expressed with LLVM fence semantics.
-; TSO lowers acquire/release fences to compiler ordering and seq_cst to the
-; target's full hardware fence.
-
-
-
-
-
-
-
-
 attributes #0 = { nounwind "gc-leaf-function" }

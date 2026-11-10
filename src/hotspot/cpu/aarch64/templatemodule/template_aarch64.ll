@@ -72,16 +72,4 @@ return_false:
 }
 
 
-declare void @llvm.aarch64.dmb(i32)
-
-; Platform-specific memory barriers. These named JavaOps mirror the C2
-; MemBar types and avoid carrying a numeric barrier mask through the IR.
-
-
-
-
-
-
-
-
 attributes #0 = { nounwind "gc-leaf-function" }

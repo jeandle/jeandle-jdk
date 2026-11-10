@@ -27,10 +27,10 @@
 #include "llvm/IR/Intrinsics.h"
 #include "llvm/IR/MDBuilder.h"
 #include "llvm/IR/Jeandle/Attributes.h"
-#include "llvm/IR/Jeandle/MemoryBarrier.h"
 #include "llvm/IR/Jeandle/Deoptimization.h"
 #include "llvm/IR/Jeandle/GCStrategy.h"
 #include "llvm/IR/Jeandle/JavaType.h"
+#include "llvm/IR/Jeandle/MemoryBarrier.h"
 #include "llvm/IR/Jeandle/Metadata.h"
 #include <string>
 
@@ -39,7 +39,6 @@
 #include "jeandle/jeandleCompiledCode.hpp"
 #include "jeandle/jeandleIntrinsicLowering.hpp"
 #include "jeandle/jeandleRuntimeRoutine.hpp"
-#include "jeandle/jeandleVMCallback.hpp"
 #include "jeandle/jeandleType.hpp"
 #include "jeandle/jeandleUtils.hpp"
 
@@ -2802,14 +2801,17 @@ void JeandleAbstractInterpreter::do_put_xxx(ciField* field, bool is_static) {
     bt = T_NARROWOOP;
   }
   store_to_address(addr, value, bt, is_volatile);
-  _wrote_fields = true;
-  _wrote_final |= field->is_final();
-  // Like C2 (Parse::do_put_xxx in parse3.cpp), only instance volatile writes
-  // feed the constructor-exit freeze barrier: the barrier orders this
-  // object's initialization writes before publication, and only instance
-  // fields write the object under construction.
-  _wrote_volatile |= !is_static && is_volatile;
-  _wrote_stable |= field->is_stable();
+  // Like C2 (Parse::do_put_xxx in parse3.cpp), only INSTANCE field writes
+  // feed the exit barriers: the freeze orders this object's initialization
+  // writes before publication, and the @Stable release orders a freshly
+  // written instance field value. A static store writes neither the object
+  // under construction nor a fresh instance field.
+  if (!is_static) {
+    _wrote_fields = true;
+    _wrote_final |= field->is_final();
+    _wrote_volatile |= is_volatile;
+    _wrote_stable |= field->is_stable();
+  }
 }
 
 llvm::Value* JeandleAbstractInterpreter::compute_instance_field_address(llvm::Value* obj, int offset) {

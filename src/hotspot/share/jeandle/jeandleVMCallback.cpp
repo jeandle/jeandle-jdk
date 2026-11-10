@@ -585,10 +585,11 @@ JeandleVMCallback::get_klass_constant_field(uintptr_t klass_ptr, int offset,
   }
   ciMethod* method = env->get_method(target);
   record_klass_metadata(ci_klass);
-  // The embedded method must remain discoverable for unloading. Redefinition
-  // can replace a vtable entry, so retain the method evolution dependency too.
+  // The embedded method must remain discoverable for unloading, and
+  // redefinition can replace a vtable entry. The evolution dependency covers
+  // both: Dependencies::encode_content_bytes records every dependency
+  // argument, including this method, in the oop recorder at install time.
   Metadata* encoding = method->constant_encoding();
-  env->oop_recorder()->find_index(encoding);
   env->dependencies()->assert_evol_method(method);
   return {T_ADDRESS, static_cast<int64_t>(reinterpret_cast<uintptr_t>(encoding))};
 }

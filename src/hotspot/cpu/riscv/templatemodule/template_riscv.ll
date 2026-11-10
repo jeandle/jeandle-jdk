@@ -73,14 +73,4 @@ return_false:
 
 
 
-; Platform-specific memory barriers expressed with LLVM fence semantics.
-; The RISC-V backend selects the corresponding fence instruction.
-
-
-
-
-
-
-
-
 attributes #0 = { nounwind "gc-leaf-function" }
