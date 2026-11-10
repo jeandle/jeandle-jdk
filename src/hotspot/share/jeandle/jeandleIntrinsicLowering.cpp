@@ -991,102 +991,21 @@ bool JeandleIntrinsicLowering::lower_dual_path_libm(
 
 // ---- lower_pow ----
 //
-// Math.pow(double a, double b) lowers to the dual-path dpow runtime call
-// (StubRoutines::dpow -> SharedRuntime::dpow -> llvm.pow), plus C2's
-// sqrt specialization for a literal 0.5 exponent:
-//   pow(x, 0.5)  => sqrt(x) guarded to x > 0, dpow as the unlikely slow path
-//
-// The exact constant-exponent identities -- pow(x, 2.0) => x*x and
-// pow(x, +-0.0) => 1.0 -- are deliberately NOT folded here. They are folded
-// on the LLVM side (the LibmIdentityFolding pass on the runtime call, and
-// LLVM's own libcall simplifier on llvm.pow), which also covers exponents
-// that only later passes prove constant (inlined callers, select/phi
-// collapses). Both identities are bit-exact against both runtime entries on
-// every input; y == 1.0 => x is not among them because the runtime quiets a
-// signaling-NaN base while returning x would not.
+// Keep the selected runtime call visible to LLVM. LibmIdentityFolding
+// specializes exact constant exponents and guarded fast paths after inlining,
+// including exponents that are not yet constant in the frontend.
 bool JeandleIntrinsicLowering::lower_pow() {
-  llvm::LLVMContext& ctx = *_interp->_context;
-  llvm::IRBuilder<>& builder = _interp->_ir_builder;
-
-  // Peek before deciding: when the specialization does not apply, the
-  // operands stay on the stack for the generic path below to pop. peek_value
-  // addresses logical operands (double/long slots carry a null high-word
-  // placeholder).
-  llvm::ConstantFP* exp = llvm::dyn_cast<llvm::ConstantFP>(
-      _interp->_jvm->peek_value(0).value());
-  llvm::Value* base = _interp->_jvm->peek_value(1).value();
-
-  // Resolved once and threaded through every runtime path below, so the
-  // guarded pow(x, 0.5) slow path and the unguarded call always use the
-  // same routine.
   JeandleRuntimeCalleeFn dpow_callee = select_dual_path_libm_callee(
       "StubRoutines_dpow", &JeandleRuntimeRoutine::StubRoutines_dpow_callee,
       "SharedRuntime_dpow", &JeandleRuntimeRoutine::SharedRuntime_dpow_callee);
 
-  if (exp != nullptr && exp->isExactlyValue(0.5) && dpow_callee != nullptr) {
-    // pow(x, 0.5) => sqrt(x) for x > 0. The guard is an ordered compare
-    // against 0.0 that routes x <= 0.0 to the runtime: a negative base has
-    // pow NaN (which sqrt also gives, but the exact runtime behavior stays
-    // on the runtime for parity), and the zeros must not take the sqrt
-    // path because pow(+-0.0, 0.5) is +0.0 while sqrt(-0.0) is -0.0 and a
-    // floating-point compare cannot tell the zero signs apart. NaN stays on
-    // the fast path: `ole` is unordered-false and sqrt(NaN) returns the
-    // input NaN quieted, bit-identical to what every dpow entry returns
-    // for a NaN base (the fdlibm port's x+y and the stub's sqrtsd/addsd
-    // exits quiet the same way). C2's inline_math_pow instead uses an
-    // unordered-true `le` guard, which routes NaN to its dpow slow path --
-    // a routing difference only; the results agree on every input.
-    _interp->_jvm->dpop();
-    _interp->_jvm->dpop();
-    llvm::Value* zero = llvm::ConstantFP::get(builder.getDoubleTy(), 0.0);
-    llvm::Value* needs_runtime = builder.CreateFCmp(
-        llvm::CmpInst::FCMP_OLE, base, zero, "pow.sqrt_unsafe");
-    // generate_slow_guard branches to the returned slow block and leaves the
-    // builder inserting in the fast block. A null return means the compare
-    // folded to constant-false (base provably > 0), so no guard blocks are
-    // created and only the sqrt remains.
-    llvm::BasicBlock* slow_bb = generate_slow_guard(needs_runtime, nullptr);
-    llvm::CallInst* fast_result = builder.CreateIntrinsic(
-        llvm::Intrinsic::sqrt, {base->getType()}, {base}, nullptr, "pow.sqrt");
-    if (slow_bb == nullptr) {
-      _interp->_jvm->dpush(fast_result);
-      return true;
-    }
-
-    llvm::BasicBlock* fast_bb = builder.GetInsertBlock();
-    llvm::BasicBlock* merge_bb =
-        llvm::BasicBlock::Create(ctx, "pow_half_merge", _interp->_llvm_func);
-    builder.CreateBr(merge_bb);
-
-    // Slow path: exact pow(x, 0.5) from the same dpow routine the unguarded
-    // call would use.
-    builder.SetInsertPoint(slow_bb);
-    llvm::CallBase* slow_result = emit_libm_call(
-        dpow_callee, {base, llvm::ConstantFP::get(builder.getDoubleTy(), 0.5)});
-    builder.CreateBr(merge_bb);
-    llvm::BasicBlock* slow_tail_bb = builder.GetInsertBlock();
-
-    // Merge the two results; the interpreter continues in the merge block.
-    builder.SetInsertPoint(merge_bb);
-    _interp->_block->set_tail_llvm_block(merge_bb);
-    llvm::PHINode* result =
-        builder.CreatePHI(builder.getDoubleTy(), 2, "pow_half.result");
-    result->addIncoming(fast_result, fast_bb);
-    result->addIncoming(slow_result, slow_tail_bb);
-    _interp->_jvm->dpush(result);
-    return true;
-  }
-
   if (dpow_callee != nullptr) {
-    // Pop the JVM-stack doubles in reverse (LIFO) order so the callee sees
-    // them in declaration order: (base, exponent).
+    // Pop the JVM-stack doubles in reverse order to preserve (base, exponent).
     llvm::Value* exponent = _interp->_jvm->dpop();
-    llvm::Value* base_arg = _interp->_jvm->dpop();
-    _interp->_jvm->dpush(emit_libm_call(dpow_callee, {base_arg, exponent}));
+    llvm::Value* base = _interp->_jvm->dpop();
+    _interp->_jvm->dpush(emit_libm_call(dpow_callee, {base, exponent}));
     return true;
   }
-  // No runtime available, fall through to the LLVM builtin, which pops the
-  // Java arguments from the target signature itself.
   return emit_llvm_builtin(llvm::Intrinsic::pow);
 }
 

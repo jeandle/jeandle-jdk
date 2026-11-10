@@ -208,26 +208,29 @@ public class TestPowDouble {
         powPhiOptChecker.checkNot("call double @StubRoutines_dpow");
         powPhiOptChecker.checkNot("call double inttoptr");
 
-        // double_pow_half(double): Math.pow(x, 0.5) becomes sqrt(x) guarded
-        // by "x <= 0" -- sqrt on the fast path, the dpow runtime call in the
-        // unlikely slow block, merged by a PHI. The specialization needs a
-        // dpow runtime entry, so in LLVM-only mode the call stays llvm.pow.
+        // The frontend keeps the runtime call for constant exponents;
+        // LLVM specializes the half exponent after inlining.
         FileCheck powHalfChecker = new FileCheck(dumpDir,
                 TestWrapper.class.getMethod("double_pow_half", double.class), false);
         powHalfChecker.checkPattern("define hotspotcc double .*TestPowDouble.*double_pow_half.*");
         if (mode == MODE_STUB) {
-            // The blocks are laid out in creation order, with the guard's
-            // slow block (dpow) before the fast block (sqrt), so look for
-            // the two calls without the sequential cursor.
-            powHalfChecker.checkPatternAnywhere("call double @llvm.sqrt.f64");
-            powHalfChecker.checkPatternAnywhere("call double @StubRoutines_dpow");
+            powHalfChecker.check("call double @StubRoutines_dpow");
+            powHalfChecker.checkNot("llvm.sqrt");
         } else if (mode == MODE_SHARED) {
-            powHalfChecker.checkPatternAnywhere("call double @llvm.sqrt.f64");
-            powHalfChecker.checkPatternAnywhere("call double inttoptr \\(i64 \\d+ to ptr\\)");
+            powHalfChecker.checkPattern("call double inttoptr \\(i64 \\d+ to ptr\\)");
+            powHalfChecker.checkNot("llvm.sqrt");
             powHalfChecker.checkPatternAnywhere("@SharedRuntime_dpow = alias");
         } else {
             powHalfChecker.check("call double @llvm.pow.f64");
             powHalfChecker.checkNot("llvm.sqrt");
+        }
+        if (mode != MODE_LLVM) {
+            FileCheck halfOpt = new FileCheck(dumpDir,
+                    TestWrapper.class.getMethod("double_pow_half", double.class), true);
+            halfOpt.checkPatternAnywhere("call double @llvm.sqrt.f64");
+            halfOpt.checkPatternAnywhere(mode == MODE_STUB
+                    ? "call double @StubRoutines_dpow"
+                    : "call double inttoptr \\(i64 \\d+ to ptr\\)");
         }
     }
 
