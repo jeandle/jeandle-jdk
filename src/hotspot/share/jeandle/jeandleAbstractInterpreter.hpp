@@ -328,6 +328,11 @@ class JeandleAbstractInterpreter : public StackObj {
   llvm::Value* _constructor_receiver = nullptr;
   bool _wrote_final = false;
   bool _wrote_fields = false;
+  // Instance volatile writes, for the constructor-freeze leg required only
+  // on non-multi-copy-atomic CPUs (C2 Parse::_wrote_volatile). The leg is
+  // unreachable on every multi-copy-atomic target, where
+  // support_IRIW_for_not_multiple_copy_atomic_cpu is a false constant.
+  bool _wrote_volatile = false;
   bool _wrote_stable = false;
   // Record true bytecode returns, before synchronized unlock, until all writes
   // have been parsed. Helper returns for exceptions and deopt are excluded.

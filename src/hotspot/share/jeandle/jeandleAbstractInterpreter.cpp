@@ -1155,8 +1155,19 @@ void JeandleAbstractInterpreter::interpret() {
   }
 
   // Defer insertion so a return parsed before a writing block still freezes.
+  // Mirrors C2 Parse::do_exits (parse1.cpp): an instance constructor that
+  // wrote final fields, any field under AlwaysSafeConstructors, or a
+  // volatile field on a non-multi-copy-atomic CPU freezes before returning.
+  // The volatile leg is constant-false on every multi-copy-atomic target
+  // (x86, aarch64, riscv) and only PPC64 can enable it, as in C2.
+  // Two deliberate divergences from C2's is_initializer() gate: an OSR parse
+  // starts mid-body so the wrote-flags under-approximate earlier writes —
+  // freeze unconditionally there; and <clinit> is excluded because the class
+  // initialization protocol (JLS 12.4.2) already orders its writes against
+  // any later use of the class.
   bool freeze = _method->is_object_initializer() &&
-      (is_osr() || _wrote_final || (AlwaysSafeConstructors && _wrote_fields));
+      (is_osr() || _wrote_final || (AlwaysSafeConstructors && _wrote_fields) ||
+       (support_IRIW_for_not_multiple_copy_atomic_cpu && _wrote_volatile));
   for (llvm::Instruction* anchor : _normal_return_anchors) {
     llvm::IRBuilder<> builder(anchor);
     if (freeze) {
@@ -2793,6 +2804,11 @@ void JeandleAbstractInterpreter::do_put_xxx(ciField* field, bool is_static) {
   store_to_address(addr, value, bt, is_volatile);
   _wrote_fields = true;
   _wrote_final |= field->is_final();
+  // Like C2 (Parse::do_put_xxx in parse3.cpp), only instance volatile writes
+  // feed the constructor-exit freeze barrier: the barrier orders this
+  // object's initialization writes before publication, and only instance
+  // fields write the object under construction.
+  _wrote_volatile |= !is_static && is_volatile;
   _wrote_stable |= field->is_stable();
 }
 
