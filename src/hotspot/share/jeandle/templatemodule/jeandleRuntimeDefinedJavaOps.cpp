@@ -57,23 +57,11 @@
 #include "runtime/sharedRuntime.hpp"
 #include "runtime/vm_version.hpp"
 
-// All JavaOps are nounwind and gc-leaf-function by default. These attributes
-// are a paired Jeandle leaf contract: add them together, or remove them
-// together.
-//
-// The pairing matters for two reasons:
-//   1. Keep JavaOps nounwind whenever possible. Inlining an invoke rewrites
-//      calls inside the inlinee into invokes; if a JavaOp can unwind, every such
-//      invoke carries extra EH control flow that later lowering must remove
-//      explicitly.
-//   2. Any gc-leaf-function must also be nounwind. RS4GC skips gc-leaf calls, so
-//      an invoke to a gc-leaf function would keep its landingpad type unchanged
-//      while other landingpads are rewritten to token, producing mixed
-//      landingpad types in one module.
-//
-// JavaOps have no supported use case for splitting these attributes, so if a
-// JavaOp may trigger GC safepoints or throw asynchronous exceptions, it must
-// remove both attributes.
+// JavaOps default to nounwind and gc-leaf-function. A GC-capable operation
+// must remove gc-leaf-function, and an operation that can throw must also
+// remove nounwind. Nonthrowing polls retain nounwind while remaining visible
+// to statepoint rewriting. A gc-leaf-function must be nounwind: RS4GC skips
+// leaf calls, including the rewriting of their exceptional landingpads.
 //                  name, lower_phase, return_type, arg_types
 #define DEF_JAVA_OP(name, lower_phase, return_type, ...)                                        \
   void define_##name(llvm::Module& template_module) {                                           \
@@ -533,9 +521,8 @@ DEF_JAVA_OP(zero_half_heap_word, 1, llvm::Type::getVoidTy(context),
 JAVA_OP_END
 
 DEF_JAVA_OP(safepoint_poll, 1, llvm::Type::getVoidTy(context))
-  // safepoint_poll may trigger GC and throw asynchronous exceptions,
-  // so it must not be nounwind or gc-leaf-function.
-  func->removeFnAttr(llvm::Attribute::NoUnwind);
+  // Polls can collect and deoptimize; asynchronous exceptions are delivered
+  // after deoptimization rather than through a compiled exceptional exit.
   func->removeFnAttr("gc-leaf-function");
   llvm::BasicBlock* return_block = llvm::BasicBlock::Create(context, "return", func);
   llvm::BasicBlock* do_safepoint_block = llvm::BasicBlock::Create(context, "do_safepoint", func);
@@ -566,6 +553,7 @@ DEF_JAVA_OP(safepoint_poll, 1, llvm::Type::getVoidTy(context))
   llvm::CallInst* call_inst = ir_builder.CreateCall(JeandleRuntimeRoutine::safepoint_handler_callee(template_module), {current_thread},
                                                     {create_empty_deopt_bundle()});
   call_inst->setCallingConv(llvm::CallingConv::Hotspot_JIT);
+  call_inst->setDoesNotThrow();
   ir_builder.CreateBr(return_block);
 
   // ******** Return Block ********
