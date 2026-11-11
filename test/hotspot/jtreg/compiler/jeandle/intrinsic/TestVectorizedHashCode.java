@@ -36,9 +36,10 @@ import jdk.internal.util.ArraysSupport;
  *          java.base/jdk.internal.util
  * @library /test/lib /
  *
- * @run main/othervm -XX:CompileCommand=quiet -XX:CompileCommand=compileonly,*::hash*
- *                   -XX:CompileCommand=compileonly,*::verify* -XX:CompileCommand=compileonly,*::ref*
- *                   -Xbatch -XX:-TieredCompilation
+ * @run main/othervm -XX:CompileCommand=quiet
+ *                   -XX:CompileCommand=compileonly,compiler.jeandle.intrinsic.TestVectorizedHashCode::hash*
+ *                   -XX:CompileCommand=compileonly,java.lang.String*::hashCode
+ *                   -XX:+UseJeandleCompiler -XX:CompileThreshold=1000 -Xbatch -XX:-TieredCompilation
  *                    compiler.jeandle.intrinsic.TestVectorizedHashCode
  */
 
@@ -235,6 +236,11 @@ public class TestVectorizedHashCode {
         return Arrays.hashCode(new byte[]{1, 2, 3, 4});
     }
 
+    static int hashFreshSeventeen(int value) {
+        return Arrays.hashCode(new int[]{value, 1, 2, 3, 4, 5, 6, 7, 8,
+                                         9, 10, 11, 12, 13, 14, 15, 16});
+    }
+
     static int hashFreshEmpty() {
         return Arrays.hashCode(new byte[0]);
     }
@@ -257,7 +263,8 @@ public class TestVectorizedHashCode {
         }
     }
 
-    private static final int[] LENGTHS = {0, 1, 2, 7, 8, 9, 15, 16, 17, 31, 32, 33, 63, 64, 127, 128, 1000};
+    private static final int[] LENGTHS = java.util.stream.IntStream.concat(
+            java.util.stream.IntStream.rangeClosed(0, 129), java.util.stream.IntStream.of(1000)).toArray();
     private static final int[] CONST_LENGTHS = {0, 1, 7, 8, 9, 15, 16, 17, 31, 32, 33};
 
     // Initial values baked into the Const wrappers: 1 for even boundaries to
@@ -267,7 +274,7 @@ public class TestVectorizedHashCode {
         return length == 0 ? 1 : (length & 1);
     }
     private static final int[] FROMS = {0, 3};
-    private static final int[] INITS = {0, 1};
+    private static final int[] INITS = {0, 1, Integer.MIN_VALUE, Integer.MAX_VALUE};
 
     private static void verifyDynamic() {
         for (int from : FROMS) {
@@ -390,17 +397,85 @@ public class TestVectorizedHashCode {
         return refChar(0, c, 0, c.length);
     }
 
-    public static void main(String[] args) throws Exception {
-        for (int i = 0; i < 20_000; i++) {
-            verifyDynamic();
-            verifyConstants();
-            expect(Arrays.hashCode(new byte[]{1, 2, 3, 4}), hashFreshConstant(), "fresh constant");
-            expect(1, hashFreshEmpty(), "fresh empty");
-            expect(refSigned(1, byteData, 0, 64), hashFreshDynamicLen(64), "fresh dynamic 64");
+    private static volatile int sink;
+
+    // Warm the compilation roots directly; the oracle and its large matrix
+    // remain interpreted and run once after compilation has completed.
+    private static void warmup() {
+        char[] latin = new char[63];
+        char[] wide = new char[63];
+        Arrays.fill(latin, '\u00e9');
+        Arrays.fill(wide, '\u8123');
+        for (int i = 0; i < 2_000; i++) {
+            int length = i & 127;
+            int h = hashByteDyn(byteData, 3, length, i);
+            h ^= hashBooleanDyn(byteData, 3, length, i);
+            h ^= hashShortDyn(shortData, 3, length, i);
+            h ^= hashCharDyn(charData, 3, length, i);
+            h ^= hashUtf16Dyn(utf16Bytes, 3, length, i);
+            h ^= hashIntDyn(intData, 3, length, i);
+            h ^= hashDynamicType(byteData, 3, length, i);
+            h ^= hashFreshConstant() ^ hashFreshEmpty();
+            h ^= hashFreshSeventeen(i) ^ hashFreshDynamicLen(64);
+            // Construct from chars: copying a String can copy its cached hash.
+            h ^= hashStringDyn(new String(latin));
+            h ^= hashStringDyn(new String(wide));
+            sink = h;
+            sink ^= hashByteConst0(byteData);
+            sink ^= hashByteConst1(byteData);
+            sink ^= hashByteConst7(byteData);
+            sink ^= hashByteConst8(byteData);
+            sink ^= hashByteConst9(byteData);
+            sink ^= hashByteConst15(byteData);
+            sink ^= hashByteConst16(byteData);
+            sink ^= hashByteConst17(byteData);
+            sink ^= hashByteConst31(byteData);
+            sink ^= hashByteConst32(byteData);
+            sink ^= hashByteConst33(byteData);
+            sink ^= hashBooleanConst8(byteData);
+            sink ^= hashBooleanConst17(byteData);
+            sink ^= hashShortConst8(shortData);
+            sink ^= hashShortConst17(shortData);
+            sink ^= hashCharConst0(charData);
+            sink ^= hashCharConst1(charData);
+            sink ^= hashCharConst7(charData);
+            sink ^= hashCharConst8(charData);
+            sink ^= hashCharConst9(charData);
+            sink ^= hashCharConst15(charData);
+            sink ^= hashCharConst16(charData);
+            sink ^= hashCharConst17(charData);
+            sink ^= hashCharConst31(charData);
+            sink ^= hashCharConst32(charData);
+            sink ^= hashCharConst33(charData);
+            sink ^= hashUtf16Const8(utf16Bytes);
+            sink ^= hashUtf16Const17(utf16Bytes);
+            sink ^= hashUtf16Const33(utf16Bytes);
+            sink ^= hashIntConst0(intData);
+            sink ^= hashIntConst1(intData);
+            sink ^= hashIntConst7(intData);
+            sink ^= hashIntConst8(intData);
+            sink ^= hashIntConst9(intData);
+            sink ^= hashIntConst15(intData);
+            sink ^= hashIntConst16(intData);
+            sink ^= hashIntConst17(intData);
+            sink ^= hashIntConst31(intData);
+            sink ^= hashIntConst32(intData);
+            sink ^= hashIntConst33(intData);
         }
+    }
+
+    public static void main(String[] args) throws Exception {
+        warmup();
         verifyDynamic();
         verifyConstants();
         verifyPublicApis();
+        for (int value : INITS) {
+            int[] a = {value, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16};
+            expect(refInt(1, a, 0, a.length), hashFreshSeventeen(value), "fresh seventeen");
+        }
+        expect(955331, hashFreshConstant(), "fresh constant");
+        expect(1, hashFreshEmpty(), "fresh empty");
+        expect(refSigned(1, byteData, 0, 64), hashFreshDynamicLen(64), "fresh dynamic 64");
         if (args.length == 0) {
             verifyIntrinsicLowering();
         }
@@ -473,6 +548,19 @@ public class TestVectorizedHashCode {
             throw new AssertionError("dynamic-length fresh-array hash lost the vector body");
         }
 
+        // The coder helpers can be compiled callees rather than inlined.
+        // Require each vector body on the actual String caller chain.
+        for (String coder : new String[]{"StringLatin1", "StringUTF16"}) {
+            boolean stringLowered = stringHashLowered(dumpsA, coder);
+            if (!stringLowered) {
+                throw new AssertionError("compiled String caller chain has no " + coder + " vector hash body");
+            }
+        }
+        boolean seventeenFolded = freshSeventeenFolded(dumpsA);
+        if (!seventeenFolded) {
+            throw new AssertionError("fresh seventeen-element hash did not scalarize");
+        }
+
         if (hostHasAvx512()) {
             java.nio.file.Path dirB = java.nio.file.Files.createTempDirectory("jeandle_vhc_avx512");
             runForensicsFork(dirB, "-XX:UseAVX=3");
@@ -480,10 +568,40 @@ public class TestVectorizedHashCode {
             if (!dynDumpContains(dumpsB, "mul <16 x i32>")) {
                 throw new AssertionError("UseAVX=3 IR has no 16-lane hash vector multiply");
             }
-            // The grouped 8-lane tier folds away under AVX-512 (lengths >= 32
-            // take the 16-lane tier), but the mid tier still serves lengths
-            // 8..31, so an 8-lane multiply may legitimately remain.
+            // AVX-512 groups start at 64 elements. The grouped 8-lane tier
+            // serves 32..63; the mid tier also handles shorter inputs and
+            // remainders, so 8-lane multiplies remain valid.
         }
+    }
+
+    private static boolean stringHashLowered(java.util.List<java.nio.file.Path> dumps, String coder) {
+        String widening = coder.equals("StringLatin1") ? "zext <8 x i8>" : "zext <8 x i16>";
+        java.util.function.Predicate<java.nio.file.Path> vectorBody = p -> {
+            String text = dumpText(p);
+            return text.contains(widening) && text.contains("mul <8 x i32>");
+        };
+        return dumps.stream()
+                .filter(p -> p.getFileName().toString().contains("hashStringDyn_"))
+                .anyMatch(p -> vectorBody.test(p)
+                        || (dumpText(p).contains("java_lang_" + coder + "_hashCode")
+                            && dumps.stream()
+                                .filter(q -> q.getFileName().toString().contains("java_lang_" + coder + "_hashCode_"))
+                                .anyMatch(vectorBody)));
+    }
+
+    private static boolean freshSeventeenFolded(java.util.List<java.nio.file.Path> dumps) {
+        return dumps.stream()
+                .filter(p -> p.getFileName().toString().contains("hashFreshSeventeen_"))
+                .anyMatch(p -> {
+                    String text = dumpText(p);
+                    // At this phase retained allocations use TLAB IR and a
+                    // statepoint whose runtime target is new_array.
+                    boolean allocates = text.contains("%tlab_")
+                            || text.matches("(?s).*\\b(?:call|invoke)\\b[^\\n]*@(?:jeandle\\.new_array|new_array)\\b.*");
+                    return !allocates
+                            && text.matches("(?s).*\\bmul i32 [^\\n]*, 1353309697(?:\\n|, !).*")
+                            && !text.contains("mul <8 x i32>");
+                });
     }
 
     private static jdk.test.lib.process.OutputAnalyzer runForensicsFork(java.nio.file.Path dumpDirectory,
@@ -491,22 +609,14 @@ public class TestVectorizedHashCode {
         java.util.List<String> command = java.util.List.of(
                 "--add-exports=java.base/jdk.internal.misc=ALL-UNNAMED",
                 "--add-exports=java.base/jdk.internal.util=ALL-UNNAMED",
-                "-Xbatch", "-XX:-TieredCompilation",
+                "-Xbatch", "-XX:-TieredCompilation", "-XX:CompileThreshold=1000",
                 "-XX:+UnlockDiagnosticVMOptions", "-XX:+IgnoreUnrecognizedVMOptions",
                 "-XX:+UseJeandleCompiler", avxFlag,
                 "-Xlog:jeandle=debug", "-XX:+JeandleDumpIR",
                 "-XX:JeandleDumpDirectory=" + dumpDirectory,
                 "-XX:CompileCommand=quiet",
                 "-XX:CompileCommand=compileonly,compiler.jeandle.intrinsic.TestVectorizedHashCode::hash*",
-                // The one-line wrappers inline into the driver otherwise and
-                // never become dumpable compilation roots of their own.
-                "-XX:CompileCommand=dontinline,compiler.jeandle.intrinsic.TestVectorizedHashCode::hashByteDyn",
-                "-XX:CompileCommand=dontinline,compiler.jeandle.intrinsic.TestVectorizedHashCode::hashByteConst1",
-                "-XX:CompileCommand=dontinline,compiler.jeandle.intrinsic.TestVectorizedHashCode::hashByteConst7",
-                "-XX:CompileCommand=dontinline,compiler.jeandle.intrinsic.TestVectorizedHashCode::hashByteConst31",
-                "-XX:CompileCommand=dontinline,compiler.jeandle.intrinsic.TestVectorizedHashCode::hashByteConst32",
-                "-XX:CompileCommand=dontinline,compiler.jeandle.intrinsic.TestVectorizedHashCode::hashFreshConstant",
-                "-XX:CompileCommand=dontinline,compiler.jeandle.intrinsic.TestVectorizedHashCode::hashFreshDynamicLen",
+                "-XX:CompileCommand=compileonly,java.lang.String*::hashCode",
                 TestVectorizedHashCode.class.getName(), "functional");
         jdk.test.lib.process.OutputAnalyzer output = jdk.test.lib.process.ProcessTools.executeCommand(
                 jdk.test.lib.process.ProcessTools.createLimitedTestJavaProcessBuilder(
