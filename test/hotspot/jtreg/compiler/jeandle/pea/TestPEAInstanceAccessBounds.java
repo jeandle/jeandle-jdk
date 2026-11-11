@@ -22,9 +22,9 @@
  * @test
  * @summary Speculative instance accesses must not replay beyond the receiver layout
  * @requires vm.gc.G1
- * @library /test/lib
+ * @library /test/lib /
  * @modules jdk.compiler
- * @build jdk.test.whitebox.WhiteBox
+ * @build jdk.test.whitebox.WhiteBox compiler.jeandle.pea.PEATestUtils
  * @run driver jdk.test.lib.helpers.ClassFileInstaller jdk.test.whitebox.WhiteBox
  * @run main/othervm -Xbootclasspath/a:. -XX:+UnlockDiagnosticVMOptions -XX:+WhiteBoxAPI
  *      -XX:+IgnoreUnrecognizedVMOptions -XX:+UnlockExperimentalVMOptions -XX:-UseJVMCICompiler
@@ -72,6 +72,7 @@ public class TestPEAInstanceAccessBounds {
         if (target == null) {
             throw new AssertionError("javac resolution target not found");
         }
+        wb.testSetDontInlineMethod(target, true);
 
         // Javac profiles both ArraySpliterator and IteratorSpliterator. Inlining
         // their alternatives must not add the larger layout's iterator field
@@ -83,6 +84,11 @@ public class TestPEAInstanceAccessBounds {
         wb.concurrentGCAcquireControl();
         try {
             for (int iteration = 0; iteration < 100; iteration++) {
+                // Keep the warmup profiles, then explicitly compile the method
+                // whose normal entry is checked around each javac invocation.
+                if (iteration >= 15) {
+                    PEATestUtils.enqueueAndAwaitLevel4(target);
+                }
                 boolean compiled = wb.getMethodCompilationLevel(target) == 4;
                 if (!marking && iteration >= 15 && compiled) {
                     wb.concurrentGCRunTo(wb.AFTER_MARKING_STARTED);
