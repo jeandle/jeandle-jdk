@@ -297,3 +297,67 @@ void JeandleRuntimeRoutine::generate_zero_heap_words_stub() {
   _routine_entry[_zero_heap_words_stub] = entry;
   _gc_leaf_routines.insert(entry);
 }
+
+// C ABI: (UTF16 source, Latin1 destination, i32 count) -> count or zero.
+void JeandleRuntimeRoutine::generate_string_compress_stub() {
+  ResourceMark rm;
+  CodeBuffer buffer(_string_compress_stub, 2048, 64);
+  MacroAssembler* masm = new MacroAssembler(&buffer);
+  address start = __ pc();
+
+  // char_array_compress uses a separate result and preserves its length.
+  __ uxtw(r3, c_rarg2);
+  __ mov(r2, c_rarg0);
+  __ char_array_compress(r2, c_rarg1, r3, r0, v0, v1, v2, v3, v4, v5);
+  __ ret(lr);
+  masm->flush();
+
+  RuntimeStub* stub = RuntimeStub::new_runtime_stub(
+      _string_compress_stub, &buffer, (int)(__ pc() - start),
+      0 /* frame size */, nullptr /* oop maps */, false);
+  address entry = stub->entry_point();
+  _routine_entry[_string_compress_stub] = entry;
+  _gc_leaf_routines.insert(entry);
+}
+
+// C ABI: (Latin1 source, UTF16 destination, i32 count) -> void.
+// Keep the entire operation in this leaf rather than calling the large-copy
+// helper used by byte_array_inflate. All vector stores use halfword elements.
+void JeandleRuntimeRoutine::generate_string_inflate_stub() {
+  ResourceMark rm;
+  CodeBuffer buffer(_string_inflate_stub, 1024, 64);
+  MacroAssembler* masm = new MacroAssembler(&buffer);
+  const Register src = c_rarg0;
+  const Register dst = c_rarg1;
+  const Register count = c_rarg2;
+  Label vector_loop, scalar, scalar_loop, done;
+  address start = __ pc();
+
+  __ uxtw(count, count);
+  __ fmovd(v1, 0.0);
+  __ bind(vector_loop);
+  __ cmpw(count, 8);
+  __ br(Assembler::LT, scalar);
+  __ ldrd(v0, Address(__ post(src, 8)));
+  __ zip1(v0, __ T16B, v0, v1);
+  __ st1(v0, __ T8H, Address(__ post(dst, 16)));
+  __ subw(count, count, 8);
+  __ b(vector_loop);
+  __ bind(scalar);
+  __ cbzw(count, done);
+  __ bind(scalar_loop);
+  __ ldrb(r3, Address(__ post(src, 1)));
+  __ strh(r3, Address(__ post(dst, 2)));
+  __ subsw(count, count, 1);
+  __ br(Assembler::NE, scalar_loop);
+  __ bind(done);
+  __ ret(lr);
+  masm->flush();
+
+  RuntimeStub* stub = RuntimeStub::new_runtime_stub(
+      _string_inflate_stub, &buffer, (int)(__ pc() - start),
+      0 /* frame size */, nullptr /* oop maps */, false);
+  address entry = stub->entry_point();
+  _routine_entry[_string_inflate_stub] = entry;
+  _gc_leaf_routines.insert(entry);
+}
