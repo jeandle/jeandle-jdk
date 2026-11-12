@@ -23,10 +23,14 @@
 #include "llvm/ADT/FloatingPointMode.h"
 #include "llvm/Analysis/ConstantFolding.h"
 #include "llvm/IR/Jeandle/Attributes.h"
+#include "llvm/IR/Jeandle/GCStrategy.h"
 #include "llvm/IR/Jeandle/JavaType.h"
+#include "llvm/IR/Jeandle/Metadata.h"
+#include "llvm/IR/CFG.h"
 #include "llvm/IR/Constants.h"
 #include "llvm/IR/DerivedTypes.h"
 #include "llvm/IR/MDBuilder.h"
+#include "llvm/Support/ModRef.h"
 
 #include "jeandle/jeandleAbstractInterpreter.hpp"
 #include "jeandle/jeandleRuntimeRoutine.hpp"
@@ -36,6 +40,7 @@
 #include "jeandle/__hotspotHeadersBegin__.hpp"
 #include "ci/ciField.hpp"
 #include "ci/ciInstanceKlass.hpp"
+#include "ci/ciKlass.hpp"
 #include "ci/ciMethod.hpp"
 #include "ci/ciSignature.hpp"
 #include "ci/ciSymbol.hpp"
@@ -54,6 +59,7 @@
 #include "runtime/vm_version.hpp"
 #include "utilities/globalDefinitions.hpp"
 
+#include <cstddef>
 #include <cstring>
 
 // =============================================================================
@@ -70,7 +76,8 @@ void annotate_call(llvm::CallBase* call,
 }
 
 void apply_memory_attr(llvm::CallBase* call, const CallSiteAttributeMetadata& attrs) {
-  if (attrs.needs_gc_state() || attrs.may_deopt() || attrs.needs_exception_edge()) {
+  if (attrs.needs_gc_state() || attrs.may_deopt() || attrs.needs_exception_edge() ||
+      attrs.observes_external_state()) {
     return;
   }
   const bool reads = attrs.reads_memory();
@@ -82,6 +89,25 @@ void apply_memory_attr(llvm::CallBase* call, const CallSiteAttributeMetadata& at
   } else if (!reads && writes) {
     call->setOnlyWritesMemory();       // memory(write)
   }
+}
+
+// Native word width of the crypto/digest stub ABI. jeandleRuntimeRoutine.hpp
+// declares integer arguments with BitsPerWord, so conversions from Java ints
+// target that exact type rather than a data-layout pointer width; a mismatch
+// between the two would be caught by the IR builder at the call site.
+static llvm::IntegerType* native_word_type(llvm::LLVMContext& context) {
+  return llvm::IntegerType::get(context, BitsPerWord);
+}
+
+// Branch weights for crypto-intrinsic guards: the stub edge is hot, every
+// guard-miss edge is cold. C2 marks all crypto predicate failure edges
+// PROB_MIN (1e-6, LibraryCallKit inline_*_predicate guards); with
+// generate_guard's scale of 1e6 that ratio is expressed as 999999 : 1.
+static llvm::MDNode* guard_miss_weights(llvm::LLVMContext& context) {
+  constexpr uint32_t BranchWeightScale = 1000000;
+  constexpr uint32_t MissWeight = 1;
+  return llvm::MDBuilder(context).createBranchWeights(BranchWeightScale - MissWeight,
+                                                      MissWeight);
 }
 
 // =============================================================================
@@ -124,6 +150,11 @@ bool JeandleIntrinsicLowering::is_supported(vmIntrinsics::ID id) {
     case vmIntrinsics::_floatToFloat16:
     case vmIntrinsics::_float16ToFloat:
       return VM_Version::supports_float16();
+
+    case vmIntrinsics::_writeback0:
+    case vmIntrinsics::_writebackPreSync0:
+    case vmIntrinsics::_writebackPostSync0:
+      return cpu_supports_cache_writeback();
 
     default: break;
   }
@@ -177,6 +208,10 @@ bool JeandleIntrinsicLowering::is_supported(vmIntrinsics::ID id) {
 
     // getClass
     case vmIntrinsics::_getClass:
+
+    // System time queries
+    case vmIntrinsics::_currentTimeMillis:
+    case vmIntrinsics::_nanoTime:
 
     // currentThread
     case vmIntrinsics::_currentThread:
@@ -285,17 +320,67 @@ bool JeandleIntrinsicLowering::is_supported(vmIntrinsics::ID id) {
 
     // arraycopy
     case vmIntrinsics::_arraycopy:
+    case vmIntrinsics::_clone:
+    case vmIntrinsics::_copyOf:
+    case vmIntrinsics::_copyOfRange:
     // hash code
     case vmIntrinsics::_hashCode:
     case vmIntrinsics::_identityHashCode:
+
+    // String operations over Latin1 and native-endian UTF16 arrays.
+    case vmIntrinsics::_compareToL:
+    case vmIntrinsics::_compareToU:
+    case vmIntrinsics::_compareToLU:
+    case vmIntrinsics::_compareToUL:
+    case vmIntrinsics::_indexOfL:
+    case vmIntrinsics::_indexOfU:
+    case vmIntrinsics::_indexOfUL:
+    case vmIntrinsics::_indexOfIL:
+    case vmIntrinsics::_indexOfIU:
+    case vmIntrinsics::_indexOfIUL:
+    case vmIntrinsics::_indexOfL_char:
+    case vmIntrinsics::_indexOfU_char:
+    case vmIntrinsics::_equalsL:
+    case vmIntrinsics::_equalsU:
+    case vmIntrinsics::_toBytesStringU:
+    case vmIntrinsics::_getCharsStringU:
+    case vmIntrinsics::_compressStringC:
+    case vmIntrinsics::_compressStringB:
+    case vmIntrinsics::_inflateStringC:
+    case vmIntrinsics::_inflateStringB:
       return true;
 
-    // Single-block SHA compression. Availability is checked again by the
+    // arrayequals
+    case vmIntrinsics::_equalsB:
+    case vmIntrinsics::_equalsC:
+      return true;
+
+    // Single-block digest compression (MD5 and the SHA family).
+    // Availability is checked again by the
     // lowering because platform stubs are generated conditionally.
+    case vmIntrinsics::_md5_implCompress:
     case vmIntrinsics::_sha_implCompress:
     case vmIntrinsics::_sha2_implCompress:
     case vmIntrinsics::_sha5_implCompress:
     case vmIntrinsics::_sha3_implCompress:
+
+    // Crypto and digest stub intrinsics. As with SHA, the lowering re-checks
+    // availability: per-algorithm Use*Intrinsics flags via
+    // vmIntrinsics::is_disabled_by_flags (called by try_lower_intrinsic) and
+    // platform stub generation via JeandleRuntimeRoutine::find_routine_entry.
+    case vmIntrinsics::_digestBase_implCompressMB:
+    case vmIntrinsics::_aescrypt_encryptBlock:
+    case vmIntrinsics::_aescrypt_decryptBlock:
+    case vmIntrinsics::_cipherBlockChaining_encryptAESCrypt:
+    case vmIntrinsics::_cipherBlockChaining_decryptAESCrypt:
+    case vmIntrinsics::_electronicCodeBook_encryptAESCrypt:
+    case vmIntrinsics::_electronicCodeBook_decryptAESCrypt:
+    case vmIntrinsics::_counterMode_AESCrypt:
+    case vmIntrinsics::_galoisCounterMode_AESCrypt:
+    case vmIntrinsics::_ghash_processBlocks:
+    case vmIntrinsics::_chacha20Block:
+    case vmIntrinsics::_poly1305_processBlocks:
+      return true;
 
     // StringUTF16 trusted single-code-unit access
     case vmIntrinsics::_getCharStringU:
@@ -453,6 +538,13 @@ bool JeandleIntrinsicLowering::lower(vmIntrinsics::ID id, const ciMethod* target
       return lower_java_op("jeandle.get_class",
                            {CTRL_NONE, MEM_READ});
 
+    case vmIntrinsics::_currentTimeMillis:
+      return lower_native_time_func(
+          JeandleRuntimeRoutine::os_javaTimeMillis_callee(_interp->_module));
+    case vmIntrinsics::_nanoTime:
+      return lower_native_time_func(
+          JeandleRuntimeRoutine::os_javaTimeNanos_callee(_interp->_module));
+
     // Thread.currentThread()
     case vmIntrinsics::_currentThread:
       return lower_java_op("jeandle.current_thread_obj",
@@ -516,6 +608,15 @@ bool JeandleIntrinsicLowering::lower(vmIntrinsics::ID id, const ciMethod* target
     case vmIntrinsics::_onSpinWait:
       return lower_spin_wait_hint();
 
+    // writeback0
+    case vmIntrinsics::_writeback0:
+      return lower_writeback0();
+
+    // writebackPreSync0 / writebackPostSync0
+    case vmIntrinsics::_writebackPreSync0:
+    case vmIntrinsics::_writebackPostSync0:
+      return lower_writeback_sync(id);
+
     // Preconditions
     case vmIntrinsics::_Preconditions_checkIndex:
       return lower_preconditions_check_index(T_INT);
@@ -567,12 +668,84 @@ bool JeandleIntrinsicLowering::lower(vmIntrinsics::ID id, const ciMethod* target
     // arraycopy
     case vmIntrinsics::_arraycopy:
       return lower_arraycopy();
+    case vmIntrinsics::_clone:
+      return lower_object_clone();
+    case vmIntrinsics::_copyOf:
+      return lower_arrays_copy_of(false);
+    case vmIntrinsics::_copyOfRange:
+      return lower_arrays_copy_of(true);
 
+    case vmIntrinsics::_compareToL:
+    case vmIntrinsics::_compareToU:
+    case vmIntrinsics::_compareToLU:
+    case vmIntrinsics::_compareToUL:
+    case vmIntrinsics::_indexOfL:
+    case vmIntrinsics::_indexOfU:
+    case vmIntrinsics::_indexOfUL:
+    case vmIntrinsics::_indexOfIL:
+    case vmIntrinsics::_indexOfIU:
+    case vmIntrinsics::_indexOfIUL:
+    case vmIntrinsics::_indexOfL_char:
+    case vmIntrinsics::_indexOfU_char:
+    case vmIntrinsics::_equalsL:
+    case vmIntrinsics::_equalsU:
+    case vmIntrinsics::_toBytesStringU:
+    case vmIntrinsics::_getCharsStringU:
+    case vmIntrinsics::_compressStringC:
+    case vmIntrinsics::_compressStringB:
+    case vmIntrinsics::_inflateStringC:
+    case vmIntrinsics::_inflateStringB:
+      return lower_string_intrinsic(id);
+
+    // arraycopy
+    case vmIntrinsics::_equalsB:
+      return lower_arrayequals(T_BYTE);
+    case vmIntrinsics::_equalsC:
+      return lower_arrayequals(T_CHAR);
+
+    case vmIntrinsics::_md5_implCompress:
     case vmIntrinsics::_sha_implCompress:
     case vmIntrinsics::_sha2_implCompress:
     case vmIntrinsics::_sha5_implCompress:
     case vmIntrinsics::_sha3_implCompress:
       return lower_digestBase_implCompress(id);
+
+    // Multi-block digest compression (per-receiver-algorithm guarded).
+    case vmIntrinsics::_digestBase_implCompressMB:
+      return lower_digestBase_implCompressMB();
+
+    // AESCrypt single-block encrypt/decrypt (unguarded stub bridge).
+    case vmIntrinsics::_aescrypt_encryptBlock:
+    case vmIntrinsics::_aescrypt_decryptBlock:
+      return lower_aescrypt_block(id);
+
+    // Guarded AES block-cipher modes (CBC and ECB).
+    case vmIntrinsics::_cipherBlockChaining_encryptAESCrypt:
+    case vmIntrinsics::_cipherBlockChaining_decryptAESCrypt:
+    case vmIntrinsics::_electronicCodeBook_encryptAESCrypt:
+    case vmIntrinsics::_electronicCodeBook_decryptAESCrypt:
+      return lower_block_cipher_mode(id);
+
+    // Counter-mode AES, guarded on the embedded cipher's runtime type.
+    case vmIntrinsics::_counterMode_AESCrypt:
+      return lower_counter_mode();
+
+    // Combined AES-GCM crypt+GHASH, guarded on the gctr's embedded cipher.
+    case vmIntrinsics::_galoisCounterMode_AESCrypt:
+      return lower_galois_counter_mode();
+
+    // GHASH multi-block MAC: direct stub bridge, no receiver-type guard.
+    case vmIntrinsics::_ghash_processBlocks:
+      return lower_ghash_process_blocks();
+
+    // ChaCha20 block keystream: direct stub bridge, no receiver-type guard.
+    case vmIntrinsics::_chacha20Block:
+      return lower_chacha20_block();
+
+    // Poly1305 multi-block MAC: direct stub bridge, no receiver-type guard.
+    case vmIntrinsics::_poly1305_processBlocks:
+      return lower_poly1305_process_blocks();
+
     // HashCode
     case vmIntrinsics::_identityHashCode:
     case vmIntrinsics::_hashCode:
@@ -593,6 +766,15 @@ bool JeandleIntrinsicLowering::lower(vmIntrinsics::ID id, const ciMethod* target
 // Shared emit helpers
 // =============================================================================
 
+bool JeandleIntrinsicLowering::lower_native_time_func(llvm::FunctionCallee callee) {
+  static constexpr CallSiteAttributeMetadata attrs = {
+      CTRL_NONE, MEM_OBSERVES_EXTERNAL_STATE};
+  llvm::CallBase* result = emit_callsite(
+      callee, llvm::CallingConv::C, {}, attrs, /*is_gc_leaf_entry=*/true);
+  _interp->_jvm->lpush(result);
+  return true;
+}
+
 llvm::CallBase* JeandleIntrinsicLowering::emit_callsite(llvm::FunctionCallee callee,
                                                         llvm::CallingConv::ID cc,
                                                         llvm::ArrayRef<llvm::Value*> args,
@@ -604,7 +786,8 @@ llvm::CallBase* JeandleIntrinsicLowering::emit_callsite(llvm::FunctionCallee cal
   }
   llvm::CallBase* site;
   if (attrs.needs_exception_edge()) {
-    site = _interp->create_call_ex(callee, args, cc, bundles);
+    site = _interp->create_call_ex(callee, args, cc, bundles,
+                                   attrs.deoptimize_on_exception());
   } else {
     site = _interp->create_call(callee, args, cc, bundles);
     site->setDoesNotThrow();
@@ -690,15 +873,12 @@ bool JeandleIntrinsicLowering::lower_dual_path_libm(llvm::Intrinsic::ID llvm_id,
 }
 
 // =============================================================================
-// lower_digestBase_implCompress — single-block SHA compression
+// lower_digestBase_implCompress — single-block digest compression (MD5/SHA)
 // =============================================================================
 
 bool JeandleIntrinsicLowering::lower_digestBase_implCompress(vmIntrinsics::ID id) {
   ciSignature* sig = _target->signature();
-  if (sig->count() != 2 || sig->type_at(0)->basic_type() != T_ARRAY ||
-      sig->type_at(1)->basic_type() != T_INT ||
-      sig->type_at(0)->name() == nullptr ||
-      strcmp(sig->type_at(0)->name(), "[B") != 0) {
+  if (!expect_signature(sig, {SigKind::ByteArray, SigKind::Int}, T_ILLEGAL)) {
     return false;
   }
 
@@ -707,6 +887,12 @@ bool JeandleIntrinsicLowering::lower_digestBase_implCompress(vmIntrinsics::ID id
   BasicType state_element_type = T_ILLEGAL;
   JeandleRuntimeCalleeFn callee_fn = nullptr;
   switch (id) {
+    case vmIntrinsics::_md5_implCompress:
+      state_signature = "[I";
+      state_element_type = T_INT;
+      stub_name = "StubRoutines_md5_implCompress";
+      callee_fn = &JeandleRuntimeRoutine::StubRoutines_md5_implCompress_callee;
+      break;
     case vmIntrinsics::_sha_implCompress:
       state_signature = "[I";
       state_element_type = T_INT;
@@ -742,17 +928,14 @@ bool JeandleIntrinsicLowering::lower_digestBase_implCompress(vmIntrinsics::ID id
   }
 
   ciInstanceKlass* holder = _target->holder();
-  ciField* state_field = holder->get_field_by_name(ciSymbol::make("state"),
-                                                   ciSymbol::make(state_signature),
-                                                   false);
+  ciField* state_field = find_instance_field(holder, "state", state_signature);
   if (state_field == nullptr) {
     return false;
   }
 
   ciField* block_size_field = nullptr;
   if (id == vmIntrinsics::_sha3_implCompress) {
-    block_size_field = holder->get_field_by_name(ciSymbol::make("blockSize"),
-                                                 ciSymbol::make("I"), false);
+    block_size_field = find_instance_field(holder, "blockSize", "I");
     if (block_size_field == nullptr) {
       return false;
     }
@@ -766,52 +949,1057 @@ bool JeandleIntrinsicLowering::lower_digestBase_implCompress(vmIntrinsics::ID id
   llvm::Value* ofs = _interp->_jvm->raw_peek(0).value();
   _interp->null_check(src);
 
-  llvm::IRBuilder<>& builder = _interp->_ir_builder;
-  llvm::LLVMContext& context = *_interp->_context;
-  llvm::Type* java_oop_type = JeandleType::java2llvm(T_OBJECT, context);
-
-  llvm::Value* src_offset = builder.CreateAdd(
-      builder.getInt32(arrayOopDesc::base_offset_in_bytes(T_BYTE)), ofs,
-      "sha_src_offset");
-  llvm::Value* src_start = builder.CreateInBoundsPtrAdd(src, src_offset,
-                                                        "sha_src_start");
-
-  llvm::Value* state_field_addr = _interp->compute_instance_field_address(
-      receiver, state_field->offset_in_bytes());
-  BasicType state_ref_type = state_field->layout_type();
-  if (UseCompressedOops && is_reference_type(state_ref_type)) {
-    state_ref_type = T_NARROWOOP;
-  }
-  llvm::Value* state_array = _interp->load_from_address(state_field_addr,
-                                                        state_ref_type, false);
-  if (state_ref_type == T_NARROWOOP) {
-    state_array = builder.CreateAddrSpaceCast(state_array, java_oop_type,
-                                              "sha_state_array");
-  }
-
-  llvm::Value* state_base = builder.CreateInBoundsPtrAdd(
-      state_array, builder.getInt32(arrayOopDesc::base_offset_in_bytes(state_element_type)),
-      "sha_state_base");
-
+  // Commit: pop all operands; the values stay live as SSA across the call.
   _interp->_jvm->ipop();  // ofs
   _interp->_jvm->apop();  // src
-  _interp->_jvm->apop();  // receiver
+  _interp->_jvm->apop();  // receiver (null-checked by invoke())
 
-  static constexpr CallSiteAttributeMetadata attrs = {
-      CTRL_NONE, MEM_READ | MEM_WRITE};
+  llvm::Value* src_start = array_data_pointer(src, T_BYTE, ofs,
+                                              "sha_src_start");
+  llvm::Value* state_array =
+      load_instance_object_field(receiver, state_field, "sha_state_array");
+  llvm::Value* state_base = array_element0_pointer(state_array,
+                                                   state_element_type,
+                                                   "sha_state_base");
+
   if (block_size_field == nullptr) {
-    emit_callsite(callee_fn(_interp->_module), llvm::CallingConv::C,
-                  {src_start, state_base}, attrs,
-                  /*is_gc_leaf_entry=*/true);
+    emit_crypto_stub(callee_fn, {src_start, state_base});
   } else {
     llvm::Value* block_size_addr = _interp->compute_instance_field_address(
         receiver, block_size_field->offset_in_bytes());
     llvm::Value* block_size = _interp->load_from_address(block_size_addr,
                                                          T_INT, false);
-    emit_callsite(callee_fn(_interp->_module), llvm::CallingConv::C,
-                  {src_start, state_base, block_size}, attrs,
-                  /*is_gc_leaf_entry=*/true);
+    llvm::IRBuilder<>& builder = _interp->_ir_builder;
+    block_size = builder.CreateZExtOrTrunc(
+        block_size, native_word_type(*_interp->_context));
+    emit_crypto_stub(callee_fn, {src_start, state_base, block_size});
   }
+  return true;
+}
+
+// =============================================================================
+// Shared crypto-intrinsic helpers
+// =============================================================================
+
+llvm::CallBase* JeandleIntrinsicLowering::emit_crypto_stub(
+    JeandleRuntimeCalleeFn callee, llvm::ArrayRef<llvm::Value*> args) {
+  static constexpr CallSiteAttributeMetadata attrs = {
+      CTRL_NONE, MEM_READ | MEM_WRITE};
+  llvm::CallBase* call = emit_callsite(callee(_interp->_module), llvm::CallingConv::C,
+                                      args, attrs, /*is_gc_leaf_entry=*/true);
+  // Crypto stubs update only the buffers and state passed by address. Their
+  // masks and round constants are VM-owned tables inaccessible to LLVM IR.
+  // Keep argument memory read/write: input and output buffers may alias.
+  call->setMemoryEffects(llvm::MemoryEffects::inaccessibleOrArgMemOnly()
+      .getWithModRef(llvm::MemoryEffects::Location::InaccessibleMem, llvm::ModRefInfo::Ref));
+  return call;
+}
+
+bool JeandleIntrinsicLowering::expect_signature(
+    const ciSignature* sig, llvm::ArrayRef<SigKind> params, BasicType ret) {
+  if (sig->count() != static_cast<int>(params.size())) {
+    return false;
+  }
+  int index = 0;
+  for (SigKind kind : params) {
+    ciType* type = sig->type_at(index++);
+    BasicType basic;
+    const char* array_name;  // nullptr for non-array kinds
+    switch (kind) {
+      case SigKind::ByteArray:  basic = T_ARRAY;  array_name = "[B"; break;
+      case SigKind::IntArray:   basic = T_ARRAY;  array_name = "[I"; break;
+      case SigKind::LongArray:  basic = T_ARRAY;  array_name = "[J"; break;
+      case SigKind::Int:        basic = T_INT;    array_name = nullptr; break;
+      case SigKind::Object:     basic = T_OBJECT; array_name = nullptr; break;
+      default:                  return false;
+    }
+    // Only array types carry a name(); the name comparison must be reached
+    // after the basic-type check so it never dereferences a basic ciType.
+    if (type->basic_type() != basic ||
+        (array_name != nullptr &&
+         (type->name() == nullptr || strcmp(type->name(), array_name) != 0))) {
+      return false;
+    }
+  }
+  return ret == T_ILLEGAL || sig->return_type()->basic_type() == ret;
+}
+
+ciInstanceKlass* JeandleIntrinsicLowering::resolve_loaded_instance_klass(
+    const char* klass_name) {
+  ciKlass* klass = const_cast<ciMethod*>(_target)->holder()->find_klass(
+      ciSymbol::make(klass_name));
+  if (klass == nullptr || !klass->is_loaded() || !klass->is_instance_klass()) {
+    return nullptr;
+  }
+  return klass->as_instance_klass();
+}
+
+ciField* JeandleIntrinsicLowering::find_instance_field(
+    ciInstanceKlass* holder, const char* name, const char* signature) {
+  return holder->get_field_by_name(ciSymbol::make(name),
+                                   ciSymbol::make(signature), false);
+}
+
+llvm::Value* JeandleIntrinsicLowering::array_element0_pointer(
+    llvm::Value* array, BasicType elem_type, const char* name) {
+  return array_data_pointer(array, elem_type, nullptr, name);
+}
+
+llvm::Value* JeandleIntrinsicLowering::array_data_pointer(
+    llvm::Value* array, BasicType elem_type, llvm::Value* byte_offset,
+    const char* name) {
+  llvm::IRBuilder<>& builder = _interp->_ir_builder;
+  llvm::IntegerType* offset_type = builder.getIntPtrTy(
+      _interp->_module.getDataLayout(), llvm::jeandle::AddrSpace::JavaHeapAddrSpace);
+  llvm::Value* offset = llvm::ConstantInt::get(
+      offset_type, arrayOopDesc::base_offset_in_bytes(elem_type));
+  if (byte_offset != nullptr) {
+    // Array offsets can approach Integer.MAX_VALUE. Add the header only
+    // after extending the Java offset to the native address width.
+    offset = builder.CreateAdd(offset, builder.CreateSExtOrTrunc(byte_offset, offset_type));
+  }
+  return builder.CreateInBoundsPtrAdd(array, offset, name);
+}
+
+llvm::Value* JeandleIntrinsicLowering::load_instance_object_field(
+    llvm::Value* obj, ciField* field, const char* name) {
+  llvm::IRBuilder<>& builder = _interp->_ir_builder;
+  llvm::Value* field_addr = _interp->compute_instance_field_address(
+      obj, field->offset_in_bytes());
+  BasicType ref_type = field->layout_type();
+  if (UseCompressedOops && is_reference_type(ref_type)) {
+    ref_type = T_NARROWOOP;
+  }
+  llvm::Value* value = _interp->load_from_address(field_addr, ref_type, false);
+  if (ref_type == T_NARROWOOP) {
+    value = builder.CreateAddrSpaceCast(
+        value, JeandleType::java2llvm(T_OBJECT, *_interp->_context), name);
+  }
+  return value;
+}
+
+llvm::Value* JeandleIntrinsicLowering::klass_constant_pointer(ciKlass* klass) {
+  llvm::IRBuilder<>& builder = _interp->_ir_builder;
+  llvm::PointerType* klass_type = llvm::PointerType::get(
+      *_interp->_context, llvm::jeandle::AddrSpace::CHeapAddrSpace);
+  return builder.CreateIntToPtr(
+      builder.getInt64((intptr_t)klass->constant_encoding()), klass_type);
+}
+
+llvm::Value* JeandleIntrinsicLowering::merge_with_java_fallback(
+    llvm::ArrayRef<llvm::Value*> stub_results,
+    llvm::ArrayRef<llvm::BasicBlock*> stub_blocks,
+    llvm::BasicBlock* merge_bb,
+    llvm::ArrayRef<llvm::Value*> java_args,
+    bool has_receiver,
+    const llvm::Twine& phi_name) {
+  assert(!stub_results.empty() && stub_results.size() == stub_blocks.size(),
+         "one result per guarded stub path");
+  assert(merge_bb != nullptr, "merge block must exist");
+  assert(_interp->_bytecodes.get_declared_method_holder() != nullptr,
+         "declared holder must be available");
+
+  llvm::IRBuilder<>& builder = _interp->_ir_builder;
+
+  // Fallback for every guard miss: a normal Java call of the intrinsified
+  // method. The call is statically bound to the target, whose standalone
+  // compilation keeps the original Java body.
+  llvm::InvokeInst* java_call = _interp->emit_java_call(
+      const_cast<ciMethod*>(_target),
+      _interp->_bytecodes.get_declared_method_holder(),
+      _target->signature(), java_args, has_receiver,
+      /*is_method_handle_invoke=*/false, _interp->_bytecodes.cur_bc_raw(),
+      /*call_does_dispatch=*/false);
+  if (JeandleCompilation::jeandle_error_occurred()) {
+    return nullptr;
+  }
+  builder.CreateBr(merge_bb);
+  llvm::BasicBlock* java_tail_bb = builder.GetInsertBlock();
+
+  builder.SetInsertPoint(merge_bb);
+  _interp->_block->set_tail_llvm_block(merge_bb);
+  llvm::PHINode* result = builder.CreatePHI(
+      JeandleType::java2llvm(T_INT, *_interp->_context),
+      stub_results.size() + 1, phi_name);
+  for (size_t i = 0; i < stub_results.size(); ++i) {
+    result->addIncoming(stub_results[i], stub_blocks[i]);
+  }
+  result->addIncoming(java_call, java_tail_bb);
+  return result;
+}
+
+// =============================================================================
+// lower_digestBase_implCompressMB — multi-block digest compression
+// =============================================================================
+
+// Mirrors C2's predicated inline_digestBase_implCompressMB: the shared
+// DigestBase.implCompressMultiBlock0 is intrinsified per receiver algorithm
+// with an instanceof guard per branch; receivers that match no branch run
+// the normal Java loop (the virtual implCompress dispatch) via a plain call.
+bool JeandleIntrinsicLowering::lower_digestBase_implCompressMB() {
+  ciSignature* sig = _target->signature();
+  if (!expect_signature(sig,
+                        {SigKind::ByteArray, SigKind::Int, SigKind::Int},
+                        T_ILLEGAL)) {
+    return false;
+  }
+
+  struct MBSpec {
+    vmIntrinsics::ID gate_id;         // per-algorithm Use*Intrinsics gate
+    const char* klass_name;
+    const char* label;                // block naming
+    const char* stub_name;            // JeandleRuntimeRoutine entry name
+    JeandleRuntimeCalleeFn callee;
+    const char* state_signature;      // state field type
+    BasicType state_elem;
+    bool has_block_size;              // SHA3 passes blockSize to the stub
+  };
+  static const MBSpec SPECS[] = {
+      { vmIntrinsics::_md5_implCompress, "sun/security/provider/MD5", "md5",
+        "StubRoutines_md5_implCompressMB",
+        &JeandleRuntimeRoutine::StubRoutines_md5_implCompressMB_callee,
+        "[I", T_INT, false },
+      { vmIntrinsics::_sha_implCompress, "sun/security/provider/SHA", "sha1",
+        "StubRoutines_sha1_implCompressMB",
+        &JeandleRuntimeRoutine::StubRoutines_sha1_implCompressMB_callee,
+        "[I", T_INT, false },
+      { vmIntrinsics::_sha2_implCompress, "sun/security/provider/SHA2", "sha256",
+        "StubRoutines_sha256_implCompressMB",
+        &JeandleRuntimeRoutine::StubRoutines_sha256_implCompressMB_callee,
+        "[I", T_INT, false },
+      { vmIntrinsics::_sha5_implCompress, "sun/security/provider/SHA5", "sha512",
+        "StubRoutines_sha512_implCompressMB",
+        &JeandleRuntimeRoutine::StubRoutines_sha512_implCompressMB_callee,
+        "[J", T_LONG, false },
+      { vmIntrinsics::_sha3_implCompress, "sun/security/provider/SHA3", "sha3",
+        "StubRoutines_sha3_implCompressMB",
+        &JeandleRuntimeRoutine::StubRoutines_sha3_implCompressMB_callee,
+        "[B", T_BYTE, true },
+  };
+
+  // Compile-time branch gating, like C2's predicate selection: the
+  // algorithm's Use*Intrinsics flag must be on (the MB id itself only
+  // requires one of the five), the platform must have generated the MB
+  // stub, and the algorithm class and its fields must be resolvable.
+  struct ResolvedMB { const MBSpec* spec; ciInstanceKlass* klass;
+                      ciField* state_field; ciField* block_size_field; };
+  llvm::SmallVector<ResolvedMB, 5> branches;
+  for (const MBSpec& spec : SPECS) {
+    if (vmIntrinsics::is_disabled_by_flags(spec.gate_id)) continue;
+    if (JeandleRuntimeRoutine::find_routine_entry(spec.stub_name) == nullptr) continue;
+    ciInstanceKlass* klass = resolve_loaded_instance_klass(spec.klass_name);
+    if (klass == nullptr) continue;
+    ciField* state = find_instance_field(klass, "state", spec.state_signature);
+    if (state == nullptr) continue;
+    ciField* block_size = spec.has_block_size
+        ? find_instance_field(klass, "blockSize", "I") : nullptr;
+    if (spec.has_block_size && block_size == nullptr) continue;
+    branches.push_back({&spec, klass, state, block_size});
+  }
+  if (branches.empty()) {
+    return false;
+  }
+
+  // All compile-time checks must happen before the operand stack is touched;
+  // this includes the declared holder for the potential Java fallback call.
+  if (_interp->_bytecodes.get_declared_method_holder() == nullptr) {
+    return false;
+  }
+
+  // Peek (not pop) until every fallible step has succeeded, preserving the
+  // operand stack for the normal invoke path on failure.
+  llvm::Value* receiver = _interp->_jvm->raw_peek(3).value();
+  llvm::Value* src = _interp->_jvm->raw_peek(2).value();
+  llvm::Value* ofs = _interp->_jvm->raw_peek(1).value();
+  llvm::Value* limit = _interp->_jvm->raw_peek(0).value();
+  _interp->null_check(src);
+
+  // Commit: pop all operands; the values stay live as SSA across branches.
+  _interp->_jvm->ipop();  // limit
+  _interp->_jvm->ipop();  // ofs
+  _interp->_jvm->apop();  // b
+  _interp->_jvm->apop();  // receiver (null-checked by invoke())
+
+  llvm::IRBuilder<>& builder = _interp->_ir_builder;
+  llvm::LLVMContext& ctx = *_interp->_context;
+
+  llvm::Value* src_start = array_data_pointer(src, T_BYTE, ofs);
+  llvm::IntegerType* word_type = native_word_type(ctx);
+
+  llvm::BasicBlock* merge_bb =
+      llvm::BasicBlock::Create(ctx, "digestMB_merge", _interp->_llvm_func);
+  llvm::SmallVector<llvm::Value*, 6> results;
+  llvm::SmallVector<llvm::BasicBlock*, 6> result_blocks;
+
+  for (const ResolvedMB& branch : branches) {
+    // invoke() has already checked the receiver for null. Each branch
+    // assumes it is the receiver's algorithm, so its miss edge (the next
+    // guard, and finally the Java fallback) stays cold like C2's PROB_MIN
+    // predicates.
+    llvm::Value* hit = _interp->call_java_op(
+        "jeandle.check_instanceof",
+        {klass_constant_pointer(branch.klass), receiver});
+
+    llvm::BasicBlock* hit_bb = llvm::BasicBlock::Create(
+        ctx, std::string("digestMB_") + branch.spec->label + "_hit",
+        _interp->_llvm_func);
+    llvm::BasicBlock* next_bb = llvm::BasicBlock::Create(
+        ctx, std::string("digestMB_") + branch.spec->label + "_next",
+        _interp->_llvm_func);
+    builder.CreateCondBr(hit, hit_bb, next_bb, guard_miss_weights(ctx));
+
+    builder.SetInsertPoint(hit_bb);
+    llvm::Value* state_array =
+        load_instance_object_field(receiver, branch.state_field);
+    llvm::Value* state_base =
+        array_element0_pointer(state_array, branch.spec->state_elem);
+    // Match each entry's register contract directly from the Java values.
+    // x86 MD5 uses 32-bit offsets; the other entries consume native words.
+    llvm::FunctionType* stub_type = branch.spec->callee(_interp->_module).getFunctionType();
+    llvm::Type* offset_type = stub_type->getParamType(branch.spec->has_block_size ? 3 : 2);
+    llvm::Value* stub_ofs = builder.CreateSExtOrTrunc(ofs, offset_type);
+    llvm::Value* stub_limit = builder.CreateSExtOrTrunc(limit, offset_type);
+    llvm::CallBase* call;
+    if (branch.block_size_field == nullptr) {
+      call = emit_crypto_stub(branch.spec->callee,
+                           {src_start, state_base, stub_ofs, stub_limit});
+    } else {
+      llvm::Value* block_size_addr = _interp->compute_instance_field_address(
+          receiver, branch.block_size_field->offset_in_bytes());
+      llvm::Value* block_size =
+          _interp->load_from_address(block_size_addr, T_INT, false);
+      block_size = builder.CreateZExtOrTrunc(block_size, word_type);
+      call = emit_crypto_stub(branch.spec->callee,
+                           {src_start, state_base, block_size, stub_ofs, stub_limit});
+    }
+    builder.CreateBr(merge_bb);
+    results.push_back(call);
+    result_blocks.push_back(builder.GetInsertBlock());
+    builder.SetInsertPoint(next_bb);
+  }
+
+  // No guard matched: run the original Java loop (virtual implCompress
+  // dispatch preserved by the callee) through a normal call.
+  llvm::Value* mb_ofs = merge_with_java_fallback(
+      results, result_blocks, merge_bb, {receiver, src, ofs, limit},
+      /*has_receiver=*/true, "digestMB_ofs");
+  if (mb_ofs == nullptr) {
+    return true;
+  }
+  _interp->_jvm->ipush(mb_ofs);
+  return true;
+}
+
+// =============================================================================
+// lower_aescrypt_block — AESCrypt single-block encrypt/decrypt
+// =============================================================================
+
+// AESCrypt.implEncryptBlock/implDecryptBlock is only called with an AESCrypt
+// receiver, so it bridges straight to the single-block stub without a guard,
+// like the single-block digest lowering.
+bool JeandleIntrinsicLowering::lower_aescrypt_block(vmIntrinsics::ID id) {
+  const char* stub_name = nullptr;
+  JeandleRuntimeCalleeFn callee_fn = nullptr;
+  switch (id) {
+    case vmIntrinsics::_aescrypt_encryptBlock:
+      stub_name = "StubRoutines_aescrypt_encryptBlock";
+      callee_fn = &JeandleRuntimeRoutine::StubRoutines_aescrypt_encryptBlock_callee;
+      break;
+    case vmIntrinsics::_aescrypt_decryptBlock:
+      stub_name = "StubRoutines_aescrypt_decryptBlock";
+      callee_fn = &JeandleRuntimeRoutine::StubRoutines_aescrypt_decryptBlock_callee;
+      break;
+    default:
+      return false;
+  }
+
+  // implEncryptBlock(byte[] in, int inOffset, byte[] out, int outOffset)
+  ciSignature* sig = _target->signature();
+  if (!expect_signature(sig,
+                        {SigKind::ByteArray, SigKind::Int,
+                         SigKind::ByteArray, SigKind::Int}, T_VOID)) {
+    return false;
+  }
+
+  // StubRoutines entries are generated only on platforms with AES
+  // instructions; never materialize a direct call when the entry is absent.
+  if (JeandleRuntimeRoutine::find_routine_entry(stub_name) == nullptr) {
+    return false;
+  }
+
+  ciField* k_field = find_instance_field(_target->holder(), "K", "[I");
+  if (k_field == nullptr) {
+    return false;
+  }
+
+  // Peek (not pop) until every fallible step has succeeded, preserving the
+  // operand stack for the normal invoke path on failure.
+  llvm::Value* receiver = _interp->_jvm->raw_peek(4).value();
+  llvm::Value* src      = _interp->_jvm->raw_peek(3).value();
+  llvm::Value* src_ofs  = _interp->_jvm->raw_peek(2).value();
+  llvm::Value* dst      = _interp->_jvm->raw_peek(1).value();
+  llvm::Value* dst_ofs  = _interp->_jvm->raw_peek(0).value();
+  _interp->null_check(src);
+  _interp->null_check(dst);
+
+  // Commit: pop all operands; the values stay live as SSA across the call.
+  _interp->_jvm->ipop();  // dst_ofs
+  _interp->_jvm->apop();  // dst
+  _interp->_jvm->ipop();  // src_ofs
+  _interp->_jvm->apop();  // src
+  _interp->_jvm->apop();  // receiver (null-checked by invoke())
+
+  llvm::Value* src_start = array_data_pointer(src, T_BYTE, src_ofs);
+  llvm::Value* dst_start = array_data_pointer(dst, T_BYTE, dst_ofs);
+  llvm::Value* k_array = load_instance_object_field(receiver, k_field);
+  llvm::Value* k_start = array_element0_pointer(k_array, T_INT);
+
+  emit_crypto_stub(callee_fn, {src_start, dst_start, k_start});
+  return true;
+}
+
+// =============================================================================
+// lower_block_cipher_mode — guarded CBC/ECB AES block-cipher intrinsics
+// =============================================================================
+
+// Mirrors C2's predicated inline_cipherBlockChaining_AESCrypt /
+// inline_electronicCodeBook_AESCrypt: the shared FeedbackCipher mode methods
+// are intrinsified behind an instanceof guard on the runtime type of the
+// embeddedCipher field. Non-AES and null embedded ciphers take a normal Java
+// call, and so does decryption with conjoint src==dst buffers: like C2's
+// conservative predicate, the guard keeps the Java loop's observable
+// behavior, which the stub's in-place block updates would not reproduce for
+// that buffer shape.
+bool JeandleIntrinsicLowering::lower_block_cipher_mode(vmIntrinsics::ID id) {
+  const char* label = nullptr;                // IR block-name prefix
+  const char* stub_name = nullptr;
+  JeandleRuntimeCalleeFn callee_fn = nullptr;
+  bool has_r_vector = false;                  // CBC passes the r vector
+  bool decrypting = false;
+  switch (id) {
+    case vmIntrinsics::_cipherBlockChaining_encryptAESCrypt:
+      label = "cbc";
+      stub_name = "StubRoutines_cipherBlockChaining_encryptAESCrypt";
+      callee_fn = &JeandleRuntimeRoutine::StubRoutines_cipherBlockChaining_encryptAESCrypt_callee;
+      has_r_vector = true;
+      break;
+    case vmIntrinsics::_cipherBlockChaining_decryptAESCrypt:
+      label = "cbc";
+      stub_name = "StubRoutines_cipherBlockChaining_decryptAESCrypt";
+      callee_fn = &JeandleRuntimeRoutine::StubRoutines_cipherBlockChaining_decryptAESCrypt_callee;
+      has_r_vector = true;
+      decrypting = true;
+      break;
+    case vmIntrinsics::_electronicCodeBook_encryptAESCrypt:
+      label = "ecb";
+      stub_name = "StubRoutines_electronicCodeBook_encryptAESCrypt";
+      callee_fn = &JeandleRuntimeRoutine::StubRoutines_electronicCodeBook_encryptAESCrypt_callee;
+      break;
+    case vmIntrinsics::_electronicCodeBook_decryptAESCrypt:
+      label = "ecb";
+      stub_name = "StubRoutines_electronicCodeBook_decryptAESCrypt";
+      callee_fn = &JeandleRuntimeRoutine::StubRoutines_electronicCodeBook_decryptAESCrypt_callee;
+      decrypting = true;
+      break;
+    default:
+      return false;
+  }
+
+  // implEncrypt(byte[] src, int srcOfs, int len, byte[] dst, int dstOfs): int
+  ciSignature* sig = _target->signature();
+  if (!expect_signature(sig,
+                        {SigKind::ByteArray, SigKind::Int, SigKind::Int,
+                         SigKind::ByteArray, SigKind::Int}, T_INT)) {
+    return false;
+  }
+
+  // Platform stub generation is conditional (x86 registers the ECB stubs
+  // only with AVX512 VAES); a missing entry closes the intrinsic.
+  if (JeandleRuntimeRoutine::find_routine_entry(stub_name) == nullptr) {
+    return false;
+  }
+
+  // embeddedCipher is declared by FeedbackCipher; AESCrypt may not be loaded
+  // yet when some other SymmetricCipher reached this call site, in which case
+  // the guard could not be closed and the intrinsic is declined.
+  ciInstanceKlass* holder = _target->holder();
+  ciField* embedded_field = find_instance_field(
+      holder, "embeddedCipher", "Lcom/sun/crypto/provider/SymmetricCipher;");
+  ciInstanceKlass* aes_klass =
+      resolve_loaded_instance_klass("com/sun/crypto/provider/AESCrypt");
+  if (embedded_field == nullptr || aes_klass == nullptr) {
+    return false;
+  }
+  ciField* k_field = find_instance_field(aes_klass, "K", "[I");
+  ciField* r_field = nullptr;
+  if (k_field == nullptr) {
+    return false;
+  }
+  if (has_r_vector) {
+    r_field = find_instance_field(holder, "r", "[B");
+    if (r_field == nullptr) {
+      return false;
+    }
+  }
+
+  // The fallback call needs the statically resolved holder; resolve it
+  // before the operand stack is touched (the merge helper asserts it).
+  if (_interp->_bytecodes.get_declared_method_holder() == nullptr) {
+    return false;
+  }
+
+  // Peek (not pop) until every fallible step has succeeded, preserving the
+  // operand stack for the normal invoke path on failure.
+  llvm::Value* receiver = _interp->_jvm->raw_peek(5).value();
+  llvm::Value* src      = _interp->_jvm->raw_peek(4).value();
+  llvm::Value* src_ofs  = _interp->_jvm->raw_peek(3).value();
+  llvm::Value* len      = _interp->_jvm->raw_peek(2).value();
+  llvm::Value* dst      = _interp->_jvm->raw_peek(1).value();
+  llvm::Value* dst_ofs  = _interp->_jvm->raw_peek(0).value();
+  _interp->null_check(src);
+  _interp->null_check(dst);
+
+  // Commit: pop all operands; the values stay live as SSA across branches.
+  _interp->_jvm->ipop();  // dst_ofs
+  _interp->_jvm->apop();  // dst
+  _interp->_jvm->ipop();  // len
+  _interp->_jvm->ipop();  // src_ofs
+  _interp->_jvm->apop();  // src
+  _interp->_jvm->apop();  // receiver (null-checked by invoke())
+
+  llvm::IRBuilder<>& builder = _interp->_ir_builder;
+  llvm::LLVMContext& ctx = *_interp->_context;
+
+  llvm::Value* src_start = array_data_pointer(src, T_BYTE, src_ofs);
+  llvm::Value* dst_start = array_data_pointer(dst, T_BYTE, dst_ofs);
+
+  llvm::BasicBlock* stub_bb = llvm::BasicBlock::Create(
+      ctx, std::string(label) + "_stub", _interp->_llvm_func);
+  llvm::BasicBlock* fallback_bb = llvm::BasicBlock::Create(
+      ctx, std::string(label) + "_fallback", _interp->_llvm_func);
+  llvm::BasicBlock* merge_bb = llvm::BasicBlock::Create(
+      ctx, std::string(label) + "_merge", _interp->_llvm_func);
+
+  // Guard: the embedded cipher must be an AESCrypt at runtime. The
+  // jeandle.instanceof JavaOp is null-safe, so a null embeddedCipher simply
+  // takes the Java path like any other non-AES cipher. Like C2's predicates
+  // the guard-miss (Java fallback) edge stays cold.
+  llvm::Value* embedded = load_instance_object_field(receiver, embedded_field);
+  llvm::CallInst* is_aes = _interp->call_java_op(
+      "jeandle.instanceof", {klass_constant_pointer(aes_klass), embedded});
+  llvm::Value* embedded_ok = builder.CreateICmpNE(
+      is_aes, builder.getInt32(0), std::string(label) + "_embedded_is_aes");
+
+  if (!decrypting) {
+    builder.CreateCondBr(embedded_ok, stub_bb, fallback_bb,
+                         guard_miss_weights(ctx));
+  } else {
+    // Decrypt also rejects conjoint src==dst buffers; the Java loop produces
+    // the right plaintext for them, the block-at-a-time stubs do not.
+    llvm::BasicBlock* embedded_aes_bb = llvm::BasicBlock::Create(
+        ctx, std::string(label) + "_embedded_aes", _interp->_llvm_func);
+    builder.CreateCondBr(embedded_ok, embedded_aes_bb, fallback_bb,
+                         guard_miss_weights(ctx));
+    builder.SetInsertPoint(embedded_aes_bb);
+    llvm::Value* disjoint = builder.CreateICmpNE(
+        src, dst, std::string(label) + "_disjoint");
+    builder.CreateCondBr(disjoint, stub_bb, fallback_bb,
+                         guard_miss_weights(ctx));
+  }
+
+  // Stub fast path: the guard proved the embedded cipher is an AESCrypt, so
+  // loading its key schedule and the mode state is safe.
+  builder.SetInsertPoint(stub_bb);
+  llvm::Value* k_array = load_instance_object_field(embedded, k_field);
+  llvm::Value* k_start = array_element0_pointer(k_array, T_INT);
+  // Some stubs consume the full native register even though Java lengths
+  // are ints. Make the non-negative byte count explicit in the native ABI.
+  llvm::Value* stub_len = builder.CreateZExtOrTrunc(
+      len, native_word_type(ctx));
+  llvm::CallBase* stub_call;
+  if (has_r_vector) {
+    llvm::Value* r_array = load_instance_object_field(receiver, r_field);
+    llvm::Value* r_start = array_element0_pointer(r_array, T_BYTE);
+    stub_call = emit_crypto_stub(callee_fn, {src_start, dst_start, k_start, r_start, stub_len});
+  } else {
+    stub_call = emit_crypto_stub(callee_fn, {src_start, dst_start, k_start, stub_len});
+  }
+  builder.CreateBr(merge_bb);
+  llvm::BasicBlock* stub_tail_bb = builder.GetInsertBlock();
+
+  // Guard misses run the original Java method.
+  builder.SetInsertPoint(fallback_bb);
+  llvm::Value* result = merge_with_java_fallback(
+      {stub_call}, {stub_tail_bb}, merge_bb,
+      {receiver, src, src_ofs, len, dst, dst_ofs}, /*has_receiver=*/true,
+      std::string(label) + "_result");
+  if (result == nullptr) {
+    return true;
+  }
+  _interp->_jvm->ipush(result);
+  return true;
+}
+
+// =============================================================================
+// lower_counter_mode — guarded CTR AES intrinsic
+// =============================================================================
+
+// Mirrors C2's predicated inline_counterMode_AESCrypt: CounterMode.implCrypt
+// is shared by every counter-style cipher, so the fast path guards on the
+// runtime type of the embeddedCipher field and every non-AES (or null)
+// embedded cipher takes a normal Java call. Unlike the CBC/ECB modes there is
+// no conjoint exclusion: CTR is a stream cipher, so in-place operation is
+// well-defined for the stub too. The stub receives the counter, the saved
+// encrypted counter and the address of the `used` field; the stub consumes
+// the keystream left over in `encryptedCounter` from position `used` and
+// stores the updated position back through that address.
+bool JeandleIntrinsicLowering::lower_counter_mode() {
+  const char* const stub_name = "StubRoutines_counterMode_AESCrypt";
+  JeandleRuntimeCalleeFn const callee_fn =
+      &JeandleRuntimeRoutine::StubRoutines_counterMode_AESCrypt_callee;
+
+  // implCrypt(byte[] src, int srcOfs, int len, byte[] dst, int dstOfs): int
+  ciSignature* sig = _target->signature();
+  if (!expect_signature(sig,
+                        {SigKind::ByteArray, SigKind::Int, SigKind::Int,
+                         SigKind::ByteArray, SigKind::Int}, T_INT)) {
+    return false;
+  }
+
+  if (JeandleRuntimeRoutine::find_routine_entry(stub_name) == nullptr) {
+    return false;
+  }
+
+  // embeddedCipher is declared by FeedbackCipher; counter, encryptedCounter
+  // and used by CounterMode itself. AESCrypt may not be loaded yet when some
+  // other SymmetricCipher reached this call site, in which case the guard
+  // could not be closed and the intrinsic is declined.
+  ciInstanceKlass* holder = _target->holder();
+  ciField* embedded_field = find_instance_field(
+      holder, "embeddedCipher", "Lcom/sun/crypto/provider/SymmetricCipher;");
+  ciInstanceKlass* aes_klass =
+      resolve_loaded_instance_klass("com/sun/crypto/provider/AESCrypt");
+  if (embedded_field == nullptr || aes_klass == nullptr) {
+    return false;
+  }
+  ciField* k_field = find_instance_field(aes_klass, "K", "[I");
+  ciField* counter_field = find_instance_field(holder, "counter", "[B");
+  ciField* encrypted_counter_field =
+      find_instance_field(holder, "encryptedCounter", "[B");
+  ciField* used_field = find_instance_field(holder, "used", "I");
+  if (k_field == nullptr || counter_field == nullptr ||
+      encrypted_counter_field == nullptr || used_field == nullptr) {
+    return false;
+  }
+
+  // The fallback call needs the statically resolved holder; resolve it
+  // before the operand stack is touched (the merge helper asserts it).
+  if (_interp->_bytecodes.get_declared_method_holder() == nullptr) {
+    return false;
+  }
+
+  // Peek (not pop) until every fallible step has succeeded, preserving the
+  // operand stack for the normal invoke path on failure.
+  llvm::Value* receiver = _interp->_jvm->raw_peek(5).value();
+  llvm::Value* src      = _interp->_jvm->raw_peek(4).value();
+  llvm::Value* src_ofs  = _interp->_jvm->raw_peek(3).value();
+  llvm::Value* len      = _interp->_jvm->raw_peek(2).value();
+  llvm::Value* dst      = _interp->_jvm->raw_peek(1).value();
+  llvm::Value* dst_ofs  = _interp->_jvm->raw_peek(0).value();
+  _interp->null_check(src);
+  _interp->null_check(dst);
+
+  // Commit: pop all operands; the values stay live as SSA across branches.
+  _interp->_jvm->ipop();  // dst_ofs
+  _interp->_jvm->apop();  // dst
+  _interp->_jvm->ipop();  // len
+  _interp->_jvm->ipop();  // src_ofs
+  _interp->_jvm->apop();  // src
+  _interp->_jvm->apop();  // receiver (null-checked by invoke())
+
+  llvm::IRBuilder<>& builder = _interp->_ir_builder;
+  llvm::LLVMContext& ctx = *_interp->_context;
+
+  llvm::Value* src_start = array_data_pointer(src, T_BYTE, src_ofs);
+  llvm::Value* dst_start = array_data_pointer(dst, T_BYTE, dst_ofs);
+
+  llvm::BasicBlock* stub_bb = llvm::BasicBlock::Create(
+      ctx, "ctr_stub", _interp->_llvm_func);
+  llvm::BasicBlock* fallback_bb = llvm::BasicBlock::Create(
+      ctx, "ctr_fallback", _interp->_llvm_func);
+  llvm::BasicBlock* merge_bb = llvm::BasicBlock::Create(
+      ctx, "ctr_merge", _interp->_llvm_func);
+
+  // Guard: the embedded cipher must be an AESCrypt at runtime. The
+  // jeandle.instanceof JavaOp is null-safe, so a null embeddedCipher simply
+  // takes the Java path like any other non-AES cipher. Like C2's predicates
+  // the guard-miss (Java fallback) edge stays cold.
+  llvm::Value* embedded = load_instance_object_field(receiver, embedded_field);
+  llvm::CallInst* is_aes = _interp->call_java_op(
+      "jeandle.instanceof", {klass_constant_pointer(aes_klass), embedded});
+  llvm::Value* embedded_ok = builder.CreateICmpNE(
+      is_aes, builder.getInt32(0), "ctr_embedded_is_aes");
+  builder.CreateCondBr(embedded_ok, stub_bb, fallback_bb,
+                       guard_miss_weights(ctx));
+
+  // Stub fast path: the guard proved the embedded cipher is an AESCrypt, so
+  // loading its key schedule and the mode state is safe. The stub updates
+  // counter, encryptedCounter and used through the two array pointers and
+  // the used field address.
+  builder.SetInsertPoint(stub_bb);
+  llvm::Value* k_array = load_instance_object_field(embedded, k_field);
+  llvm::Value* k_start = array_element0_pointer(k_array, T_INT);
+  llvm::Value* counter_array =
+      load_instance_object_field(receiver, counter_field);
+  llvm::Value* cnt_start = array_element0_pointer(counter_array, T_BYTE);
+  llvm::Value* enc_counter_array =
+      load_instance_object_field(receiver, encrypted_counter_field);
+  llvm::Value* enc_counter_start =
+      array_element0_pointer(enc_counter_array, T_BYTE);
+  llvm::Value* used_addr = _interp->compute_instance_field_address(
+      receiver, used_field->offset_in_bytes());
+  llvm::Value* stub_len = builder.CreateZExtOrTrunc(
+      len, native_word_type(ctx));
+  llvm::CallBase* stub_call = emit_crypto_stub(callee_fn,
+      {src_start, dst_start, k_start, cnt_start, stub_len,
+       enc_counter_start, used_addr});
+  builder.CreateBr(merge_bb);
+  llvm::BasicBlock* stub_tail_bb = builder.GetInsertBlock();
+
+  // Guard misses run the original Java method.
+  builder.SetInsertPoint(fallback_bb);
+  llvm::Value* result = merge_with_java_fallback(
+      {stub_call}, {stub_tail_bb}, merge_bb,
+      {receiver, src, src_ofs, len, dst, dst_ofs}, /*has_receiver=*/true,
+      "ctr_result");
+  if (result == nullptr) {
+    return true;
+  }
+  _interp->_jvm->ipush(result);
+  return true;
+}
+
+// =============================================================================
+// lower_galois_counter_mode — guarded combined AES-GCM intrinsic
+// =============================================================================
+
+// Mirrors C2's predicated inline_galoisCounterMode_AESCrypt: the static
+// GaloisCounterMode.implGCMCrypt0 combines the GCTR encryption and the GHASH
+// tag update in one stub call. The fast path guards on the gctr argument's
+// embeddedCipher runtime type — the same null-safe check as the CTR/CBC
+// modes — and feeds the AES key schedule, the GCTR counter and the GHASH
+// state/subkey tables to the stub, which writes out, state and counter back.
+// The call is static, so unlike the mode-method intrinsics every object
+// argument is null-checked here.
+bool JeandleIntrinsicLowering::lower_galois_counter_mode() {
+  const char* const stub_name = "StubRoutines_galoisCounterMode_AESCrypt";
+  JeandleRuntimeCalleeFn const callee_fn =
+      &JeandleRuntimeRoutine::StubRoutines_galoisCounterMode_AESCrypt_callee;
+
+  // implGCMCrypt0(byte[] in, int inOfs, int inLen, byte[] ct, int ctOfs,
+  //               byte[] out, int outOfs, GCTR gctr, GHASH ghash): int
+  ciSignature* sig = _target->signature();
+  if (!expect_signature(sig,
+                        {SigKind::ByteArray, SigKind::Int,
+                         SigKind::Int, SigKind::ByteArray,
+                         SigKind::Int, SigKind::ByteArray,
+                         SigKind::Int, SigKind::Object,
+                         SigKind::Object}, T_INT)) {
+    return false;
+  }
+
+  // The x86 stub is generated only with AVX512 VAES; a missing entry closes
+  // the intrinsic.
+  if (JeandleRuntimeRoutine::find_routine_entry(stub_name) == nullptr) {
+    return false;
+  }
+
+  // embeddedCipher and counter live on GCTR's CounterMode superclass, the
+  // GHASH state on the GHASH object itself. AESCrypt may not be loaded yet
+  // when some other SymmetricCipher reached this call site, in which case the
+  // guard could not be closed and the intrinsic is declined.
+  ciInstanceKlass* gctr_klass =
+      resolve_loaded_instance_klass("com/sun/crypto/provider/GCTR");
+  ciInstanceKlass* ghash_klass =
+      resolve_loaded_instance_klass("com/sun/crypto/provider/GHASH");
+  ciInstanceKlass* aes_klass =
+      resolve_loaded_instance_klass("com/sun/crypto/provider/AESCrypt");
+  if (gctr_klass == nullptr || ghash_klass == nullptr || aes_klass == nullptr) {
+    return false;
+  }
+  ciField* embedded_field = find_instance_field(
+      gctr_klass, "embeddedCipher", "Lcom/sun/crypto/provider/SymmetricCipher;");
+  ciField* counter_field = find_instance_field(gctr_klass, "counter", "[B");
+  ciField* state_field = find_instance_field(ghash_klass, "state", "[J");
+  ciField* subkey_field = find_instance_field(ghash_klass, "subkeyHtbl", "[J");
+  ciField* k_field = find_instance_field(aes_klass, "K", "[I");
+  if (embedded_field == nullptr || counter_field == nullptr ||
+      state_field == nullptr || subkey_field == nullptr || k_field == nullptr) {
+    return false;
+  }
+
+  // The fallback call needs the statically resolved holder; resolve it
+  // before the operand stack is touched (the merge helper asserts it).
+  if (_interp->_bytecodes.get_declared_method_holder() == nullptr) {
+    return false;
+  }
+
+  // Peek (not pop) until every fallible step has succeeded, preserving the
+  // operand stack for the normal invoke path on failure. A static call has
+  // no receiver null check from invoke(), so every object argument is
+  // null-checked here; the guard below loads fields from gctr and ghash.
+  llvm::Value* in      = _interp->_jvm->raw_peek(8).value();
+  llvm::Value* in_ofs  = _interp->_jvm->raw_peek(7).value();
+  llvm::Value* in_len  = _interp->_jvm->raw_peek(6).value();
+  llvm::Value* ct      = _interp->_jvm->raw_peek(5).value();
+  llvm::Value* ct_ofs  = _interp->_jvm->raw_peek(4).value();
+  llvm::Value* out     = _interp->_jvm->raw_peek(3).value();
+  llvm::Value* out_ofs = _interp->_jvm->raw_peek(2).value();
+  llvm::Value* gctr    = _interp->_jvm->raw_peek(1).value();
+  llvm::Value* ghash   = _interp->_jvm->raw_peek(0).value();
+  _interp->null_check(in);
+  _interp->null_check(ct);
+  _interp->null_check(out);
+  _interp->null_check(gctr);
+  _interp->null_check(ghash);
+
+  // Commit: pop all operands; the values stay live as SSA across branches.
+  _interp->_jvm->apop();  // ghash
+  _interp->_jvm->apop();  // gctr
+  _interp->_jvm->ipop();  // out_ofs
+  _interp->_jvm->apop();  // out
+  _interp->_jvm->ipop();  // ct_ofs
+  _interp->_jvm->apop();  // ct
+  _interp->_jvm->ipop();  // in_len
+  _interp->_jvm->ipop();  // in_ofs
+  _interp->_jvm->apop();  // in
+
+  llvm::IRBuilder<>& builder = _interp->_ir_builder;
+  llvm::LLVMContext& ctx = *_interp->_context;
+
+  llvm::Value* in_start = array_data_pointer(in, T_BYTE, in_ofs);
+  llvm::Value* ct_start = array_data_pointer(ct, T_BYTE, ct_ofs);
+  llvm::Value* out_start = array_data_pointer(out, T_BYTE, out_ofs);
+
+  llvm::BasicBlock* stub_bb = llvm::BasicBlock::Create(
+      ctx, "gcm_stub", _interp->_llvm_func);
+  llvm::BasicBlock* fallback_bb = llvm::BasicBlock::Create(
+      ctx, "gcm_fallback", _interp->_llvm_func);
+  llvm::BasicBlock* merge_bb = llvm::BasicBlock::Create(
+      ctx, "gcm_merge", _interp->_llvm_func);
+
+  // Guard: the gctr's embedded cipher must be an AESCrypt at runtime. The
+  // jeandle.instanceof JavaOp is null-safe, so a null embeddedCipher simply
+  // takes the Java path like any other non-AES cipher. Like C2's predicates
+  // the guard-miss (Java fallback) edge stays cold.
+  llvm::Value* embedded = load_instance_object_field(gctr, embedded_field);
+  llvm::CallInst* is_aes = _interp->call_java_op(
+      "jeandle.instanceof", {klass_constant_pointer(aes_klass), embedded});
+  llvm::Value* embedded_ok = builder.CreateICmpNE(
+      is_aes, builder.getInt32(0), "gcm_embedded_is_aes");
+  builder.CreateCondBr(embedded_ok, stub_bb, fallback_bb,
+                       guard_miss_weights(ctx));
+
+  // Stub fast path: the guard proved the embedded cipher is an AESCrypt, so
+  // loading its key schedule and the GCTR/GHASH state is safe. The stub
+  // writes out, the GHASH state and the counter through these pointers.
+  builder.SetInsertPoint(stub_bb);
+  llvm::Value* k_array = load_instance_object_field(embedded, k_field);
+  llvm::Value* k_start = array_element0_pointer(k_array, T_INT);
+  llvm::Value* counter_array = load_instance_object_field(gctr, counter_field);
+  llvm::Value* cnt_start = array_element0_pointer(counter_array, T_BYTE);
+  llvm::Value* state_array = load_instance_object_field(ghash, state_field);
+  llvm::Value* state_start = array_element0_pointer(state_array, T_LONG);
+  llvm::Value* subkey_array = load_instance_object_field(ghash, subkey_field);
+  llvm::Value* subkey_start = array_element0_pointer(subkey_array, T_LONG);
+  llvm::Value* stub_len = builder.CreateZExtOrTrunc(
+      in_len, native_word_type(ctx));
+  llvm::CallBase* stub_call = emit_crypto_stub(callee_fn,
+      {in_start, stub_len, ct_start, out_start, k_start,
+       state_start, subkey_start, cnt_start});
+  builder.CreateBr(merge_bb);
+  llvm::BasicBlock* stub_tail_bb = builder.GetInsertBlock();
+
+  // Guard misses run the original Java method.
+  builder.SetInsertPoint(fallback_bb);
+  llvm::Value* result = merge_with_java_fallback(
+      {stub_call}, {stub_tail_bb}, merge_bb,
+      {in, in_ofs, in_len, ct, ct_ofs, out, out_ofs, gctr, ghash},
+      /*has_receiver=*/false, "gcm_result");
+  if (result == nullptr) {
+    return true;
+  }
+  _interp->_jvm->ipush(result);
+  return true;
+}
+
+// =============================================================================
+// lower_ghash_process_blocks — GHASH multi-block intrinsic
+// =============================================================================
+
+// GHASH.processBlocks is package-private and only called on GHASH objects,
+// so like C2's inline_ghash_processBlocks it bridges straight to the stub
+// without a guard. The call is static, so the array arguments are
+// null-checked here instead of by invoke().
+bool JeandleIntrinsicLowering::lower_ghash_process_blocks() {
+  const char* const stub_name = "StubRoutines_ghash_processBlocks";
+  JeandleRuntimeCalleeFn const callee_fn =
+      &JeandleRuntimeRoutine::StubRoutines_ghash_processBlocks_callee;
+
+  // processBlocks(byte[] data, int inOfs, int blocks, long[] st, long[] subH)
+  ciSignature* sig = _target->signature();
+  if (!expect_signature(sig,
+                        {SigKind::ByteArray, SigKind::Int, SigKind::Int,
+                         SigKind::LongArray, SigKind::LongArray}, T_VOID)) {
+    return false;
+  }
+
+  // The ghash stub is generated only on platforms with carry-less multiply
+  // support; never materialize a direct call when the entry is absent.
+  if (JeandleRuntimeRoutine::find_routine_entry(stub_name) == nullptr) {
+    return false;
+  }
+
+  // Peek (not pop) until every fallible step has succeeded, preserving the
+  // operand stack for the normal invoke path on failure. A static call has
+  // no receiver null check from invoke().
+  llvm::Value* data    = _interp->_jvm->raw_peek(4).value();
+  llvm::Value* in_ofs  = _interp->_jvm->raw_peek(3).value();
+  llvm::Value* blocks  = _interp->_jvm->raw_peek(2).value();
+  llvm::Value* st      = _interp->_jvm->raw_peek(1).value();
+  llvm::Value* sub_h   = _interp->_jvm->raw_peek(0).value();
+  _interp->null_check(data);
+  _interp->null_check(st);
+  _interp->null_check(sub_h);
+
+  // Commit: pop all operands; the values stay live as SSA across the call.
+  _interp->_jvm->apop();  // sub_h
+  _interp->_jvm->apop();  // st
+  _interp->_jvm->ipop();  // blocks
+  _interp->_jvm->ipop();  // in_ofs
+  _interp->_jvm->apop();  // data
+
+  llvm::Value* data_start = array_data_pointer(data, T_BYTE, in_ofs);
+  llvm::Value* state_start = array_element0_pointer(st, T_LONG);
+  llvm::Value* subkey_start = array_element0_pointer(sub_h, T_LONG);
+
+  llvm::IRBuilder<>& builder = _interp->_ir_builder;
+  llvm::Value* stub_blocks = builder.CreateZExtOrTrunc(
+      blocks, native_word_type(*_interp->_context));
+  emit_crypto_stub(callee_fn, {state_start, subkey_start, data_start, stub_blocks});
+  return true;
+}
+
+// =============================================================================
+// lower_chacha20_block — ChaCha20 block keystream intrinsic
+// =============================================================================
+
+// ChaCha20Cipher.implChaCha20Block is private and static, so like C2's
+// inline_chacha20Block it bridges straight to the stub without a receiver
+// guard; a static call has no receiver null check from invoke(), so both
+// array arguments are null-checked here, and the Java caller (chaCha20Block)
+// has already validated the state and keystream buffer sizes when the
+// intrinsic callee is reached. The stub generates as many keystream blocks as
+// its vector width allows (a multiple of the 64-byte ChaCha block) and
+// returns the byte count; the Java caller iterates the keystream buffer by
+// exactly that count, so the value is passed through verbatim.
+bool JeandleIntrinsicLowering::lower_chacha20_block() {
+  const char* const stub_name = "StubRoutines_chacha20Block";
+  JeandleRuntimeCalleeFn const callee_fn =
+      &JeandleRuntimeRoutine::StubRoutines_chacha20Block_callee;
+
+  // implChaCha20Block(int[] initState, byte[] result): int
+  ciSignature* sig = _target->signature();
+  if (!expect_signature(sig, {SigKind::IntArray, SigKind::ByteArray}, T_INT)) {
+    return false;
+  }
+
+  // The stub is generated only on platforms with vector support; never
+  // materialize a direct call when the entry is absent.
+  if (JeandleRuntimeRoutine::find_routine_entry(stub_name) == nullptr) {
+    return false;
+  }
+
+  // Peek (not pop) until every fallible step has succeeded, preserving the
+  // operand stack for the normal invoke path on failure. A static call has
+  // no receiver null check from invoke().
+  llvm::Value* state  = _interp->_jvm->raw_peek(1).value();
+  llvm::Value* result = _interp->_jvm->raw_peek(0).value();
+  _interp->null_check(state);
+  _interp->null_check(result);
+
+  // Commit: pop all operands; the values stay live as SSA across the call.
+  _interp->_jvm->apop();  // result
+  _interp->_jvm->apop();  // state
+
+  llvm::Value* state_start = array_element0_pointer(state, T_INT);
+  llvm::Value* result_start = array_element0_pointer(result, T_BYTE);
+
+  llvm::CallBase* keystream_len = emit_crypto_stub(callee_fn, {state_start, result_start});
+  _interp->_jvm->ipush(keystream_len);
+  return true;
+}
+
+// =============================================================================
+// lower_poly1305_process_blocks — Poly1305 multi-block intrinsic
+// =============================================================================
+
+// Poly1305.processMultipleBlocks passes the accumulator and key limbs as
+// explicit long[] arguments, so like C2's inline_poly1305_processBlocks it
+// bridges straight to the stub without a receiver-type guard; the limb arrays
+// alias the authenticator's a/r state and their bounds were validated by the
+// sibling processMultipleBlocksCheck call. The receiver is null-checked by
+// invoke(); the Java byte offset is folded into the input pointer, as the
+// stub ABI takes no separate offset.
+bool JeandleIntrinsicLowering::lower_poly1305_process_blocks() {
+  const char* const stub_name = "StubRoutines_poly1305_processBlocks";
+  JeandleRuntimeCalleeFn const callee_fn =
+      &JeandleRuntimeRoutine::StubRoutines_poly1305_processBlocks_callee;
+
+  // processMultipleBlocks(byte[] input, int offset, int length,
+  //                       long[] aLimbs, long[] rLimbs)
+  ciSignature* sig = _target->signature();
+  if (!expect_signature(sig,
+                        {SigKind::ByteArray, SigKind::Int, SigKind::Int,
+                         SigKind::LongArray, SigKind::LongArray}, T_VOID)) {
+    return false;
+  }
+
+  // The poly stub vector loop needs AVX512 IFMA + BW/VL, and the VM turns
+  // UsePoly1305Intrinsics off without them; never materialize a direct call
+  // when the entry is absent.
+  if (JeandleRuntimeRoutine::find_routine_entry(stub_name) == nullptr) {
+    return false;
+  }
+
+  // Peek (not pop) until every fallible step has succeeded, preserving the
+  // operand stack for the normal invoke path on failure. The receiver below
+  // input is null-checked by invoke().
+  llvm::Value* input    = _interp->_jvm->raw_peek(4).value();
+  llvm::Value* offset   = _interp->_jvm->raw_peek(3).value();
+  llvm::Value* length   = _interp->_jvm->raw_peek(2).value();
+  llvm::Value* a_limbs  = _interp->_jvm->raw_peek(1).value();
+  llvm::Value* r_limbs  = _interp->_jvm->raw_peek(0).value();
+  _interp->null_check(input);
+  _interp->null_check(a_limbs);
+  _interp->null_check(r_limbs);
+
+  // Commit: pop all operands; the values stay live as SSA across the call.
+  _interp->_jvm->apop();  // r_limbs
+  _interp->_jvm->apop();  // a_limbs
+  _interp->_jvm->ipop();  // length
+  _interp->_jvm->ipop();  // offset
+  _interp->_jvm->apop();  // input
+  _interp->_jvm->apop();  // receiver (null-checked by invoke())
+
+  llvm::Value* input_start = array_data_pointer(input, T_BYTE, offset);
+  llvm::Value* acc_start = array_element0_pointer(a_limbs, T_LONG);
+  llvm::Value* r_start = array_element0_pointer(r_limbs, T_LONG);
+
+  llvm::IRBuilder<>& builder = _interp->_ir_builder;
+  llvm::Value* stub_len = builder.CreateZExtOrTrunc(
+      length, native_word_type(*_interp->_context));
+  emit_crypto_stub(callee_fn, {input_start, stub_len, acc_start, r_start});
   return true;
 }
 
@@ -1288,7 +2476,8 @@ bool JeandleIntrinsicLowering::lower_new_array() {
       builder.CreateLShr(layout_helper, builder.getInt32(Klass::_lh_header_size_shift)),
       builder.getInt32(Klass::_lh_header_size_mask));
   llvm::Value* log2_esize = builder.CreateAnd(layout_helper, builder.getInt32(0x1f));
-  llvm::Value* size_in_bytes = _interp->emit_array_size_in_bytes(length, log2_esize, base_offset);
+  llvm::Value* size_in_bytes = _interp->emit_array_size_in_bytes(
+      length, log2_esize, base_offset, MinObjAlignmentInBytes - 1);
   // Fast-path length cap, mirroring C2's reflective array path: the unscaled
   // FastAllocateSizeLimit bounds the byte size to <= FastAllocateSizeLimit << LogBytesPerLong
   // (~1MB) for any element type, so size_in_bytes cannot overflow i32. Larger reflective arrays
@@ -1319,7 +2508,10 @@ bool JeandleIntrinsicLowering::lower_new_array() {
   llvm::Function* new_array_op = m.getFunction("jeandle.new_array");
   llvm::CallBase* fast_call =
       emit_callsite(new_array_op, llvm::CallingConv::Hotspot_JIT,
-                    {klass, length, size_in_bytes, base_offset, length_limit}, fast_attrs);
+                    {klass, length, size_in_bytes, base_offset, length_limit,
+                     /*uninitialized=*/builder.getFalse(),
+                     /*defer_initialization_membar=*/builder.getFalse()},
+                    fast_attrs);
   // emit_callsite with exception edge moves builder to a new normal_dest block.
   builder.CreateBr(merge_bb);
   llvm::BasicBlock* fast_normal_bb = builder.GetInsertBlock();
@@ -1507,7 +2699,8 @@ bool JeandleIntrinsicLowering::lower_hash_code(vmIntrinsics::ID id) {
   llvm::InvokeInst* slow_call = _interp->emit_java_call(
       target, declared_holder, _target->signature(), {obj},
       /*has_receiver=*/!is_identity,
-      /*is_method_handle_invoke=*/false, bc);
+      /*is_method_handle_invoke=*/false, bc,
+      /*call_does_dispatch=*/needs_virtual_guard);
   RETURN_ON_JEANDLE_ERROR(true);
   llvm::Value* slow_result = slow_call;
   builder.CreateBr(merge_bb);
@@ -1657,17 +2850,17 @@ bool JeandleIntrinsicLowering::lower_vectorized_mismatch() {
       byte_length, llvm::ConstantInt::get(i64, small_path_limit),
       "mismatch_inline_small");
 
-  const uint64_t medium_path_limit =
-      static_cast<uint64_t>(ArrayOperationPartialInlineSize);
-  const bool use_medium_path = supports_vectorized_mismatch_medium_path() &&
-                               medium_path_limit >= small_path_limit;
+  const uint64_t medium_path_limit = vectorized_mismatch_medium_path_limit();
+  const bool use_medium_path = medium_path_limit >= small_path_limit;
   llvm::BasicBlock* small_bb = llvm::BasicBlock::Create(ctx, "mismatch_inline_small", f);
   llvm::BasicBlock* dispatch_bb = llvm::BasicBlock::Create(ctx, "mismatch_dispatch_medium", f);
   llvm::BasicBlock* medium_bb = use_medium_path
       ? llvm::BasicBlock::Create(ctx, "mismatch_inline_medium", f) : nullptr;
   llvm::BasicBlock* stub_bb = llvm::BasicBlock::Create(ctx, "mismatch_stub", f);
   llvm::BasicBlock* done_bb = llvm::BasicBlock::Create(ctx, "mismatch_done", f);
-  b.CreateCondBr(is_small, small_bb, dispatch_bb);
+  // Weighted: small ranges dominate real call sites.
+  b.CreateCondBr(is_small, small_bb, dispatch_bb,
+                 llvm::MDBuilder(ctx).createBranchWeights(3, 1));
 
   // Tier 1: inline scalar IR for ranges shorter than 16 bytes.
   b.SetInsertPoint(small_bb);
@@ -1685,9 +2878,11 @@ bool JeandleIntrinsicLowering::lower_vectorized_mismatch() {
     llvm::Value* is_medium = b.CreateICmpULE(
         byte_length, llvm::ConstantInt::get(i64, medium_path_limit),
         "mismatch_inline_medium");
-    b.CreateCondBr(is_medium, medium_bb, stub_bb);
+    // Weighted: the stub is the cold fallback, like C2's PROB_MIN guard.
+    b.CreateCondBr(is_medium, medium_bb, stub_bb,
+                   llvm::MDBuilder(ctx).createBranchWeights(1023, 1));
 
-    // Tier 2: inline 128-bit vector IR up to ArrayOperationPartialInlineSize.
+    // Tier 2: inline 128-bit vector IR up to the platform medium limit.
     b.SetInsertPoint(medium_bb);
     medium_result = emit_vectorized_mismatch_medium(a_addr, b_addr, byte_length, scale64);
     medium_done_bb = b.GetInsertBlock();
@@ -2034,6 +3229,71 @@ llvm::BasicBlock* JeandleIntrinsicLowering::generate_fair_guard(
   return generate_guard(test, region_bb, PROB_FAIR);
 }
 
+// C2's generate_slow_guard(): a guard whose taken edge is strongly unlikely.
+llvm::BasicBlock* JeandleIntrinsicLowering::generate_slow_guard(
+    llvm::Value* test, llvm::BasicBlock* slow_bb) {
+  return generate_guard(test, slow_bb, PROB_UNLIKELY_MAG(3));
+}
+
+// Match C2 LibraryCallKit::generate_virtual_guard().  The receiver Klass's
+// vtable entry must still point at the intrinsic target method; otherwise an
+// overriding implementation must execute through the normal clone path.
+llvm::BasicBlock* JeandleIntrinsicLowering::generate_virtual_guard(
+    llvm::Value* obj_klass, llvm::BasicBlock* slow_region) {
+  assert(_target != nullptr && !_target->is_static(),
+         "virtual guard requires an instance target");
+
+  llvm::IRBuilder<>& builder = _interp->_ir_builder;
+  llvm::PointerType* c_heap_ptr_ty = llvm::PointerType::get(
+      *_interp->_context, llvm::jeandle::AddrSpace::CHeapAddrSpace);
+
+  ciMethod* method = const_cast<ciMethod*>(_target);
+  const int vtable_index = method->vtable_index();
+  assert(vtable_index >= 0 ||
+         vtable_index == Method::nonvirtual_vtable_index,
+         "bad vtable index %d", vtable_index);
+
+  const int entry_offset =
+      in_bytes(Klass::vtable_start_offset()) +
+      vtable_index * vtableEntry::size_in_bytes() +
+      in_bytes(vtableEntry::method_offset());
+  llvm::Value* entry_addr = builder.CreateInBoundsGEP(
+      builder.getInt8Ty(), obj_klass, builder.getInt32(entry_offset),
+      "clone.vtable_entry_addr");
+  llvm::LoadInst* target_method = builder.CreateLoad(
+      c_heap_ptr_ty, entry_addr, "clone.vtable_target_method");
+  target_method->setAtomic(llvm::AtomicOrdering::Unordered);
+
+  llvm::Value* expected_method = builder.CreateIntToPtr(
+      builder.getInt64(reinterpret_cast<intptr_t>(method->constant_encoding())),
+      c_heap_ptr_ty, "clone.expected_method");
+  llvm::Value* mismatch = builder.CreateICmpNE(
+      target_method, expected_method, "clone.virtual_target_mismatch");
+  return generate_slow_guard(mismatch, slow_region);
+}
+
+// Match C2 LibraryCallKit::generate_access_flags_guard().  A set of modifier
+// bits keeps the intrinsic fast path; any mismatch is appended to the shared
+// slow region.
+llvm::BasicBlock* JeandleIntrinsicLowering::generate_access_flags_guard(
+    llvm::Value* klass, int modifier_mask, int modifier_bits,
+    llvm::BasicBlock* region) {
+  llvm::IRBuilder<>& builder = _interp->_ir_builder;
+  llvm::Value* flags_addr = builder.CreateInBoundsGEP(
+      builder.getInt8Ty(), klass,
+      builder.getInt32(in_bytes(Klass::access_flags_offset())),
+      "access_flags_guard.addr");
+  llvm::LoadInst* flags = builder.CreateLoad(
+      builder.getInt32Ty(), flags_addr, "access_flags_guard.flags");
+  flags->setAtomic(llvm::AtomicOrdering::Unordered);
+  llvm::Value* masked = builder.CreateAnd(
+      flags, builder.getInt32(modifier_mask), "access_flags_guard.masked");
+  llvm::Value* mismatch = builder.CreateICmpNE(
+      masked, builder.getInt32(modifier_bits),
+      "access_flags_guard.mismatch");
+  return generate_fair_guard(mismatch, region);
+}
+
 void JeandleIntrinsicLowering::generate_negative_guard(
     llvm::Value* index, llvm::BasicBlock* slow_bb) {
 
@@ -2106,7 +3366,7 @@ llvm::BasicBlock* JeandleIntrinsicLowering::generate_array_guard_common(
     return nullptr;
   }
 
-  jint layout_con = 0;
+  jint layout_con = Klass::_lh_neutral_value;
   llvm::Value* layout_val = _interp->get_layout_helper(klass, layout_con);
   if (layout_val == nullptr) {
     bool query = obj_array
@@ -2212,7 +3472,7 @@ bool JeandleIntrinsicLowering::lower_arraycopy() {
       return true;
     }
     // (2) src and dest arrays must have elements of the same BasicType:
-    // completed by ArrayCopySpecialization, like C2 defers this to Ideal/macro
+    // completed by CopySpecialization, like C2 defers this to Ideal/macro
     // expansion.
 
     // (4) src_offset must not be negative.
@@ -2293,32 +3553,48 @@ bool JeandleIntrinsicLowering::lower_arraycopy() {
   _interp->_jvm->ipop(); // srcPos
   _interp->_jvm->apop(); // src
 
+  // jeandle.copy uses native-width integer arguments.  Keep the Java
+  // int semantics at the lowering boundary by sign-extending the values;
+  // this preserves negative values for the slow/deoptimization path while
+  // legal non-negative offsets and lengths retain their value.
+  llvm::Value* src_offset_x = b.CreateSExt(
+      src_offset, b.getInt64Ty(), "arraycopy.src_offset_x");
+  llvm::Value* dest_offset_x = b.CreateSExt(
+      dest_offset, b.getInt64Ty(), "arraycopy.dest_offset_x");
+  llvm::Value* length_x = b.CreateSExt(
+      length, b.getInt64Ty(), "arraycopy.length_x");
+  llvm::Value* src_length_x = b.CreateSExt(
+      _interp->call_java_op("jeandle.arraylength", {src}), b.getInt64Ty(),
+      "arraycopy.src_length_x");
+  llvm::Value* dest_length_x = b.CreateSExt(
+      _interp->call_java_op("jeandle.arraylength", {dest}), b.getInt64Ty(),
+      "arraycopy.dest_length_x");
+
   // The pseudo call is the Jeandle equivalent of C2 ArrayCopyNode::make(). It is
   // created after guard admission, and the validated attribute corresponds
   // to C2 ac->set_arraycopy(validated).
-  llvm::Function* arraycopy_callee = m.getFunction("jeandle.arraycopy");
-  assert(arraycopy_callee != nullptr,
-         "jeandle.arraycopy must be declared in template.ll");
+  llvm::Function* copy_callee = m.getFunction("jeandle.copy");
+  assert(copy_callee != nullptr,
+         "jeandle.copy must be declared in template.ll");
   static constexpr CallSiteAttributeMetadata arraycopy_attrs = {
       CTRL_NEEDS_EXCEPTION_EDGE,
       MEM_READ | MEM_WRITE | MEM_NEEDS_GC_STATE};
   llvm::CallBase* arraycopy_call = emit_callsite(
-      arraycopy_callee, llvm::CallingConv::Hotspot_JIT,
-      {src, src_offset, dest, dest_offset, length,
+      copy_callee, llvm::CallingConv::Hotspot_JIT,
+      {src, src_offset_x, dest, dest_offset_x, length_x,
        _interp->load_object_klass(src), _interp->load_object_klass(dest),
-       _interp->call_java_op("jeandle.arraylength", {src}),
-       _interp->call_java_op("jeandle.arraylength", {dest})},
+       src_length_x, dest_length_x},
       arraycopy_attrs);
   arraycopy_call->addFnAttr(llvm::Attribute::get(
-      ctx, llvm::jeandle::Attribute::ArrayCopyKind,
-      llvm::jeandle::Attribute::ArrayCopyKindArrayCopy));
+      ctx, llvm::jeandle::Attribute::CopyKind,
+      llvm::jeandle::Attribute::CopyKindArrayCopy));
   if (validated) {
     arraycopy_call->addFnAttr(llvm::Attribute::get(
-        ctx, llvm::jeandle::Attribute::ValidatedArrayCopy));
+        ctx, llvm::jeandle::Attribute::ValidatedCopy));
   }
   if (negative_length_guard_generated) {
     arraycopy_call->addFnAttr(llvm::Attribute::get(
-        ctx, llvm::jeandle::Attribute::ArrayCopyNegativeLengthGuard));
+        ctx, llvm::jeandle::Attribute::CopyNegativeLengthGuard));
   }
   return true;
 }
@@ -2343,14 +3619,14 @@ bool JeandleIntrinsicLowering::lower_string_char_access(bool is_store) {
 
   _interp->null_check(array);
 
-  llvm::Value* data = b.CreateInBoundsGEP(
-      i8, array, b.getInt32(arrayOopDesc::base_offset_in_bytes(T_BYTE)),
-      is_store ? "string_putchar_data" : "string_getchar_data");
-  llvm::Value* addr = b.CreateInBoundsGEP(
-      i16, data, index,
-      is_store ? "string_putchar_addr" : "string_getchar_addr");
-
   if (is_store) {
+    llvm::Value* data = b.CreateInBoundsGEP(
+        i8, array, b.getInt32(arrayOopDesc::base_offset_in_bytes(T_BYTE)),
+        "string_putchar_data");
+    llvm::Value* addr = b.CreateInBoundsGEP(
+        i16, data, index,
+        "string_putchar_addr");
+
     llvm::Value* ch = _interp->_jvm->peek_value(0).value();
     llvm::Value* ch16 = b.CreateTrunc(ch, i16, "string_putchar_value");
     llvm::StoreInst* store = b.CreateStore(ch16, addr);
@@ -2361,9 +3637,11 @@ bool JeandleIntrinsicLowering::lower_string_char_access(bool is_store) {
     _interp->_jvm->ipop(); // index
     _interp->_jvm->apop(); // value
   } else {
-    llvm::LoadInst* loaded = b.CreateLoad(i16, addr, "string_getchar_result");
-    loaded->setAlignment(llvm::Align(2));
-    loaded->setAtomic(llvm::AtomicOrdering::Unordered);
+    llvm::CallInst* loaded = _interp->call_java_op("jeandle.string_getchar", {array, index});
+    loaded->setDoesNotThrow();
+    const CallSiteAttributeMetadata attrs = {CTRL_NONE, MEM_READ};
+    annotate_call(loaded, attrs);
+    apply_memory_attr(loaded, attrs);
     llvm::Value* result = b.CreateZExt(
         loaded, b.getInt32Ty(), "string_getchar_result_i32");
 
@@ -2371,5 +3649,566 @@ bool JeandleIntrinsicLowering::lower_string_char_access(bool is_store) {
     _interp->_jvm->apop(); // value
     _interp->_jvm->ipush(result);
   }
+  return true;
+}
+
+//------------------------emit_clone_copy--------------------------------
+
+// Jeandle LLVM IR counterpart of C2 BarrierSetC2::clone().
+void JeandleIntrinsicLowering::emit_clone_copy(llvm::Value* src_base,
+                                              llvm::Value* dst_base,
+                                              llvm::Value* size_bytes,
+                                              bool is_array) {
+  llvm::IRBuilder<>& builder = _interp->_ir_builder;
+  llvm::Module& m = _interp->_module;
+  llvm::LLVMContext& ctx = builder.getContext();
+  assert(size_bytes != nullptr, "clone size must be available");
+
+  // Match C2's TypeX arithmetic in native address width. The shared copy
+  // pseudo-op also uses i64 arguments, so large array clone sizes are kept
+  // intact instead of being truncated at the call boundary.
+  llvm::Value* size_bytes_x = size_bytes;
+  if (!size_bytes->getType()->isIntegerTy(64)) {
+    assert(size_bytes->getType()->isIntegerTy(32),
+           "clone size must be i32 or i64");
+    size_bytes_x = builder.CreateSExt(size_bytes, builder.getInt64Ty(),
+                                      "clone.size_bytes_x");
+  }
+
+  llvm::PointerType* c_heap_ptr_ty =
+      llvm::PointerType::get(ctx, llvm::jeandle::AddrSpace::CHeapAddrSpace);
+
+  // Match BarrierSetC2::clone(): copy the payload in double-words.
+  int base_offset = clone_payload_base_offset(is_array);
+  llvm::Value* offset = builder.getInt64(base_offset);
+  llvm::Value* payload_bytes = builder.CreateSub(
+      size_bytes_x, offset, "clone.payload_bytes");
+  if (is_array) {
+    // Array size excludes object-alignment padding, so round the payload up
+    // before converting it to double-words.
+    payload_bytes = builder.CreateAdd(
+        payload_bytes, builder.getInt64(BytesPerLong - 1),
+        "clone.rounded_payload_bytes");
+  }
+  llvm::Value* payload_long_count = builder.CreateLShr(
+      payload_bytes, builder.getInt64(LogBytesPerLong),
+      "clone.payload_long_count");
+  llvm::Function* copy_callee = m.getFunction("jeandle.copy");
+  assert(copy_callee != nullptr,
+         "jeandle.copy must be declared in template.ll");
+  static constexpr CallSiteAttributeMetadata clone_attrs = {
+      CTRL_MAY_DEOPT, MEM_READ | MEM_WRITE | MEM_NEEDS_GC_STATE};
+  llvm::CallBase* copy = emit_callsite(
+      copy_callee, llvm::CallingConv::Hotspot_JIT,
+      {src_base, offset, dst_base, offset, payload_long_count,
+       llvm::ConstantPointerNull::get(c_heap_ptr_ty),
+       llvm::ConstantPointerNull::get(c_heap_ptr_ty), size_bytes_x, size_bytes_x},
+      clone_attrs);
+  RETURN_VOID_ON_JEANDLE_ERROR();
+  // Instance and raw-array payload clones use byte offsets and a jlong count,
+  // unlike ordinary arraycopy's element indices. The last two operands carry
+  // object byte sizes; expansion does not interpret them as array lengths.
+  copy->addFnAttr(llvm::Attribute::get(
+      ctx, llvm::jeandle::Attribute::CopyKind,
+      is_array ? llvm::jeandle::Attribute::CopyKindCloneArray
+               : llvm::jeandle::Attribute::CopyKindCloneInstance));
+  copy->addFnAttr(llvm::Attribute::get(
+      ctx, llvm::jeandle::Attribute::CopyTightlyCoupledAllocation));
+}
+
+//------------------------clone_copying-----------------------------------
+// Helper function for lower_object_clone.
+
+// Jeandle counterpart of C2 LibraryCallKit::copy_to_clone().
+//
+// C2 marks the just-created allocation initialization as complete, emits
+// access_clone(), then places a StoreStore/CPUOrder memory barrier. Jeandle
+// cannot model AllocateNode/InitializeNode memory slices here yet. Jeandle
+// represents array and instance payload copies as clone-array/clone-instance
+// calls and expands them to collector-correct stubs later; allocation-
+// initialization fusion remains a separate backend task.
+void JeandleIntrinsicLowering::copy_clone_payload(llvm::Value* obj,
+                                                 llvm::Value* alloc_obj,
+                                                 llvm::Value* obj_size,
+                                                 bool is_array) {
+  assert(obj_size != nullptr, "clone size must be available");
+
+  // TODO: Match C2's ReduceBulkZeroing path. Jeandle must expose the fresh
+  // allocation behind alloc_obj, verify that an array clone has a statically
+  // known array source type, mark the allocation complete, and record a
+  // complete_with_arraycopy initialization so the clone copy can own payload
+  // initialization instead of zeroing the same memory first.
+
+  emit_clone_copy(obj, alloc_obj, obj_size, is_array);
+  RETURN_VOID_ON_JEANDLE_ERROR();
+
+  // Payload stores happen after the allocation's initialization fence. Order
+  // them before publishing the clone, including final fields copied here.
+  _interp->call_java_op("jeandle.membar_storestore", {});
+}
+
+// Follow C2 LibraryCallKit::inline_native_clone() control order. LLVM control
+// edges carry Jeandle's memory and I/O state, so only the result value needs an
+// explicit PHI at the final merge.
+bool JeandleIntrinsicLowering::lower_object_clone() {
+  assert(!_target->is_static(), "Object.clone must be an instance method");
+
+  const Bytecodes::Code bc = _interp->_bytecodes.cur_bc_raw();
+  ciKlass* declared_holder =
+      _interp->_bytecodes.get_declared_method_holder();
+
+  // C2 passes call_does_dispatch through LibraryIntrinsic::is_virtual().
+  // Besides statically bound calls, C2 treats Object methods invoked on
+  // arrays as monomorphic because arrays cannot override them. Array clone
+  // bytecodes retain the array type as their declared holder, so preserve
+  // that distinction while expanding the intrinsic.
+  const bool is_virtual =
+      bc == Bytecodes::_invokevirtual &&
+      !_target->can_be_statically_bound() &&
+      (declared_holder == nullptr || !declared_holder->is_array_klass());
+
+  JeandlePreserveReexecuteState reexecute_scope(_interp);
+  _interp->_should_reexecute = true;
+
+  llvm::LLVMContext& ctx = *_interp->_context;
+  llvm::IRBuilder<>& b = _interp->_ir_builder;
+  llvm::Module& m = _interp->_module;
+  llvm::Function* f = _interp->_llvm_func;
+
+  llvm::PointerType* java_heap_ptr_ty = llvm::PointerType::get(
+      ctx, llvm::jeandle::AddrSpace::JavaHeapAddrSpace);
+
+  // invoke() has already performed C2's null_check_receiver(). Keep the
+  // receiver on the JVM stack until every deoptimizing clone operation has
+  // captured its reexecute state.
+  llvm::Value* obj = _interp->_jvm->raw_peek(0).value();
+
+  // TODO: Match C2's speculative instance-clone narrowing here. Jeandle does
+  // not yet expose speculative receiver types or maybe_cast_profiled_obj().
+
+  // C2 MemBarCPUOrder prevents compiler reordering but has no AArch64 machine
+  // instruction. LLVM singlethread scope provides the same compiler-only fence.
+  b.CreateFence(llvm::AtomicOrdering::SequentiallyConsistent,
+                llvm::SyncScope::SingleThread);
+
+  llvm::BasicBlock* result_bb =
+      llvm::BasicBlock::Create(ctx, "clone_result", f);
+  llvm::SmallVector<llvm::Value*, 4> result_values;
+  llvm::SmallVector<llvm::BasicBlock*, 4> result_controls;
+
+  llvm::Value* obj_klass =
+      _interp->load_object_klass(obj);
+
+  // C2 generate_array_guard(obj_klass, nullptr) returns the array projection
+  // while leaving the builder on the instance projection.
+  llvm::BasicBlock* array_control = generate_array_guard(obj_klass, nullptr);
+  {
+    // This only restores the LLVM IRBuilder insertion point. Unlike C2's
+    // PreserveJVMState, it does not save control, memory, I/O, or the JVM
+    // stack/map.
+    llvm::IRBuilderBase::InsertPointGuard preserve_control(b);
+    if (array_control != nullptr) {
+      b.SetInsertPoint(array_control);
+      llvm::Value* obj_length =
+          _interp->emit_array_length(obj);
+      llvm::Value* array_size = nullptr;
+      llvm::InvokeInst* alloc_obj = _interp->emit_jeandle_newarray(
+          obj_klass, obj_length, &array_size,
+          true /* deoptimize_on_exception */);
+      RETURN_ON_JEANDLE_ERROR(true);
+
+      // Jeandle currently supports Serial and G1. Both use C2's card-table
+      // barrier-set rule for this tightly-coupled oop-array clone.
+      if (copy_requires_gc_barriers(
+              true /* tightly_coupled_alloc */, T_OBJECT)) {
+        llvm::BasicBlock* obj_array_control =
+            generate_objArray_guard(obj_klass, nullptr);
+
+        if (obj_array_control != nullptr) {
+          // This only restores the LLVM IRBuilder insertion point. Unlike C2's
+          // PreserveJVMState, it does not save control, memory, I/O, or the JVM
+          // stack/map.
+          llvm::IRBuilderBase::InsertPointGuard preserve_control(b);
+          b.SetInsertPoint(obj_array_control);
+          // Clones are always tightly coupled. Reuse the phase-1 JavaOp
+          // declaration so its ABI stays in sync with template.ll. The
+          // ArrayCopyNode is created with may_throw=true in C2, and its slow
+          // path retains the exception projection. Keep the same exception
+          // and deoptimization state on the Jeandle pseudo call.
+          llvm::Value* obj_length_x = b.CreateSExt(
+              obj_length, b.getInt64Ty(), "clone.object_array_length_x");
+          static constexpr CallSiteAttributeMetadata clone_arraycopy_attrs = {
+              CTRL_MAY_DEOPT | CTRL_NEEDS_EXCEPTION_EDGE |
+                  CTRL_DEOPT_ON_EXCEPTION,
+              MEM_READ | MEM_WRITE | MEM_NEEDS_GC_STATE};
+          llvm::CallBase* ac = emit_callsite(
+              m.getFunction("jeandle.copy"),
+              llvm::CallingConv::Hotspot_JIT,
+              {obj, b.getInt64(0), alloc_obj, b.getInt64(0),
+               obj_length_x, obj_klass, obj_klass, obj_length_x,
+               obj_length_x},
+              clone_arraycopy_attrs, false /* is_gc_leaf_entry */);
+          RETURN_ON_JEANDLE_ERROR(true);
+          ac->addFnAttr(llvm::Attribute::get(
+              ctx, llvm::jeandle::Attribute::CopyKind,
+              llvm::jeandle::Attribute::CopyKindCloneReferenceArray));
+          ac->addFnAttr(llvm::Attribute::get(
+              ctx, llvm::jeandle::Attribute::CopyNegativeLengthGuard));
+          ac->addFnAttr(llvm::Attribute::get(
+              ctx,
+              llvm::jeandle::Attribute::CopyTightlyCoupledAllocation));
+
+          // Present the results of the object-array copy.
+          llvm::BasicBlock* obj_array_result_control = b.GetInsertBlock();
+          b.CreateBr(result_bb);
+          result_values.push_back(alloc_obj);
+          result_controls.push_back(obj_array_result_control);
+        }
+      }
+
+      // Otherwise, there are no barriers to worry about.
+      // (We can dispense with card marks if we know the allocation
+      // comes out of eden (TLAB)... In fact, ReduceInitialCardMarks
+      // causes the non-eden paths to take compensating steps to
+      // simulate a fresh allocation, so that no further
+      // card marks are required in compiled code to initialize
+      // the object.)
+      if (b.GetInsertBlock() != nullptr) {
+        copy_clone_payload(obj, alloc_obj, array_size, true /* is_array */);
+        RETURN_ON_JEANDLE_ERROR(true);
+
+        // Present the results of the array copy.
+        llvm::BasicBlock* array_result_control = b.GetInsertBlock();
+        b.CreateBr(result_bb);
+        result_values.push_back(alloc_obj);
+        result_controls.push_back(array_result_control);
+      }
+    }
+  }
+
+  // Accumulate instance guard failures in the same slow region as C2. A
+  // virtual-target mismatch reaches emit_java_call() below, which emits
+  // a dynamic Java call so that an overriding clone() is invoked.
+  llvm::BasicBlock* slow_region =
+      llvm::BasicBlock::Create(ctx, "clone_slow", f, result_bb);
+  if (b.GetInsertBlock() != nullptr) {
+    if (is_virtual) {
+      generate_virtual_guard(obj_klass, slow_region);
+    }
+
+    generate_access_flags_guard(
+        obj_klass, JVM_ACC_IS_CLONEABLE_FAST | JVM_ACC_HAS_FINALIZER,
+        JVM_ACC_IS_CLONEABLE_FAST, slow_region);
+  }
+
+  if (b.GetInsertBlock() != nullptr) {
+    // It's an instance, and it passed the slow-path tests. This is C2's
+    // _instance_path: allocate an object of the guarded Klass, copy its
+    // instance payload, and join the fast result with the other clone paths.
+    // new_instance() carries deoptimize_on_exception so allocation failures
+    // reexecute Object.clone, matching C2's PreserveJVMState contract.
+    llvm::Value* obj_size = nullptr;
+    llvm::InvokeInst* alloc_obj = _interp->new_instance(
+        obj_klass, nullptr, &obj_size,
+        true /* deoptimize_on_exception */);
+    RETURN_ON_JEANDLE_ERROR(true);
+
+    if (b.GetInsertBlock() != nullptr) {
+      copy_clone_payload(obj, alloc_obj, obj_size, false /* is_array */);
+      RETURN_ON_JEANDLE_ERROR(true);
+
+      llvm::BasicBlock* instance_result_control = b.GetInsertBlock();
+      b.CreateBr(result_bb);
+      result_values.push_back(alloc_obj);
+      result_controls.push_back(instance_result_control);
+    }
+  }
+
+  // Generate code for the slow case. We make a call to clone().
+  if (!llvm::pred_empty(slow_region)) {
+    b.SetInsertPoint(slow_region);
+    // An override is an ordinary Java call: it may return null or throw after
+    // side effects. Consume its receiver and use call state so deoptimization
+    // and exception dispatch never execute the override a second time.
+    JeandlePreserveReexecuteState slow_reexecute_scope(_interp);
+    _interp->_should_reexecute = false;
+    _interp->_jvm->apop();
+    llvm::CallBase* slow_result = _interp->emit_java_call(
+        const_cast<ciMethod*>(_target), declared_holder, _target->signature(),
+        {obj}, /*has_receiver=*/true, /*is_method_handle_invoke=*/false, bc,
+        /*call_does_dispatch=*/is_virtual,
+        /*deoptimize_on_exception=*/false,
+        /*result_is_non_null=*/!is_virtual);
+    _interp->_jvm->apush(obj);
+    RETURN_ON_JEANDLE_ERROR(true);
+
+    // The builder insertion point comes from emit_java_call().
+    // Present the results of the slow call.
+    llvm::BasicBlock* slow_call_control = b.GetInsertBlock();
+    b.CreateBr(result_bb);
+    result_values.push_back(slow_result);
+    result_controls.push_back(slow_call_control);
+  } else {
+    slow_region->eraseFromParent();
+  }
+
+  assert(!result_values.empty(), "clone must have a live result path");
+  b.SetInsertPoint(result_bb);
+  llvm::PHINode* result = b.CreatePHI(
+      java_heap_ptr_ty, result_values.size(), "clone_result_value");
+  for (size_t i = 0; i < result_values.size(); ++i) {
+    result->addIncoming(result_values[i], result_controls[i]);
+  }
+
+  // C2 also merges result_i_o and result_mem. LLVM's side-effecting control
+  // flow already merges those states at result_bb.
+  _interp->_block->set_tail_llvm_block(result_bb);
+  _interp->_jvm->apop();
+  _interp->_jvm->apush(result);
+  return true;
+}
+
+// public static <T,U> T[] java.util.Arrays.copyOf(
+//     U[] original, int newLength, Class<? extends T[]> newType);
+// public static <T,U> T[] java.util.Arrays.copyOfRange(
+//     U[] original, int from, int to, Class<? extends T[]> newType);
+bool JeandleIntrinsicLowering::lower_arrays_copy_of(bool is_copy_of_range) {
+  if (_interp->too_many_traps(_interp->_method,
+                              _interp->_bytecodes.cur_bci(),
+                              Deoptimization::Reason_intrinsic)) {
+    return false;
+  }
+
+  assert(_target->is_static(), "Arrays.copyOf[Range] must be static");
+  JeandlePreserveReexecuteState reexecute_scope(_interp);
+  _interp->_should_reexecute = true;
+  llvm::LLVMContext& ctx = *_interp->_context;
+  llvm::IRBuilder<>& b = _interp->_ir_builder;
+  llvm::Module& m = _interp->_module;
+  llvm::Function* f = _interp->_llvm_func;
+
+  // Get the arguments.
+  llvm::Value* original =
+      _interp->_jvm->raw_peek(is_copy_of_range ? 3 : 2).value();
+  llvm::Value* start = is_copy_of_range
+      ? _interp->_jvm->raw_peek(2).value()
+      : b.getInt32(0);
+  llvm::Value* end = _interp->_jvm->raw_peek(1).value();
+  llvm::Value* array_type_mirror = _interp->_jvm->raw_peek(0).value();
+
+  // Keep the original arguments on the JVM stack until allocation and the
+  // copy pseudo call have captured the reexecute state.
+  _interp->null_check(array_type_mirror);
+  _interp->null_check(original);
+
+  llvm::Value* orig_length = _interp->emit_array_length(original);
+  llvm::Value* klass_node = _interp->call_java_op(
+      "jeandle.load_mirror_klass", {array_type_mirror});
+  _interp->null_check(klass_node);
+
+  llvm::BasicBlock* bailout =
+      llvm::BasicBlock::Create(ctx, "copyof_bailout", f);
+
+  // Despite the generic Java signature, newType can be a primitive class or
+  // a primitive-array class. Only reference-array destinations are handled by
+  // this intrinsic; all other mirrors reexecute the Java implementation.
+  generate_non_objArray_guard(klass_node, bailout);
+  if (b.GetInsertBlock() == nullptr) {
+    _interp->_block->set(JeandleBasicBlock::always_uncommon_trap);
+    return true;
+  }
+
+  // Bail out if either start or end is negative.
+  generate_negative_guard(start, bailout);
+  generate_negative_guard(end, bailout);
+
+  llvm::Value* length = end;
+  if (is_copy_of_range) {
+    length = b.CreateSub(end, start, "copyof.length");
+  }
+
+  // If start > end, Java must throw IllegalArgumentException. Reexecute the
+  // Java method instead of allowing new_array to throw NegativeArraySizeException.
+  generate_negative_guard(length, bailout);
+
+  // start > original.length is an ArrayIndexOutOfBoundsException in the Java
+  // implementation and must also be handled by reexecution.
+  llvm::Value* orig_tail =
+      b.CreateSub(orig_length, start, "copyof.original_tail");
+  generate_negative_guard(orig_tail, bailout);
+
+  // All failed guards above merge at bailout, matching C2's RegionNode.
+  if (!llvm::pred_empty(bailout)) {
+    _interp->uncommon_trap(Deoptimization::Reason_intrinsic,
+                           Deoptimization::Action_maybe_recompile,
+                           bailout);
+  } else {
+    bailout->eraseFromParent();
+  }
+
+  // The number copied can be smaller than the requested result length; the
+  // allocation's normal zeroing supplies null padding for the remainder.
+  llvm::Value* tail_is_shorter = b.CreateICmpSLT(
+      orig_tail, length, "copyof.tail_is_shorter");
+  llvm::Value* moved = b.CreateSelect(
+      tail_is_shorter, orig_tail, length, "copyof.moved");
+
+  // TODO: Match C2's singleton target-Klass check and
+  // maybe_cast_profiled_obj()-style speculative narrowing of original before
+  // generating this subtype check.
+  llvm::Value* src_klass = _interp->load_object_klass(original);
+  bool validated = false;
+  if (!_interp->too_many_traps(_interp->_method,
+                              _interp->_bytecodes.cur_bci(),
+                              Deoptimization::Reason_class_check)) {
+    llvm::BasicBlock* class_check_fail =
+        llvm::BasicBlock::Create(ctx, "copyof_class_check_fail", f);
+    llvm::Value* is_subtype = _interp->call_java_op(
+        "jeandle.check_klass_subtype", {src_klass, klass_node});
+    llvm::Value* not_subtype =
+        b.CreateNot(is_subtype, "copyof_not_subtype");
+    generate_guard(not_subtype, class_check_fail, PROB_MIN);
+    if (!llvm::pred_empty(class_check_fail)) {
+      _interp->uncommon_trap(Deoptimization::Reason_class_check,
+                             Deoptimization::Action_make_not_entrant,
+                             class_check_fail);
+    } else {
+      class_check_fail->eraseFromParent();
+    }
+    validated = true;
+  }
+
+  llvm::InvokeInst* newcopy = _interp->emit_jeandle_newarray(
+      klass_node, length);
+  RETURN_ON_JEANDLE_ERROR(true);
+
+  llvm::Value* start_x =
+      b.CreateSExt(start, b.getInt64Ty(), "copyof.start_x");
+  llvm::Value* moved_x =
+      b.CreateSExt(moved, b.getInt64Ty(), "copyof.moved_x");
+  llvm::Value* orig_length_x = b.CreateSExt(
+      orig_length, b.getInt64Ty(), "copyof.original_length_x");
+  llvm::Value* length_x =
+      b.CreateSExt(length, b.getInt64Ty(), "copyof.length_x");
+
+  // This is the Jeandle counterpart of ArrayCopyNode::make(..., true, true):
+  // the destination allocation is tightly coupled and all length guards have
+  // already run. The specialization pass recognizes copyOf kinds separately
+  // so it can preserve their disjoint, object-array expansion.
+  llvm::Function* copy_callee = m.getFunction("jeandle.copy");
+  assert(copy_callee != nullptr,
+         "jeandle.copy must be declared in template.ll");
+  static constexpr CallSiteAttributeMetadata copyof_attrs = {
+      CTRL_NEEDS_EXCEPTION_EDGE,
+      MEM_READ | MEM_WRITE | MEM_NEEDS_GC_STATE};
+  llvm::CallBase* arraycopy_call = emit_callsite(
+      copy_callee, llvm::CallingConv::Hotspot_JIT,
+      {original, start_x, newcopy, b.getInt64(0), moved_x,
+       src_klass, klass_node, orig_length_x, length_x},
+      copyof_attrs);
+  RETURN_ON_JEANDLE_ERROR(true);
+  arraycopy_call->addFnAttr(llvm::Attribute::get(
+      ctx, llvm::jeandle::Attribute::CopyKind,
+      is_copy_of_range
+          ? llvm::jeandle::Attribute::CopyKindCopyOfRange
+          : llvm::jeandle::Attribute::CopyKindCopyOf));
+  arraycopy_call->addFnAttr(llvm::Attribute::get(
+      ctx, llvm::jeandle::Attribute::CopyNegativeLengthGuard));
+  arraycopy_call->addFnAttr(llvm::Attribute::get(
+      ctx, llvm::jeandle::Attribute::CopyTightlyCoupledAllocation));
+  if (validated) {
+    arraycopy_call->addFnAttr(llvm::Attribute::get(
+        ctx, llvm::jeandle::Attribute::ValidatedCopy));
+  }
+
+  if (is_copy_of_range) {
+    _interp->_jvm->apop();  // newType
+    _interp->_jvm->ipop();  // to
+    _interp->_jvm->ipop();  // from
+    _interp->_jvm->apop();  // original
+  } else {
+    _interp->_jvm->apop();  // newType
+    _interp->_jvm->ipop();  // newLength
+    _interp->_jvm->apop();  // original
+  }
+  _interp->_jvm->apush(newcopy);
+  return true;
+}
+
+// ---- lower_arrayequals ----
+bool JeandleIntrinsicLowering::lower_arrayequals(BasicType element_type) {
+  llvm::LLVMContext& ctx = *_interp->_context;
+  llvm::IRBuilder<>& b = _interp->_ir_builder;
+  llvm::Module& m = _interp->_module;
+
+  llvm::Value* left = _interp->_jvm->peek_value(1).value();
+  llvm::Value* right = _interp->_jvm->peek_value(0).value();
+
+  llvm::BasicBlock* current_bb = b.GetInsertBlock();
+  llvm::BasicBlock* null_bb = llvm::BasicBlock::Create(ctx, "null_check", current_bb->getParent());
+  llvm::BasicBlock* slow_bb = llvm::BasicBlock::Create(ctx, "slow_branch", current_bb->getParent());
+  llvm::BasicBlock* result_bb = llvm::BasicBlock::Create(ctx, "result", current_bb->getParent());
+
+  // ---------- if left == right ----------
+  llvm::Value* ptr_eq = b.CreateICmpEQ(left, right);
+  b.CreateCondBr(ptr_eq, result_bb, null_bb);
+
+  // ---------- if left == null || right == null ----------
+  b.SetInsertPoint(null_bb);
+
+  llvm::Value* null_const = llvm::ConstantPointerNull::get(llvm::cast<llvm::PointerType>(left->getType()));
+  llvm::Value* is_null_left = b.CreateICmpEQ(left, null_const);
+  llvm::Value* is_null_right = b.CreateICmpEQ(right, null_const);
+
+  llvm::Value* any_null = b.CreateOr(is_null_left, is_null_right);
+  b.CreateCondBr(any_null, result_bb, slow_bb);
+
+  // ---------- check array length ----------
+  b.SetInsertPoint(slow_bb);
+
+  llvm::Value* left_length = _interp->call_java_op("jeandle.arraylength", {left});
+  llvm::Value* right_length = _interp->call_java_op("jeandle.arraylength", {right});
+
+  llvm::Value* len_equals = b.CreateICmpEQ(left_length, right_length);
+
+  llvm::BasicBlock* memcmp_bb = llvm::BasicBlock::Create(ctx, "memcmp",
+                                            current_bb->getParent());
+
+  b.CreateCondBr(len_equals, memcmp_bb, result_bb);
+
+  // ---------- if len(left) == len(right) ----------
+  b.SetInsertPoint(memcmp_bb);
+
+  llvm::Value* array_base_offset = b.getInt32(arrayOopDesc::base_offset_in_bytes(element_type));
+  llvm::Value* left_array_base = b.CreatePtrAdd(left, array_base_offset, "left_array_element_base");
+  llvm::Value* right_array_base = b.CreatePtrAdd(right, array_base_offset, "right_array_element_base");
+
+  llvm::Value* element_byte_size = llvm::ConstantInt::get(left_length->getType(),type2aelembytes(element_type));
+  llvm::Value* left_byte_length = b.CreateMul(element_byte_size, left_length);
+  if (left_byte_length->getType() != b.getInt64Ty()) left_byte_length = b.CreateIntCast(left_byte_length, b.getInt64Ty(), false);
+
+
+  llvm::Value* memcmp_result = _interp->call_java_op("jeandle.memcmp", {left_array_base, right_array_base, left_byte_length});
+  llvm::Value* is_equal = b.CreateICmpEQ(memcmp_result,
+                                        llvm::ConstantInt::get(memcmp_result->getType(), 0));
+
+  b.CreateBr(result_bb);
+
+  b.SetInsertPoint(result_bb);
+  _interp->_block->set_tail_llvm_block(result_bb);
+  llvm::PHINode* phi = b.CreatePHI(b.getInt1Ty(), 4);
+  phi->addIncoming(llvm::ConstantInt::getTrue(ctx), current_bb);  // left == right -> true
+  phi->addIncoming(llvm::ConstantInt::getFalse(ctx), null_bb);    // any null -> false
+  phi->addIncoming(llvm::ConstantInt::getFalse(ctx), slow_bb);    // len(left) != len(right) -> false
+  phi->addIncoming(is_equal, memcmp_bb);                          // memcmp(left_base, right_base) == 0 -> true
+
+  llvm::Value* result = b.CreateIntCast(phi, b.getInt32Ty(), false);
+
+  _interp->_jvm->apop(); // right
+  _interp->_jvm->apop(); // left
+
+
+  _interp->_jvm->push(T_BOOLEAN, result);
+
   return true;
 }

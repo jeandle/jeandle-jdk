@@ -27,6 +27,7 @@
 
 #include "jeandle/__hotspotHeadersBegin__.hpp"
 #include "runtime/globals.hpp"
+#include "runtime/vm_version.hpp"
 
 // =============================================================================
 // Arch-specific CPU feature checks (x86)
@@ -52,8 +53,20 @@ bool JeandleIntrinsicLowering::cpu_supports_spin_wait() {
   return true;
 }
 
-bool JeandleIntrinsicLowering::supports_vectorized_mismatch_medium_path() {
-  return false;
+uint64_t JeandleIntrinsicLowering::vectorized_mismatch_medium_path_limit() {
+  // The medium tier is a fixed 128-bit <16 x i8> loop lowered to
+  // pcmpeqb/pmovmskb, available from the SSE2 baseline regardless of the
+  // AVX level. C2's ArrayOperationPartialInlineSize carries AVX-512
+  // masked-vector ergonomics (0 on non-AVX-512 x86) and does not describe
+  // this tier, so the limit is fixed instead of flag-derived. Unlike
+  // aarch64, the user flag cannot disable this tier on x86.
+  return 32;
+}
+
+bool JeandleIntrinsicLowering::cpu_supports_cache_writeback() {
+  // Matches C2's predicate for Op_CacheWB/Op_CacheWBPreSync/Op_CacheWBPostSync:
+  // predicate(VM_Version::supports_data_cache_line_flush())
+  return VM_Version::supports_data_cache_line_flush();
 }
 
 // =============================================================================
@@ -68,5 +81,35 @@ bool JeandleIntrinsicLowering::lower_spin_wait_hint() {
   builder.CreateIntrinsic(
       llvm::Intrinsic::x86_sse2_pause, llvm::ArrayRef<llvm::Type*>{}, {});
   // void return: nothing to push on the JVM operand stack
+  return true;
+}
+
+bool JeandleIntrinsicLowering::lower_writeback0() {
+  llvm::IRBuilder<>& builder = _interp->_ir_builder;
+  llvm::Value* address = _interp->_jvm->lpop();
+  _interp->_jvm->apop();
+
+  llvm::PointerType* ptr_type = llvm::PointerType::getUnqual(builder.getContext());
+  llvm::Value* address_ptr = builder.CreateIntToPtr(address, ptr_type);
+  if (VM_Version::supports_clflushopt()) {
+    llvm::Intrinsic::ID id = VM_Version::supports_clwb()
+        ? llvm::Intrinsic::x86_clwb
+        : llvm::Intrinsic::x86_clflushopt;
+    builder.CreateIntrinsic(id, {}, {address_ptr});
+  } else {
+    builder.CreateIntrinsic(llvm::Intrinsic::x86_sse2_clflush, {}, {address_ptr});
+  }
+  return true;
+}
+
+bool JeandleIntrinsicLowering::lower_writeback_sync(vmIntrinsics::ID id) {
+  llvm::IRBuilder<>& builder = _interp->_ir_builder;
+  _interp->_jvm->apop();
+
+  if (id == vmIntrinsics::_writebackPostSync0 &&
+      (VM_Version::supports_clflushopt() || VM_Version::supports_clwb())) {
+    builder.CreateIntrinsic(
+        llvm::Intrinsic::x86_sse_sfence, llvm::ArrayRef<llvm::Type*>{}, {});
+  }
   return true;
 }

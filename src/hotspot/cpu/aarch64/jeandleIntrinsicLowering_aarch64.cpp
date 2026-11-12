@@ -10,7 +10,7 @@
  * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
  * FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General Public License
  * version 2 for more details (a copy is included in the LICENSE file that
- * accompanied this code.
+ * accompanied this code).
  *
  * You should have received a copy of the GNU General Public License version
  * 2 along with this work; if not, write to the Free Software Foundation,
@@ -24,8 +24,10 @@
 
 #include "jeandle/jeandleAbstractInterpreter.hpp"
 #include "jeandle/jeandleIntrinsicLowering.hpp"
+#include "jeandle/jeandleRuntimeRoutine.hpp"
 
 #include "jeandle/__hotspotHeadersBegin__.hpp"
+#include "runtime/globals.hpp"
 #include "runtime/vm_version.hpp"
 
 // =============================================================================
@@ -44,6 +46,10 @@ bool JeandleIntrinsicLowering::cpu_supports_popcount() {
   return true;
 }
 
+bool JeandleIntrinsicLowering::cpu_supports_cache_writeback() {
+  return VM_Version::supports_data_cache_line_flush();
+}
+
 bool JeandleIntrinsicLowering::cpu_supports_spin_wait() {
   // The current lowering always emits YIELD. Decline when VM_Version selected
   // NOP/ISB/NONE, and let the normal path preserve the platform policy.
@@ -52,9 +58,11 @@ bool JeandleIntrinsicLowering::cpu_supports_spin_wait() {
   return VM_Version::spin_wait_desc().inst() == SpinWait::YIELD;
 }
 
-bool JeandleIntrinsicLowering::supports_vectorized_mismatch_medium_path() {
-  // NEON (128-bit Advanced SIMD) is ARMv8-A baseline, always available.
-  return true;
+uint64_t JeandleIntrinsicLowering::vectorized_mismatch_medium_path_limit() {
+  // Preserve the SVE ergonomics: ArrayOperationPartialInlineSize is
+  // MaxVectorSize on SVE machines and 0 on NEON-only ones, so the medium
+  // tier stays disabled there.
+  return (uint64_t)ArrayOperationPartialInlineSize;
 }
 
 // =============================================================================
@@ -72,5 +80,39 @@ bool JeandleIntrinsicLowering::lower_spin_wait_hint() {
   builder.CreateIntrinsic(
       llvm::Intrinsic::aarch64_hint, {}, {builder.getInt32(1)});
   // void return: nothing to push on the JVM operand stack
+  return true;
+}
+
+bool JeandleIntrinsicLowering::lower_writeback0() {
+  if (JeandleRuntimeRoutine::find_routine_entry(
+          "StubRoutines_data_cache_writeback") == nullptr) {
+    return false;
+  }
+  llvm::IRBuilder<>& builder = _interp->_ir_builder;
+  llvm::Value* address = _interp->_jvm->lpop();
+  _interp->_jvm->apop();
+  // Unsafe.writeback0 accepts an arbitrary native address, not a C-heap object.
+  llvm::PointerType* ptr_type = llvm::PointerType::getUnqual(builder.getContext());
+  llvm::Value* address_ptr = builder.CreateIntToPtr(address, ptr_type);
+  static constexpr CallSiteAttributeMetadata writeback_attrs = {
+      CTRL_NONE, MEM_READ | MEM_WRITE};
+  emit_callsite(
+      JeandleRuntimeRoutine::StubRoutines_data_cache_writeback_callee(
+          _interp->_module),
+      llvm::CallingConv::C, {address_ptr}, writeback_attrs,
+      /*is_gc_leaf_entry=*/true);
+  return true;
+}
+
+bool JeandleIntrinsicLowering::lower_writeback_sync(vmIntrinsics::ID id) {
+  llvm::IRBuilder<>& builder = _interp->_ir_builder;
+  _interp->_jvm->apop();
+  if (id == vmIntrinsics::_writebackPostSync0) {
+    // Keep the intrinsic's default unknown memory effects. Restricting DMB to
+    // inaccessible memory would let LLVM move ordinary heap/raw accesses
+    // across the post-writeback barrier.
+    builder.CreateIntrinsic(
+      llvm::Intrinsic::aarch64_dmb, {}, {builder.getInt32(0xb)});
+  }
   return true;
 }

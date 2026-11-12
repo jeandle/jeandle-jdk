@@ -213,3 +213,193 @@ void JeandleRuntimeRoutine::generate_exception_handler() {
 void JeandleRuntimeRoutine::generate_deopt_blob() {
   _routine_entry[_deopt_blob] = SharedRuntime::deopt_blob()->unpack();
 }
+
+// Clear a variable number of HeapWords using the C calling convention:
+//   x10: HeapWord-aligned base
+//   x11: i32 HeapWord count
+//
+// Unlike C2's zero_blocks stub, this routine also clears the tail because an
+// LLVM call cannot consume adjusted argument registers after returning.
+void JeandleRuntimeRoutine::generate_zero_heap_words_stub() {
+  ResourceMark rm;
+  CodeBuffer buffer(_zero_heap_words_stub, 1024, 64);
+  MacroAssembler* masm = new MacroAssembler(&buffer);
+
+  const Register base = c_rarg0;
+  const Register cnt = c_rarg1;
+  const Register tmp1 = t0;
+  const Register tmp2 = t1;
+
+  address start = __ pc();
+
+  // The C ABI argument is i32. Clear the unspecified upper bits before using
+  // the count in 64-bit address arithmetic and loop control.
+  __ zero_extend(cnt, cnt, 32);
+
+  Label done;
+
+  if (UseBlockZeroing) {
+    // Ensure count >= 2*CacheLineSize so that it still deserves a cbo.zero
+    // after alignment.
+    Label small;
+    int low_limit = MAX2(2 * CacheLineSize, BlockZeroingLowLimit) / wordSize;
+    __ mv(tmp1, low_limit);
+    __ blt(cnt, tmp1, small);
+    __ zero_dcache_blocks(base, cnt, tmp1, tmp2);
+    __ bind(small);
+  }
+
+  {
+    // Clear the remaining blocks.
+    Label loop;
+    __ mv(tmp1, MacroAssembler::zero_words_block_size);
+    __ blt(cnt, tmp1, done);
+    __ bind(loop);
+    for (int i = 0; i < MacroAssembler::zero_words_block_size; i++) {
+      __ sd(zr, Address(base, i * wordSize));
+    }
+    __ add(base, base, MacroAssembler::zero_words_block_size * wordSize);
+    __ sub(cnt, cnt, MacroAssembler::zero_words_block_size);
+    __ bge(cnt, tmp1, loop);
+    __ bind(done);
+  }
+
+  // Unlike C2's zero_blocks stub, clear the tail here as well because the C
+  // ABI call cannot return the adjusted base and count in its arguments.
+  for (int i = MacroAssembler::zero_words_block_size >> 1; i > 1; i >>= 1) {
+    Label l;
+    __ test_bit(tmp1, cnt, exact_log2(i));
+    __ beqz(tmp1, l);
+    for (int j = 0; j < i; j++) {
+      __ sd(zr, Address(base, j * wordSize));
+    }
+    __ addi(base, base, i * wordSize);
+    __ bind(l);
+  }
+  {
+    Label l;
+    __ test_bit(tmp1, cnt, 0);
+    __ beqz(tmp1, l);
+    __ sd(zr, Address(base, 0));
+    __ bind(l);
+  }
+
+  __ ret();
+  masm->flush();
+
+  RuntimeStub* stub = RuntimeStub::new_runtime_stub(
+      _zero_heap_words_stub, &buffer, (int)(__ pc() - start),
+      0 /* frame size */, nullptr /* oop maps */, false);
+  address entry = stub->entry_point();
+  _routine_entry[_zero_heap_words_stub] = entry;
+  _gc_leaf_routines.insert(entry);
+}
+
+// C ABI: (UTF16 source, Latin1 destination, i32 count) -> count or zero.
+void JeandleRuntimeRoutine::generate_string_compress_stub() {
+  ResourceMark rm;
+  CodeBuffer buffer(_string_compress_stub, 1024, 64);
+  MacroAssembler* masm = new MacroAssembler(&buffer);
+  const Register src = c_rarg0;
+  const Register dst = c_rarg1;
+  const Register count = c_rarg2;
+  const Register original_count = c_rarg3;
+  Label success, failure, done;
+  address start = __ pc();
+
+  __ zero_extend(count, count, 32);
+  __ mv(original_count, count);
+  __ beqz(count, success);
+  if (UseRVV) {
+    Label vector_loop;
+    __ mv(t1, 255);
+    __ bind(vector_loop);
+    __ vsetvli(t0, count, Assembler::e16, Assembler::m2);
+    __ vle16_v(v2, src);
+    __ vmsgtu_vx(v1, v2, t1);
+    __ vfirst_m(t2, v1);
+    // Commit only the active lanes before the first invalid character.
+    __ vmsbf_m(v0, v1);
+    __ vsetvli(t0, count, Assembler::e8);
+    __ vncvt_x_x_w(v1, v2, Assembler::v0_t);
+    __ vse8_v(v1, dst, Assembler::v0_t);
+    __ bgez(t2, failure);
+    __ sub(count, count, t0);
+    __ add(dst, dst, t0);
+    __ shadd(src, t0, src, t2, 1);
+    __ bnez(count, vector_loop);
+  } else {
+    Label scalar_loop;
+    __ mv(t1, 255);
+    __ bind(scalar_loop);
+    __ lhu(t0, Address(src));
+    __ bltu(t1, t0, failure);
+    __ sb(t0, Address(dst));
+    __ addi(src, src, 2);
+    __ addi(dst, dst, 1);
+    __ addi(count, count, -1);
+    __ bnez(count, scalar_loop);
+  }
+  __ bind(success);
+  __ mv(c_rarg0, original_count);
+  __ j(done);
+  __ bind(failure);
+  __ mv(c_rarg0, zr);
+  __ bind(done);
+  __ ret();
+  masm->flush();
+
+  RuntimeStub* stub = RuntimeStub::new_runtime_stub(
+      _string_compress_stub, &buffer, (int)(__ pc() - start),
+      0 /* frame size */, nullptr /* oop maps */, false);
+  address entry = stub->entry_point();
+  _routine_entry[_string_compress_stub] = entry;
+  _gc_leaf_routines.insert(entry);
+}
+
+// C ABI: (Latin1 source, UTF16 destination, i32 count) -> void.
+void JeandleRuntimeRoutine::generate_string_inflate_stub() {
+  ResourceMark rm;
+  CodeBuffer buffer(_string_inflate_stub, 1024, 64);
+  MacroAssembler* masm = new MacroAssembler(&buffer);
+  const Register src = c_rarg0;
+  const Register dst = c_rarg1;
+  const Register count = c_rarg2;
+  Label done;
+  address start = __ pc();
+
+  __ zero_extend(count, count, 32);
+  __ beqz(count, done);
+  if (UseRVV) {
+    Label vector_loop;
+    __ bind(vector_loop);
+    __ vsetvli(t1, count, Assembler::e8, Assembler::m2);
+    __ vle8_v(v6, src);
+    __ vsetvli(t0, count, Assembler::e16, Assembler::m4);
+    __ vzext_vf2(v4, v6);
+    __ vse16_v(v4, dst);
+    __ sub(count, count, t1);
+    __ add(src, src, t1);
+    __ shadd(dst, t1, dst, t0, 1);
+    __ bnez(count, vector_loop);
+  } else {
+    Label scalar_loop;
+    __ bind(scalar_loop);
+    __ lbu(t0, Address(src));
+    __ sh(t0, Address(dst));
+    __ addi(src, src, 1);
+    __ addi(dst, dst, 2);
+    __ addi(count, count, -1);
+    __ bnez(count, scalar_loop);
+  }
+  __ bind(done);
+  __ ret();
+  masm->flush();
+
+  RuntimeStub* stub = RuntimeStub::new_runtime_stub(
+      _string_inflate_stub, &buffer, (int)(__ pc() - start),
+      0 /* frame size */, nullptr /* oop maps */, false);
+  address entry = stub->entry_point();
+  _routine_entry[_string_inflate_stub] = entry;
+  _gc_leaf_routines.insert(entry);
+}

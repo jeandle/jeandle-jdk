@@ -36,6 +36,7 @@
 #include "jeandle/jeandleProfile.hpp"
 
 #include "jeandle/__hotspotHeadersBegin__.hpp"
+#include "ci/ciArray.hpp"
 #include "ci/ciClassList.hpp"
 #include "ci/ciEnv.hpp"
 #include "ci/ciInstanceKlass.hpp"
@@ -52,6 +53,7 @@
 #include "ci/ciUtilities.inline.hpp"
 #include "code/oopRecorder.hpp"
 #include "logging/log.hpp"
+#include "oops/arrayOop.hpp"
 #include "oops/fieldInfo.inline.hpp"
 #include "oops/fieldStreams.inline.hpp"
 #include "oops/instanceMirrorKlass.hpp"
@@ -123,6 +125,12 @@ bool constant_field(int oop_id, int offset, ciField*& field, ciConstant& con, in
   }
 
   if (base_oop->is_array()) {
+    // Array length is immutable even when its elements are not stable.
+    if (offset == arrayOopDesc::length_offset_in_bytes()) {
+      con = ciConstant(T_INT, base_oop->as_array()->length());
+      return true;
+    }
+
     JeandleCompilation* compilation = JeandleCompilation::current();
     JeandleCompiledCode* compiled_code = compilation->compiled_code();
     int base_stable_dimension = compiled_code->stable_array_dimension(oop_id);
@@ -403,7 +411,7 @@ JeandleVMCallback::get_constant_field(int oop_id, int offset) {
 
   int basic_type;
   if (field == nullptr) {
-    // @Stable array element.
+    // Array length or @Stable array element.
     basic_type = con.basic_type();
   } else {
     // Instance or static field.
@@ -841,8 +849,13 @@ ciInstanceKlass* JeandleVMCallback::get_ci_instance_klass(Klass* klass) {
   if (klass == nullptr) {
     return nullptr;
   }
-  assert(klass->is_instance_klass(), "must be instance klass");
   VM_ENTRY_MARK;
+  // Array classes expose methods inherited from Object, including clone().
+  // CHA still requires an instance klass as the declared method holder.
+  if (klass->is_array_klass()) {
+    return ciEnv::current()->Object_klass();
+  }
+  assert(klass->is_instance_klass(), "must be instance or array klass");
   return ciEnv::current()->get_instance_klass(klass);
 }
 
@@ -1034,6 +1047,68 @@ uintptr_t JeandleVMCallback::get_signature_arg_type_klass(uintptr_t method, int 
   return reinterpret_cast<uintptr_t>(k->constant_encoding());
 }
 
+llvm::jeandle::CloneInstanceInfoResult
+JeandleVMCallback::get_clone_instance_info(uintptr_t klass_ptr,
+                                           bool klass_exact) {
+  VM_ENTRY_MARK;
+  using llvm::jeandle::CloneInstanceFieldInfo;
+  using llvm::jeandle::CloneInstanceInfoStatus;
+
+  Klass* holder = reinterpret_cast<Klass*>(klass_ptr);
+  if (holder == nullptr || !holder->is_instance_klass()) {
+    return {static_cast<int>(CloneInstanceInfoStatus::NotInstance), -1, {}};
+  }
+  ciEnv* env = ciEnv::current();
+  ciMetadata* meta = env->get_metadata(reinterpret_cast<Metadata*>(holder));
+  if (meta == nullptr || !meta->is_instance_klass()) {
+    return {static_cast<int>(CloneInstanceInfoStatus::NotApplicable), -1, {}};
+  }
+  ciInstanceKlass* ik = meta->as_instance_klass();
+
+  // Match ArrayCopyNode::get_count(). Injected fields are not represented by
+  // nof_nonstatic_fields(), so C2 declines rather than copying an incomplete
+  // instance layout.
+  if ((!klass_exact && (ik->is_interface() || ik->has_subklass())) ||
+      ik->has_injected_fields()) {
+    return {static_cast<int>(CloneInstanceInfoStatus::NotApplicable), -1, {}};
+  }
+  const int field_count = ik->nof_nonstatic_fields();
+  if (field_count > ArrayCopyLoadStoreMaxElem) {
+    return {static_cast<int>(CloneInstanceInfoStatus::NotApplicable),
+            field_count, {}};
+  }
+
+  if (copy_requires_gc_barriers(/*tightly_coupled_alloc=*/true,
+                                      T_OBJECT)) {
+    return {
+        static_cast<int>(CloneInstanceInfoStatus::RequiresGCBarriers),
+        field_count, {}};
+  }
+
+  if (!klass_exact) {
+    assert(!ik->is_interface(), "inconsistent klass hierarchy");
+    if (ik->has_subklass()) {
+      // Recheck the cached ci hierarchy before recording the dependency.
+      // assert_leaf_type supplies class-loading validation at code installation.
+      return {static_cast<int>(CloneInstanceInfoStatus::TransformFailed),
+              field_count, {}};
+    }
+    env->dependencies()->assert_leaf_type(ik);
+  }
+
+  std::vector<CloneInstanceFieldInfo> fields;
+  fields.reserve(field_count);
+  for (int index = 0; index < field_count; ++index) {
+    ciField* field = ik->nonstatic_field_at(index);
+    fields.emplace_back(field->offset_in_bytes(),
+                        basictype_to_jbasictype(field->layout_type()));
+  }
+  // Ready must describe exactly field_count fields on both sides of the VM interface.
+  assert(fields.size() == static_cast<size_t>(field_count), "incomplete clone field layout");
+  return {static_cast<int>(CloneInstanceInfoStatus::Ready), field_count,
+          std::move(fields)};
+}
+
 void JeandleVMCallback::register_callbacks() {
   llvm::jeandle::VMCallbacks callbacks;
   callbacks.IsSubtype = &JeandleVMCallback::is_subtype;
@@ -1073,6 +1148,8 @@ void JeandleVMCallback::register_callbacks() {
       &JeandleVMCallback::get_profile_devirtualization_info;
   callbacks.UpdateToStaticOptVirtualCall =
       &JeandleVMCallback::update_to_static_opt_virtual_call;
+  callbacks.GetCloneInstanceInfo =
+      &JeandleVMCallback::get_clone_instance_info;
   llvm::jeandle::registerVMCallbacks(callbacks);
 
   if (JeandleRecordVMCallbacks) {

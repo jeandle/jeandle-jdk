@@ -145,6 +145,19 @@ void Relocation::pd_set_call_destination(address x) {
 
 void Relocation::pd_set_jeandle_data_value(address x, int addend, bool verify_only) {
 #ifdef AMD64
+  if (addr_in_const()) {
+    if (type() == relocInfo::jeandle_oop_addr_type) {
+      if (verify_only) {
+        guarantee(*(address*)addr() == x, "instructions must match");
+      } else {
+        *(address*)addr() = x;
+      }
+      return;
+    }
+
+    assert(type() == relocInfo::jeandle_section_word_type, "unexpected relocation in const section");
+  }
+
   typedef Assembler::WhichOperand WhichOperand;
   WhichOperand which = (WhichOperand) format();
   assert(which == Assembler::disp32_operand, "format unpacks ok");
@@ -222,8 +235,7 @@ void trampoline_stub_Relocation::pd_fix_owner_after_move() {
 }
 #endif // JEANDLE
 
-void jeandle_oop_addr_Relocation::fix_relocation_after_move(const CodeBuffer* src, CodeBuffer* dest) {
-  Unimplemented();
+void jeandle_oop_addr_Relocation::fix_relocation_after_move(const CodeBuffer*, CodeBuffer*) {
 }
 
 bool jeandle_oop_Relocation::pd_pack_data_to(CodeSection* dest) {
