@@ -11,7 +11,7 @@
 | ```JeandleRecordVMCallbacks``` | bool | Record VM callback invocations for standalone LLVM testing. | ```false``` |
 | ```JeandleUseProfile``` | bool | Use interpreter/C1 profile data (MDO) for branch and switch weights, as well as unstable-if branch pruning. | ```true``` |
 | ```JeandleUseProfiledVirtualCallDevirtualization``` | bool | Use receiver type profiles to devirtualize `invokevirtual` and `invokeinterface` calls. | ```true``` |
-| ```JeandleNodeCountInliningCutoff``` | intx | Stop non-forced inlining once the root method's LLVM IR instruction count exceeds this limit. A value of ```0``` disables non-forced inlining limited by this cutoff. | ```18000``` |
+| ```JeandleNodeCountInliningCutoff``` | intx | Limit inlining of nontrivial, nonaccessor methods when the root method's LLVM IR instruction count exceeds this limit. Zero always triggers the limit. Methods marked `@ForceInline` bypass this check when `IncrementalInline` is enabled; forcing through `CompileCommand` or replay does not itself bypass it. | ```18000``` |
 | ```JeandlePrintInlineTree``` | bool | Print the Jeandle inline tree before installing compiled code. | ```false``` |
 | ```JeandleDoPEA``` | bool | Run Partial Escape Analysis (PEA) in the Jeandle optimization pipeline. | ```true``` |
 | ```JeandleEliminateLocks``` | bool | Enable lock elimination in Jeandle PEA. | ```true``` |
