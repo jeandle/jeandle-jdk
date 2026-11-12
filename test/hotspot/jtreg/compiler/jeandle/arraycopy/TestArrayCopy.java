@@ -87,10 +87,10 @@ public class TestArrayCopy {
                         int[].class, int.class, int.class), false);
         if (intrinsicEnabled) {
             raw.checkNotPattern("call hotspotcc .*@jeandle\\.assume_java_type");
-            raw.checkPattern("invoke hotspotcc void @jeandle\\.arraycopy");
-            raw.checkPattern("attributes .*jeandle\\.arraycopy\\.validated");
+            raw.checkPattern("invoke hotspotcc void @jeandle\\.copy");
+            raw.checkPattern("attributes .*jeandle\\.copy\\.validated");
         } else {
-            raw.checkNotPattern("(?:call|invoke) hotspotcc void @jeandle\\.arraycopy");
+            raw.checkNotPattern("(?:call|invoke) hotspotcc void @jeandle\\.copy");
         }
     }
 

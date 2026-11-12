@@ -30,9 +30,17 @@
 #include "runtime/arguments.hpp"
 
 void apply_vm_flag_feature_overrides(llvm::SubtargetFeatures& features) {
-  if (!UseRVC) {
-    features.AddFeature("c", false);
-  }
+  // Compressed instructions are always disabled for Jeandle methods.
+  // patch_static_call_site and patch_ic_call_site emit a 4-byte jal at the
+  // statepoint return PC, and NativeCall later patches that jal with a 32-bit
+  // store. trampoline_call asserts the address is 4-byte aligned. With C, Zca,
+  // Zcd, or Zcf that PC is legally 2 (mod 4). -XX:-UseRVC clears only "c";
+  // Zca and Zcd stay enabled, so 16-bit parcels remain. UseRVC itself is left
+  // unchanged so HotSpot's assembler can still compress.
+  features.AddFeature("c", false);
+  features.AddFeature("zca", false);
+  features.AddFeature("zcd", false);
+  features.AddFeature("zcf", false);
   if (!UseRVV) {
     features.AddFeature("v", false);
   }
@@ -84,6 +92,9 @@ void JeandleFuncSig::setup_description(llvm::Function* func, ciMethod* method, b
   if (UseCompressedOops) {
     func->addFnAttr(llvm::Attribute::get(func->getContext(), llvm::jeandle::Attribute::UseCompressedOops));
   }
+
+  // HotSpot locates caller frames using a fixed stack-pointer adjustment.
+  func->addFnAttr("no-realign-stack");
 
   // Always disable tail call for jeandle, to ensure the correct stack states.
   func->addFnAttr("disable-tail-calls", "true");

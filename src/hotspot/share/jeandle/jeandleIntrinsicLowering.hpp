@@ -36,7 +36,11 @@
 #define PROB_FAIR               (0.5f)
 
 class JeandleAbstractInterpreter;
+class ciField;
+class ciInstanceKlass;
+class ciKlass;
 class ciMethod;
+class ciSignature;
 
 // =============================================================================
 // Control-flow facts for a lowered intrinsic call site. Combined into
@@ -49,6 +53,10 @@ enum JeandleControlFlag : uint8_t {
   // The call may throw a Java exception and needs invoke-style exception
   // continuation handling.
   CTRL_NEEDS_EXCEPTION_EDGE = 1u << 1,
+  // A Java exception from the call must deoptimize and reexecute the
+  // intrinsic bytecode instead of being merged into the caller's exception
+  // state (C2's deoptimize_on_exception contract).
+  CTRL_DEOPT_ON_EXCEPTION    = 1u << 2,
 };
 
 // =============================================================================
@@ -61,6 +69,8 @@ enum JeandleMemoryFlag : uint16_t {
   MEM_READ              = 1u << 0,
   MEM_WRITE             = 1u << 1,
   MEM_NEEDS_GC_STATE    = 1u << 2,
+  // Retain unknown memory effects for calls that observe changing external state.
+  MEM_OBSERVES_EXTERNAL_STATE = 1u << 3,
 };
 
 // =============================================================================
@@ -72,16 +82,22 @@ struct CallSiteAttributeMetadata {
   uint8_t  control_flags;   // bitmask of JeandleControlFlag
   uint16_t memory_flags;    // bitmask of JeandleMemoryFlag
 
-  bool may_deopt()            const { return (control_flags & CTRL_MAY_DEOPT) != 0; }
-  bool needs_exception_edge() const { return (control_flags & CTRL_NEEDS_EXCEPTION_EDGE) != 0; }
-  bool reads_memory()         const { return (memory_flags  & MEM_READ) != 0; }
-  bool writes_memory()        const { return (memory_flags  & MEM_WRITE) != 0; }
-  bool needs_gc_state()       const { return (memory_flags  & MEM_NEEDS_GC_STATE) != 0; }
-  bool attach_deopt_bundle()  const {
-    return may_deopt() || needs_gc_state() || needs_exception_edge();
+  bool may_deopt()               const { return (control_flags & CTRL_MAY_DEOPT) != 0; }
+  bool needs_exception_edge()    const { return (control_flags & CTRL_NEEDS_EXCEPTION_EDGE) != 0; }
+  bool deoptimize_on_exception() const { return (control_flags & CTRL_DEOPT_ON_EXCEPTION) != 0; }
+  bool reads_memory()            const { return (memory_flags  & MEM_READ) != 0; }
+  bool writes_memory()           const { return (memory_flags  & MEM_WRITE) != 0; }
+  bool needs_gc_state()          const { return (memory_flags  & MEM_NEEDS_GC_STATE) != 0; }
+  bool observes_external_state() const {
+    return (memory_flags & MEM_OBSERVES_EXTERNAL_STATE) != 0;
   }
-  bool gc_leaf_by_flags()     const {
-    return !needs_gc_state() && !may_deopt() && !needs_exception_edge();
+  bool attach_deopt_bundle()     const {
+    return may_deopt() || deoptimize_on_exception() ||
+           needs_gc_state() || needs_exception_edge();
+  }
+  bool gc_leaf_by_flags()        const {
+    return !needs_gc_state() && !may_deopt() &&
+           !needs_exception_edge() && !deoptimize_on_exception();
   }
 };
 
@@ -127,11 +143,18 @@ class JeandleIntrinsicLowering : public StackObj {
   static bool cpu_supports_rounding();          // floor/ceil/rint
   static bool cpu_supports_popcount();          // bitCount_i/bitCount_l
   static bool cpu_supports_spin_wait();         // onSpinWait
-  static bool supports_vectorized_mismatch_medium_path();
+  // Byte limit of the inline 128-bit vector tier for vectorizedMismatch.
+  // A value of 0 disables the tier (values below the 16-byte scalar tier
+  // limit also fall back to the stub); see the per-cpu definitions for the
+  // platform rationale.
+  static uint64_t vectorized_mismatch_medium_path_limit();
+  static bool cpu_supports_cache_writeback();   // Unsafe writeback family
 
   // ========================================================================
   // Shared emit helpers
   // ========================================================================
+
+  bool lower_native_time_func(llvm::FunctionCallee callee);
 
   // Central call-site emission: builds deopt bundle, emits call or invoke,
   // applies GC-leaf and memory annotations.
@@ -165,12 +188,28 @@ class JeandleIntrinsicLowering : public StackObj {
 
   // Helper functions to inline natives
   llvm::BasicBlock* generate_guard(llvm::Value* test, llvm::BasicBlock* slow_bb, float true_prob);
+  llvm::BasicBlock* generate_slow_guard(llvm::Value* test, llvm::BasicBlock* slow_bb);
   llvm::BasicBlock* generate_fair_guard(llvm::Value* test, llvm::BasicBlock* slow_bb);
+  llvm::BasicBlock* generate_virtual_guard(llvm::Value* obj_klass,
+                                           llvm::BasicBlock* slow_region = nullptr);
+  llvm::BasicBlock* generate_access_flags_guard(llvm::Value* klass,
+                                                int modifier_mask,
+                                                int modifier_bits,
+                                                llvm::BasicBlock* region);
   void generate_negative_guard(llvm::Value* index, llvm::BasicBlock* slow_bb);
   void generate_limit_guard(llvm::Value* offset, llvm::Value* copy_length,
                             llvm::Value* array_length, llvm::BasicBlock* slow_bb);
   llvm::BasicBlock* generate_non_array_guard(llvm::Value* klass, llvm::BasicBlock* region_bb) {
     return generate_array_guard_common(klass, region_bb, false, true);
+  }
+  llvm::BasicBlock* generate_array_guard(llvm::Value* klass, llvm::BasicBlock* region_bb) {
+    return generate_array_guard_common(klass, region_bb, false, false);
+  }
+  llvm::BasicBlock* generate_objArray_guard(llvm::Value* klass, llvm::BasicBlock* region_bb) {
+    return generate_array_guard_common(klass, region_bb, true, false);
+  }
+  llvm::BasicBlock* generate_non_objArray_guard(llvm::Value* klass, llvm::BasicBlock* region_bb) {
+    return generate_array_guard_common(klass, region_bb, true, true);
   }
   llvm::BasicBlock* generate_array_guard_common(llvm::Value* klass, llvm::BasicBlock* region_bb,
                                                 bool obj_array, bool not_array);
@@ -188,12 +227,74 @@ class JeandleIntrinsicLowering : public StackObj {
   bool lower_llvm_fence(vmIntrinsics::ID id);
   bool lower_preconditions_check_index(BasicType bt);
   bool lower_spin_wait_hint();       // arch-specific
+  bool lower_writeback0();           // arch-specific
+  bool lower_writeback_sync(vmIntrinsics::ID id); // arch-specific
   bool lower_compare_unsigned(vmIntrinsics::ID id);
   bool lower_exact_arith(vmIntrinsics::ID id, llvm::Intrinsic::ID overflow_id);
   bool lower_divide_unsigned(vmIntrinsics::ID id);
   bool lower_remainder_unsigned(vmIntrinsics::ID id);
   bool lower_multiply_high(vmIntrinsics::ID id);
   bool lower_digestBase_implCompress(vmIntrinsics::ID id);
+  bool lower_digestBase_implCompressMB();
+
+  // ---- shared crypto-intrinsic helpers ----
+  llvm::CallBase* emit_crypto_stub(JeandleRuntimeCalleeFn callee,
+                                   llvm::ArrayRef<llvm::Value*> args);
+  // Descriptor for one Java parameter slot in expect_signature.
+  enum class SigKind { ByteArray, IntArray, LongArray, Int, Object };
+  // Validate that sig's parameters match `params` in arity and per-slot
+  // kinds, and that the return basic type is `ret`. Array kinds also require
+  // the exact array element signature name ("[B"/"[I"/"[J"); a T_ILLEGAL
+  // return skips the return-type check. Returns false on any mismatch.
+  bool expect_signature(const ciSignature* sig, llvm::ArrayRef<SigKind> params,
+                        BasicType ret);
+  // Resolve a class by binary name relative to the intrinsic target holder.
+  // Returns nullptr unless the class is loaded; guarded fast paths must
+  // close when it is not (mirrors C2's predicate klass check).
+  ciInstanceKlass* resolve_loaded_instance_klass(const char* klass_name);
+  // Find a non-static field by name/signature (searches superclasses);
+  // nullptr when unresolvable.
+  ciField* find_instance_field(ciInstanceKlass* holder, const char* name,
+                               const char* signature);
+  // Pointer to the first element of an array (header + base offset).
+  llvm::Value* array_element0_pointer(llvm::Value* array, BasicType elem_type,
+                                      const char* name = "");
+  // Pointer to array element data at the given byte offset.
+  llvm::Value* array_data_pointer(llvm::Value* array, BasicType elem_type,
+                                  llvm::Value* byte_offset,
+                                  const char* name = "");
+  // Load a reference-typed instance field, decoding compressed oops.
+  llvm::Value* load_instance_object_field(llvm::Value* obj, ciField* field,
+                                          const char* name = "");
+  // Klass* constant as a C-heap pointer value for jeandle.instanceof guards.
+  llvm::Value* klass_constant_pointer(ciKlass* klass);
+  // Emit the fallback Java call for a guarded intrinsic in the block the
+  // builder is currently parked at, branch to merge_bb, and PHI-merge the
+  // i32 results of the guarded stub paths with the call result. Returns the
+  // PHI, or nullptr when emit_java_call recorded a compilation error (the
+  // caller returns true so the error aborts the compilation). On success the
+  // builder is left positioned at merge_bb with the tail block recorded, so
+  // the caller must only ipush the result and emit no further IR of its own.
+  llvm::Value* merge_with_java_fallback(llvm::ArrayRef<llvm::Value*> stub_results,
+                                        llvm::ArrayRef<llvm::BasicBlock*> stub_blocks,
+                                        llvm::BasicBlock* merge_bb,
+                                        llvm::ArrayRef<llvm::Value*> java_args,
+                                        bool has_receiver,
+                                        const llvm::Twine& phi_name);
+  // ---- crypto intrinsic handlers ----
+  bool lower_aescrypt_block(vmIntrinsics::ID id);
+  // Guarded AES block-cipher modes (CBC and ECB); the intrinsic id selects
+  // the stub, its callee, the CBC r-vector argument and the encrypt/decrypt
+  // direction, so one shared lowering covers all four intrinsics.
+  bool lower_block_cipher_mode(vmIntrinsics::ID id);
+  bool lower_counter_mode();
+  bool lower_galois_counter_mode();
+  bool lower_ghash_process_blocks();
+  // ChaCha20 block keystream and Poly1305 multi-block MAC: direct stub
+  // bridges with no receiver-type guard (the limb arrays are explicit
+  // arguments and the ChaCha20 block is a static method).
+  bool lower_chacha20_block();
+  bool lower_poly1305_process_blocks();
   bool lower_new_array();
   bool lower_unsafe_allocate_instance();
   bool lower_object_notify(vmIntrinsics::ID id);
@@ -202,6 +303,16 @@ class JeandleIntrinsicLowering : public StackObj {
   // StringUTF16 trusted single-code-unit access. The byte[] backing stores
   // UTF16 values in the platform's native byte order.
   bool lower_string_char_access(bool is_store);
+  bool lower_string_intrinsic(vmIntrinsics::ID id);
+  bool lower_arrays_copy_of(bool is_copy_of_range);
+  bool lower_object_clone();
+  void emit_clone_copy(llvm::Value* src_base,
+                       llvm::Value* dst_base,
+                       llvm::Value* size_bytes,
+                       bool is_array);
+  void copy_clone_payload(llvm::Value* obj, llvm::Value* alloc_obj,
+                           llvm::Value* obj_size, bool is_array);
+  bool lower_arrayequals(BasicType element_type);
   llvm::Value* emit_vectorized_mismatch_small(llvm::Value* a_addr,
                                               llvm::Value* b_addr,
                                               llvm::Value* byte_length,
@@ -211,7 +322,6 @@ class JeandleIntrinsicLowering : public StackObj {
                                                llvm::Value* byte_length,
                                                llvm::Value* scale);
   bool lower_hash_code(vmIntrinsics::ID id);
-
-  };
+};
 
 #endif // SHARE_JEANDLE_INTRINSIC_LOWERING_HPP

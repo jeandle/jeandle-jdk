@@ -115,6 +115,10 @@ public class VectorizedMismatchTest {
     int testByteConstantLength15()  { return testByteConstantLength(15);  }
     int testByteConstantLength16()  { return testByteConstantLength(16);  }
     int testByteConstantLength32()  { return testByteConstantLength(32);  }
+    int testByteConstantLength17()  { return testByteConstantLength(17);  }
+    int testByteConstantLength24()  { return testByteConstantLength(24);  }
+    int testByteConstantLength31()  { return testByteConstantLength(31);  }
+    int testByteConstantLength33()  { return testByteConstantLength(33);  }
     int testByteConstantLength63()  { return testByteConstantLength(63);  }
     int testByteConstantLength64()  { return testByteConstantLength(64);  }
     int testByteConstantLength128() { return testByteConstantLength(128); }
@@ -167,6 +171,9 @@ public class VectorizedMismatchTest {
 
     int testIntConstantLength0()  { return testIntConstantLength(0);  }
     int testIntConstantLength1()  { return testIntConstantLength(1);  }
+    int testIntConstantLength4()  { return testIntConstantLength(4);  }
+    int testIntConstantLength5()  { return testIntConstantLength(5);  }
+    int testIntConstantLength8()  { return testIntConstantLength(8);  }
     int testIntConstantLength16() { return testIntConstantLength(16); }
     int testIntConstantLength32() { return testIntConstantLength(32); }
 
@@ -284,6 +291,10 @@ public class VectorizedMismatchTest {
             t.testByteConstantLength15();
             t.testByteConstantLength16();
             t.testByteConstantLength32();
+            t.testByteConstantLength17();
+            t.testByteConstantLength24();
+            t.testByteConstantLength31();
+            t.testByteConstantLength33();
             t.testByteConstantLength63();
             t.testByteConstantLength64();
             t.testByteConstantLength128();
@@ -300,6 +311,9 @@ public class VectorizedMismatchTest {
 
             t.testIntConstantLength0();
             t.testIntConstantLength1();
+            t.testIntConstantLength4();
+            t.testIntConstantLength5();
+            t.testIntConstantLength8();
             t.testIntConstantLength16();
             t.testIntConstantLength32();
 
@@ -338,6 +352,27 @@ public class VectorizedMismatchTest {
         t.byte_b[62] = 1;
         expect(62, t.testByteConstantLength63());
         t.byte_b[62] = 0;
+        t.byte_b[16] = 1;
+        expect(16, t.testByteConstantLength17());
+        t.byte_b[16] = 0;
+        t.byte_b[23] = 1;
+        expect(23, t.testByteConstantLength24());
+        t.byte_b[23] = 0;
+        t.byte_b[30] = 1;
+        expect(30, t.testByteConstantLength31());
+        t.byte_b[30] = 0;
+        t.byte_b[32] = 1;
+        expect(32, t.testByteConstantLength33());
+        t.byte_b[32] = 0;
+        t.int_b[3] = 1;
+        expect(3, t.testIntConstantLength4());
+        t.int_b[3] = 0;
+        t.int_b[4] = 1;
+        expect(4, t.testIntConstantLength5());
+        t.int_b[4] = 0;
+        t.int_b[7] = 1;
+        expect(7, t.testIntConstantLength8());
+        t.int_b[7] = 0;
 
         verifyResultValues();
         verifyDirectMemoryValues();
@@ -615,12 +650,26 @@ public class VectorizedMismatchTest {
             }
             int partialInlineSize = Integer.parseInt(inlineSizeMatcher.group(1));
             boolean expectInlineVectorPath =
-                    Platform.isAArch64() && partialInlineSize >= 16;
+                    Platform.isX64()
+                    || (Platform.isAArch64() && partialInlineSize >= 16);
             if (expectInlineVectorPath && !foundInlineVectorPath) {
                 throw new AssertionError("compiled IR does not contain inline vector mismatch loads");
             } else if (!expectInlineVectorPath && foundInlineVectorPath) {
                 throw new AssertionError(
                         "compiled IR unexpectedly contains inline vector mismatch loads");
+            }
+            // Lock the medium-tier upper boundary: length 33 must still use
+            // the stub wherever the medium limit stays below 33 bytes
+            // (fixed 32 on x86; ArrayOperationPartialInlineSize on aarch64).
+            boolean mediumLimitBelow33 = Platform.isX64() || partialInlineSize < 33;
+            if (mediumLimitBelow33) {
+                boolean boundary33UsesStub = irFiles.stream().anyMatch(p ->
+                        p.getFileName().toString().contains("testByteConstantLength33")
+                        && containsStubCall(p));
+                if (!boundary33UsesStub) {
+                    throw new AssertionError(
+                            "compiled IR for length 33 unexpectedly avoids the stub");
+                }
             }
             boolean foundDirectMemoryGep = irFiles.stream()
                                                    .anyMatch(VectorizedMismatchTest::containsDirectMemoryGep);

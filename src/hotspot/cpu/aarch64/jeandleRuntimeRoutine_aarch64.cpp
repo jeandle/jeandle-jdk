@@ -208,3 +208,156 @@ void JeandleRuntimeRoutine::generate_exception_handler() {
 void JeandleRuntimeRoutine::generate_deopt_blob() {
   _routine_entry[_deopt_blob] = SharedRuntime::deopt_blob()->unpack();
 }
+
+// Clear a variable number of HeapWords using the C calling convention:
+//   x0: HeapWord-aligned base
+//   w1: HeapWord count
+//
+// This follows C2's zero_blocks strategy, but owns the tail clearing as well
+// because an LLVM call cannot consume the adjusted x0/x1 values on return.
+void JeandleRuntimeRoutine::generate_zero_heap_words_stub() {
+  ResourceMark rm;
+  CodeBuffer buffer(_zero_heap_words_stub, 1024, 64);
+  MacroAssembler* masm = new MacroAssembler(&buffer);
+
+  const Register base = c_rarg0;
+  const Register cnt = c_rarg1;
+  Label done;
+  Label base_aligned;
+
+  address start = __ pc();
+
+  // The C ABI supplies the i32 count in w1. Zero-extend it before using x1
+  // for address arithmetic and loop control.
+  __ uxtw(cnt, cnt);
+
+  if (UseBlockZeroing) {
+    int zva_length = VM_Version::zva_length();
+
+    // Ensure ZVA length can be divided by 16. This is required by
+    // the subsequent operations.
+    assert (zva_length % 16 == 0, "Unexpected ZVA Length");
+
+    __ tbz(base, 3, base_aligned);
+    __ str(zr, Address(__ post(base, 8)));
+    __ sub(cnt, cnt, 1);
+    __ bind(base_aligned);
+
+    // Ensure count >= zva_length * 2 so that it still deserves a zva after
+    // alignment.
+    Label small;
+    int low_limit = MAX2(zva_length * 2, (int)BlockZeroingLowLimit);
+    __ subs(rscratch1, cnt, low_limit >> 3);
+    __ br(Assembler::LT, small);
+    __ zero_dcache_blocks(base, cnt);
+    __ bind(small);
+  }
+
+  {
+    // Number of stp instructions we'll unroll
+    const int unroll =
+      MacroAssembler::zero_words_block_size / 2;
+    // Clear the remaining blocks.
+    Label loop;
+    __ subs(cnt, cnt, unroll * 2);
+    __ br(Assembler::LT, done);
+    __ bind(loop);
+    for (int i = 0; i < unroll; i++)
+      __ stp(zr, zr, __ post(base, 16));
+    __ subs(cnt, cnt, unroll * 2);
+    __ br(Assembler::GE, loop);
+    __ bind(done);
+    __ add(cnt, cnt, unroll * 2);
+  }
+
+  // Unlike C2's zero_blocks stub, clear the tail here as well because the C
+  // ABI call cannot return the adjusted base and count in its arguments.
+  for (int i = MacroAssembler::zero_words_block_size >> 1; i > 1; i >>= 1) {
+    Label l;
+    __ tbz(cnt, exact_log2(i), l);
+    for (int j = 0; j < i; j += 2) {
+      __ stp(zr, zr, __ post(base, 2 * BytesPerWord));
+    }
+    __ bind(l);
+  }
+  {
+    Label l;
+    __ tbz(cnt, 0, l);
+    __ str(zr, Address(base));
+    __ bind(l);
+  }
+
+  __ ret(lr);
+  masm->flush();
+
+  RuntimeStub* stub = RuntimeStub::new_runtime_stub(
+      _zero_heap_words_stub, &buffer, (int)(__ pc() - start),
+      0 /* frame size */, nullptr /* oop maps */, false);
+  address entry = stub->entry_point();
+  _routine_entry[_zero_heap_words_stub] = entry;
+  _gc_leaf_routines.insert(entry);
+}
+
+// C ABI: (UTF16 source, Latin1 destination, i32 count) -> count or zero.
+void JeandleRuntimeRoutine::generate_string_compress_stub() {
+  ResourceMark rm;
+  CodeBuffer buffer(_string_compress_stub, 2048, 64);
+  MacroAssembler* masm = new MacroAssembler(&buffer);
+  address start = __ pc();
+
+  // char_array_compress uses a separate result and preserves its length.
+  __ uxtw(r3, c_rarg2);
+  __ mov(r2, c_rarg0);
+  __ char_array_compress(r2, c_rarg1, r3, r0, v0, v1, v2, v3, v4, v5);
+  __ ret(lr);
+  masm->flush();
+
+  RuntimeStub* stub = RuntimeStub::new_runtime_stub(
+      _string_compress_stub, &buffer, (int)(__ pc() - start),
+      0 /* frame size */, nullptr /* oop maps */, false);
+  address entry = stub->entry_point();
+  _routine_entry[_string_compress_stub] = entry;
+  _gc_leaf_routines.insert(entry);
+}
+
+// C ABI: (Latin1 source, UTF16 destination, i32 count) -> void.
+// Keep the entire operation in this leaf rather than calling the large-copy
+// helper used by byte_array_inflate. All vector stores use halfword elements.
+void JeandleRuntimeRoutine::generate_string_inflate_stub() {
+  ResourceMark rm;
+  CodeBuffer buffer(_string_inflate_stub, 1024, 64);
+  MacroAssembler* masm = new MacroAssembler(&buffer);
+  const Register src = c_rarg0;
+  const Register dst = c_rarg1;
+  const Register count = c_rarg2;
+  Label vector_loop, scalar, scalar_loop, done;
+  address start = __ pc();
+
+  __ uxtw(count, count);
+  __ fmovd(v1, 0.0);
+  __ bind(vector_loop);
+  __ cmpw(count, 8);
+  __ br(Assembler::LT, scalar);
+  __ ldrd(v0, Address(__ post(src, 8)));
+  __ zip1(v0, __ T16B, v0, v1);
+  __ st1(v0, __ T8H, Address(__ post(dst, 16)));
+  __ subw(count, count, 8);
+  __ b(vector_loop);
+  __ bind(scalar);
+  __ cbzw(count, done);
+  __ bind(scalar_loop);
+  __ ldrb(r3, Address(__ post(src, 1)));
+  __ strh(r3, Address(__ post(dst, 2)));
+  __ subsw(count, count, 1);
+  __ br(Assembler::NE, scalar_loop);
+  __ bind(done);
+  __ ret(lr);
+  masm->flush();
+
+  RuntimeStub* stub = RuntimeStub::new_runtime_stub(
+      _string_inflate_stub, &buffer, (int)(__ pc() - start),
+      0 /* frame size */, nullptr /* oop maps */, false);
+  address entry = stub->entry_point();
+  _routine_entry[_string_inflate_stub] = entry;
+  _gc_leaf_routines.insert(entry);
+}

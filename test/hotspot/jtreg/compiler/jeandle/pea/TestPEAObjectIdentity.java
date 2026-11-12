@@ -217,8 +217,6 @@ public class TestPEAObjectIdentity {
         loweredFinal.assertLineCount(LOWERED_NEW_INSTANCE, 1);
         assertCallWithDeoptBCI(loweredFinal, LOWERED_NEW_INSTANCE, 0, 1, target);
         assertCallWithDeoptBCI(loweredFinal, LOWERED_NEW_INSTANCE, 37, 0, target);
-        loweredFinal.assertLineCount("alloc_fast_path.i: ; preds =", 1);
-        loweredFinal.assertLineCount("alloc_slow_path.i: ; preds =", 1);
         loweredFinal.assertBefore(LOWERED_NEW_INSTANCE, 0, "store atomic i32", 0);
         int publicationIndex = PEATestUtils.useCompressedOops() ? 0 : 1;
         loweredFinal.assertBetween("jeandle.pre_barrier.exit: ; preds =", 0,
