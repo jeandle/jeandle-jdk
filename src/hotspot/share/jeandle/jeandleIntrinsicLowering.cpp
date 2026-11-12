@@ -3787,7 +3787,11 @@ bool JeandleIntrinsicLowering::lower_object_clone() {
   // not yet expose speculative receiver types or maybe_cast_profiled_obj().
 
   // C2 MemBarCPUOrder prevents compiler reordering but has no AArch64 machine
-  // instruction. LLVM singlethread scope provides the same compiler-only fence.
+  // instruction. LLVM singlethread scope provides the same compiler-only
+  // fence. This exact (ordering, scope) pair is Jeandle's MemBarCPUOrder
+  // convention. Consumer: jeandle-llvm/llvm/lib/Analysis/Jeandle/
+  // PartialEscapeAnalysis.cpp, Analyzer::processInstruction()'s FenceInst
+  // branch, recognizes it explicitly.
   b.CreateFence(llvm::AtomicOrdering::SequentiallyConsistent,
                 llvm::SyncScope::SingleThread);
 
