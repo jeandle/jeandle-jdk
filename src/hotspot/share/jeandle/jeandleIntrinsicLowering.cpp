@@ -3811,6 +3811,10 @@ bool JeandleIntrinsicLowering::lower_object_clone() {
       llvm::Value* obj_length =
           _interp->emit_array_length(obj);
       llvm::Value* array_size = nullptr;
+      // TODO: Defer the fast allocation's AllocationInit to copy completion.
+      // Keep publication deferral independent of zeroing: GC-aware copy paths
+      // and PEA-retained allocations must be initialized at safepoints.
+      // Preserve the VM slow allocation's own publication protocol.
       llvm::InvokeInst* alloc_obj = _interp->emit_jeandle_newarray(
           obj_klass, obj_length, &array_size,
           true /* deoptimize_on_exception */);
@@ -3907,6 +3911,9 @@ bool JeandleIntrinsicLowering::lower_object_clone() {
     // new_instance() carries deoptimize_on_exception so allocation failures
     // reexecute Object.clone, matching C2's PreserveJVMState contract.
     llvm::Value* obj_size = nullptr;
+    // TODO: Extend instance allocation with deferred publication so copy or
+    // PEA replay owns the fast path's AllocationInit. Elide zeroing only with
+    // complete field initialization and GC-safe PEA-retained allocations.
     llvm::InvokeInst* alloc_obj = _interp->new_instance(
         obj_klass, nullptr, &obj_size,
         true /* deoptimize_on_exception */);
@@ -4077,6 +4084,10 @@ bool JeandleIntrinsicLowering::lower_arrays_copy_of(bool is_copy_of_range) {
     validated = true;
   }
 
+  // TODO: Defer fast-allocation publication to copy completion independently
+  // of zeroing. Bulk-zeroing elimination must preserve null padding, handle
+  // zero-length and checked/slow copies, and keep PEA-retained allocations
+  // GC-safe with correct default slots before replay.
   llvm::InvokeInst* newcopy = _interp->emit_jeandle_newarray(
       klass_node, length);
   RETURN_ON_JEANDLE_ERROR(true);
