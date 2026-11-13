@@ -185,7 +185,7 @@ public class TestPEASeededLoopMaterialization {
         PEATestUtils.IRBlock innerPoll = after.blockContaining(SAFEPOINT_POLL, 2);
         Asserts.assertNotEquals(innerPoll.label(), outerPoll.label(),
                 target + ": inner and outer polls are in distinct loop blocks");
-        innerPoll.assertPresent("invoke hotspotcc void @jeandle.safepoint_poll");
+        innerPoll.assertPresent("call hotspotcc void @jeandle.safepoint_poll");
         outerPoll.assertPresent("call hotspotcc void @jeandle.safepoint_poll");
         innerPoll.assertAbsent("pea.matslot");
         Asserts.assertNotEquals(replay.label(), innerPoll.label(),

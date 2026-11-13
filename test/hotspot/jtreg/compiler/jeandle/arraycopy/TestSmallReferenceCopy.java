@@ -52,25 +52,27 @@ public class TestSmallReferenceCopy {
             Workload.run(args[0].equals("pretenure"));
             return;
         }
-        for (String gc : List.of("-XX:+UseG1GC", "-XX:+UseSerialGC")) {
-            for (boolean compressed : List.of(true, false)) {
-                for (boolean reduceInitialCardMarks : List.of(true, false)) {
-                    runCase(gc, compressed, reduceInitialCardMarks);
+        for (boolean pea : List.of(true, false)) {
+            for (String gc : List.of("-XX:+UseG1GC", "-XX:+UseSerialGC")) {
+                for (boolean compressed : List.of(true, false)) {
+                    for (boolean reduceInitialCardMarks : List.of(true, false)) {
+                        runCase(pea, gc, compressed, reduceInitialCardMarks);
+                    }
                 }
             }
+            runCase(pea, "-XX:+UseSerialGC", true, true,
+                    "-XX:-UseTLAB", "-XX:PretenureSizeThreshold=32");
         }
-        runCase("-XX:+UseSerialGC", true, true,
-                "-XX:-UseTLAB", "-XX:PretenureSizeThreshold=32");
     }
 
-    private static void runCase(String gc, boolean compressed,
+    private static void runCase(boolean pea, String gc, boolean compressed,
                                 boolean reduceInitialCardMarks,
                                 String... extraOptions) throws Exception {
         Path dump = Files.createTempDirectory("small_reference_copy_");
         ArrayList<String> command = new ArrayList<>(List.of(
                 "-Xbootclasspath/a:.", "-XX:+UnlockDiagnosticVMOptions", "-XX:+WhiteBoxAPI",
                 "-Xcomp", "-Xbatch", "-XX:-TieredCompilation", "-XX:+UseJeandleCompiler",
-                "-XX:+JeandleDoPEA", "-Xms32m", "-Xmx32m", gc,
+                pea ? "-XX:+JeandleDoPEA" : "-XX:-JeandleDoPEA", "-Xms32m", "-Xmx32m", gc,
                 compressed ? "-XX:+UseCompressedOops" : "-XX:-UseCompressedOops",
                 reduceInitialCardMarks ? "-XX:+ReduceInitialCardMarks" : "-XX:-ReduceInitialCardMarks",
                 "-XX:+CIPrintCompilerName", "-Xlog:jit+compilation=debug",
@@ -87,17 +89,33 @@ public class TestSmallReferenceCopy {
         for (String name : METHODS) {
             output.shouldMatch("Jeandle:.*" + Pattern.quote(Workload.class.getName() + "::" + name)
                     + " \\([0-9]+ bytes\\)");
+            FileCheck raw = new FileCheck(dump.toString(),
+                    Workload.class.getDeclaredMethod(name, Object.class, Object.class), false);
+            raw.checkPattern("(?:call|invoke).*@jeandle\\.copy");
             FileCheck optimized = new FileCheck(dump.toString(),
                     Workload.class.getDeclaredMethod(name, Object.class, Object.class), true);
-            if (reduceInitialCardMarks && !name.equals("copyOf9")) {
+            if (pea) {
+                // The virtual source has SSA entries, so neither source loads
+                // nor the scalar-copy size threshold apply to its replay.
+                optimized.checkNotPattern("(?:call|invoke).*@jeandle\\.copy");
+                optimized.checkNotPattern("call.*@StubRoutines_.*arraycopy");
                 int oopSpace = compressed ? 3 : 1;
-                optimized.checkPattern("load atomic volatile ptr addrspace\\(" + oopSpace + "\\)");
-                optimized.checkPattern("store atomic ptr addrspace\\(" + oopSpace + "\\)");
+                int elements = name.equals("copyOf9") ? 9 : 8;
+                for (int element = 0; element < elements; element++) {
+                    optimized.checkPattern("store atomic ptr addrspace\\(" + oopSpace
+                            + "\\).*?, ptr addrspace\\(1\\)");
+                }
             } else {
-                optimized.checkPattern("call void @StubRoutines_(?:arrayof_)?oop_disjoint_arraycopy_uninit");
+                // PEA off also bypasses its high-tier length folding. The
+                // replacement compilation retains a runtime copy length.
+                optimized.checkPatternAnywhere(
+                        "call void @StubRoutines_(?:arrayof_)?oop_disjoint_arraycopy_uninit");
+                optimized.checkPatternAnywhere("br label %arraycopy\\.result");
+                optimized.checkPattern("^arraycopy\\.result:");
             }
             optimized.checkPattern(Platform.isAArch64()
                     ? "call void @llvm\\.aarch64\\.dmb\\(i32 10\\)" : "fence release");
+            // The shared return block can precede the replay block in the dump.
             optimized.checkPatternAnywhere("ret ptr addrspace\\(1\\)");
         }
     }
