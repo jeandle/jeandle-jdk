@@ -151,8 +151,11 @@ public class TestPEALoopKeptRealNestedRefRetry {
         String innerResult = allocationResult(after, innerKey);
         FieldStore retainedInnerStore = exactFieldStore(
                 after, innerResult, innerElemsOffset, PEATestUtils.referencePointerType());
-        Asserts.assertFalse(retainedInnerStore.line().contains("pea.matslot"),
-                target + ": Inner.elems remains its original real-object store");
+        Asserts.assertEquals(retainedInnerStore.line(), sourceInnerStore.line(),
+                target + ": retry preserves its input Inner.elems store exactly");
+        Asserts.assertEquals(retainedInnerStore.block().label(),
+                sourceInnerStore.block().label(),
+                target + ": retry keeps Inner.elems on its defining branch");
 
         String consumeName = PEATestUtils.MethodId.of(consume).llvmFunctionName();
         PEATestUtils.IRBlock sink = after.blockContaining(consumeName, 0);

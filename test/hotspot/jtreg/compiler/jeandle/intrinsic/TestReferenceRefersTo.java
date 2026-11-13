@@ -87,17 +87,21 @@ public class TestReferenceRefersTo {
                 false);
 
         // Verify the jeandle.reference_refers_to JavaOp definition is present.
-        // IR order: load -> fence -> icmp -> zext -> ret (no barrier call).
+        // IR order: load -> CPUOrder JavaOp -> icmp -> zext -> ret (no SATB barrier).
         fc.checkPattern("define.*jeandle.reference_refers_to");
 
         // Verify the load is unordered atomic (appears before the fence in IR)
         fc.checkPattern("load atomic ptr addrspace\\([13]\\).*unordered");
 
-        // Verify a fence with seq_cst ordering is present (CPUOrder fence)
-        fc.checkPattern("fence.*seq_cst");
+        // The owner retains semantic CPU ordering until phase 1
+        fc.checkPattern("call hotspotcc void @jeandle\\.membar_cpuorder\\(\\)");
 
         // Verify the function ends with icmp + zext + ret (no barrier call)
         fc.check("icmp eq");
         fc.check("ret i32");
+
+        FileCheck optimized = new FileCheck(currentDir,
+                TestReferenceRefersTo.class.getDeclaredMethod("testWeakRefersTo", WeakReference.class, Object.class), true);
+        optimized.checkPattern("fence syncscope\\(\"singlethread\"\\) seq_cst");
     }
 }

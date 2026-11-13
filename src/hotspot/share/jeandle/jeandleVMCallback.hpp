@@ -66,6 +66,7 @@ class JeandleVMCallback : public AllStatic {
 
   // Constant field folding.
   static llvm::jeandle::ConstantFieldResult get_constant_field(int oop_id, int offset);
+  static llvm::jeandle::ConstantFieldResult get_klass_constant_field(uintptr_t klass_ptr, int offset, int bit_width);
 
   // Oop handles.
   static std::string get_oop_handle_name(int oop_id);
@@ -112,7 +113,8 @@ class JeandleVMCallback : public AllStatic {
   // klass it delegates to is reachable because JeandleVMCallback is a friend of
   // ciEnv.
   static ciInstanceKlass* get_ci_instance_klass(Klass* klass);
-  static llvm::jeandle::CloneInstanceInfoResult get_clone_instance_info(uintptr_t klass_ptr, bool klass_exact);
+  static llvm::jeandle::CloneInstanceInfoResult get_clone_instance_info(uintptr_t klass_ptr, bool klass_exact,
+                                                                      llvm::jeandle::CloneInstanceInfoPurpose purpose);
 };
 
 #endif // SHARE_JEANDLE_VM_CALLBACK_HPP

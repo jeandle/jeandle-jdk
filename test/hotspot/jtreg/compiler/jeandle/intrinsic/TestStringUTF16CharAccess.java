@@ -59,7 +59,7 @@ public class TestStringUTF16CharAccess {
         ArrayList<String> command = new ArrayList<>(List.of(
                 "--patch-module=java.base=" + System.getProperty("test.class.path"),
                 "-Xbatch", "-Xcomp", "-XX:-TieredCompilation",
-                "-XX:-BackgroundCompilation", "-XX:+UseJeandleCompiler",
+                "-XX:-BackgroundCompilation", "-XX:+UseJeandleCompiler", "-XX:+JeandleDoPEA",
                 "-XX:+UnlockDiagnosticVMOptions", "-Xlog:jeandle=debug",
                 "-XX:+JeandleDumpIR", "-XX:JeandleDumpDirectory=" + dump,
                 "-XX:CompileCommand=compileonly,java.lang.JeandleStringUTF16CharCaller::*"));
@@ -84,6 +84,17 @@ public class TestStringUTF16CharAccess {
                     "missing putChar intrinsic IR");
             Asserts.assertTrue(containsMarker(dump, "store atomic i16"),
                     "putChar store must be unordered atomic");
+            try (Stream<Path> files = Files.walk(dump)) {
+                Path optimized = files.filter(path -> path.getFileName().toString()
+                        .contains("JeandleStringUTF16CharCaller_defaultFirstByte"))
+                        .filter(path -> path.toString().endsWith("_optimized.ll"))
+                        .findFirst().orElseThrow(() -> new AssertionError(
+                                "missing compiled partial-default getChar method"));
+                String ir = Files.readString(optimized);
+                Asserts.assertFalse(ir.contains("@jeandle.new_array")
+                                || ir.contains("@new_array") || ir.contains("@jeandle.string_getchar"),
+                        "partial-default getChar must stay scalar: " + optimized);
+            }
         } else {
             output.shouldNotMatch(intrinsicLog).shouldNotMatch(storeIntrinsicLog);
         }
@@ -110,6 +121,20 @@ public class TestStringUTF16CharAccess {
         Class<?> caller = Class.forName("java.lang.JeandleStringUTF16CharCaller");
         Method get = caller.getMethod("get", byte[].class, int.class);
         Method put = caller.getMethod("put", byte[].class, int.class, int.class);
+        Method defaultFirstByte = caller.getMethod("defaultFirstByte", int.class);
+        Method packedChar = caller.getMethod("packedChar", int.class);
+
+        for (int high : new int[] {1, 127, 128, 255}) {
+            int expected = ByteOrder.nativeOrder() == ByteOrder.BIG_ENDIAN
+                    ? high : high << 8;
+            Asserts.assertEquals((int) (char) defaultFirstByte.invoke(null, high), expected);
+        }
+        for (int character : new int[] {0, 0x1234, 0x8000, 0xffff}) {
+            Asserts.assertEquals((int) (char) packedChar.invoke(null, character), character);
+        }
+        Method compressPackedPrefix = caller.getMethod("compressPackedPrefix");
+        int prefix = ByteOrder.nativeOrder() == ByteOrder.BIG_ENDIAN ? 0x4122 : 0x1141;
+        Asserts.assertEquals((int) (char) compressPackedPrefix.invoke(null), prefix);
 
         byte[] value = new byte[8];
         put.invoke(null, value, 1, 0x1234);
