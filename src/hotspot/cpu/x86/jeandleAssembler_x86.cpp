@@ -186,7 +186,7 @@ void JeandleAssembler::emit_clinit_barrier_on_entry(Klass* klass) {
   __ bind(fallthrough);
 }
 
-int JeandleAssembler::interior_entry_alignment() const {
+int JeandleAssembler::interior_entry_alignment() {
   // Keep interior entry 16-byte aligned (matches default HotSpot interior entry alignment).
   return 16;
 }
@@ -320,4 +320,119 @@ void JeandleEntryBarrierStub::emit(MacroAssembler* _masm) {
   __ call(RuntimeAddress(StubRoutines::x86::method_entry_barrier()));
   __ jmp(continuation(), false /* maybe_short */);
 #endif
+}
+
+int JeandleAssembler::ic_check_upper_bound() {
+  // load_klass / cmpptr + jump_cc + 8-byte align nop padding
+  return 32;
+}
+
+int JeandleAssembler::poisoned_osr_entry_upper_bound() {
+  // int3
+  return 1;
+}
+
+int JeandleAssembler::verified_entry_upper_bound() {
+  // addr_nop_5
+  return 5;
+}
+
+int JeandleAssembler::clinit_barrier_upper_bound() {
+  // mov_metadata + clinit_barrier + jump handle_wrong_method
+  return 48;
+}
+
+int JeandleAssembler::stack_bang_instruction_size() {
+  // movl [rsp - offset], rax (up to 7 bytes with 32-bit disp, bounded by 8)
+  return 8;
+}
+
+int JeandleAssembler::nmethod_entry_barrier_upper_bound() {
+  // align(4) + cmpl_imm32 (8B) + jcc (6B) + alignment margin
+  return 20;
+}
+
+int JeandleAssembler::entry_barrier_stub_upper_bound() {
+  // call RuntimeAddress + jmp continuation
+  return 24;
+}
+
+int JeandleAssembler::exception_handler_upper_bound() {
+  // start_a_stub(NativeJump::instruction_size), jmp RuntimeAddress (5 bytes, bounded by 8)
+  return 8;
+}
+
+int JeandleAssembler::deopt_handler_upper_bound() {
+  // deopt_handler_size() = 17 bytes, bounded by 24 (word-aligned)
+  return 24;
+}
+
+int JeandleAssembler::static_call_stub_upper_bound() {
+  // start_a_stub requested space for static call stub (28 bytes)
+  return 28;
+}
+
+int JeandleAssembler::trampoline_call_stub_upper_bound() {
+  // max_trampoline_stub_size() = NativeFarJump::instruction_size (13 bytes, bounded by 16)
+  return 16;
+}
+
+// ---------------------------------------------------------------------------
+// Relocation record census for this architecture.
+// ---------------------------------------------------------------------------
+//
+// x86_64 has no `far_branches()`: a pc-relative call or jump reaches the whole code cache
+// as long as the cache stays inside the 2 GiB displacement of a rel32, which the assert in
+// MacroAssembler::call(const AddressLiteral&) checks. So Jeandle routes a call through a
+// trampoline stub only where it has to - the external call sites, which use
+// MacroAssembler::trampoline_call(AddressLiteral) unconditionally (see
+// patch_external_call_site() above). That trampoline records its owning call site, hence
+// one trampoline_stub record per external call and, because the call site itself is
+// patched with `relocInfo::none`, no record in insts for it.
+bool JeandleAssembler::needs_trampoline_branches() {
+  return false;
+}
+
+bool JeandleAssembler::shares_runtime_call_trampolines() {
+  // Not about CodeBuffer::supports_shared_stubs() (which is true on x86_64 as well): this
+  // is about Jeandle's own patching path. patch_routine_call_site() emits
+  // `call(AddressLiteral(target, relocInfo::runtime_call_type))` directly, so a runtime
+  // call never asks for a trampoline here and none is shared.
+  return false;
+}
+
+bool JeandleAssembler::entry_barrier_calls_runtime_stub() {
+  // JeandleEntryBarrierStub::emit() above: `call(RuntimeAddress(method_entry_barrier))`,
+  // which relocates the call site with runtime_call_type.
+  return true;
+}
+
+bool JeandleAssembler::static_call_stub_has_metadata_record() {
+  // emit_static_call_stub() above ends with __ mov_metadata(rbx, nullptr), which
+  // relocates the immediate with metadata_type (macroAssembler_x86.cpp).
+  return true;
+}
+
+bool JeandleAssembler::static_call_stub_has_runtime_call_record() {
+  // ... and with __ jump(RuntimeAddress(__ pc())), whose RuntimeAddress rspec relocates too.
+  return true;
+}
+
+// The three jeandle relocation types are packed by the generic implementations here:
+// relocInfo_x86.cpp's pd_pack_data_to() returns false for all of them, so the record
+// payload is what the base class writes - pack_2_ints_to(), at most 4 halfwords.
+bool JeandleAssembler::runtime_call_needs_trampoline(address target) {
+  return false;
+}
+
+int JeandleAssembler::reloc_record_data_halfwords(relocInfo::relocType type) {
+  switch (type) {
+    case relocInfo::jeandle_oop_type:        // oop_Relocation: index + offset
+    case relocInfo::jeandle_oop_addr_type:   // oop_Relocation: index + offset
+    case relocInfo::jeandle_section_word_type: // compressed target + addend
+      return 4;
+    default:
+      ShouldNotReachHere();
+      return 0;
+  }
 }

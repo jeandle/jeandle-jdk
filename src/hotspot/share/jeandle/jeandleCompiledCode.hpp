@@ -179,18 +179,156 @@ struct JeandleDeferredVORefField {
   int voref_id;
 };
 
+// What one compilation will relocate, counted once and read by two reservations.
+//
+// The stubs section and the locs section are both sized from the same
+// facts: the LinkGraph edges of the object and its LLVM stackmap records.
+// Sizing them from two independent passes would build a second LinkGraph
+// and scan the stackmap section twice. `collect_call_site_census()`
+// walks them once, in exactly the order and with the same classifications that
+// resolve_reloc_info() will use, so the counts below are the record inventory rather than
+// an estimate of it.
+struct JeandleCallSiteCensus {
+  // Call sites, classified the way the resolver will resolve them.
+  int _static_call_sites;        // STATIC_CALL, resolved through the static-call stub
+  int _opt_virtual_call_sites;   // STATIC_CALL bound to the opt-virtual resolver stub
+  int _virtual_call_sites;       // DYNAMIC_CALL, inline-cache site
+  int _routine_call_sites;      // calls of HotSpot runtime routines
+  int _external_call_sites;     // calls of symbols outside HotSpot
+  int _stub_c_call_sites;       // STUB_C_CALL sites
+
+  // Cross-section references, one relocation record each.
+  int _section_word_insts;       // code refers to a constant: relocated in insts
+  int _section_word_consts;      // a constant refers to code: relocated in consts
+  int _oop_relocs;               // oop handled from code
+  int _oop_addr_relocs;          // oop address stored in a constant
+
+  // Refusal inputs. Anything that cannot be attributed to a known emitter makes the locs
+  // plan fall back, because an unexplained record is an under-provisioned array.
+  int _unclassified_edges;
+  int _unmapped_records;
+
+  bool _has_method_handle_invoke;
+  int _shared_trampoline_targets;
+
+  JeandleCallSiteCensus()
+    : _static_call_sites(0), _opt_virtual_call_sites(0), _virtual_call_sites(0),
+      _routine_call_sites(0), _external_call_sites(0),
+      _stub_c_call_sites(0), _section_word_insts(0), _section_word_consts(0),
+      _oop_relocs(0), _oop_addr_relocs(0), _unclassified_edges(0), _unmapped_records(0),
+      _has_method_handle_invoke(false), _shared_trampoline_targets(-1) {}
+
+  int total_records() const {
+    return _static_call_sites + _opt_virtual_call_sites + _virtual_call_sites +
+           _routine_call_sites + _external_call_sites + _section_word_insts +
+           _section_word_consts + _oop_relocs + _oop_addr_relocs;
+  }
+};
+
+// Every capacity decision for one CodeBuffer installation.
+//
+// This struct has six core fields, plus the
+// fields needed to make each allocation decision *explainable* afterwards:
+// if we allocated exactly, we must also be able to say which plan produced
+// the size and what its padding was.
+struct InstallLayoutCore {
+  size_t insts_payload;      // ELF text size plus the runtime prolog reserve
+  size_t consts_payload;     // exact size from ConstSectionPlan, or legacy 48 KiB
+  size_t stubs_payload;      // unchanged conservative estimate
+  size_t locs_payload;       // unchanged conservative estimate
+  size_t code_size_input;    // first argument of CodeBuffer::initialize(...)
+  bool   used_legacy_fallback;
+  // Exact insts planning
+  size_t planned_prolog;     // condition-sensitive prolog upper bound
+  size_t planned_post_stubs; // out-of-line insts stubs bound
+  // Exact stubs planning
+  size_t planned_stubs;          // condition-sensitive stubs upper bound
+  size_t planned_static_calls;   // physical static calls counted from stackmaps
+  size_t planned_external_calls; // external calls counted from LinkGraph
+  bool   has_mh_invoke;          // whether method handle invoke deopt stub is needed
+  // Exact locs planning. One entry per CodeBuffer section: the relocation array
+  // of each section is sized separately, because a record is written into the locs array
+  // of the section its address belongs to.
+  int    planned_locs_records[CodeBuffer::SECT_LIMIT];  // relocation records expected
+  size_t planned_locs_elements[CodeBuffer::SECT_LIMIT]; // relocInfo slots expected
+  size_t planned_locs_bytes[CodeBuffer::SECT_LIMIT];    // capacity actually requested
+  const char* locs_plan_status;  // JeandleRelocPlan::Status name
+  bool   used_exact_locs;        // locs capacity came from the record model
+  // diagnostics
+  size_t planned_padding;    // bytes of inter-section padding inside consts
+  size_t planned_alignment;  // max_alignment requested from the planner
+  size_t planned_entries;    // number of planned const sections
+  const char* plan_status;   // ConstPlanStatus name
+
+  InstallLayoutCore()
+    : insts_payload(0), consts_payload(0), stubs_payload(0), locs_payload(0),
+      code_size_input(0), used_legacy_fallback(true), planned_prolog(0), planned_post_stubs(0),
+      planned_stubs(0), planned_static_calls(0), planned_external_calls(0), has_mh_invoke(false),
+      locs_plan_status("NotComputed"), used_exact_locs(false),
+      planned_padding(0), planned_alignment(0), planned_entries(0), plan_status("Unplanned") {
+    for (int s = 0; s < (int)CodeBuffer::SECT_LIMIT; s++) {
+      planned_locs_records[s] = 0;
+      planned_locs_elements[s] = 0;
+      planned_locs_bytes[s] = 0;
+    }
+  }
+};
+
+// Allocation constants for the legacy path. These match the legacy values so that the
+// legacy fallback path is bit-for-bit the old behaviour, and so that a reader
+// can diff the two strategies without archeology.
+static const size_t LEGACY_CONSTS_SIZE   = 6144 * wordSize;  // 48 KiB on RISCV64
+static const size_t LEGACY_STUBS_SIZE    = 160;
+static const size_t INSTS_PROLOG_RESERVE = 2048;                 // "for prolog"
+// The legacy relocation-array request. Note what it actually
+// buys: 17 bytes divided by sizeof(relocInfo) is 8 slots, while CodeSection::relocate()
+// refuses to write unless 15 slots are free after the current end - so the legacy path
+// reallocated on the first record. Kept as the comparison column, not as a strategy.
+static const size_t LEGACY_LOCS_SIZE     = sizeof(relocInfo) + relocInfo::length_limit;
+
 class JeandleCompiledCode : public StackObj {
  public:
+  // Defined in the .cpp: records CodeBuffer telemetry once per finalize() call,
+  // on every exit path. Needs access to record_finalize_telemetry().
+  friend class FinalizeTelemetry;
+
   // For compiled Java methods.
   JeandleCompiledCode(ciEnv* env,
                       ciMethod* method,
                       bool is_osr_entry) :
                       _obj(nullptr),
                       _elf(nullptr),
+                      _link_graph_ssp(nullptr),
+                      _link_graph(nullptr),
+                      _section_cache(),
+                      _section_cache_built(false),
+                      _func_symbol_found(false),
+                      _func_symbol_name_matches(false),
+                      _func_symbol_align(0),
+                      _func_symbol_offset(0),
+                      _func_symbol_code_size(0),
                       _code_buffer("JeandleCompiledCode"),
                       _routine_call_sites(),
                       _non_routine_call_sites(),
+                      _const_section_addrs_by_index(),
                       _const_sections(),
+                      _const_plan(),
+                      _used_const_layout_fallback(false),
+                      _layout_fallback_count(0),
+                      _used_exact_allocation(false),
+                      _planned_padding(0),
+                      _planned_alignment(0),
+                      _planned_entries(0),
+                      _planned_consts_size(-1),
+                      _planned_stubs_size(-1),
+                      _plan_status("Unplanned"),
+                      _planned_locs_records{ -1, -1, -1 },
+                      _planned_locs_kinds{ { 0 } },
+                      _planned_locs_elements{ 0, 0, 0 },
+                      _planned_locs_bytes{ -1, -1, -1 },
+                      _locs_plan_status("NotComputed"),
+                      _used_exact_locs(false),
+                      _locs_planned(false),
                       _oop_handles(),
                       _oop_handle_ids(),
                       _oop_handle_info(),
@@ -212,10 +350,37 @@ class JeandleCompiledCode : public StackObj {
   JeandleCompiledCode(ciEnv* env, const char* func_name) :
                       _obj(nullptr),
                       _elf(nullptr),
+                      _link_graph_ssp(nullptr),
+                      _link_graph(nullptr),
+                      _section_cache(),
+                      _section_cache_built(false),
+                      _func_symbol_found(false),
+                      _func_symbol_name_matches(false),
+                      _func_symbol_align(0),
+                      _func_symbol_offset(0),
+                      _func_symbol_code_size(0),
                       _code_buffer("JeandleCompiledStub"),
                       _routine_call_sites(),
                       _non_routine_call_sites(),
+                      _const_section_addrs_by_index(),
                       _const_sections(),
+                      _const_plan(),
+                      _used_const_layout_fallback(false),
+                      _layout_fallback_count(0),
+                      _used_exact_allocation(false),
+                      _planned_padding(0),
+                      _planned_alignment(0),
+                      _planned_entries(0),
+                      _planned_consts_size(-1),
+                      _planned_stubs_size(-1),
+                      _plan_status("Unplanned"),
+                      _planned_locs_records{ -1, -1, -1 },
+                      _planned_locs_kinds{ { 0 } },
+                      _planned_locs_elements{ 0, 0, 0 },
+                      _planned_locs_bytes{ -1, -1, -1 },
+                      _locs_plan_status("NotComputed"),
+                      _used_exact_locs(false),
+                      _locs_planned(false),
                       _oop_handles(),
                       _oop_handle_ids(),
                       _oop_handle_info(),
@@ -232,6 +397,11 @@ class JeandleCompiledCode : public StackObj {
                       _orig_pc_offset_in_bytes(-1),
                       _interpreter_frame_size_in_bytes(0),
                       _has_method_handle_invoke(false) {}
+
+  const ConstSectionPlan& const_plan() const { return _const_plan; }
+
+  // The name of the function being compiled, as it appears in the trace output.
+  const std::string& func_name() const { return _func_name; }
 
   void install_obj(std::unique_ptr<ObjectBuffer> obj);
 
@@ -302,6 +472,20 @@ class JeandleCompiledCode : public StackObj {
  private:
   std::unique_ptr<ObjectBuffer> _obj; // Compiled instructions.
   std::unique_ptr<ELFObject> _elf;
+  std::shared_ptr<llvm::orc::SymbolStringPool> _link_graph_ssp;
+  std::unique_ptr<llvm::jitlink::LinkGraph> _link_graph;
+  llvm::SmallVector<SectionInfo, 32> _section_cache;
+  bool _section_cache_built;
+
+  bool _func_symbol_found;
+  bool _func_symbol_name_matches;
+  uint64_t _func_symbol_align;
+  uint64_t _func_symbol_offset;
+  uint64_t _func_symbol_code_size;
+
+  llvm::jitlink::LinkGraph* shared_link_graph();
+  bool find_section_cached(llvm::StringRef name, SectionInfo& section_info);
+
   CodeBuffer _code_buffer; // Relocations and stubs.
 
   // Call sites in our compiled code:
@@ -313,7 +497,33 @@ class JeandleCompiledCode : public StackObj {
   llvm::SmallVector<CallSiteInfo*> _non_routine_call_sites; // Contains all other call sites,
                                                             // constructed during LLVM IR generation.
 
+  llvm::DenseMap<uint32_t, address> _const_section_addrs_by_index;
   llvm::StringMap<address> _const_sections;
+  ConstSectionPlan _const_plan;
+  bool _used_const_layout_fallback;
+  // Telemetry for one finalize() invocation.
+  int _layout_fallback_count;   // unplanned const sections discovered at runtime
+  bool _used_exact_allocation;  // consts capacity came from the plan
+  size_t _planned_padding;
+  size_t _planned_alignment;
+  size_t _planned_entries;
+  int64_t _planned_consts_size; // -1 when the planner was not used
+  int64_t _planned_stubs_size;  // -1 when the planner was not used
+  const char* _plan_status;
+  // Locs telemetry for one finalize() invocation. `_planned_locs_bytes[n] < 0`
+  // means the record model did not size that section and HotSpot's heuristic was used.
+  int    _planned_locs_records[CodeBuffer::SECT_LIMIT];
+  // Per-kind detail of the same plan, kept so that a planned/actual mismatch can name the
+  // relocInfo type it missed instead of only the size of the gap.
+  int    _planned_locs_kinds[CodeBuffer::SECT_LIMIT][relocInfo::type_mask + 1];
+  size_t _planned_locs_elements[CodeBuffer::SECT_LIMIT];
+  int64_t _planned_locs_bytes[CodeBuffer::SECT_LIMIT];
+  const char* _locs_plan_status;
+  bool _used_exact_locs;
+  // True when a relocation plan was computed at all, whether or not it was applied: the
+  // A/B arm applies nothing but still reports what the model would have asked for, which
+  // is what keeps the two arms doing the same work and printing the same lines.
+  bool _locs_planned;
 
   // Oop handles maintainer:
   llvm::StringMap<jobject> _oop_handles;                // name -> jobject
@@ -343,8 +553,49 @@ class JeandleCompiledCode : public StackObj {
                         llvm::SmallVector<JeandleReloc*>& relocs,
                         llvm::jitlink::LinkGraph* link_graph);
 
-  // Lookup address of const section in CodeBuffer.
+  // Architecture-specific half of the relocation census. Returns true when this
+  // architecture classifies its edges as a pair (RISC-V's HI20/LO12), which then has to be
+  // walked next to the resolver that does the same. Returning false means "use the generic
+  // per-edge walk", exactly as resolve_reloc_info() uses pd_resolve_reloc().
+  bool pd_collect_call_site_census(llvm::jitlink::LinkGraph* link_graph,
+                                   JeandleCallSiteCensus& census);
+
+  // Decide every allocation-relevant quantity before any section size
+  // has been requested from the CodeBuffer. See the .cpp for why this has to
+  // happen before initialize().
+  void decide_install_layout(uint64_t elf_text_size, uint64_t func_align, InstallLayoutCore& layout);
+
+  // Exact upper bound estimators for insts section
+  size_t prolog_upper_bound(uint64_t func_align);
+  size_t post_insts_stubs_upper_bound();
+
+  // Exact upper bound estimator for stubs section
+  size_t stubs_upper_bound(const JeandleCallSiteCensus& census, size_t& static_calls,
+                           size_t& external_calls, bool& has_mh);
+
+  // One pass over the LinkGraph edges and the LLVM stackmap records that answers
+  // both reservations. Fills `census` exactly the way resolve_reloc_info() will later
+  // resolve the same edges and records; returns false when the object cannot be inspected
+  // at all, which puts the whole layout decision on the legacy path.
+  bool collect_call_site_census(JeandleCallSiteCensus& census);
+
+  // Exact upper bound estimator for the locs section of each CodeBuffer section.
+  void plan_locs_capacity(const JeandleCallSiteCensus& census,
+                          InstallLayoutCore& layout,
+                          size_t insts_size, size_t consts_size, size_t stubs_size);
+
+  // Records allocate/expand/finalize telemetry for this compilation.
+  // `layout` is the decision that produced the buffer being reported, so that the planned
+  // and the actual columns of every section are recorded from one source.
+  void record_finalize_telemetry(const InstallLayoutCore& layout);
+
+  // Centralized emission of planned const sections.
+  void emit_planned_const_sections(JeandleAssembler& assembler);
+
+  // Lookup address of const section in CodeBuffer (index is canonical primary identity).
+  address lookup_const_section(uint32_t section_index, JeandleAssembler& assembler);
   address lookup_const_section(llvm::StringRef name, JeandleAssembler& assembler);
+  address lookup_const_section_fallback(llvm::StringRef name, JeandleAssembler& assembler);
   address resolve_const_reloc_site(LinkBlock& block, LinkEdge& edge, JeandleAssembler& assembler);
   address resolve_const_edge(LinkBlock& block, LinkEdge& edge, JeandleAssembler& assembler);
 

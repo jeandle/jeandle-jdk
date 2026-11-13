@@ -221,7 +221,7 @@ void JeandleAssembler::emit_clinit_barrier_on_entry(Klass* klass) {
   __ bind(fallthrough);
 }
 
-int JeandleAssembler::interior_entry_alignment() const {
+int JeandleAssembler::interior_entry_alignment() {
   // Keep interior entry 16-byte aligned (matches default HotSpot interior entry alignment).
   return 16;
 }
@@ -339,4 +339,113 @@ void JeandleEntryBarrierStub::emit(MacroAssembler* _masm) {
   __ bind(guard());
   __ relocate(entry_guard_Relocation::spec());
   __ emit_int32(0);   // nmethod guard value
+}
+
+int JeandleAssembler::ic_check_upper_bound() {
+  // cmp_klass + br + far_jump + align(CodeEntryAlignment)
+  return 64;
+}
+
+int JeandleAssembler::poisoned_osr_entry_upper_bound() {
+  // brk #0
+  return 4;
+}
+
+int JeandleAssembler::verified_entry_upper_bound() {
+  // nop
+  return 4;
+}
+
+int JeandleAssembler::clinit_barrier_upper_bound() {
+  // mov_metadata + clinit_barrier + far_jump
+  return 64;
+}
+
+int JeandleAssembler::stack_bang_instruction_size() {
+  // sub + str (up to 3 instructions)
+  return 12;
+}
+
+int JeandleAssembler::nmethod_entry_barrier_upper_bound() {
+  // ldrw + cmp + b.ne / fences (up to 9 instructions)
+  return 36;
+}
+
+int JeandleAssembler::entry_barrier_stub_upper_bound() {
+  // str + movptr + blr + ldr + b + guard word
+  return 36;
+}
+
+int JeandleAssembler::exception_handler_upper_bound() {
+  // far_codestub_branch_size (6 instructions = 24 bytes)
+  return 24;
+}
+
+int JeandleAssembler::deopt_handler_upper_bound() {
+  // deopt_handler_size() = 7 * NativeInstruction::instruction_size = 28 bytes
+  return 28;
+}
+
+int JeandleAssembler::static_call_stub_upper_bound() {
+  // 13 * NativeInstruction::instruction_size = 52 bytes
+  return 52;
+}
+
+int JeandleAssembler::trampoline_call_stub_upper_bound() {
+  // max_trampoline_stub_size() = NativeInstruction::instruction_size + NativeCallTrampolineStub::instruction_size (32 bytes)
+  return 32;
+}
+
+// ---------------------------------------------------------------------------
+// Relocation record census for this architecture.
+// ---------------------------------------------------------------------------
+//
+// AArch64 patches every Jeandle call through MacroAssembler::trampoline_call(), which
+// emits a trampoline stub whenever the target is not always within branch range; runtime
+// calls hand their target to CodeBuffer::share_trampoline_for() instead. As on RISC-V,
+// sharing changes the number of stubs and not the number of records: each caller still
+// gets a trampoline_stub record relating it to the shared stub.
+bool JeandleAssembler::needs_trampoline_branches() {
+  return MacroAssembler::far_branches();
+}
+
+bool JeandleAssembler::shares_runtime_call_trampolines() {
+  return CodeBuffer::supports_shared_stubs();
+}
+
+bool JeandleAssembler::entry_barrier_calls_runtime_stub() {
+  // JeandleEntryBarrierStub::emit() above reaches the barrier routine with
+  // movptr + blr, which relocates nothing; the guard word is the record.
+  return false;
+}
+
+bool JeandleAssembler::static_call_stub_has_metadata_record() {
+  // emit_static_call_stub() above calls __ mov_metadata(rmethod, nullptr), which
+  // relocates with metadata_type (macroAssembler_aarch64.cpp).
+  return true;
+}
+
+bool JeandleAssembler::static_call_stub_has_runtime_call_record() {
+  // The stub then does movptr(rscratch1, 0) + br(rscratch1) over a plain address: no
+  // relocation record, unlike x86_64's jump through a RuntimeAddress.
+  return false;
+}
+
+// As on x86_64, relocInfo_aarch64.cpp's pd_pack_data_to() returns false for all three
+// jeandle types, so their payload is written by the base classes - pack_2_ints_to(), at
+// most 4 halfwords per record.
+bool JeandleAssembler::runtime_call_needs_trampoline(address target) {
+  return true;
+}
+
+int JeandleAssembler::reloc_record_data_halfwords(relocInfo::relocType type) {
+  switch (type) {
+    case relocInfo::jeandle_oop_type:        // oop_Relocation: index + offset
+    case relocInfo::jeandle_oop_addr_type:   // oop_Relocation: index + offset
+    case relocInfo::jeandle_section_word_type: // compressed target + addend
+      return 4;
+    default:
+      ShouldNotReachHere();
+      return 0;
+  }
 }

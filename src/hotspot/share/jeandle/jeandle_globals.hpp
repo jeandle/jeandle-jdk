@@ -88,7 +88,39 @@
           "counted loops (0 disables strip mining).")                       \
           range(0, max_juint)                                               \
                                                                             \
-// end of JEANDLE_FLAGS
+  develop(bool, JeandleCodeBufferInstrument, false,                         \
+          "Instrument CodeBuffer allocation, expansion, and finalization "  \
+          "to collect baseline data for the deterministic layout work. "    \
+          "Prints a text summary at VM exit.")                               \
+                                                                          \
+                                                                            \
+  develop(bool, JeandleForceConstPlanFallback, false,                       \
+          "Force the const section planner to fail so that the legacy "     \
+          "6144*wordSize consts reservation is exercised (testing only).")  \
+                                                                            \
+  develop(bool, JeandleStressCodeBufferExpand, false,                       \
+          "Start the stubs section of every Jeandle CodeBuffer empty so "   \
+          "that the first emitted stub expands the buffer (testing only).") \
+                                                                            \
+  product(bool, JeandleExactInsts, true,                                    \
+          "Size CodeBuffer insts section from exact prolog and machine "    \
+          "code upper bound instead of legacy 2048-byte prolog reserve.")   \
+                                                                            \
+  product(bool, JeandleExactStubs, true,                                    \
+          "Size CodeBuffer stubs section from exact stackmap and LinkGraph "\
+          "call site model instead of legacy fixed stubs reserve.")         \
+                                                                            \
+  product(bool, JeandleExactLocs, true,                                     \
+          "Size each CodeBuffer relocation array (locs) from the Jeandle "  \
+          "relocation record model instead of HotSpot's fixed heuristic. "  \
+          "Turn off to A/B the legacy provisioning, which grows the array " \
+          "by repeated CodeSection::expand_locs() reallocations.")          \
+                                                                            \
+  develop(bool, JeandleTraceRelocRecords, false,                            \
+          "Print one line per compiled method with its relocation record "  \
+          "census by relocInfo type and section.")                          \
+                                                                            \
+                                                                            // end of JEANDLE_FLAGS
 
 DECLARE_FLAGS(JEANDLE_FLAGS)
 

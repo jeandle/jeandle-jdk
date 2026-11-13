@@ -119,6 +119,15 @@ void CodeBuffer::initialize(csize_t code_size, csize_t locs_size) {
 
   if (locs_size != 0) {
     _insts.initialize_locs(locs_size / sizeof(relocInfo));
+  } else if (_locs_capacity[SECT_INSTS] != 0) {
+    // Jeandle asks for the relocation capacity per section instead of mixing it into
+    // the code size argument; a request for insts only takes effect when the legacy
+    // locs_size argument was not given, so no existing caller changes behaviour.
+    _insts.initialize_locs(_locs_capacity[SECT_INSTS] / sizeof(relocInfo));
+  }
+
+  if (CodeBufferInstrumentation::enabled()) {
+    CodeBufferInstrumentation::instance()->record_initialize(this, _name, code_size, 0, 0, locs_size);
   }
 
   debug_only(verify_section_allocation();)
@@ -134,6 +143,10 @@ void CodeBuffer::initialize(csize_t inst_size,
   }
   initialize_section_size(&_stubs, stubs_size);
   initialize_oop_recorder(oop_recorder);
+
+  if (CodeBufferInstrumentation::enabled()) {
+    CodeBufferInstrumentation::instance()->record_initialize(this, _name, inst_size, 0, stubs_size, locs_size);
+  }
 }
 
 CodeBuffer::~CodeBuffer() {
@@ -153,6 +166,12 @@ CodeBuffer::~CodeBuffer() {
   }
   if (_shared_trampoline_requests != nullptr) {
     delete _shared_trampoline_requests;
+  }
+
+  if (CodeBufferInstrumentation::enabled()) {
+    // Close the record for this buffer: the address may be handed to a later
+    // CodeBuffer, and two different compilations must not share one record.
+    CodeBufferInstrumentation::instance()->record_retire(this);
   }
 
   NOT_PRODUCT(clear_strings());
@@ -179,7 +198,20 @@ void CodeBuffer::initialize_section_size(CodeSection* cs, csize_t size) {
   assert(cs->start() == middle, "sanity");
   assert(cs->limit() == limit,  "sanity");
   // give it some relocations to start with, if the main section has them
-  if (_insts.has_locs())  cs->initialize_locs(1);
+  if (_insts.has_locs()) {
+    // A secondary section starts with one record slot, which initialize_locs
+    // floors to four (the insts section gets eight). relocate() demands relocInfo::length_
+    // limit (15) free slots before it writes anything, so 4 or 8 slots are not
+    // enough: the first record reallocates the array in any compilation whose
+    // section receives a record. A compiler that knows how many records it will emit can ask
+    // for that many up front.
+    // The request array is in BYTES (see set_locs_capacity); initialize_locs() takes
+    // ELEMENTS - it allocates NEW_RESOURCE_ARRAY(relocInfo, n) and sets
+    // _locs_limit = _locs_start + n. The insts path in CodeBuffer::initialize()
+    // divides for exactly that reason; the same division here keeps the secondary
+    // sections at the relocation array size the record model asks for.
+    cs->initialize_locs(_locs_capacity[cs->index()] / sizeof(relocInfo));
+  }
 }
 
 void CodeBuffer::set_blob(BufferBlob* blob) {
@@ -339,10 +371,30 @@ void CodeSection::relocate(address at, RelocationHolder const& spec, int format)
            rtype == relocInfo::external_word_type||
            rtype == relocInfo::barrier_type,
            "code needs relocation information");
+#ifndef PRODUCT
+    if (CodeBufferInstrumentation::enabled()) {
+      // A dropped relocation is invisible in every other metric this buffer reports, so
+      // it is counted here even though nothing was written.
+      _outer->note_unstored_reloc(index(), (int)rtype);
+    }
+#endif // PRODUCT
     // leave behind an indication that we attempted a relocation
     DEBUG_ONLY(_locs_start = _locs_limit = (relocInfo*)badAddress);
     return;
   }
+
+#ifndef PRODUCT
+  // Census: how many records this section really receives, and how many
+  // relocInfo elements they cost once the gap fillers and the optional data prefix are
+  // counted. locs_count() - not a pointer difference - is the unit: expand_locs() below
+  // may move the array while the record is being written.
+  const bool census = CodeBufferInstrumentation::enabled();
+  int census_before_count = 0;
+  int census_fillers = 0;
+  if (census) {
+    census_before_count = locs_count();
+  }
+#endif // PRODUCT
 
   // Advance the point, noting the offset we'll have to record.
   csize_t offset = at - locs_point();
@@ -368,6 +420,7 @@ void CodeSection::relocate(address at, RelocationHolder const& spec, int format)
     assert(end < locs_limit(), "adjust previous paragraph of code");
     *end++ = relocInfo::filler_info();
     offset -= relocInfo::filler_info().addr_offset();
+    NOT_PRODUCT(census_fillers++);
   }
 
   // If it's a simple reloc with no data, we'll just write (rtype | offset).
@@ -375,6 +428,13 @@ void CodeSection::relocate(address at, RelocationHolder const& spec, int format)
 
   // If it has data, insert the prefix, as (data_prefix_tag | data1), data2.
   end->initialize(this, reloc);
+
+#ifndef PRODUCT
+  if (census) {
+    _outer->note_reloc_record(index(), (int)rtype,
+                              locs_count() - census_before_count, census_fillers);
+  }
+#endif // PRODUCT
 }
 
 void CodeSection::initialize_locs(int locs_capacity) {
@@ -387,6 +447,11 @@ void CodeSection::initialize_locs(int locs_capacity) {
   _locs_end      = locs_start;
   _locs_limit    = locs_start + locs_capacity;
   _locs_own      = true;
+  NOT_PRODUCT(if (CodeBufferInstrumentation::enabled()) {
+    // What the section was actually given, after the floor above was applied: this is
+    // the number the locs plan is compared against, not the requested one.
+    _outer->note_locs_initial_capacity(index(), locs_capacity);
+  });
 }
 
 void CodeSection::initialize_shared_locs(relocInfo* buf, int length) {
@@ -417,6 +482,11 @@ void CodeSection::initialize_locs_from(const CodeSection* source_cs) {
 
 void CodeSection::expand_locs(int new_capacity) {
   if (_locs_start == nullptr) {
+    NOT_PRODUCT(if (CodeBufferInstrumentation::enabled()) {
+      // First allocation on demand: no data was copied, but the section had no
+      // requested capacity at all, which is a provisioning gap worth telling apart.
+      _outer->note_locs_expand(index(), 0, new_capacity);
+    });
     initialize_locs(new_capacity);
     return;
   } else {
@@ -432,6 +502,12 @@ void CodeSection::expand_locs(int new_capacity) {
       Copy::conjoint_jbytes(_locs_start, locs_start, old_capacity * sizeof(relocInfo));
       _locs_own = true;
     }
+    NOT_PRODUCT(if (CodeBufferInstrumentation::enabled()) {
+      // The relocation array lives in the ResourceArea, not in the CodeCache, so this
+      // costs compile time (a realloc plus a copy of everything already written) rather
+      // than CodeCache space. It is the exact thing an exact locs plan removes.
+      _outer->note_locs_expand(index(), old_capacity, new_capacity);
+    });
     _locs_start    = locs_start;
     _locs_end      = locs_start + old_count;
     _locs_limit    = locs_start + new_capacity;
@@ -870,6 +946,7 @@ csize_t CodeBuffer::figure_expanded_capacities(CodeSection* which_cs,
 }
 
 void CodeBuffer::expand(CodeSection* which_cs, csize_t amount) {
+
 #ifndef PRODUCT
   if (PrintNMethods && (WizardMode || Verbose)) {
     tty->print("expanding CodeBuffer:");
@@ -897,6 +974,15 @@ void CodeBuffer::expand(CodeSection* which_cs, csize_t amount) {
   memset(new_capacity, 0, sizeof(csize_t) * SECT_LIMIT);
   csize_t new_total_cap
     = figure_expanded_capacities(which_cs, amount, new_capacity);
+
+  if (CodeBufferInstrumentation::enabled()) {
+    // Declared here rather than at the top of expand(): with the instrumentation off
+    // this path must cost nothing. Index by explicit comparison - deriving it from the
+    // address difference of CodeBuffer members worked only because _consts, _insts and
+    // _stubs happen to be adjacent, and would break silently if they ever move apart.
+    const int sect = (which_cs == &_consts) ? 0 : ((which_cs == &_insts) ? 1 : 2);
+    CodeBufferInstrumentation::instance()->record_expand(this, sect, amount, new_total_cap);
+  }
 
   // Create a new (temporary) code buffer to hold all the new data
   CodeBuffer cb(name(), new_total_cap, 0);
