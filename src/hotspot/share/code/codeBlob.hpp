@@ -635,9 +635,9 @@ class DeoptimizationBlob: public SingletonBlob {
 
 
 //----------------------------------------------------------------------------------------------------
-// UncommonTrapBlob (currently only used by Compiler 2)
+// UncommonTrapBlob: used by high-tier compilers for uncommon traps.
 
-#ifdef COMPILER2
+#if COMPILER2_OR_JEANDLE
 
 class UncommonTrapBlob: public SingletonBlob {
   friend class VMStructs;
@@ -664,11 +664,13 @@ class UncommonTrapBlob: public SingletonBlob {
   // Typing
   bool is_uncommon_trap_stub() const             { return true; }
 };
+#endif // COMPILER2_OR_JEANDLE
 
 
 //----------------------------------------------------------------------------------------------------
 // ExceptionBlob: used for exception unwinding in compiled code (currently only used by Compiler 2)
 
+#ifdef COMPILER2
 class ExceptionBlob: public SingletonBlob {
   friend class VMStructs;
  private:

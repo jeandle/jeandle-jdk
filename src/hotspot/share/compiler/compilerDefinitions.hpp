@@ -61,7 +61,7 @@ enum CompLevel : s1 {
   CompLevel_simple            = 1,         // C1
   CompLevel_limited_profile   = 2,         // C1, invocation & backedge counters
   CompLevel_full_profile      = 3,         // C1, invocation & backedge counters + mdo
-  CompLevel_full_optimization = 4          // C2 or JVMCI
+  CompLevel_full_optimization = 4          // C2, JVMCI, or Jeandle
 };
 
 class CompilationModeFlag : AllStatic {
@@ -135,10 +135,11 @@ public:
   static void ergo_initialize();
 
   // Which compilers are baked in?
-  constexpr static bool has_c1()     { return COMPILER1_PRESENT(true) NOT_COMPILER1(false); }
-  constexpr static bool has_c2()     { return COMPILER2_PRESENT(true) NOT_COMPILER2(false); }
-  constexpr static bool has_jvmci()  { return JVMCI_ONLY(true) NOT_JVMCI(false);            }
-  constexpr static bool has_tiered() { return has_c1() && (has_c2() || has_jvmci());        }
+  constexpr static bool has_c1()      { return COMPILER1_PRESENT(true) NOT_COMPILER1(false); }
+  constexpr static bool has_c2()      { return COMPILER2_PRESENT(true) NOT_COMPILER2(false); }
+  constexpr static bool has_jeandle() { return JEANDLE_PRESENT(true) NOT_JEANDLE(false);     }
+  constexpr static bool has_jvmci()   { return JVMCI_ONLY(true) NOT_JVMCI(false);            }
+  constexpr static bool has_tiered()  { return has_c1() && (has_c2() || has_jeandle() || has_jvmci()); }
 
   inline static bool is_jvmci_compiler();
   inline static bool is_jvmci();
@@ -162,10 +163,16 @@ public:
   inline static bool is_jvmci_compiler_enabled();
   inline static bool is_jvmci_compiler_only();
 
+  inline static bool is_jeandle_compiler();
+  inline static bool is_jeandle_compiler_enabled();
+  inline static bool is_jeandle_compiler_only();
+
   inline static bool is_c2_only();
   inline static bool is_c2_enabled();
   inline static bool is_c2_or_jvmci_compiler_only();
   inline static bool is_c2_or_jvmci_compiler_enabled();
+  inline static bool is_high_tier_compiler_only();
+  inline static bool is_high_tier_compiler_enabled();
 
 private:
   static bool is_compilation_mode_selected();

@@ -339,12 +339,35 @@
 #define NOT_JEANDLE(code) code
 #endif // JEANDLE
 
+// COMPILER1, COMPILER2, or JEANDLE
+#if defined(COMPILER1) || defined(COMPILER2) || defined(JEANDLE)
+#define COMPILER1_OR_COMPILER2_OR_JEANDLE 1
+#else
+#define COMPILER1_OR_COMPILER2_OR_JEANDLE 0
+#endif
+
+// COMPILER2, JVMCI, or JEANDLE
+#if defined(COMPILER2) || INCLUDE_JVMCI || defined(JEANDLE)
+#define COMPILER2_OR_JVMCI_OR_JEANDLE 1
+#else
+#define COMPILER2_OR_JVMCI_OR_JEANDLE 0
+#endif
+
 // COMPILER2 or JEANDLE
 #if defined(COMPILER2) || defined(JEANDLE)
 #define COMPILER2_OR_JEANDLE 1
 #else // COMPILER2 || JEANDLE
 #define COMPILER2_OR_JEANDLE 0
 #endif // COMPILER2 || JEANDLE
+
+// COMPILER2, JVMCI, or JEANDLE
+#if defined(COMPILER2) || INCLUDE_JVMCI || defined(JEANDLE)
+#define NOT_COMPILER2_OR_JVMCI_OR_JEANDLE_RETURN        /* next token must be ; */
+#define NOT_COMPILER2_OR_JVMCI_OR_JEANDLE_RETURN_(code) /* next token must be ; */
+#else
+#define NOT_COMPILER2_OR_JVMCI_OR_JEANDLE_RETURN {}
+#define NOT_COMPILER2_OR_JVMCI_OR_JEANDLE_RETURN_(code) { return code; }
+#endif
 
 // PRODUCT variant
 #ifdef PRODUCT
