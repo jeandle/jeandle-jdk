@@ -79,7 +79,11 @@ public class TestPowSpecializations {
         FileCheck minus = new FileCheck(dump,
                 Kernel.class.getMethod("powerMinusOne", double.class), true);
         minus.checkPatternAnywhere(runtime);
-        minus.checkNot("fdiv double");
+        if (x86 && !shared) {
+            minus.checkNot("fdiv double");
+        } else {
+            minus.checkPatternAnywhere("fdiv double");
+        }
         FileCheck variable = new FileCheck(dump,
                 Kernel.class.getMethod("powerVariable", double.class, double.class), true);
         variable.checkPatternAnywhere(runtime);

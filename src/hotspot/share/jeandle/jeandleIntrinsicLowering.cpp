@@ -970,8 +970,11 @@ static JeandleRuntimeCalleeFn select_dual_path_libm_callee(
 llvm::CallBase* JeandleIntrinsicLowering::emit_libm_call(
     JeandleRuntimeCalleeFn fn, llvm::ArrayRef<llvm::Value*> args) {
   static constexpr CallSiteAttributeMetadata libm_attrs = {CTRL_NONE, MEM_NONE};
-  return emit_callsite(fn(_interp->_module), llvm::CallingConv::C, args,
-                       libm_attrs, /*is_gc_leaf_entry=*/true);
+  llvm::CallBase* call = emit_callsite(fn(_interp->_module), llvm::CallingConv::C, args,
+                                       libm_attrs, /*is_gc_leaf_entry=*/true);
+  // Selected libm entries terminate for every Java floating-point input.
+  call->addFnAttr(llvm::Attribute::WillReturn);
+  return call;
 }
 
 bool JeandleIntrinsicLowering::lower_dual_path_libm(
@@ -2548,6 +2551,9 @@ bool JeandleIntrinsicLowering::lower_signum(vmIntrinsics::ID id) {
   bool is_double = (id == vmIntrinsics::_dsignum);
 
   llvm::Value* x = is_double ? _interp->_jvm->dpop() : _interp->_jvm->fpop();
+  // The value is observed by the guard, passthrough and copysign arms.
+  // A stable choice also exposes the signum identities to LLVM consumers.
+  x = builder.CreateFreeze(x, "signum.input");
   llvm::Type* fp_ty = x->getType();
   llvm::Value* special = builder.CreateFCmp(
       llvm::CmpInst::FCMP_UEQ, x, llvm::ConstantFP::get(fp_ty, 0.0));
@@ -2565,115 +2571,13 @@ bool JeandleIntrinsicLowering::lower_signum(vmIntrinsics::ID id) {
 }
 
 // ---- lower_round ----
-// Both widths round the signed IEEE significand using the same integer
-// algorithm as java.lang.Math.round -- the same algorithm C2's
-// round_float/round_double implement on x86. Adding 0.5 in floating-point
-// would double-round near half-integers and at large magnitudes. A valid
-// shift gives ((signed_significand >> shift) + 1) >> 1, with ties toward
-// +infinity. The guarded-branch form keeps the in-range fast path free of
-// any conversion instruction: the saturating cast for out-of-range inputs
-// (tiny values that round to zero, already-integral magnitudes, infinities,
-// and NaN, which the cast maps to 0) sits in the rarely-taken block, and
-// neither path needs the SSE4.1 roundsd of a floor-based sequence.
+// Preserve Java round semantics through inlining and high-tier simplification.
+// Exact integer-to-FP round trips can then fold before the phase-1 JavaOp
+// expands the guarded integer-significand algorithm for general inputs.
 bool JeandleIntrinsicLowering::lower_round(vmIntrinsics::ID id) {
-  llvm::LLVMContext& ctx = *_interp->_context;
-  llvm::IRBuilder<>& builder = _interp->_ir_builder;
-  if (id == vmIntrinsics::_roundD) {
-    // shift = 1074 - biasedExp, where 1074 is SIGNIFICAND_WIDTH - 2 +
-    // EXP_BIAS for double. The in-range test matches Java's (shift & -64)
-    // == 0, i.e. 0 <= shift < 64.
-    llvm::Value* a = _interp->_jvm->dpop();
-    llvm::Type* fp_ty = builder.getDoubleTy();
-    llvm::Type* int_ty = builder.getInt64Ty();
-    llvm::Value* bits = builder.CreateBitCast(a, int_ty, "round.bits");
-    llvm::Value* exponent = builder.CreateAnd(
-        builder.CreateLShr(bits, 52), 0x7ff);
-    llvm::Value* shift = builder.CreateSub(
-        llvm::ConstantInt::get(int_ty, 1074),
-        exponent, "round.shift");
-    llvm::Value* in_range = builder.CreateICmpULT(
-        shift, llvm::ConstantInt::get(int_ty, 64));
-
-    llvm::BasicBlock* round_bb =
-        llvm::BasicBlock::Create(ctx, "round_significand", _interp->_llvm_func);
-    llvm::BasicBlock* cast_bb =
-        llvm::BasicBlock::Create(ctx, "round_cast", _interp->_llvm_func);
-    llvm::BasicBlock* merge_bb =
-        llvm::BasicBlock::Create(ctx, "round_merge", _interp->_llvm_func);
-    builder.CreateCondBr(in_range, round_bb, cast_bb);
-
-    builder.SetInsertPoint(round_bb);
-    llvm::Value* significand = builder.CreateOr(
-        builder.CreateAnd(bits, 0x000fffffffffffffLL), 0x0010000000000000LL);
-    llvm::Value* negative = builder.CreateICmpSLT(
-        bits, llvm::ConstantInt::get(int_ty, 0));
-    significand = builder.CreateSelect(negative, builder.CreateNeg(significand), significand);
-    // Only evaluate the variable shift under the unsigned range guard:
-    // LLVM shifts by the bit width or more produce poison, unlike Java shifts.
-    llvm::Value* rounded = builder.CreateAShr(
-        builder.CreateAdd(builder.CreateAShr(significand, shift),
-                          llvm::ConstantInt::get(int_ty, 1)), 1);
-    builder.CreateBr(merge_bb);
-
-    builder.SetInsertPoint(cast_bb);
-    llvm::Value* converted = builder.CreateIntrinsic(
-        llvm::Intrinsic::fptosi_sat, {int_ty, fp_ty}, {a});
-    builder.CreateBr(merge_bb);
-
-    builder.SetInsertPoint(merge_bb);
-    _interp->_block->set_tail_llvm_block(merge_bb);
-    llvm::PHINode* res = builder.CreatePHI(int_ty, 2, "round.result");
-    res->addIncoming(rounded, round_bb);
-    res->addIncoming(converted, cast_bb);
-    _interp->_jvm->lpush(res);
-    return true;
-  }
-
-  llvm::Value* a = _interp->_jvm->fpop();
-  llvm::Type* fp_ty = builder.getFloatTy();
-  llvm::Type* int_ty = builder.getInt32Ty();
-  llvm::Value* bits = builder.CreateBitCast(a, int_ty, "round.bits");
-  llvm::Value* exponent = builder.CreateAnd(
-      builder.CreateLShr(bits, 23), 0xff);
-  llvm::Value* shift = builder.CreateSub(
-      llvm::ConstantInt::get(int_ty, 149),
-      exponent, "round.shift");
-  llvm::Value* in_range = builder.CreateICmpULT(
-      shift, llvm::ConstantInt::get(int_ty, 32));
-
-  llvm::BasicBlock* round_bb =
-      llvm::BasicBlock::Create(ctx, "round_significand", _interp->_llvm_func);
-  llvm::BasicBlock* cast_bb =
-      llvm::BasicBlock::Create(ctx, "round_cast", _interp->_llvm_func);
-  llvm::BasicBlock* merge_bb =
-      llvm::BasicBlock::Create(ctx, "round_merge", _interp->_llvm_func);
-  builder.CreateCondBr(in_range, round_bb, cast_bb);
-
-  builder.SetInsertPoint(round_bb);
-  llvm::Value* significand = builder.CreateOr(
-      builder.CreateAnd(bits, 0x007fffff), 0x00800000);
-  llvm::Value* negative = builder.CreateICmpSLT(
-      bits, llvm::ConstantInt::get(int_ty, 0));
-  significand = builder.CreateSelect(negative, builder.CreateNeg(significand), significand);
-  // Only evaluate the variable shift under the unsigned range guard:
-  // LLVM shifts by the bit width or more produce poison, unlike Java shifts.
-  llvm::Value* rounded = builder.CreateAShr(
-      builder.CreateAdd(builder.CreateAShr(significand, shift),
-                        llvm::ConstantInt::get(int_ty, 1)), 1);
-  builder.CreateBr(merge_bb);
-
-  builder.SetInsertPoint(cast_bb);
-  llvm::Value* converted = builder.CreateIntrinsic(
-      llvm::Intrinsic::fptosi_sat, {int_ty, fp_ty}, {a});
-  builder.CreateBr(merge_bb);
-
-  builder.SetInsertPoint(merge_bb);
-  _interp->_block->set_tail_llvm_block(merge_bb);
-  llvm::PHINode* res = builder.CreatePHI(int_ty, 2, "round.result");
-  res->addIncoming(rounded, round_bb);
-  res->addIncoming(converted, cast_bb);
-  _interp->_jvm->ipush(res);
-  return true;
+  static constexpr CallSiteAttributeMetadata attrs = {CTRL_NONE, MEM_NONE};
+  return lower_java_op(id == vmIntrinsics::_roundD ? "jeandle.round.double"
+                                                  : "jeandle.round.float", attrs);
 }
 
 // ---- lower_reverse_bytes_narrow ----

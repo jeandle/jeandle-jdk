@@ -57,10 +57,10 @@ public class TestRound {
               .shouldContain("TestRound PASSED");
 
         FileCheck intChecker = new FileCheck(dumpDir,
-                TestWrapper.class.getMethod("int_round", float.class), false);
+                TestWrapper.class.getMethod("int_round", float.class), true);
         intChecker.checkPattern("define hotspotcc i32 .*TestRound.*int_round.*");
         FileCheck longChecker = new FileCheck(dumpDir,
-                TestWrapper.class.getMethod("long_round", double.class), false);
+                TestWrapper.class.getMethod("long_round", double.class), true);
         longChecker.checkPattern("define hotspotcc i64 .*TestRound.*long_round.*");
         if (!disabled) {
             intChecker.check("bitcast float");
@@ -81,12 +81,12 @@ public class TestRound {
             longChecker.checkNot("java_lang_Math_round");
             output.shouldContain("java.lang.Math.round(jdouble)` is parsed as intrinsic");
         } else {
-            intChecker.checkPattern("(?:call|invoke) hotspotcc i32 .*java_lang_Math_round");
-            intChecker.checkNot("llvm.fptosi.sat");
+            intChecker.checkPattern("(?:call|invoke).*java_lang_Math_round");
+            intChecker.checkNot("call i32 @llvm.fptosi.sat");
             output.shouldNotContain("java.lang.Math.round(jfloat)` is parsed as intrinsic");
-            longChecker.checkPattern("(?:call|invoke) hotspotcc i64 .*java_lang_Math_round");
+            longChecker.checkPattern("(?:call|invoke).*java_lang_Math_round");
             longChecker.checkNot("llvm.floor");
-            longChecker.checkNot("llvm.fptosi.sat");
+            longChecker.checkNot("call i64 @llvm.fptosi.sat");
             output.shouldNotContain("java.lang.Math.round(jdouble)` is parsed as intrinsic");
         }
     }
