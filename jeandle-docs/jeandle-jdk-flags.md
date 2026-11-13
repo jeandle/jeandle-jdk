@@ -6,7 +6,7 @@
 | ```JeandleDumpDirectory``` | string | The dump destination for all Jeandle items. | The working directory of the current Java process. |
 | ```JeandleCrashOnError``` | bool | Only available in debug version.<br/>Jeandle only marks a method as non-compilable when a compilation error occurs. To identify issues during testing immediately, this option is set to true, which means any compilation error in Jeandle will result in a JVM crash. | ```true``` |
 | ```JeandleDumpRuntimeStubs``` | bool | Dump all runtime stubs of Jeandle in the form of LLVM IR and object files. | ```false``` |
-| ```JeandleUseHotspotIntrinsics``` | bool | Prefer HotSpot intrinsics over LLVM intrinsics. | ```false``` |
+| ```JeandleUseHotspotIntrinsics``` | bool | Prefer the HotSpot runtime libm implementations over LLVM intrinsics for the dual-path Math intrinsics (dsin/dcos/dtan/dlog/dlog10/dexp/dpow): the StubRoutines entry where the platform generated one, else the SharedRuntime fdlibm port, so compiled results match interpreted execution bit-for-bit (on x86 both call the same stub). Turn off to use LLVM intrinsics and the host libm instead, which enables compile-time constant folding but accepts ulp-level differences versus the interpreter and, for Math.pow, the documented deviation where pow(1.0, non-finite) and pow(-1.0, ±inf) return 1.0 instead of the specified NaN. | ```true``` |
 | ```JeandleLLVMOptions``` | string | Additional LLVM command line options. | ```null``` |
 | ```JeandleRecordVMCallbacks``` | bool | Record VM callback invocations for standalone LLVM testing. | ```false``` |
 | ```JeandleUseProfile``` | bool | Use interpreter/C1 profile data (MDO) for branch and switch weights, as well as unstable-if branch pruning. | ```true``` |

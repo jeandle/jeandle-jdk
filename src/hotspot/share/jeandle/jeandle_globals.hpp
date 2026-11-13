@@ -50,8 +50,16 @@
   product(bool, JeandleDumpRuntimeStubs, false,                             \
           "Dump Jeandle runtime stubs")                                     \
                                                                             \
-  product(bool, JeandleUseHotspotIntrinsics, false,                         \
-          "Prefer Hotspot intrinsics over LLVM intrinsics")                 \
+  product(bool, JeandleUseHotspotIntrinsics, true,                          \
+          "Default: prefer the HotSpot runtime libm implementations "       \
+          "(StubRoutines entry first, SharedRuntime fallback) over LLVM "   \
+          "intrinsics, so compiled results match interpreted execution "    \
+          "bit-for-bit (on x86 both call the same stub); turn off to "      \
+          "select LLVM intrinsics/host libm for compile-time folding, "     \
+          "accepting ulp-level differences and, for Math.pow, the "         \
+          "documented deviation where pow(1.0, non-finite) and "            \
+          "pow(-1.0, +-inf) return 1.0 instead of the specified NaN "       \
+          "(pinned in TestPowDouble)")                                      \
                                                                             \
   product(ccstr, JeandleLLVMOptions, nullptr,                               \
           "Additional LLVM command line options")                           \

@@ -142,6 +142,7 @@ class JeandleIntrinsicLowering : public StackObj {
   // Arch-specific CPU feature checks. Defined in cpu/<arch>/jeandleIntrinsicLowering_<arch>.cpp.
   static bool cpu_supports_rounding();          // floor/ceil/rint
   static bool cpu_supports_popcount();          // bitCount_i/bitCount_l
+  static bool cpu_supports_bit_shuffle();       // compress/expand bit shuffle
   static bool cpu_supports_spin_wait();         // onSpinWait
   // Byte limit of the inline 128-bit vector tier for vectorizedMismatch.
   // A value of 0 disables the tier (values below the 16-byte scalar tier
@@ -173,9 +174,18 @@ class JeandleIntrinsicLowering : public StackObj {
   // Pattern helpers — reusable lowering patterns shared by multiple intrinsics
   // ========================================================================
 
+  // Call an already-resolved libm runtime callee (a *_callee function from
+  // JeandleRuntimeRoutine) with the given double arguments: C calling
+  // convention, no control-flow or memory side effects, GC-leaf. Shared by
+  // the one-argument dual-path intrinsics and lower_pow's guarded dpow call.
+  llvm::CallBase* emit_libm_call(JeandleRuntimeCalleeFn fn,
+                                 llvm::ArrayRef<llvm::Value*> args);
+
   // Dual-path libm (dsin, dcos, dtan, dlog, dlog10, dexp):
   //   JeandleUseHotspotIntrinsics=true  -> try stub -> try SharedRuntime -> llvm builtin
   //   JeandleUseHotspotIntrinsics=false -> llvm builtin only
+  // Pops the single double argument and pushes the double result; the
+  // llvm-builtin fallback pops the full Java signature itself.
   bool lower_dual_path_libm(llvm::Intrinsic::ID llvm_id,
                             const char* stub_name,
                             JeandleRuntimeCalleeFn stub_fn,
@@ -219,10 +229,20 @@ class JeandleIntrinsicLowering : public StackObj {
   // ========================================================================
   bool lower_bit_count(vmIntrinsics::ID id);
   bool lower_count_zeros(vmIntrinsics::ID id, llvm::Intrinsic::ID llvm_id);
+
+  // Integer/Long.compress/expand. Arch-specific emission (x86: BMI2
+  // PEXT/PDEP). aarch64/riscv have no lowering: cpu_supports_bit_shuffle()
+  // declines there, is_supported() returns false, and the call falls back
+  // to a normal invoke of the inlinable Java implementation.
+  bool lower_bit_shuffle(vmIntrinsics::ID id);   // arch-specific
+
   bool lower_reverse_bytes_narrow(vmIntrinsics::ID id);
   bool lower_llvm_bitcast();
   bool lower_fp_to_bits_canonical(vmIntrinsics::ID id);
   bool lower_fp_range_check(vmIntrinsics::ID id);
+  bool lower_signum(vmIntrinsics::ID id);
+  bool lower_round(vmIntrinsics::ID id);
+  bool lower_pow();
   bool lower_float16_convert(vmIntrinsics::ID id);
   bool lower_llvm_fence(vmIntrinsics::ID id);
   bool lower_preconditions_check_index(BasicType bt);
