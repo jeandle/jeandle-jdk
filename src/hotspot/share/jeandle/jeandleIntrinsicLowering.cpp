@@ -140,6 +140,12 @@ bool JeandleIntrinsicLowering::is_supported(vmIntrinsics::ID id) {
     case vmIntrinsics::_vectorizedMismatch:
       return UseVectorizedMismatchIntrinsic;
 
+    // The platform flag already encodes the vector capability C2 requires
+    // (x86: UseAVX >= 2, aarch64: NEON); riscv keeps it off and takes the
+    // Java fallback.
+    case vmIntrinsics::_vectorizedHashCode:
+      return UseVectorizedHashCodeIntrinsic;
+
     // floatToFloat16/float16ToFloat: gated on the same
     // VM_Version::supports_float16() predicate that turns on the template
     // interpreter's hardware entries (and gates C1/C2's intrinsic versions
@@ -562,6 +568,9 @@ bool JeandleIntrinsicLowering::lower(vmIntrinsics::ID id, const ciMethod* target
 
     case vmIntrinsics::_vectorizedMismatch:
       return lower_vectorized_mismatch();
+
+    case vmIntrinsics::_vectorizedHashCode:
+      return lower_vectorized_hashcode();
 
     // newArray
     case vmIntrinsics::_newArray:
@@ -2914,6 +2923,62 @@ bool JeandleIntrinsicLowering::lower_vectorized_mismatch() {
   result->addIncoming(call, stub_done_bb);
   _interp->_block->set_tail_llvm_block(done_bb);
   _interp->_jvm->ipush(result);
+  return true;
+}
+
+// ---- lower_vectorized_hashcode ----
+//
+// ArraysSupport.vectorizedHashCode(Object array, int fromIndex, int length,
+//                                  int initialValue, int basicType) forwards
+// every argument to the jeandle.vectorized_hashcode JavaOp. The op body owns
+// the element interpretation; like C2's inline_vectorizedHashCode, only a
+// compile-time-constant basicType in the set the Java switch implements is
+// intrinsifiable, and anything else replays the Java method (including its
+// IllegalArgumentException). The API is a trusted internal one: as with
+// vectorizedMismatch, no null/range guards are emitted here.
+bool JeandleIntrinsicLowering::lower_vectorized_hashcode() {
+  const char* const op = "jeandle.vectorized_hashcode";
+  llvm::Function* function = _interp->_module.getFunction(op);
+  if (function == nullptr || function->isDeclaration()) {
+    return false;
+  }
+
+  // Operand stack, top to bottom: basicType, initialValue, length,
+  // fromIndex, array. Decline before touching the stack or emitting IR.
+  llvm::Value* basic_type = _interp->_jvm->peek_value(0).value();
+  auto* basic_type_const = llvm::dyn_cast<llvm::ConstantInt>(basic_type);
+  if (basic_type_const == nullptr) {
+    return false;
+  }
+  // The Java constants (ArraysSupport.T_*) share the BasicType numbering.
+  switch (static_cast<BasicType>(static_cast<int>(basic_type_const->getSExtValue()))) {
+    case T_BOOLEAN:
+    case T_CHAR:
+    case T_BYTE:
+    case T_SHORT:
+    case T_INT:
+      break;
+    default:
+      return false;
+  }
+
+  const int nargs = _target->signature()->count();
+  assert(nargs == 5, "vectorizedHashCode has 5 parameters");
+  llvm::SmallVector<llvm::Value*, 5> args;
+  for (int i = 0; i < nargs; ++i) {
+    args.push_back(_interp->_jvm->peek_value(nargs - i - 1).value());
+  }
+  for (int i = nargs - 1; i >= 0; --i) {
+    _interp->_jvm->pop(JeandleType::actual2computational(_target->signature()->type_at(i)->basic_type()));
+  }
+
+  static constexpr CallSiteAttributeMetadata attrs = {CTRL_NONE, MEM_READ};
+  llvm::CallBase* call = _interp->call_java_op(op, args);
+  call->setDoesNotThrow();
+  annotate_call(call, attrs);
+  apply_memory_attr(call, attrs);
+  _interp->_jvm->ipush(call);
+  _interp->_block->set_tail_llvm_block(_interp->_ir_builder.GetInsertBlock());
   return true;
 }
 
