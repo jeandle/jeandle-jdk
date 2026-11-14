@@ -229,13 +229,18 @@ bool vmIntrinsics::disabled_by_jvm_flags(vmIntrinsics::ID id) {
     case vmIntrinsics::_compressStringB:
     case vmIntrinsics::_inflateStringC:
     case vmIntrinsics::_inflateStringB:
+    case vmIntrinsics::_getAndAddByte:
+    case vmIntrinsics::_getAndAddShort:
     case vmIntrinsics::_getAndAddInt:
     case vmIntrinsics::_getAndAddLong:
+    case vmIntrinsics::_getAndSetByte:
+    case vmIntrinsics::_getAndSetShort:
     case vmIntrinsics::_getAndSetInt:
     case vmIntrinsics::_getAndSetLong:
     case vmIntrinsics::_getAndSetReference:
     case vmIntrinsics::_loadFence:
     case vmIntrinsics::_storeFence:
+    case vmIntrinsics::_storeStoreFence:
     case vmIntrinsics::_fullFence:
     case vmIntrinsics::_countPositives:
     case vmIntrinsics::_Reference_get:
@@ -394,14 +399,29 @@ bool vmIntrinsics::disabled_by_jvm_flags(vmIntrinsics::ID id) {
   case vmIntrinsics::_putLongOpaque:
   case vmIntrinsics::_putFloatOpaque:
   case vmIntrinsics::_putDoubleOpaque:
+  case vmIntrinsics::_getAndAddByte:
+  case vmIntrinsics::_getAndAddShort:
   case vmIntrinsics::_getAndAddInt:
   case vmIntrinsics::_getAndAddLong:
+  case vmIntrinsics::_getAndSetByte:
+  case vmIntrinsics::_getAndSetShort:
   case vmIntrinsics::_getAndSetInt:
   case vmIntrinsics::_getAndSetLong:
   case vmIntrinsics::_getAndSetReference:
   case vmIntrinsics::_loadFence:
   case vmIntrinsics::_storeFence:
+  case vmIntrinsics::_storeStoreFence:
   case vmIntrinsics::_fullFence:
+  case vmIntrinsics::_compareAndSetByte:
+  case vmIntrinsics::_compareAndSetShort:
+  case vmIntrinsics::_weakCompareAndSetByte:
+  case vmIntrinsics::_weakCompareAndSetBytePlain:
+  case vmIntrinsics::_weakCompareAndSetByteAcquire:
+  case vmIntrinsics::_weakCompareAndSetByteRelease:
+  case vmIntrinsics::_weakCompareAndSetShort:
+  case vmIntrinsics::_weakCompareAndSetShortPlain:
+  case vmIntrinsics::_weakCompareAndSetShortAcquire:
+  case vmIntrinsics::_weakCompareAndSetShortRelease:
   case vmIntrinsics::_compareAndSetLong:
   case vmIntrinsics::_weakCompareAndSetLong:
   case vmIntrinsics::_weakCompareAndSetLongPlain:
@@ -417,6 +437,12 @@ bool vmIntrinsics::disabled_by_jvm_flags(vmIntrinsics::ID id) {
   case vmIntrinsics::_weakCompareAndSetReferencePlain:
   case vmIntrinsics::_weakCompareAndSetReferenceAcquire:
   case vmIntrinsics::_weakCompareAndSetReferenceRelease:
+  case vmIntrinsics::_compareAndExchangeByte:
+  case vmIntrinsics::_compareAndExchangeByteAcquire:
+  case vmIntrinsics::_compareAndExchangeByteRelease:
+  case vmIntrinsics::_compareAndExchangeShort:
+  case vmIntrinsics::_compareAndExchangeShortAcquire:
+  case vmIntrinsics::_compareAndExchangeShortRelease:
   case vmIntrinsics::_compareAndExchangeInt:
   case vmIntrinsics::_compareAndExchangeIntAcquire:
   case vmIntrinsics::_compareAndExchangeIntRelease:
@@ -427,6 +453,8 @@ bool vmIntrinsics::disabled_by_jvm_flags(vmIntrinsics::ID id) {
   case vmIntrinsics::_compareAndExchangeReferenceAcquire:
   case vmIntrinsics::_compareAndExchangeReferenceRelease:
   case vmIntrinsics::_allocateInstance:
+  case vmIntrinsics::_park:
+  case vmIntrinsics::_unpark:
     if (!InlineUnsafeOps) return true;
     break;
   case vmIntrinsics::_getShortUnaligned:
