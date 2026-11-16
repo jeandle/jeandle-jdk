@@ -84,6 +84,7 @@
 @Klass.java_mirror_offset = external global i32
 @Klass.layout_helper_offset = external global i32
 @Klass.modifier_flags_offset = external global i32
+@java_lang_Object.klass = external global i64
 @Klass.secondary_super_cache_offset = external global i32
 @Klass.secondary_supers_offset = external global i32
 @Klass.super_check_offset_offset = external global i32
@@ -385,6 +386,37 @@ reference:
   %mask = load i32, ptr @AccessFlags.jvm_acc_written_flags
   %flags = call hotspotcc i32 @jeandle.klass_access_flags(ptr %klass, i32 %mask)
   ret i32 %flags
+}
+
+; Java superclass semantics remain visible through mirror merges and loops.
+define hotspotcc ptr addrspace(1) @jeandle.class_get_superclass(ptr addrspace(1) nocapture nonnull readonly %mirror) noinline "lower-phase"="1" #0 {
+entry:
+  %klass = call hotspotcc ptr @jeandle.load_mirror_klass(ptr addrspace(1) %mirror)
+  %primitive = icmp eq ptr %klass, null
+  br i1 %primitive, label %null_result, label %reference
+reference:
+  %mask = load i32, ptr @AccessFlags.jvm_acc_interface
+  %flags = call hotspotcc i32 @jeandle.klass_access_flags(ptr %klass, i32 %mask)
+  %interface = icmp ne i32 %flags, 0
+  br i1 %interface, label %null_result, label %non_interface
+non_interface:
+  %layout = call hotspotcc i32 @jeandle.layout_helper(ptr %klass)
+  %array = icmp slt i32 %layout, 0
+  br i1 %array, label %array_result, label %ordinary
+array_result:
+  %object_bits = load i64, ptr @java_lang_Object.klass
+  %object_klass = inttoptr i64 %object_bits to ptr
+  %object_mirror = call hotspotcc ptr addrspace(1) @jeandle.klass_mirror(ptr %object_klass)
+  ret ptr addrspace(1) %object_mirror
+ordinary:
+  %super = call hotspotcc ptr @jeandle.klass_super(ptr %klass)
+  %root = icmp eq ptr %super, null
+  br i1 %root, label %null_result, label %super_result
+super_result:
+  %super_mirror = call hotspotcc ptr addrspace(1) @jeandle.klass_mirror(ptr %super)
+  ret ptr addrspace(1) %super_mirror
+null_result:
+  ret ptr addrspace(1) null
 }
 
 ; Query a Klass' current initialization state. Keeping this opaque through

@@ -585,6 +585,31 @@ uintptr_t JeandleVMCallback::get_super_klass(uintptr_t klass_ptr) {
   return record_klass_metadata(ciEnv::current()->get_klass(super));
 }
 
+uintptr_t JeandleVMCallback::get_class_superclass(int oop_id) {
+  ciObject* oop = oop_by_id(oop_id);
+  if (oop == nullptr || oop->is_null_object() || !oop->is_instance()) {
+    return llvm::jeandle::MirrorKlassUnavailable;
+  }
+  ciType* type = oop->as_instance()->java_mirror_type();
+  if (type == nullptr) {
+    return llvm::jeandle::MirrorKlassUnavailable;
+  }
+  if (!type->is_klass()) {
+    return 0;
+  }
+  ciKlass* klass = type->as_klass();
+  if (!klass->is_loaded()) {
+    return llvm::jeandle::MirrorKlassUnavailable;
+  }
+  VM_ENTRY_MARK;
+  Klass* raw = static_cast<Klass*>(klass->constant_encoding());
+  if (raw->is_interface()) {
+    return 0;
+  }
+  Klass* super = raw->is_array_klass() ? vmClasses::Object_klass() : raw->super();
+  return super == nullptr ? 0 : record_klass_metadata(ciEnv::current()->get_klass(super));
+}
+
 int JeandleVMCallback::get_caller_class(int scope_id) {
   if (scope_id < 0) {
     return -1;
@@ -1277,6 +1302,7 @@ void JeandleVMCallback::register_callbacks() {
   callbacks.GetKlassModifierFlags = &JeandleVMCallback::get_klass_modifier_flags;
   callbacks.GetKlassAccessFlags = &JeandleVMCallback::get_klass_access_flags;
   callbacks.GetSuperKlass = &JeandleVMCallback::get_super_klass;
+  callbacks.GetClassSuperclass = &JeandleVMCallback::get_class_superclass;
   callbacks.GetCallerClass = &JeandleVMCallback::get_caller_class;
   callbacks.GetKlassConstantField = &JeandleVMCallback::get_klass_constant_field;
   callbacks.IsKlassInitialized = &JeandleVMCallback::is_klass_initialized;

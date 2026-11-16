@@ -100,6 +100,12 @@ public class TestClassConstantUnloading {
         assignable.setAccessible(true);
         assignableArgument.setAccessible(true);
 
+        // Resolve constant-pool sites before compilation, so executing the
+        // compiled methods cannot silently fall back on an unresolved trap.
+        isInstance.invoke(null, instance);
+        cast.invoke(null, instance);
+        assignable.invoke(null, target);
+        assignableArgument.invoke(null, target);
         compile(isInstance);
         compile(cast);
         compile(assignable);
@@ -117,6 +123,11 @@ public class TestClassConstantUnloading {
         if (!((Boolean) assignableArgument.invoke(null, target))) {
             throw new RuntimeException(
                     "constant isAssignableFrom argument failed for " + target);
+        }
+        for (Method method : new Method[] {isInstance, cast, assignable, assignableArgument}) {
+            if (!WB.isMethodCompiled(method)) {
+                throw new RuntimeException("Method deoptimized during verification: " + method);
+            }
         }
     }
 

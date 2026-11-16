@@ -190,12 +190,7 @@ public class TestClassQueries {
         checkMethodIR(dumpPath, enabled, "queryIsHidden", "java_lang_Class", "isHidden",
                 new Class<?>[] {Class.class}, List.of());
         checkMethodIR(dumpPath, enabled, "queryGetSuperclass", "java_lang_Class", "getSuperclass",
-                new Class<?>[] {Class.class}, List.of(
-                        "%class\\.super\\.is_primitive = icmp eq ptr "
-                                + "%class\\.super\\.klass_from_mirror, null",
-                        "%class\\.super\\.is_interface = icmp ne i32",
-                        "%class\\.super\\.is_array = icmp slt i32",
-                        "call hotspotcc ptr @jeandle\\.klass_super"));
+                new Class<?>[] {Class.class}, List.of());
         checkMethodIR(dumpPath, enabled, "queryGetClassAccessFlags",
                 "jdk_internal_reflect_Reflection", "getClassAccessFlags",
                 new Class<?>[] {Class.class}, List.of(
@@ -283,9 +278,7 @@ public class TestClassQueries {
         Method method = TestWrapper.class.getMethod(methodName);
         FileCheck parsed = new FileCheck(dumpPath, method, false, 0);
         parsed.selectFunction("define hotspotcc .*" + methodName);
-        parsed.checkPatternAnywhere("call hotspotcc ptr @jeandle\\.load_mirror_klass");
-        parsed.checkPatternAnywhere("call hotspotcc ptr @jeandle\\.klass_super");
-        parsed.checkPatternAnywhere("call hotspotcc ptr addrspace\\(1\\) @jeandle\\.klass_mirror");
+        parsed.checkPatternAnywhere("call hotspotcc ptr addrspace\\(1\\) @jeandle\\.class_get_superclass");
         FileCheck optimized = new FileCheck(dumpPath, method, true);
         optimized.checkPattern(returnsNull
                 ? "ret ptr addrspace\\(1\\) null"
@@ -347,11 +340,14 @@ public class TestClassQueries {
                     case "queryIsPrimitive" -> "class_is_primitive";
                     case "queryIsInterface" -> "class_is_interface";
                     case "queryIsHidden" -> "class_is_hidden";
+                    case "queryGetSuperclass" -> "class_get_superclass";
                     case "queryGetModifiers" -> "class_get_modifiers";
                     case "queryGetClassAccessFlags" -> "class_get_access_flags";
                     default -> throw new AssertionError(wrapperName);
                 };
-                checker.checkPattern("call hotspotcc i32 @jeandle\\." + operation);
+                checker.checkPattern("call hotspotcc "
+                        + (wrapperName.equals("queryGetSuperclass") ? "ptr addrspace\\(1\\)" : "i32")
+                        + " @jeandle\\." + operation);
             } else {
                 if (wrapperName.equals("queryGetSuperclass")) {
                     checker.checkNotPattern("call hotspotcc [^\\r\\n]*@jeandle\\.load_mirror_from_klass");
@@ -393,7 +389,8 @@ public class TestClassQueries {
     }
 
     private static boolean isDirectClassQuery(String wrapperName) {
-        return wrapperName.equals("queryGetModifiers")
+        return wrapperName.equals("queryGetSuperclass")
+                || wrapperName.equals("queryGetModifiers")
                 || wrapperName.equals("queryGetClassAccessFlags")
                 || wrapperName.equals("queryIsArray")
                 || wrapperName.equals("queryIsPrimitive")

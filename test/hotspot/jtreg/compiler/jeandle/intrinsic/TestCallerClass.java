@@ -30,7 +30,9 @@
 
 package compiler.jeandle.intrinsic;
 
+import java.lang.invoke.MethodHandle;
 import java.lang.invoke.MethodHandles;
+import java.lang.reflect.Method;
 import java.lang.invoke.MethodType;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -78,7 +80,8 @@ public class TestCallerClass {
         if (mode.equals("interpreter")) {
             command.add("-Xint");
         } else {
-            command.addAll(List.of("-Xcomp", "-Xbatch", "-XX:-TieredCompilation",
+            command.addAll(List.of("-Xbatch", "-XX:-TieredCompilation",
+                    "-XX:CompileThreshold=50", "-XX:-UseOnStackReplacement",
                     "-XX:+UseJeandleCompiler", "-XX:+JeandlePrintInlineTree", "-XX:+UnlockDiagnosticVMOptions",
                     "-XX:+LogCompilation", "-XX:LogFile=" + log,
                     "-XX:+JeandleDumpIR", "-XX:JeandleDumpDirectory=" + dumps,
@@ -86,6 +89,8 @@ public class TestCallerClass {
                     "-XX:CompileCommand=compileonly," + TestCallerClass.class.getName() + "::ignoredCaller",
                     "-XX:CompileCommand=compileonly," + TestCallerClass.class.getName() + "::applicationCaller",
                     "-XX:CompileCommand=compileonly," + TestCallerClass.class.getName() + "::illegalInlinedCaller",
+                    "-XX:CompileCommand=compileonly," + TestCallerClass.class.getName() + "::reflectCaller",
+                    "-XX:CompileCommand=compileonly," + TestCallerClass.class.getName() + "::handleCaller",
                     "-XX:CompileCommand=compileonly," + HELPER + "::caller",
                     "-XX:CompileCommand=compileonly," + HELPER + "::illegalCaller",
                     "-XX:CompileCommand=inline," + HELPER + "::caller",
@@ -110,8 +115,12 @@ public class TestCallerClass {
             return;
         }
         String xml = Files.readString(log);
-        for (String name : List.of("sharedCaller", "ignoredCaller", "applicationCaller", "illegalInlinedCaller")) {
+        for (String name : List.of("sharedCaller", "ignoredCaller", "applicationCaller", "illegalInlinedCaller",
+                "reflectCaller", "handleCaller")) {
             requireCompilation(xml, TestCallerClass.class.getName(), name);
+        }
+        for (String name : List.of("reflectCaller", "handleCaller")) {
+            requireStableCompilation(xml, name);
         }
         requireCompilation(xml, HELPER, "caller");
         requireCompilation(xml, HELPER, "illegalCaller");
@@ -151,6 +160,19 @@ public class TestCallerClass {
         }
     }
 
+    private static void requireStableCompilation(String xml, String method) {
+        String installed = xml.lines().filter(line -> line.contains("<nmethod")
+                && line.contains("compiler='jeandle'")
+                && line.contains(TestCallerClass.class.getName() + " " + method + " "))
+                .reduce((first, last) -> last).orElseThrow();
+        var id = Pattern.compile("compile_id='([0-9]+)'").matcher(installed);
+        if (!id.find()) throw new AssertionError("Missing compilation id: " + installed);
+        String compilationId = "compile_id='" + id.group(1) + "'";
+        if (xml.lines().anyMatch(line -> line.contains("<make_not_entrant") && line.contains(compilationId))) {
+            throw new AssertionError("Wrapper deoptimized during execution: " + method);
+        }
+    }
+
     private static String readIR(Path dumps, String holder, String method, boolean optimized) throws Exception {
         String prefix = holder.replace('.', '_') + "_" + method + "_";
         try (var paths = Files.list(dumps)) {
@@ -179,12 +201,11 @@ public class TestCallerClass {
                 || Reflection.isCallerSensitive(TestCallerClass.class.getMethod("applicationCaller"))) {
             throw new AssertionError("CallerSensitive helper trust was not established");
         }
-        // Resolve the inlinees' constant-pool call sites before -Xcomp compiles
-        // sharedCaller. The inliner requires resolved calls in this mode.
+        // Resolve the inlinees' constant-pool sites before hot compilation.
         check(CallerA.caller(), CallerA.class);
         check(CallerB.caller(), CallerB.class);
         check(JeandleCallerClassHelper.Ignored.caller(), TestCallerClass.class);
-        for (int i = 0; i < 100; i++) {
+        for (int i = 0; i < 1_000; i++) {
             check(sharedCaller(false), CallerA.class);
             check(sharedCaller(true), CallerB.class);
             check(ignoredCaller(), TestCallerClass.class);
@@ -194,15 +215,18 @@ public class TestCallerClass {
             expectInternalError(false, true);
             expectInternalError(true, true);
         }
-        Class<?> reflected = (Class<?>) JeandleCallerClassHelper.class.getMethod("caller").invoke(null);
-        if (!reflected.isNestmateOf(TestCallerClass.class)) {
-            throw new AssertionError("reflection caller: " + reflected);
-        }
-        var handle = MethodHandles.lookup().findStatic(JeandleCallerClassHelper.class, "caller",
+        Method reflectedMethod = JeandleCallerClassHelper.class.getMethod("caller");
+        MethodHandle handle = MethodHandles.lookup().findStatic(JeandleCallerClassHelper.class, "caller",
                 MethodType.methodType(Class.class));
-        Class<?> handled = (Class<?>) handle.invokeExact();
-        if (!handled.isNestmateOf(TestCallerClass.class)) {
-            throw new AssertionError("method handle caller: " + handled);
+        for (int i = 0; i < 1_000; i++) {
+            Class<?> reflected = reflectCaller(reflectedMethod);
+            if (!reflected.isNestmateOf(TestCallerClass.class)) {
+                throw new AssertionError("reflection caller: " + reflected);
+            }
+            Class<?> handled = handleCaller(handle);
+            if (!handled.isNestmateOf(TestCallerClass.class)) {
+                throw new AssertionError("method handle caller: " + handled);
+            }
         }
     }
 
@@ -227,6 +251,14 @@ public class TestCallerClass {
                 throw expected;
             }
         }
+    }
+
+    public static Class<?> reflectCaller(Method method) throws Exception {
+        return (Class<?>) method.invoke(null);
+    }
+
+    public static Class<?> handleCaller(MethodHandle handle) throws Throwable {
+        return (Class<?>) handle.invokeExact();
     }
 
     public static Class<?> sharedCaller(boolean second) {
