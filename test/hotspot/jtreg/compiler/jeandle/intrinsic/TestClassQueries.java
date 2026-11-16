@@ -248,6 +248,11 @@ public class TestClassQueries {
                         "%class\\.cast\\.is_primitive = icmp eq ptr"));
         checkMethodIR(dumpPath, enabled, "queryIsAssignableFrom", "java_lang_Class",
                 "isAssignableFrom", new Class<?>[] {Class.class, Class.class}, List.of(
+                        // The mirror-identity fast path must precede any Klass
+                        // materialization; the remaining checks live on its
+                        // fall-through path.
+                        "%class\\.assignable\\.same_mirror = icmp eq",
+                        "call hotspotcc ptr @jeandle\\.load_mirror_klass",
                         "%class\\.assignable\\.any_primitive = or i1",
                         "ret i32"));
     }
@@ -531,6 +536,7 @@ public class TestClassQueries {
             expectCCE(() -> queryCast(int.class, Integer.valueOf(1)), "primitive cast");
             Asserts.assertTrue(queryIsAssignableFrom(Object.class, String.class));
             Asserts.assertTrue(queryIsAssignableFrom(int.class, int.class));
+            Asserts.assertTrue(queryIsAssignableFrom(String.class, String.class));
             Asserts.assertFalse(queryIsAssignableFrom(int.class, long.class));
             Asserts.assertFalse(queryIsAssignableFrom(String.class, Object.class));
             expectNPE(() -> queryIsAssignableFrom(null, int.class),

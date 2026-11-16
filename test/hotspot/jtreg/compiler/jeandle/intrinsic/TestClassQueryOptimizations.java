@@ -37,7 +37,7 @@ import jdk.test.lib.process.ProcessTools;
 public class TestClassQueryOptimizations {
     private static final List<String> TARGETS = List.of("constantInverse", "constantAssignable",
             "nonPrimitive", "nonInterface", "commonSuperclass", "differentSuperclass",
-            "commonNullSuperclass", "loopProperty", "mixedLoopProperty");
+            "commonNullSuperclass", "loopProperty", "mixedLoopProperty", "getClassCompare");
 
     public static void main(String[] args) throws Exception {
         if (args.length != 0) {
@@ -87,6 +87,13 @@ public class TestClassQueryOptimizations {
             }
             check.checkPattern("load atomic ptr");
         }
+        // getClass(x) == ConstClass compares on the Klass directly instead of
+        // materializing the mirror. Downstream folding may narrow the compare
+        // to the compressed klass value.
+        FileCheck klassCompare = ir(dumps, "getClassCompare", Object.class);
+        klassCompare.checkPattern("icmp (eq|ne) (i32|ptr) ");
+        klassCompare.checkPatternAnywhere("class\\.mirror\\.klass_eq");
+        klassCompare.checkNotPattern("load ptr addrspace\\(1\\), ptr %");
         FileCheck different = ir(dumps, "differentSuperclass", boolean.class);
         different.checkNotPattern("ret ptr addrspace\\(1\\) null");
         different.checkPattern("(select|phi|br i1)");
@@ -114,6 +121,7 @@ public class TestClassQueryOptimizations {
             Object object = objects[i & 3];
             Class<?> type = types[i % types.length];
             require(constantInverse(object) == (object instanceof Number), "object-origin assignable");
+            require(getClassCompare(object) == (object instanceof A), "getClass comparison");
             require(constantAssignable(type) == (type == Integer.class || type == Number.class), "primary offset");
             require(!nonPrimitive(object) && !nonInterface(object), "object-origin properties");
             require(commonSuperclass((i & 1) == 0) == Base.class, "common superclass");
@@ -148,6 +156,10 @@ public class TestClassQueryOptimizations {
 
     public static boolean constantAssignable(Class<?> type) {
         return Number.class.isAssignableFrom(type);
+    }
+
+    public static boolean getClassCompare(Object object) {
+        return object.getClass() == A.class;
     }
 
     public static boolean nonPrimitive(Object object) {

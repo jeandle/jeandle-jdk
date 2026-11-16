@@ -2163,6 +2163,57 @@ bool JeandleIntrinsicLowering::lower_class_is_assignable_from() {
   llvm::Value* super_mirror = _interp->_jvm->raw_peek(1).value();
   // The call entry checks the receiver; the Class argument also needs a check.
   _interp->null_check(sub_mirror);
+
+  // Identity fast path: equal mirrors denote the same primitive or reference
+  // type, which is always assignable to itself. Testing the mirrors first
+  // keeps both Klass loads and the subtype ladder off this path, like Graal's
+  // isAssignableFrom snippet. Every remaining primitive case is between
+  // distinct mirrors and therefore answers false.
+  //
+  // Emitted only when both mirrors are dynamic values. A compile-time
+  // constant mirror (a load of an oop-handle global) already folds its
+  // primitive test through constant propagation, and the subtype ladder's
+  // self-compare covers the identity case, so an extra compare-and-branch
+  // in front would only add cost to the far more common miss path.
+  auto is_constant_mirror = [](llvm::Value* mirror) {
+    auto* load = llvm::dyn_cast<llvm::LoadInst>(mirror);
+    return load != nullptr &&
+           llvm::isa_and_nonnull<llvm::GlobalVariable>(
+               load->getPointerOperand()->stripPointerCasts());
+  };
+  // A getClass-origin operand keeps the plain shape: the mirror it would
+  // materialize for the comparison is exactly what the load_mirror_klass
+  // round-trip rewrite removes on the Klass path.
+  auto is_get_class_origin = [](llvm::Value* mirror) {
+    auto* call = llvm::dyn_cast<llvm::CallInst>(mirror);
+    return call != nullptr && call->getCalledFunction() != nullptr &&
+           call->getCalledFunction()->getName() == "jeandle.get_class";
+  };
+  const bool emit_identity_fast_path =
+      !is_constant_mirror(super_mirror) && !is_constant_mirror(sub_mirror) &&
+      !is_get_class_origin(super_mirror) && !is_get_class_origin(sub_mirror);
+
+  // The mirror comparison serves two roles: the identity fast-path branch,
+  // and the answer for identical primitive mirrors ({P,P} same mirror is the
+  // only primitive case that returns true). The gated shape keeps it as a
+  // value feeding the merge from the primitive path, as the original lowering.
+  llvm::Value* same_mirror = builder.CreateICmpEQ(
+      super_mirror, sub_mirror, "class.assignable.same_mirror");
+
+  llvm::BasicBlock* identity = builder.GetInsertBlock();
+  llvm::BasicBlock* primitive =
+      llvm::BasicBlock::Create(ctx, "class_assignable_primitive", _interp->_llvm_func);
+  llvm::BasicBlock* reference =
+      llvm::BasicBlock::Create(ctx, "class_assignable_reference", _interp->_llvm_func);
+  llvm::BasicBlock* merge =
+      llvm::BasicBlock::Create(ctx, "class_assignable_merge", _interp->_llvm_func);
+  if (emit_identity_fast_path) {
+    builder.CreateCondBr(same_mirror, merge, primitive);
+  } else {
+    builder.CreateBr(primitive);
+  }
+
+  builder.SetInsertPoint(primitive);
   llvm::PointerType* klass_ty =
       llvm::PointerType::get(ctx, llvm::jeandle::AddrSpace::CHeapAddrSpace);
   llvm::Constant* null_klass = llvm::ConstantPointerNull::get(klass_ty);
@@ -2178,31 +2229,35 @@ bool JeandleIntrinsicLowering::lower_class_is_assignable_from() {
       "class.assignable.sub_primitive");
   llvm::Value* any_primitive = builder.CreateOr(
       super_primitive, sub_primitive, "class.assignable.any_primitive");
-  llvm::Value* same_mirror = builder.CreateICmpEQ(
-      super_mirror, sub_mirror, "class.assignable.same_primitive");
-
-  llvm::BasicBlock* primitive = builder.GetInsertBlock();
-  llvm::BasicBlock* reference =
-      llvm::BasicBlock::Create(ctx, "class_assignable_reference", _interp->_llvm_func);
-  llvm::BasicBlock* merge =
-      llvm::BasicBlock::Create(ctx, "class_assignable_merge", _interp->_llvm_func);
+  // Built here so the merge phi's incoming value is defined before this
+  // block's terminator, as the phi dominance rule requires.
+  llvm::Value* same_mirror_result =
+      builder.CreateZExt(same_mirror, builder.getInt32Ty());
   builder.CreateCondBr(any_primitive, merge, reference);
 
   builder.SetInsertPoint(reference);
   llvm::Value* subtype = _interp->call_java_op(
       "jeandle.check_klass_subtype", {sub_klass, super_klass});
+  llvm::Value* subtype_result =
+      builder.CreateZExt(subtype, builder.getInt32Ty());
   builder.CreateBr(merge);
   llvm::BasicBlock* reference_end = builder.GetInsertBlock();
 
   builder.SetInsertPoint(merge);
   _interp->_block->set_tail_llvm_block(merge);
-  llvm::PHINode* result = builder.CreatePHI(builder.getInt1Ty(), 2,
+  llvm::PHINode* result = builder.CreatePHI(builder.getInt32Ty(),
+                                             emit_identity_fast_path ? 3 : 2,
                                              "class.assignable.result");
-  result->addIncoming(same_mirror, primitive);
-  result->addIncoming(subtype, reference_end);
+  if (emit_identity_fast_path) {
+    result->addIncoming(builder.getInt32(1), identity);
+    result->addIncoming(builder.getInt32(0), primitive);
+  } else {
+    result->addIncoming(same_mirror_result, primitive);
+  }
+  result->addIncoming(subtype_result, reference_end);
   _interp->_jvm->apop();
   _interp->_jvm->apop();
-  _interp->_jvm->ipush(builder.CreateZExt(result, builder.getInt32Ty()));
+  _interp->_jvm->ipush(result);
   return true;
 }
 
