@@ -224,6 +224,18 @@ public class JeandleNumericConsumers {
         return result;
     }
 
+    // Non-trivial constants fold through the EvaluateLibm VM callback to the
+    // runtime entry's own result; C2 keeps runtime calls for these.
+    @Benchmark
+    @OperationsPerInvocation(SIZE)
+    public double constantLibmEval() {
+        double result = 0;
+        for (int i = 0; i < SIZE; i++) {
+            result += Math.sin(0.7) + Math.log10(3.3) + Math.pow(2.5, 3.25);
+        }
+        return result;
+    }
+
     private static double halfCandidate(double x) {
         return x > 0.0 ? Math.sqrt(x) : x == 0.0 ? 0.0 : Math.pow(x, 0.5);
     }

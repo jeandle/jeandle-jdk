@@ -40,8 +40,8 @@ public class TestCopySignStore {
         OutputAnalyzer output = ProcessTools.executeCommand(
                 ProcessTools.createLimitedTestJavaProcessBuilder(
                         "-Xcomp", "-Xbatch", "-XX:-TieredCompilation", "-XX:+UseJeandleCompiler",
-                        "-XX:+UseCopySignIntrinsic", "-Xlog:jeandle=debug",
-                        "-XX:+UnlockDiagnosticVMOptions", "-XX:+JeandleDumpIR",
+                        "-XX:+UnlockDiagnosticVMOptions", "-XX:+UseCopySignIntrinsic",
+                        "-Xlog:jeandle=debug", "-XX:+JeandleDumpIR",
                         "-XX:JeandleDumpDirectory=" + dump,
                         "-XX:CompileCommand=compileonly," + TestWrapper.class.getName() + "::*Store",
                         "-XX:CompileCommand=compileonly," + TestWrapper.class.getName() + "::*Reduce",

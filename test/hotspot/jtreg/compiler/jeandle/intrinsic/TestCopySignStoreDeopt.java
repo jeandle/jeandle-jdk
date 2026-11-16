@@ -58,7 +58,7 @@ public class TestCopySignStoreDeopt {
             OutputAnalyzer output = ProcessTools.executeCommand(
                     ProcessTools.createLimitedTestJavaProcessBuilder(
                             "-Xcomp", "-Xbatch", "-XX:-TieredCompilation", "-XX:+UseJeandleCompiler",
-                            "-XX:+UseCopySignIntrinsic", "-XX:+UnlockDiagnosticVMOptions",
+                            "-XX:+UnlockDiagnosticVMOptions", "-XX:+UseCopySignIntrinsic",
                             "-XX:+LogCompilation", "-XX:LogFile=" + log,
                             "-XX:+JeandleDumpIR", "-XX:JeandleDumpDirectory=" + dump,
                             "-XX:CompileCommand=compileonly," + OWNER + "::*Store",
