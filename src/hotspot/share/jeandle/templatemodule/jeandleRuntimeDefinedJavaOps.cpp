@@ -1163,6 +1163,7 @@ void RuntimeDefinedJavaOps::define_global_variables(llvm::Module& template_modul
   // test them through these globals, and ConstantFieldFolding reads them back
   // via VMConstants::fromModule. Defining them from the real macros keeps both
   // sides synchronized with HotSpot without manual maintenance.
+  define_global("AccessFlags.jvm_acc_written_flags", int32_type, static_cast<uint64_t>(JVM_ACC_WRITTEN_FLAGS));
   define_global("AccessFlags.jvm_acc_public",                   int32_type, static_cast<uint64_t>(JVM_ACC_PUBLIC));
   define_global("AccessFlags.jvm_acc_final",                    int32_type, static_cast<uint64_t>(JVM_ACC_FINAL));
   define_global("AccessFlags.jvm_acc_abstract",                 int32_type, static_cast<uint64_t>(JVM_ACC_ABSTRACT));
@@ -1205,6 +1206,7 @@ void RuntimeDefinedJavaOps::define_global_variables(llvm::Module& template_modul
   define_global("arrayOopDesc.element_size.float",                  int32_type, static_cast<uint64_t>(type2aelembytes(T_FLOAT)));
   define_global("arrayOopDesc.element_size.double",                 int32_type, static_cast<uint64_t>(type2aelembytes(T_DOUBLE)));
   define_global("arrayOopDesc.element_size.object",                 int32_type, static_cast<uint64_t>(type2aelembytes(T_OBJECT)));
+  define_global("Klass.super_offset", int32_type, static_cast<uint64_t>(in_bytes(Klass::super_offset())));
   define_global("Klass.access_flags_offset",                        int32_type, static_cast<uint64_t>(Klass::access_flags_offset()));
   define_global("Klass.java_mirror_offset",                         int32_type, static_cast<uint64_t>(in_bytes(Klass::java_mirror_offset())));
   define_global("Klass.layout_helper_offset",                       int32_type, static_cast<uint64_t>(in_bytes(Klass::layout_helper_offset())));

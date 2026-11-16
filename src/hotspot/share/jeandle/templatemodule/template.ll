@@ -76,9 +76,11 @@
 @AccessFlags.jvm_acc_abstract = external global i32
 @AccessFlags.jvm_acc_interface = external global i32
 @AccessFlags.jvm_acc_is_hidden_class = external global i32
+@AccessFlags.jvm_acc_written_flags = external global i32
 
 ; Byte offsets for Klass structure fields.
 @Klass.access_flags_offset = external global i32
+@Klass.super_offset = external global i32
 @Klass.java_mirror_offset = external global i32
 @Klass.layout_helper_offset = external global i32
 @Klass.modifier_flags_offset = external global i32
@@ -251,139 +253,39 @@ entry:
   ret ptr addrspace(0) %klass
 }
 
-; Keep Class.isArray opaque until ConstantFieldFolding has propagated mirror
-; values across control-flow merges. Unfolded calls use the usual Klass layout
-; helper check after phase-1 lowering.
-define hotspotcc i32 @jeandle.class_is_array(ptr addrspace(1) nocapture readonly %mirror) noinline "lower-phase"="1" #0 {
+; Semantic Klass queries remain visible to constant folding until phase 1.
+define hotspotcc i32 @jeandle.klass_modifiers(ptr nocapture nonnull readonly %klass) noinline memory(read) "lower-phase"="1" #0 {
 entry:
-  %klass_offset = load i32, ptr @java_lang_Class.klass_offset
-  %klass_addr = getelementptr inbounds i8, ptr addrspace(1) %mirror, i32 %klass_offset
-  %klass = load atomic ptr addrspace(0), ptr addrspace(1) %klass_addr unordered, align 8
-  %is_primitive = icmp eq ptr addrspace(0) %klass, null
-  br i1 %is_primitive, label %done, label %read_layout
-
-read_layout:
-  %layout_helper_offset = load i32, ptr @Klass.layout_helper_offset
-  %layout_helper_addr = getelementptr inbounds i8, ptr addrspace(0) %klass, i32 %layout_helper_offset
-  %layout_helper = load atomic i32, ptr addrspace(0) %layout_helper_addr unordered, align 4
-  %is_array = icmp slt i32 %layout_helper, 0
-  %array_result = zext i1 %is_array to i32
-  br label %done
-
-done:
-  %result = phi i32 [ 0, %entry ], [ %array_result, %read_layout ]
-  ret i32 %result
+  %offset = load i32, ptr @Klass.modifier_flags_offset
+  %address = getelementptr inbounds i8, ptr %klass, i32 %offset
+  %flags = load atomic i32, ptr %address unordered, align 4
+  ret i32 %flags
 }
 
-; Keep Class.isInterface opaque across mirror phi nodes. The callback can fold
-; the query when all incoming mirrors agree; otherwise lower to the access
-; flags test used by the original intrinsic.
-define hotspotcc i32 @jeandle.class_is_interface(ptr addrspace(1) nocapture readonly %mirror) noinline "lower-phase"="1" #0 {
+define hotspotcc i32 @jeandle.klass_access_flags(ptr nocapture nonnull readonly %klass, i32 %mask) noinline memory(read) "lower-phase"="1" #0 {
 entry:
-  %klass_offset = load i32, ptr @java_lang_Class.klass_offset
-  %klass_addr = getelementptr inbounds i8, ptr addrspace(1) %mirror, i32 %klass_offset
-  %klass = load atomic ptr addrspace(0), ptr addrspace(1) %klass_addr unordered, align 8
-  %is_primitive = icmp eq ptr addrspace(0) %klass, null
-  br i1 %is_primitive, label %done, label %read_flags
-
-read_flags:
-  %access_flags_offset = load i32, ptr @Klass.access_flags_offset
-  %access_flags_addr = getelementptr inbounds i8, ptr addrspace(0) %klass, i32 %access_flags_offset
-  %access_flags = load atomic i32, ptr addrspace(0) %access_flags_addr unordered, align 4
-  %interface_bit = load i32, ptr @AccessFlags.jvm_acc_interface
-  %interface_bits = and i32 %access_flags, %interface_bit
-  %is_interface = icmp ne i32 %interface_bits, 0
-  %interface_result = zext i1 %is_interface to i32
-  br label %done
-
-done:
-  %result = phi i32 [ 0, %entry ], [ %interface_result, %read_flags ]
-  ret i32 %result
+  %offset = load i32, ptr @Klass.access_flags_offset
+  %address = getelementptr inbounds i8, ptr %klass, i32 %offset
+  %flags = load atomic i32, ptr %address unordered, align 4
+  %masked = and i32 %flags, %mask
+  ret i32 %masked
 }
 
-; Keep primitive-mirror identity visible to ConstantFieldFolding across phi
-; nodes. The ordinary lowering tests the VM-injected Klass field for null.
-define hotspotcc i32 @jeandle.class_is_primitive(ptr addrspace(1) nocapture readonly %mirror) noinline "lower-phase"="1" #0 {
+define hotspotcc ptr @jeandle.klass_super(ptr nocapture nonnull readonly %klass) noinline memory(read) "lower-phase"="1" #0 {
 entry:
-  %klass_offset = load i32, ptr @java_lang_Class.klass_offset
-  %klass_addr = getelementptr inbounds i8, ptr addrspace(1) %mirror, i32 %klass_offset
-  %klass = load atomic ptr addrspace(0), ptr addrspace(1) %klass_addr unordered, align 8
-  %is_primitive = icmp eq ptr addrspace(0) %klass, null
-  %result = zext i1 %is_primitive to i32
-  ret i32 %result
+  %offset = load i32, ptr @Klass.super_offset
+  %address = getelementptr inbounds i8, ptr %klass, i32 %offset
+  %super = load atomic ptr, ptr %address unordered, align 8
+  ret ptr %super
 }
 
-define hotspotcc i32 @jeandle.class_is_hidden(ptr addrspace(1) nocapture readonly %mirror) noinline "lower-phase"="1" #0 {
+define hotspotcc nonnull ptr addrspace(1) @jeandle.klass_mirror(ptr nocapture nonnull readonly %klass) noinline memory(read) "lower-phase"="1" #0 {
 entry:
-  %klass_offset = load i32, ptr @java_lang_Class.klass_offset
-  %klass_addr = getelementptr inbounds i8, ptr addrspace(1) %mirror, i32 %klass_offset
-  %klass = load atomic ptr addrspace(0), ptr addrspace(1) %klass_addr unordered, align 8
-  %is_primitive = icmp eq ptr addrspace(0) %klass, null
-  br i1 %is_primitive, label %done, label %read_flags
-
-read_flags:
-  %access_flags_offset = load i32, ptr @Klass.access_flags_offset
-  %access_flags_addr = getelementptr inbounds i8, ptr addrspace(0) %klass, i32 %access_flags_offset
-  %access_flags = load atomic i32, ptr addrspace(0) %access_flags_addr unordered, align 4
-  %hidden_bit = load i32, ptr @AccessFlags.jvm_acc_is_hidden_class
-  %hidden_bits = and i32 %access_flags, %hidden_bit
-  %is_hidden = icmp ne i32 %hidden_bits, 0
-  %hidden_result = zext i1 %is_hidden to i32
-  br label %done
-
-done:
-  %result = phi i32 [ 0, %entry ], [ %hidden_result, %read_flags ]
-  ret i32 %result
-}
-
-define hotspotcc i32 @jeandle.class_get_modifiers(ptr addrspace(1) nocapture readonly %mirror) noinline "lower-phase"="1" #0 {
-entry:
-  %klass_offset = load i32, ptr @java_lang_Class.klass_offset
-  %klass_addr = getelementptr inbounds i8, ptr addrspace(1) %mirror, i32 %klass_offset
-  %klass = load atomic ptr addrspace(0), ptr addrspace(1) %klass_addr unordered, align 8
-  %is_primitive = icmp eq ptr addrspace(0) %klass, null
-  ; Primitive mirrors report JVM_ACC_PUBLIC | JVM_ACC_FINAL | JVM_ACC_ABSTRACT.
-  %acc_public = load i32, ptr @AccessFlags.jvm_acc_public
-  %acc_final = load i32, ptr @AccessFlags.jvm_acc_final
-  %acc_abstract = load i32, ptr @AccessFlags.jvm_acc_abstract
-  %primitive_default = or i32 %acc_public, %acc_final
-  %primitive_modifiers = or i32 %primitive_default, %acc_abstract
-  br i1 %is_primitive, label %done, label %read_flags
-
-read_flags:
-  %modifier_flags_offset = load i32, ptr @Klass.modifier_flags_offset
-  %modifier_flags_addr = getelementptr inbounds i8, ptr addrspace(0) %klass, i32 %modifier_flags_offset
-  %modifier_flags = load atomic i32, ptr addrspace(0) %modifier_flags_addr unordered, align 4
-  br label %done
-
-done:
-  %result = phi i32 [ %primitive_modifiers, %entry ], [ %modifier_flags, %read_flags ]
-  ret i32 %result
-}
-
-define hotspotcc i32 @jeandle.class_get_access_flags(ptr addrspace(1) nocapture readonly %mirror) noinline "lower-phase"="1" #0 {
-entry:
-  %klass_offset = load i32, ptr @java_lang_Class.klass_offset
-  %klass_addr = getelementptr inbounds i8, ptr addrspace(1) %mirror, i32 %klass_offset
-  %klass = load atomic ptr addrspace(0), ptr addrspace(1) %klass_addr unordered, align 8
-  %is_primitive = icmp eq ptr addrspace(0) %klass, null
-  ; Primitive mirrors report JVM_ACC_PUBLIC | JVM_ACC_FINAL | JVM_ACC_ABSTRACT.
-  %acc_public = load i32, ptr @AccessFlags.jvm_acc_public
-  %acc_final = load i32, ptr @AccessFlags.jvm_acc_final
-  %acc_abstract = load i32, ptr @AccessFlags.jvm_acc_abstract
-  %primitive_default = or i32 %acc_public, %acc_final
-  %primitive_modifiers = or i32 %primitive_default, %acc_abstract
-  br i1 %is_primitive, label %done, label %read_flags
-
-read_flags:
-  %access_flags_offset = load i32, ptr @Klass.access_flags_offset
-  %access_flags_addr = getelementptr inbounds i8, ptr addrspace(0) %klass, i32 %access_flags_offset
-  %access_flags = load atomic i32, ptr addrspace(0) %access_flags_addr unordered, align 4
-  br label %done
-
-done:
-  %result = phi i32 [ %primitive_modifiers, %entry ], [ %access_flags, %read_flags ]
-  ret i32 %result
+  %offset = load i32, ptr @Klass.java_mirror_offset
+  %address = getelementptr inbounds i8, ptr %klass, i32 %offset
+  %handle = load atomic ptr, ptr %address unordered, align 8
+  %mirror = load atomic ptr addrspace(1), ptr %handle unordered, align 8
+  ret ptr addrspace(1) %mirror
 }
 
 ; Load Klass::layout_helper from a Klass pointer. Keeping this as a phase-1
@@ -395,6 +297,94 @@ entry:
   %layout_helper_addr = getelementptr inbounds i8, ptr addrspace(0) %klass, i32 %layout_helper_offset
   %layout_helper = load atomic i32, ptr addrspace(0) %layout_helper_addr unordered, align 4
   ret i32 %layout_helper
+}
+
+; Keep complete Class properties visible until mirror merges are simplified.
+define hotspotcc i32 @jeandle.class_is_array(ptr addrspace(1) nocapture nonnull readonly %mirror) noinline "lower-phase"="1" #0 {
+entry:
+  %klass = call hotspotcc ptr @jeandle.load_mirror_klass(ptr addrspace(1) %mirror)
+  %primitive = icmp eq ptr %klass, null
+  br i1 %primitive, label %primitive_result, label %reference
+primitive_result:
+  ret i32 0
+reference:
+  %layout = call hotspotcc i32 @jeandle.layout_helper(ptr %klass)
+  %test = icmp slt i32 %layout, 0
+  %result = zext i1 %test to i32
+  ret i32 %result
+}
+
+define hotspotcc i32 @jeandle.class_is_interface(ptr addrspace(1) nocapture nonnull readonly %mirror) noinline "lower-phase"="1" #0 {
+entry:
+  %klass = call hotspotcc ptr @jeandle.load_mirror_klass(ptr addrspace(1) %mirror)
+  %primitive = icmp eq ptr %klass, null
+  br i1 %primitive, label %primitive_result, label %reference
+primitive_result:
+  ret i32 0
+reference:
+  %mask = load i32, ptr @AccessFlags.jvm_acc_interface
+  %flags = call hotspotcc i32 @jeandle.klass_access_flags(ptr %klass, i32 %mask)
+  %test = icmp ne i32 %flags, 0
+  %result = zext i1 %test to i32
+  ret i32 %result
+}
+
+define hotspotcc i32 @jeandle.class_is_primitive(ptr addrspace(1) nocapture nonnull readonly %mirror) noinline "lower-phase"="1" #0 {
+entry:
+  %klass = call hotspotcc ptr @jeandle.load_mirror_klass(ptr addrspace(1) %mirror)
+  %primitive = icmp eq ptr %klass, null
+  %result = zext i1 %primitive to i32
+  ret i32 %result
+}
+
+define hotspotcc i32 @jeandle.class_is_hidden(ptr addrspace(1) nocapture nonnull readonly %mirror) noinline "lower-phase"="1" #0 {
+entry:
+  %klass = call hotspotcc ptr @jeandle.load_mirror_klass(ptr addrspace(1) %mirror)
+  %primitive = icmp eq ptr %klass, null
+  br i1 %primitive, label %primitive_result, label %reference
+primitive_result:
+  ret i32 0
+reference:
+  %mask = load i32, ptr @AccessFlags.jvm_acc_is_hidden_class
+  %flags = call hotspotcc i32 @jeandle.klass_access_flags(ptr %klass, i32 %mask)
+  %test = icmp ne i32 %flags, 0
+  %result = zext i1 %test to i32
+  ret i32 %result
+}
+
+define hotspotcc i32 @jeandle.class_get_modifiers(ptr addrspace(1) nocapture nonnull readonly %mirror) noinline "lower-phase"="1" #0 {
+entry:
+  %klass = call hotspotcc ptr @jeandle.load_mirror_klass(ptr addrspace(1) %mirror)
+  %primitive = icmp eq ptr %klass, null
+  br i1 %primitive, label %primitive_result, label %reference
+primitive_result:
+  %public = load i32, ptr @AccessFlags.jvm_acc_public
+  %final = load i32, ptr @AccessFlags.jvm_acc_final
+  %abstract = load i32, ptr @AccessFlags.jvm_acc_abstract
+  %public_final = or i32 %public, %final
+  %primitive_flags = or i32 %public_final, %abstract
+  ret i32 %primitive_flags
+reference:
+  %result = call hotspotcc i32 @jeandle.klass_modifiers(ptr %klass)
+  ret i32 %result
+}
+
+define hotspotcc i32 @jeandle.class_get_access_flags(ptr addrspace(1) nocapture nonnull readonly %mirror) noinline "lower-phase"="1" #0 {
+entry:
+  %klass = call hotspotcc ptr @jeandle.load_mirror_klass(ptr addrspace(1) %mirror)
+  %primitive = icmp eq ptr %klass, null
+  br i1 %primitive, label %primitive_result, label %reference
+primitive_result:
+  %public = load i32, ptr @AccessFlags.jvm_acc_public
+  %final = load i32, ptr @AccessFlags.jvm_acc_final
+  %abstract = load i32, ptr @AccessFlags.jvm_acc_abstract
+  %public_final = or i32 %public, %final
+  %primitive_flags = or i32 %public_final, %abstract
+  ret i32 %primitive_flags
+reference:
+  %mask = load i32, ptr @AccessFlags.jvm_acc_written_flags
+  %flags = call hotspotcc i32 @jeandle.klass_access_flags(ptr %klass, i32 %mask)
+  ret i32 %flags
 }
 
 ; Query a Klass' current initialization state. Keeping this opaque through

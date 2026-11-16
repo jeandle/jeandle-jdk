@@ -92,14 +92,6 @@ ciObject* JeandleCompiledCode::oop_at(int oop_id) {
   return _oop_handle_info[oop_id].oop;
 }
 
-ciObject* JeandleCompiledCode::oop_for_handle_name(llvm::StringRef name) {
-  for (const OopHandleInfo& info : _oop_handle_info) {
-    if (name == info.name) {
-      return info.oop;
-    }
-  }
-  return nullptr;
-}
 
 std::string JeandleCompiledCode::oop_handle_name(int oop_id) {
   assert(oop_id >= 0 && (size_t)oop_id < _oop_handle_info.size(), "unknown oop id");
@@ -1110,7 +1102,6 @@ JeandleStackMap* JeandleCompiledCode::parse_stackmap(StackMapParser& stackmaps,
       oop_map->set_oop(reg);
     }
   };
-
 
   while (location != record->location_end()) {
     // Each GC pair is encoded as: base location, derived location.

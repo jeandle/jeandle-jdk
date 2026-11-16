@@ -82,6 +82,18 @@ public class TestFileCheck {
             fileCheck.checkPatternAnywhere("define hotspotcc i32");
             fileCheck.checkNextPattern("bci_[0-9]+:");
         }
+        {
+            FileCheck fileCheck = new FileCheck(currentDir,
+                                                TestFileCheck.class.getDeclaredMethod("add", int.class, int.class),
+                                                false);
+            fileCheck.checkPatternAnywhere("define hotspotcc ptr @jeandle\\.load_mirror_klass");
+            fileCheck.selectFunction("define hotspotcc i32 .*compiler_jeandle_fileCheck_TestFileCheck_add.*");
+            fileCheck.checkPattern("define hotspotcc i32");
+            fileCheck.checkNext("entry:");
+            fileCheck.checkPattern("ret i32");
+            fileCheck.checkNext("}");
+            fileCheck.checkNotPattern("define hotspotcc ptr @jeandle\\.load_mirror_klass");
+        }
     }
 
     static int add(int a, int b) {

@@ -195,7 +195,7 @@ public class TestClassQueries {
                                 + "%class\\.super\\.klass_from_mirror, null",
                         "%class\\.super\\.is_interface = icmp ne i32",
                         "%class\\.super\\.is_array = icmp slt i32",
-                        "%class\\.super\\.klass = load ptr"));
+                        "call hotspotcc ptr @jeandle\\.klass_super"));
         checkMethodIR(dumpPath, enabled, "queryGetClassAccessFlags",
                 "jdk_internal_reflect_Reflection", "getClassAccessFlags",
                 new Class<?>[] {Class.class}, List.of(
@@ -246,9 +246,11 @@ public class TestClassQueries {
         }
         checkMethodIR(dumpPath, enabled, "queryCast", "java_lang_Class", "cast",
                 new Class<?>[] {Class.class, Object.class}, List.of(
-                        "%class\\.cast\\.is_primitive = icmp eq ptr",
                         "%class\\.cast\\.is_null = icmp eq ptr addrspace\\(1\\)",
-                        "ret ptr addrspace\\(1\\)"));
+                        "br i1 %class\\.cast\\.is_null, label %class_cast_pass, label %class_cast_non_null",
+                        "class_cast_non_null:",
+                        "call hotspotcc ptr @jeandle\\.load_mirror_klass",
+                        "%class\\.cast\\.is_primitive = icmp eq ptr"));
         checkMethodIR(dumpPath, enabled, "queryIsAssignableFrom", "java_lang_Class",
                 "isAssignableFrom", new Class<?>[] {Class.class, Class.class}, List.of(
                         "%class\\.assignable\\.any_primitive = or i1",
@@ -279,6 +281,11 @@ public class TestClassQueries {
     private static void checkConstantSuperclassIR(String dumpPath, String methodName,
                                                    boolean returnsNull) throws Exception {
         Method method = TestWrapper.class.getMethod(methodName);
+        FileCheck parsed = new FileCheck(dumpPath, method, false, 0);
+        parsed.selectFunction("define hotspotcc .*" + methodName);
+        parsed.checkPatternAnywhere("call hotspotcc ptr @jeandle\\.load_mirror_klass");
+        parsed.checkPatternAnywhere("call hotspotcc ptr @jeandle\\.klass_super");
+        parsed.checkPatternAnywhere("call hotspotcc ptr addrspace\\(1\\) @jeandle\\.klass_mirror");
         FileCheck optimized = new FileCheck(dumpPath, method, true);
         optimized.checkPattern(returnsNull
                 ? "ret ptr addrspace\\(1\\) null"
@@ -328,6 +335,7 @@ public class TestClassQueries {
         FileCheck checker = enabled && isDirectClassQuery(wrapperName)
                 ? new FileCheck(dumpPath, wrapper, false, 0)
                 : new FileCheck(dumpPath, wrapper, false);
+        checker.selectFunction("define hotspotcc .*" + wrapperName);
         checker.checkPattern("define hotspotcc .*" + wrapperName);
 
         String nativeCall = "(call|invoke) hotspotcc [^\\r\\n]*" + targetOwner + "_"
@@ -351,7 +359,7 @@ public class TestClassQueries {
                     // Loading Klass* from a nonnull mirror is a GC-leaf JavaOp. It
                     // must not inherit the Class intrinsic's deopt state or Java
                     // return-type metadata.
-                    checker.checkPattern("call hotspotcc ptr @jeandle\\.load_mirror_klass"
+                    checker.checkPatternAnywhere("call hotspotcc ptr @jeandle\\.load_mirror_klass"
                             + "\\(ptr addrspace\\(1\\) %[-A-Za-z$._0-9]+\\)");
                     checker.checkNotPattern("call hotspotcc [^\\r\\n]*"
                             + "@jeandle\\.load_mirror_klass[^\\r\\n]*"
@@ -369,6 +377,7 @@ public class TestClassQueries {
                         + "@jeandle\\.load_mirror_klass");
             }
             if (wrapperName.equals("queryCast")) {
+                checker.checkPatternAnywhere("ret ptr addrspace\\(1\\)");
                 checker.checkNotPattern("call hotspotcc [^\\r\\n]*\\\"java-klass\\\""
                         + "[^\\r\\n]*@jeandle\\.checkcast");
             }
@@ -617,9 +626,9 @@ public class TestClassQueries {
             Asserts.assertEquals(oracleGetSuperclass(klass), queryGetSuperclass(klass),
                     klass + " getSuperclass oracle");
 
-            // Reflection only guarantees the low 13 class-file flag bits.
-            int expectedAccessFlags = oracleGetClassAccessFlags(klass) & 0x1fff;
-            int actualAccessFlags = queryGetClassAccessFlags(klass) & 0x1fff;
+            // Compare the complete result so VM-private flag bits cannot leak.
+            int expectedAccessFlags = oracleGetClassAccessFlags(klass);
+            int actualAccessFlags = queryGetClassAccessFlags(klass);
             Asserts.assertEquals(expectedAccessFlags, actualAccessFlags,
                     klass + " getClassAccessFlags");
             if (primitive) {

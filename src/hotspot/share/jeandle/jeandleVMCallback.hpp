@@ -77,8 +77,9 @@ class JeandleVMCallback : public AllStatic {
   static int         get_klass_layout_helper(uintptr_t klass_ptr);
   static int         get_super_check_offset(uintptr_t klass_ptr);
   static int         get_klass_modifier_flags(uintptr_t klass_ptr);
-  static int         get_klass_access_flags(uintptr_t klass_ptr);
-  static bool        is_hidden_klass(uintptr_t klass_ptr);
+  static int64_t     get_klass_access_flags(uintptr_t klass_ptr, int mask);
+  static uintptr_t   get_super_klass(uintptr_t klass_ptr);
+  static int         get_caller_class(int scope_id);
   static bool        is_klass_initialized(uintptr_t klass_ptr);
 
   // Returns the oop id of the java.lang.Class mirror for a VM Klass pointer,
