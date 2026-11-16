@@ -87,14 +87,19 @@ public class TestClonePublication {
                     + " \\([0-9]+ bytes\\)");
             FileCheck raw = new FileCheck(dump.toString(), holder.getDeclaredMethod("copy"), false);
             raw.checkPattern("(?:call|invoke).*@jeandle\\.copy");
-            raw.checkPattern("call.*@jeandle\\.membar_storestore");
+            raw.checkPattern("\"jeandle.copy.kind\"=\"clone-instance\"");
+            raw.checkNotPattern("call.*@jeandle\\.membar_storestore");
             FileCheck optimized = new FileCheck(dump.toString(), holder.getDeclaredMethod("copy"), true);
-            if (holder == Scalar.class) {
-                optimized.checkPattern("store atomic i32 %clone\\.instance\\.load");
-            } else {
-                optimized.checkPattern("call void @StubRoutines_jlong_disjoint_arraycopy");
+            // Both the small and the twelve-field class fold their payload
+            // into per-field loads: the copy fold carries field state with
+            // no instance field-count bound (Graal parity), so a large
+            // class no longer keeps the bulk copy by size.
+            int fields = holder == Scalar.class ? 1 : 12;
+            for (int field = 0; field < fields; field++) {
+                optimized.checkPattern("store atomic i32 %pea\\.copy\\.elem");
             }
-            optimized.checkNextPattern(Platform.isAArch64()
+            // Publication ordering must cover the final payload write.
+            optimized.checkPattern(Platform.isAArch64()
                     ? "call void @llvm\\.aarch64\\.dmb\\(i32 10\\)"
                     : "fence release");
             optimized.checkPattern("ret ptr addrspace\\(1\\)");

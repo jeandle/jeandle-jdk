@@ -230,7 +230,7 @@ public final class PEATestUtils {
     );
     private static final Pattern STATS = Pattern.compile(
             "^;; PEA stats @(.*): NeverEscapes=(\\d+) PartiallyEscapes=(\\d+)"
-                    + " AlwaysEscapes=(\\d+)$"
+                    + " AlwaysEscapes=(\\d+)(?: CopyFolds=(\\d+))?$"
     );
     private static final Pattern SUMMARY = Pattern.compile(
             "^;; PEA-SUMMARY function (.*?) rounds=(\\S+) stop=(\\S+)$"
@@ -1191,6 +1191,7 @@ public final class PEATestUtils {
         private final int neverEscapes;
         private final int partiallyEscapes;
         private final int alwaysEscapes;
+        private final int copyFolds;
         private final List<PEAEffect> effects;
         private final List<PEALockReplay> lockReplays;
         private final Map<PEALockReplayGroup, List<PEALockReplay>> lockReplayGroups;
@@ -1201,6 +1202,7 @@ public final class PEATestUtils {
 
         private PEARound(int iteration, IRBody before, IRBody after,
                          int neverEscapes, int partiallyEscapes, int alwaysEscapes,
+                         int copyFolds,
                          List<PEAEffect> effects, List<PEALockReplay> lockReplays,
                          boolean hasStats, boolean transformIdle) {
             this.iteration = iteration;
@@ -1209,6 +1211,7 @@ public final class PEATestUtils {
             this.neverEscapes = neverEscapes;
             this.partiallyEscapes = partiallyEscapes;
             this.alwaysEscapes = alwaysEscapes;
+            this.copyFolds = copyFolds;
             this.effects = List.copyOf(effects);
             this.lockReplays = List.copyOf(lockReplays);
             LockReplayGrouping grouping = groupLockReplays(this.lockReplays, iteration);
@@ -1243,6 +1246,13 @@ public final class PEATestUtils {
         public int alwaysEscapes() {
             requireStats();
             return alwaysEscapes;
+        }
+
+        /** jeandle.copy pseudo calls folded this round, or -1 when the
+         *  statistics line predates the CopyFolds field. */
+        public int copyFolds() {
+            requireStats();
+            return copyFolds;
         }
 
         public boolean hasStats() {
@@ -1704,6 +1714,9 @@ public final class PEATestUtils {
                     current.never = Integer.parseInt(stats.group(2));
                     current.partial = Integer.parseInt(stats.group(3));
                     current.always = Integer.parseInt(stats.group(4));
+                    if (stats.group(5) != null) {
+                        current.copyFolds = Integer.parseInt(stats.group(5));
+                    }
                     continue;
                 }
 
@@ -1797,6 +1810,7 @@ public final class PEATestUtils {
         private int never;
         private int partial;
         private int always;
+        private int copyFolds = -1;
 
         private RoundBuilder(int iteration) {
             this.iteration = iteration;
@@ -1816,7 +1830,8 @@ public final class PEATestUtils {
             return new PEARound(iteration,
                     IRBody.fromModuleLines(beforeLines, method),
                     IRBody.fromModuleLines(afterLines, method),
-                    never, partial, always, effects, lockReplays, statsSeen, transformIdle);
+                    never, partial, always, copyFolds,
+                    effects, lockReplays, statsSeen, transformIdle);
         }
 
         private void validateEffects(MethodId method) {

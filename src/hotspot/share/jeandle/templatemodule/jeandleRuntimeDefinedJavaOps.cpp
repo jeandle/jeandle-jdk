@@ -21,7 +21,7 @@
 #include "jeandle/__llvmHeadersBegin__.hpp"
 #include "llvm/IR/BasicBlock.h"
 #include "llvm/IR/IRBuilder.h"
-#include "llvm/IR/InlineAsm.h"
+#include "llvm/IR/Jeandle/MemoryBarrier.h"
 #include "llvm/IR/Intrinsics.h"
 #if defined(RISCV64)
 #include "llvm/IR/IntrinsicsRISCV.h"
@@ -57,23 +57,11 @@
 #include "runtime/sharedRuntime.hpp"
 #include "runtime/vm_version.hpp"
 
-// All JavaOps are nounwind and gc-leaf-function by default. These attributes
-// are a paired Jeandle leaf contract: add them together, or remove them
-// together.
-//
-// The pairing matters for two reasons:
-//   1. Keep JavaOps nounwind whenever possible. Inlining an invoke rewrites
-//      calls inside the inlinee into invokes; if a JavaOp can unwind, every such
-//      invoke carries extra EH control flow that later lowering must remove
-//      explicitly.
-//   2. Any gc-leaf-function must also be nounwind. RS4GC skips gc-leaf calls, so
-//      an invoke to a gc-leaf function would keep its landingpad type unchanged
-//      while other landingpads are rewritten to token, producing mixed
-//      landingpad types in one module.
-//
-// JavaOps have no supported use case for splitting these attributes, so if a
-// JavaOp may trigger GC safepoints or throw asynchronous exceptions, it must
-// remove both attributes.
+// JavaOps default to nounwind and gc-leaf-function. A GC-capable operation
+// must remove gc-leaf-function, and an operation that can throw must also
+// remove nounwind. Nonthrowing polls retain nounwind while remaining visible
+// to statepoint rewriting. A gc-leaf-function must be nounwind: RS4GC skips
+// leaf calls, including the rewriting of their exceptional landingpads.
 //                  name, lower_phase, return_type, arg_types
 #define DEF_JAVA_OP(name, lower_phase, return_type, ...)                                        \
   void define_##name(llvm::Module& template_module) {                                           \
@@ -113,17 +101,6 @@ DEF_JAVA_OP(current_thread, 0, llvm::PointerType::get(context, llvm::jeandle::Ad
   llvm::Value* current_thread_ptr = ir_builder.CreateIntToPtr(current_thread_value,
                                                               llvm::PointerType::get(context, llvm::jeandle::AddrSpace::CHeapAddrSpace));
   ir_builder.CreateRet(current_thread_ptr);
-JAVA_OP_END
-
-DEF_JAVA_OP(membar_cpuorder, 1, llvm::Type::getVoidTy(context))
-  // C2's MemBarCPUOrder only prevents compiler movement; it has no hardware
-  // encoding on the supported platforms.
-  llvm::FunctionType* barrier_type =
-      llvm::FunctionType::get(ir_builder.getVoidTy(), false);
-  llvm::InlineAsm* barrier = llvm::InlineAsm::get(
-      barrier_type, "", "~{memory}", /*hasSideEffects=*/true);
-  ir_builder.CreateCall(barrier_type, barrier);
-  ir_builder.CreateRetVoid();
 JAVA_OP_END
 
 static void emit_allocation_prefetch_loop(llvm::IRBuilder<>& builder,
@@ -544,9 +521,8 @@ DEF_JAVA_OP(zero_half_heap_word, 1, llvm::Type::getVoidTy(context),
 JAVA_OP_END
 
 DEF_JAVA_OP(safepoint_poll, 1, llvm::Type::getVoidTy(context))
-  // safepoint_poll may trigger GC and throw asynchronous exceptions,
-  // so it must not be nounwind or gc-leaf-function.
-  func->removeFnAttr(llvm::Attribute::NoUnwind);
+  // Polls can collect and deoptimize; asynchronous exceptions are delivered
+  // after deoptimization rather than through a compiled exceptional exit.
   func->removeFnAttr("gc-leaf-function");
   llvm::BasicBlock* return_block = llvm::BasicBlock::Create(context, "return", func);
   llvm::BasicBlock* do_safepoint_block = llvm::BasicBlock::Create(context, "do_safepoint", func);
@@ -577,6 +553,7 @@ DEF_JAVA_OP(safepoint_poll, 1, llvm::Type::getVoidTy(context))
   llvm::CallInst* call_inst = ir_builder.CreateCall(JeandleRuntimeRoutine::safepoint_handler_callee(template_module), {current_thread},
                                                     {create_empty_deopt_bundle()});
   call_inst->setCallingConv(llvm::CallingConv::Hotspot_JIT);
+  call_inst->setDoesNotThrow();
   ir_builder.CreateBr(return_block);
 
   // ******** Return Block ********
@@ -766,8 +743,8 @@ DEF_JAVA_OP(reference_refers_to, 1, llvm::Type::getInt32Ty(context),
   // CPUOrder fence: equivalent to C2's MemBarCPUOrder. Prevents the compiler from
   // CSE'ing this referent load across safepoints (GC can change the referent at
   // any safepoint). Singlethread scope ensures no hardware fence instructions.
-  ir_builder.CreateFence(llvm::AtomicOrdering::SequentiallyConsistent,
-                         llvm::SyncScope::SingleThread);
+  llvm::jeandle::createMemoryBarrier(
+      ir_builder, llvm::jeandle::MemoryBarrierKind::CPUOrder);
   llvm::Value* is_equal = ir_builder.CreateICmpEQ(referent, compare_to);
   // JVM boolean on the operand stack is i32
   llvm::Value* result = ir_builder.CreateZExt(is_equal, ir_builder.getInt32Ty());
@@ -815,8 +792,8 @@ DEF_JAVA_OP(reference_get, 1,
   // referent at any safepoint. The singlethread scope ensures no hardware fence
   // instructions are emitted (x86/AArch64/RISC-V lower this to ISD::MEMBARRIER,
   // which becomes a no-op in assembly).
-  ir_builder.CreateFence(llvm::AtomicOrdering::SequentiallyConsistent,
-                         llvm::SyncScope::SingleThread);
+  llvm::jeandle::createMemoryBarrier(
+      ir_builder, llvm::jeandle::MemoryBarrierKind::CPUOrder);
   ir_builder.CreateRet(referent);
 JAVA_OP_END
 
@@ -1101,7 +1078,6 @@ bool RuntimeDefinedJavaOps::define_all(llvm::Module& template_module) {
 
   // Define all runtime defined JavaOps:
   define_current_thread(template_module);
-  define_membar_cpuorder(template_module);
   define_allocation_prefetch(template_module);
   define_zero_half_heap_word(template_module);
   define_zero_heap_words(template_module);

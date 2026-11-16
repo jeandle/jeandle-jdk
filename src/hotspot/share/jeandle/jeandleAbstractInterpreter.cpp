@@ -30,6 +30,7 @@
 #include "llvm/IR/Jeandle/Deoptimization.h"
 #include "llvm/IR/Jeandle/GCStrategy.h"
 #include "llvm/IR/Jeandle/JavaType.h"
+#include "llvm/IR/Jeandle/MemoryBarrier.h"
 #include "llvm/IR/Jeandle/Metadata.h"
 #include <string>
 
@@ -833,6 +834,9 @@ void JeandleAbstractInterpreter::initialize_VM_state() {
     // Store the receiver into locals.
     if (!_method->is_static()) {
       initial_jvm->store(BasicType::T_OBJECT, 0, _llvm_func->getArg(0));
+      if (_method->is_object_initializer()) {
+        _constructor_receiver = _llvm_func->getArg(0);
+      }
       locals_idx = 1;
       arg_idx = 1;
     }
@@ -1149,6 +1153,36 @@ void JeandleAbstractInterpreter::interpret() {
     RETURN_VOID_ON_JEANDLE_ERROR();
   }
 
+  // Defer insertion so a return parsed before a writing block still freezes.
+  // Mirrors C2 Parse::do_exits (parse1.cpp): an instance constructor that
+  // wrote final fields, any field under AlwaysSafeConstructors, or a
+  // volatile field on a non-multi-copy-atomic CPU freezes before returning.
+  // The volatile leg is constant-false on every multi-copy-atomic target
+  // (x86, aarch64, riscv) and only PPC64 can enable it, as in C2.
+  // Two deliberate divergences from C2's is_initializer() gate: an OSR parse
+  // starts mid-body so the wrote-flags under-approximate earlier writes —
+  // freeze unconditionally there; and <clinit> is excluded because the class
+  // initialization protocol (JLS 12.4.2) already orders its writes against
+  // any later use of the class.
+  bool freeze = _method->is_object_initializer() &&
+      (is_osr() || _wrote_final || (AlwaysSafeConstructors && _wrote_fields) ||
+       (support_IRIW_for_not_multiple_copy_atomic_cpu && _wrote_volatile));
+  for (llvm::Instruction* anchor : _normal_return_anchors) {
+    llvm::IRBuilder<> builder(anchor);
+    if (freeze) {
+      llvm::Value* receiver = _constructor_receiver;
+      if (receiver == nullptr) {
+        receiver = llvm::ConstantPointerNull::get(llvm::PointerType::get(
+            *_context, llvm::jeandle::AddrSpace::JavaHeapAddrSpace));
+      }
+      llvm::jeandle::createMemoryBarrier(
+          builder, llvm::jeandle::MemoryBarrierKind::ConstructorFreeze, receiver);
+    }
+    if (_wrote_stable) {
+      llvm::jeandle::createMemoryBarrier(
+          builder, llvm::jeandle::MemoryBarrierKind::Release);
+    }
+  }
   _block_builder->remove_dead_blocks();
 }
 
@@ -2686,11 +2720,12 @@ void JeandleAbstractInterpreter::do_field_access(bool is_get, bool is_static) {
 void JeandleAbstractInterpreter::do_get_xxx(ciField* field, bool is_static) {
   int offset = field->offset_in_bytes();
   llvm::Value* addr = nullptr;
+  llvm::Value* receiver = is_static ? nullptr : _jvm->apop();
 
   if (is_static) {
     addr = compute_static_field_address(field->holder(), offset);
   } else {
-    addr = compute_instance_field_address(_jvm->apop(), offset);
+    addr = compute_instance_field_address(receiver, offset);
   }
 
   bool is_volatile = field->is_volatile();
@@ -2698,7 +2733,16 @@ void JeandleAbstractInterpreter::do_get_xxx(ciField* field, bool is_static) {
   if (UseCompressedOops && is_reference_type(bt)) {
     bt = T_NARROWOOP;
   }
-  llvm::Value* value = load_from_address(addr, bt, is_volatile);
+  bool is_referent = !is_static && is_reference_type(field->layout_type()) &&
+      field->holder()->is_subclass_of(ciEnv::current()->Reference_klass()) &&
+      offset == java_lang_ref_Reference::referent_offset();
+  llvm::Value* value;
+  if (is_referent) {
+    value = call_java_op("jeandle.reference_get", {receiver});
+    bt = T_OBJECT; // The JavaOp performs compressed-oop decoding itself.
+  } else {
+    value = load_from_address(addr, bt, is_volatile);
+  }
 
   // Attach java-klass metadata to the actual field load before decoding.
   // Skip interface types: the verifier does not enforce interface types,
@@ -2707,7 +2751,16 @@ void JeandleAbstractInterpreter::do_get_xxx(ciField* field, bool is_static) {
     ciKlass* field_klass = field->type()->as_klass();
     if (field_klass->is_loaded() && !is_unverified_interface(field_klass)) {
       Klass* klass_enc = (Klass*)(field_klass->constant_encoding());
-      if (llvm::Instruction* load_inst = llvm::dyn_cast<llvm::Instruction>(value)) {
+      if (is_referent) {
+        auto* call = llvm::cast<llvm::CallBase>(value);
+        call->addRetAttr(llvm::Attribute::get(
+            *_context, llvm::jeandle::Attribute::JavaKlass,
+            std::to_string((uintptr_t)klass_enc)));
+        if (is_effectively_final(field_klass)) {
+          call->addRetAttr(llvm::Attribute::get(
+              *_context, llvm::jeandle::Attribute::JavaKlassExact));
+        }
+      } else if (llvm::Instruction* load_inst = llvm::dyn_cast<llvm::Instruction>(value)) {
         llvm::MDNode* klass_md = llvm::MDNode::get(*_context, {
             llvm::ConstantAsMetadata::get(_ir_builder.getInt64((intptr_t)klass_enc))
         });
@@ -2724,31 +2777,6 @@ void JeandleAbstractInterpreter::do_get_xxx(ciField* field, bool is_static) {
     llvm::Type* oop_type = JeandleType::java2llvm(T_OBJECT, *_context);
     value = _ir_builder.CreateAddrSpaceCast(value, oop_type);
   }
-
-  // TODO: Move to a late-insertion pass (like InsertGCBarriers)
-  // rather than inserting the barrier here in the frontend.
-  // Late insertion is preferred for GC barriers as it preserves
-  // optimization opportunities in earlier passes.
-  //
-  // CPUOrder fence after loading the Reference.referent field. Prevents the
-  // optimizer from CSE'ing the referent load across safepoints, since GC can
-  // change the referent value at any safepoint. This is the same MemBarCPUOrder
-  // that C2 inserts unconditionally after referent loads in
-  // inline_reference_get() and inline_reference_refersTo0().
-  // The CPUOrder fence is GC-independent — it is needed regardless of which
-  // collector is in use. The singlethread scope ensures no hardware fence
-  // instructions are emitted on any supported platform.
-  if (!is_static && is_reference_type(field->layout_type()) &&
-      field->holder()->is_subclass_of(ciEnv::current()->Reference_klass()) &&
-      field->offset_in_bytes() == java_lang_ref_Reference::referent_offset()) {
-    assert(value != nullptr, "must be loaded already");
-    if (UseG1GC) {
-      call_java_op("jeandle.g1_pre_barrier_loaded", {value});
-    }
-    _ir_builder.CreateFence(llvm::AtomicOrdering::SequentiallyConsistent,
-                            llvm::SyncScope::SingleThread);
-  }
-
 
   _jvm->push(field->type()->basic_type(), value);
 }
@@ -2773,6 +2801,17 @@ void JeandleAbstractInterpreter::do_put_xxx(ciField* field, bool is_static) {
     bt = T_NARROWOOP;
   }
   store_to_address(addr, value, bt, is_volatile);
+  // Like C2 (Parse::do_put_xxx in parse3.cpp), only INSTANCE field writes
+  // feed the exit barriers: the freeze orders this object's initialization
+  // writes before publication, and the @Stable release orders a freshly
+  // written instance field value. A static store writes neither the object
+  // under construction nor a fresh instance field.
+  if (!is_static) {
+    _wrote_fields = true;
+    _wrote_final |= field->is_final();
+    _wrote_volatile |= is_volatile;
+    _wrote_stable |= field->is_stable();
+  }
 }
 
 llvm::Value* JeandleAbstractInterpreter::compute_instance_field_address(llvm::Value* obj, int offset) {
@@ -2899,6 +2938,8 @@ llvm::Value* JeandleAbstractInterpreter::load_object_klass(llvm::Value* obj) {
     return klass;
   }
 
+  // Loop PHIs are completed after their bodies are parsed. Defer type-based
+  // Klass folding to LLVM, where all incoming values and guards are available.
   llvm::CallInst* loaded_klass = call_java_op("jeandle.load_klass", {obj});
   loaded_klass->setName("arraycopy_klass");
   return loaded_klass;
@@ -4054,6 +4095,9 @@ void JeandleAbstractInterpreter::return_current(llvm::Value* value) {
     call_register_finalizer();
   }
 
+  llvm::BasicBlock* return_block = _ir_builder.GetInsertBlock();
+  llvm::Instruction* previous = return_block->empty() ? nullptr : &return_block->back();
+
   if (_method && _method->is_synchronized()) {
     LockValue lock = _jvm->pop_lock();
     assert(lock.equals(_sync_lock), "sanity");
@@ -4065,6 +4109,8 @@ void JeandleAbstractInterpreter::return_current(llvm::Value* value) {
   } else {
     _ir_builder.CreateRet(value);
   }
+  _normal_return_anchors.push_back(previous ? previous->getNextNode()
+                                           : &return_block->front());
 }
 
 void JeandleAbstractInterpreter::guard_klass_being_initialized(llvm::Value* klass) {

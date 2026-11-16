@@ -30,4 +30,25 @@ public final class JeandleStringUTF16CharCaller {
     public static void put(byte[] value, int index, int c) {
         StringUTF16.putChar(value, index, c);
     }
+
+    public static char defaultFirstByte(int high) {
+        byte[] value = new byte[2];
+        value[1] = (byte) high;
+        return StringUTF16.getChar(value, 0);
+    }
+
+    public static char packedChar(int value) {
+        byte[] bytes = new byte[4];
+        StringUTF16.putChar(bytes, 1, value);
+        return StringUTF16.getChar(bytes, 1);
+    }
+
+    public static char compressPackedPrefix() {
+        byte[] bytes = new byte[2];
+        StringUTF16.putChar(bytes, 0, 0x1122);
+        char[] source = {'A', '\u0100'};
+        int count = StringUTF16.compress(source, 0, bytes, 0, 2);
+        return (char) (StringUTF16.getChar(bytes, 0) + count);
+    }
+
 }

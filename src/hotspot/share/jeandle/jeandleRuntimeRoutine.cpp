@@ -25,6 +25,8 @@
 #include "classfile/javaClasses.hpp"
 #include "memory/oopFactory.hpp"
 #include "oops/access.hpp"
+#include "runtime/deoptimization.hpp"
+#include "runtime/javaThread.inline.hpp"
 #include "runtime/reflection.hpp"
 #include "runtime/sharedRuntime.hpp"
 #include "runtime/stubRoutines.hpp"
@@ -94,7 +96,7 @@ static bool check_jeandle_compiled_frame(JavaThread* thread) {
 }
 #endif // ASSERT
 
-JRT_ENTRY(void, JeandleRuntimeRoutine::safepoint_handler(JavaThread* current))
+JRT_ENTRY_NO_ASYNC(void, JeandleRuntimeRoutine::safepoint_handler(JavaThread* current))
   RegisterMap r_map(current,
                     RegisterMap::UpdateMap::skip,
                     RegisterMap::ProcessFrames::include,
@@ -106,10 +108,15 @@ JRT_ENTRY(void, JeandleRuntimeRoutine::safepoint_handler(JavaThread* current))
   ThreadSafepointState* state = current->safepoint_state();
   state->set_at_poll_safepoint(true);
 
-  // TODO: Exception check.
   SafepointMechanism::process_if_requested_with_exit_check(current, false /* check asyncs */);
 
   state->set_at_poll_safepoint(false);
+  // Compiled polls have no exceptional exit. Deliver asynchronous exceptions
+  // in the interpreter, preserving the registers needed for deoptimization.
+  if (current->has_async_exception_condition()) {
+    Deoptimization::deoptimize_frame(current, trap_frame.id());
+    log_info(exceptions)("deferred async exception at Jeandle safepoint");
+  }
 JRT_END
 
 JRT_BLOCK_ENTRY(void, JeandleRuntimeRoutine::monitor_notify(oopDesc* obj,

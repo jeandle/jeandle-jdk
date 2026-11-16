@@ -324,6 +324,20 @@ class JeandleAbstractInterpreter : public StackObj {
   /* C2 JVMState::should_reexecute equivalent for the current intrinsic scope. */
   bool _should_reexecute = false;
 
+  // Constructor ordering belongs to the entry receiver, even if local 0 changes.
+  llvm::Value* _constructor_receiver = nullptr;
+  bool _wrote_final = false;
+  bool _wrote_fields = false;
+  // Instance volatile writes, for the constructor-freeze leg required only
+  // on non-multi-copy-atomic CPUs (C2 Parse::_wrote_volatile). The leg is
+  // unreachable on every multi-copy-atomic target, where
+  // support_IRIW_for_not_multiple_copy_atomic_cpu is a false constant.
+  bool _wrote_volatile = false;
+  bool _wrote_stable = false;
+  // Record true bytecode returns, before synchronized unlock, until all writes
+  // have been parsed. Helper returns for exceptions and deopt are excluded.
+  llvm::SmallVector<llvm::Instruction*> _normal_return_anchors;
+
   // The JeandleBasicBlock and its JeandleVMState currently being interpreted.
   JeandleBasicBlock* _block;
   JeandleVMState* _jvm;

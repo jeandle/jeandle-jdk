@@ -330,7 +330,7 @@ public class TestPEAOuterIteration {
         PEATestUtils.IRBody stable = cap4.finalAfter();
         stable.assertLineCount("store atomic", 6);
         stable.assertLineCount("load atomic", 5);
-        stable.assertLineCount("br i1", 5);
+        stable.assertLineCount("br i1", 4);
         stable.assertLineCount(MATERIALIZED_PHI, 0);
         stable.assertLineCount(FIELD_PHI, 0);
         stable.assertLineCount(CASE_C_FIELD_PHI, 0);

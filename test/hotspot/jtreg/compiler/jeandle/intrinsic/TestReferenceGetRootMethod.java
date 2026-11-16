@@ -63,17 +63,20 @@ public class TestReferenceGetRootMethod {
 
         // IR verification: check the compiled Reference.get method
         // When get() is compiled as the root method, it goes through the
-        // bytecode path (do_get_xxx) rather than the jeandle.reference_get JavaOp.
-        // Verify the CPUOrder fence is present in the bytecode-compiled path.
+        // bytecode path (do_get_xxx), which uses the shared referent-read JavaOp.
         String currentDir = System.getProperty("user.dir");
         FileCheck fc = new FileCheck(currentDir,
                 java.lang.ref.Reference.class.getDeclaredMethod("get"),
                 false);
 
-        // CPUOrder fence must be present regardless of which compilation path
-        fc.checkPattern("fence.*seq_cst");
-
-        // G1 pre-barrier should be present under G1GC
-        fc.check("jeandle.g1_pre_barrier_loaded");
+        fc.checkPattern("call hotspotcc.*@jeandle\\.reference_get");
+        FileCheck owner = new FileCheck(currentDir,
+                java.lang.ref.Reference.class.getDeclaredMethod("get"), false);
+        owner.checkPattern("define.*jeandle.reference_get");
+        owner.checkPattern("call.*@jeandle\\.g1_pre_barrier_loaded");
+        owner.checkPattern("call hotspotcc void @jeandle\\.membar_cpuorder");
+        FileCheck optimized = new FileCheck(currentDir,
+                java.lang.ref.Reference.class.getDeclaredMethod("get"), true);
+        optimized.checkPattern("fence syncscope\\(\"singlethread\"\\) seq_cst");
     }
 }
