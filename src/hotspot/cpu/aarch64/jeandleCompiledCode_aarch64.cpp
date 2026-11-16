@@ -26,7 +26,7 @@
 // Get the frame size from .stack_sizes section.
 void JeandleCompiledCode::setup_frame_size() {
   SectionInfo section_info(".stack_sizes");
-  bool found = ReadELF::findSection(*_elf, section_info);
+  bool found = find_section_cached(".stack_sizes", section_info);
   JEANDLE_ERROR_ASSERT_AND_RET_VOID_ON_FAIL(found, ".stack_sizes section not found");
 
   llvm::DataExtractor data_extractor(llvm::StringRef(((char*)_obj->getBufferStart()) + section_info._offset, section_info._size),
@@ -45,5 +45,13 @@ bool JeandleCompiledCode::pd_build_exception_handler_table() {
 bool JeandleCompiledCode::pd_resolve_reloc(JeandleAssembler& assembler,
                                            llvm::SmallVector<JeandleReloc*>& relocs,
                                            llvm::jitlink::LinkGraph* link_graph) {
+  return false;
+}
+
+bool JeandleCompiledCode::pd_collect_call_site_census(llvm::jitlink::LinkGraph* link_graph,
+                                                      JeandleCallSiteCensus& census) {
+  // AArch64 resolves each edge from its own symbol and kind, exactly like x86_64, so the
+  // generic walk in JeandleCompiledCode::collect_call_site_census() is used - the same
+  // walk resolve_reloc_info() performs when pd_resolve_reloc() declines.
   return false;
 }

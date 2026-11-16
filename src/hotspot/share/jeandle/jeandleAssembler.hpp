@@ -95,7 +95,47 @@ class JeandleAssembler : public StackObj {
   static bool is_section_word_reloc(LinkSymbol& target, LinkKind kind);
 
   // Mirrors C2's InteriorEntryAlignment flag.
-  int interior_entry_alignment() const;
+  static int interior_entry_alignment();
+
+  // Upper bounds for prolog components and post-insts stubs (in bytes).
+  static int ic_check_upper_bound();
+  static int poisoned_osr_entry_upper_bound();
+  static int verified_entry_upper_bound();
+  static int clinit_barrier_upper_bound();
+  static int stack_bang_instruction_size();
+  static int nmethod_entry_barrier_upper_bound();
+  static int entry_barrier_stub_upper_bound();
+
+  // Upper bounds for stubs section components (in bytes).
+  static int exception_handler_upper_bound();
+  static int deopt_handler_upper_bound();
+  static int static_call_stub_upper_bound();
+  static int trampoline_call_stub_upper_bound();
+
+  // Halfwords that <type>_Relocation::pack_data_to() writes for Jeandle's own
+  // relocation types, i.e. how much payload one record of that type costs in the locs
+  // array. The encodings live in relocInfo_<cpu>.cpp, so this count belongs next to them
+  // and is asked from the architecture rather than guessed centrally.
+  static int reloc_record_data_halfwords(relocInfo::relocType type);
+
+  // Whether this build routes calls through trampoline stubs, and whether runtime
+  // routine calls share them. Both decide how many records the stubs section receives.
+  static bool needs_trampoline_branches();
+  static bool shares_runtime_call_trampolines();
+  static bool runtime_call_needs_trampoline(address target);
+
+  // Whether the deferred nmethod entry barrier stub reaches its runtime routine
+  // through a pc-relative call (which relocates) or by loading an address into a register
+  // (which does not).
+  static bool entry_barrier_calls_runtime_stub();
+
+  // Which relocation records the body of one static-call stub emits, on top of the
+  // static_stub record that JeandleAssembler::emit_static_call_stub() writes explicitly.
+  // Every architecture loads a method oop into a register there (a metadata record); x86_64
+  // additionally ends the stub with a jump through a RuntimeAddress (a runtime_call record),
+  // while RISC-V and AArch64 build the target address without relocating.
+  static bool static_call_stub_has_metadata_record();
+  static bool static_call_stub_has_runtime_call_record();
 
  private:
   MacroAssembler* _masm;

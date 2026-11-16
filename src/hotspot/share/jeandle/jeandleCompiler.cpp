@@ -63,7 +63,12 @@ void install_jeandle_llvm_fatal_error_handler() {
 THREAD_LOCAL llvm::TargetMachine* JeandleCompiler::_target_machine = nullptr;
 
 bool JeandleCompiler::initialize_target_machine() {
-  llvm::Triple target_triple = llvm::Triple(llvm::sys::getProcessTriple());
+  // Use LLVM_HOST_TRIPLE instead of getProcessTriple() because
+  // getProcessTriple() relies on uname() which returns the host CPU
+  // architecture (e.g. x86_64) when running under QEMU user-mode emulation.
+  // LLVM_HOST_TRIPLE is configured at LLVM build time to match the target.
+  std::string process_triple = LLVM_HOST_TRIPLE;
+  llvm::Triple target_triple = llvm::Triple(process_triple);
 
   std::string err_msg;
   const llvm::Target* target = llvm::TargetRegistry::lookupTarget(target_triple, err_msg);

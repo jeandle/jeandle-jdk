@@ -31,10 +31,12 @@
 #include "jeandle/jeandleCompiledCode.hpp"
 #include "jeandle/jeandleRegister.hpp"
 #include "jeandle/jeandleReloc.hpp"
+#include "jeandle/jeandleRelocPlan.hpp"
 #include "jeandle/jeandleRuntimeRoutine.hpp"
 
 #include "jeandle/__hotspotHeadersBegin__.hpp"
 #include "asm/macroAssembler.hpp"
+#include "asm/codeBufferInstrumentation.hpp"
 #include "ci/ciEnv.hpp"
 #include "ci/ciInstanceKlass.hpp"
 #include "ci/ciUtilities.inline.hpp"
@@ -161,39 +163,134 @@ void JeandleCompiledCode::install_obj(std::unique_ptr<ObjectBuffer> obj) {
   int func_count = 0;
   for (const llvm::object::ELFSymbolRef &sym : _elf->symbols()) {
     llvm::Expected<llvm::object::SymbolRef::Type> type = sym.getType();
-    if (!type || (*type) != llvm::object::SymbolRef::Type::ST_Function) {
+    if (!type) {
+      llvm::consumeError(type.takeError());
+      continue;
+    }
+    if (*type != llvm::object::SymbolRef::Type::ST_Function) {
       continue;
     }
     func_count++;
+    bool symbol_ok = true;
+    llvm::Expected<llvm::StringRef> sym_name = sym.getName();
+    if (sym_name) {
+      _func_symbol_name_matches = sym_name->compare(_func_name) == 0;
+    } else {
+      llvm::consumeError(sym_name.takeError());
+      symbol_ok = false;
+    }
+    llvm::Expected<llvm::object::section_iterator> section = sym.getSection();
+    if (section) {
+      _func_symbol_align = (*section)->getAlignment().value();
+      llvm::Expected<uint64_t> sym_value = sym.getValue();
+      if (sym_value) {
+        _func_symbol_offset =
+            _elf->getSection((*section)->getRawDataRefImpl())->sh_offset + *sym_value;
+      } else {
+        llvm::consumeError(sym_value.takeError());
+        symbol_ok = false;
+      }
+    } else {
+      llvm::consumeError(section.takeError());
+      symbol_ok = false;
+    }
+    llvm::Expected<uint64_t> sym_size = sym.getSize();
+    if (sym_size) {
+      _func_symbol_code_size = *sym_size;
+    } else {
+      llvm::consumeError(sym_size.takeError());
+      symbol_ok = false;
+    }
+    _func_symbol_found = symbol_ok;
   }
   JEANDLE_ERROR_ASSERT_AND_RET_VOID_ON_FAIL(func_count == 1,
     "expected exactly one compiled function in ELF, but found multiple");
 }
 
+// RAII telemetry guard.
+//
+// finalize() has several RETURN_VOID_ON_JEANDLE_ERROR() exits. Writing the
+// record only on the success path silently dropped every failed compilation
+// from the statistics. A destructor-based guard records once per invocation
+// regardless of exit path.
+class FinalizeTelemetry : public StackObj {
+ private:
+  JeandleCompiledCode* _cc;
+  const InstallLayoutCore* _layout;
+  bool _recorded;
+
+ public:
+  FinalizeTelemetry(JeandleCompiledCode* cc) : _cc(cc), _layout(nullptr), _recorded(false) {}
+  // The layout decision is reported with the measurement, so that "how much did we
+  // reserve" and "what did the plan predict" cannot be recorded from different moments.
+  void set_layout(const InstallLayoutCore* layout) { _layout = layout; }
+  ~FinalizeTelemetry() {
+    if (!_recorded) {
+      record();
+    }
+  }
+  void record() {
+    assert(!_recorded, "recorded twice");
+    _recorded = true;
+    if (_layout != nullptr) {
+      _cc->record_finalize_telemetry(*_layout);
+    }
+  }
+};
+
 void JeandleCompiledCode::finalize() {
+  // Records CodeBuffer telemetry exactly once, whatever the exit path is.
+  FinalizeTelemetry finalize_telemetry(this);
+
   // Set up code buffer.
   uint64_t align;
   uint64_t offset;
   uint64_t code_size;
-  bool found = ReadELF::findFunc(*_elf, _func_name, align, offset, code_size);
+  bool found = _func_symbol_found && _func_symbol_name_matches;
+  if (found) {
+    align = _func_symbol_align;
+    offset = _func_symbol_offset;
+    code_size = _func_symbol_code_size;
+  } else {
+    found = ReadELF::findFunc(*_elf, _func_name, align, offset, code_size);
+  }
   JEANDLE_ERROR_ASSERT_AND_RET_VOID_ON_FAIL(found, "compiled function is not found in the ELF file");
+
+  // Force func_align to at least 4 bytes on RISC-V so the prolog upper bound and
+  // the blob start alignment match, preventing statepoint return PC misalignment (#634/#645).
+  RISCV_ONLY(align = MAX2(align, static_cast<uint64_t>(NativeInstruction::instruction_size));)
 
   setup_frame_size();
   RETURN_VOID_ON_JEANDLE_ERROR();
   assert(_frame_size > 0, "frame size must be positive");
 
-  // An estimated initial value.
-  uint64_t consts_size = 6144 * wordSize;
+  // Decide the whole allocation strategy here, while the CodeBuffer
+  // still has no section sizes. Nothing below may change consts capacity or
+  // consts alignment again.
+  InstallLayoutCore layout;
+  decide_install_layout(code_size, align, layout);
+  // From here on the telemetry guard reports the plan that was actually used.
+  finalize_telemetry.set_layout(&layout);
 
-  // TODO: How to figure out memory usage.
-  _code_buffer.initialize(code_size + consts_size + 2048/* for prolog */,
-                          sizeof(relocInfo) + relocInfo::length_limit,
-                          160,
+  _code_buffer.initialize(layout.code_size_input,
+                          layout.locs_payload,
+                          layout.stubs_payload,
                           _env->oop_recorder());
   if (_code_buffer.blob() == nullptr) {
     JEANDLE_REPORT_ERROR_AND_RET_VOID("CodeCache is full");
   }
-  _code_buffer.initialize_consts_size(consts_size);
+  _code_buffer.initialize_consts_size(layout.consts_payload);
+  guarantee(_const_plan.status() != ConstPlanStatus::Ok ||
+            is_aligned(_code_buffer.consts()->start(), _const_plan.max_alignment()),
+            "consts base " PTR_FORMAT " not aligned to %d", p2i(_code_buffer.consts()->start()),
+            (int)_const_plan.max_alignment());
+
+  if (CodeBufferInstrumentation::enabled()) {
+    CodeBufferInstrumentation::instance()->record_initialize(
+      &_code_buffer, _code_buffer.name(), (int)layout.code_size_input,
+      (int)layout.consts_payload,
+      (int)layout.stubs_payload, (int)layout.locs_payload);
+  }
 
   // Initialize assembler.
   MacroAssembler* masm = new MacroAssembler(&_code_buffer);
@@ -253,7 +350,21 @@ void JeandleCompiledCode::finalize() {
   RISCV_ONLY(assert(is_aligned(_prolog_length, NativeInstruction::instruction_size),
                     "Jeandle blob start must be 4-byte aligned for call patching: %d", _prolog_length);)
 
+  assert(!_used_exact_allocation || (size_t)_prolog_length <= layout.planned_prolog,
+         "prolog length %d must not exceed planned upper bound %zu", _prolog_length, layout.planned_prolog);
+
+  if (CodeBufferInstrumentation::enabled()) {
+    size_t legacy_insts = (size_t)code_size + INSTS_PROLOG_RESERVE;
+    size_t saved = (legacy_insts > layout.insts_payload) ? (legacy_insts - layout.insts_payload) : 0;
+    tty->print_cr("[JeandleInstsPlan] method=%s planned_prolog=%zu actual_prolog=%d text_size=%llu insts_payload=%zu legacy_insts=%zu saved=%zu",
+                  _func_name.c_str(), layout.planned_prolog, _prolog_length,
+                  (unsigned long long)code_size, layout.insts_payload, legacy_insts, saved);
+  }
+
   assembler.emit_insts(((address) _obj->getBufferStart()) + offset, code_size);
+
+  // Emit planned const sections in canonical order before resolving relocations
+  emit_planned_const_sections(assembler);
 
   resolve_reloc_info(assembler);
   RETURN_VOID_ON_JEANDLE_ERROR();
@@ -266,6 +377,10 @@ void JeandleCompiledCode::finalize() {
   if (_entry_barrier_stub != nullptr) {
     _entry_barrier_stub->emit(masm);
   }
+
+  assert(!_used_exact_allocation || (size_t)_code_buffer.insts()->size() <= layout.insts_payload,
+         "insts size %d must not exceed planned insts payload %zu",
+         _code_buffer.insts()->size(), layout.insts_payload);
 
   if (_method) {
     // For Java method compilation.
@@ -286,20 +401,31 @@ void JeandleCompiledCode::finalize() {
       RETURN_VOID_ON_JEANDLE_ERROR();
     }
   }
+
+  assert(!_used_exact_allocation || (size_t)_code_buffer.stubs()->size() <= layout.planned_stubs,
+         "stubs size %d must not exceed planned stubs payload %zu",
+         _code_buffer.stubs()->size(), layout.planned_stubs);
+
+  if (CodeBufferInstrumentation::enabled()) {
+    size_t actual_stubs = (size_t)_code_buffer.stubs()->size();
+    size_t saved_stubs = (LEGACY_STUBS_SIZE > layout.stubs_payload) ? (LEGACY_STUBS_SIZE - layout.stubs_payload) : 0;
+    tty->print_cr("[JeandleStubsPlan] method=%s planned_stubs=%zu actual_stubs=%zu legacy_stubs=%zu static_calls=%zu external_calls=%zu has_mh=%d saved_stubs=%zu",
+                  _func_name.c_str(), layout.planned_stubs, actual_stubs,
+                  LEGACY_STUBS_SIZE, layout.planned_static_calls, layout.planned_external_calls,
+                  layout.has_mh_invoke ? 1 : 0, saved_stubs);
+  }
+
+  finalize_telemetry.record();
 }
 
 void JeandleCompiledCode::resolve_reloc_info(JeandleAssembler& assembler) {
   llvm::SmallVector<JeandleReloc*> relocs;
 
   // Step 1: Resolve LinkGraph.
-  auto ssp = std::make_shared<llvm::orc::SymbolStringPool>();
+  llvm::jitlink::LinkGraph* link_graph = shared_link_graph();
+  JEANDLE_ERROR_ASSERT_AND_RET_VOID_ON_FAIL(link_graph != nullptr, "failed to create LinkGraph");
 
-  auto graph_or_err = llvm::jitlink::createLinkGraphFromObject(_elf->getMemoryBufferRef(), ssp);
-  JEANDLE_ERROR_ASSERT_AND_RET_VOID_ON_FAIL(graph_or_err, "failed to create LinkGraph");
-
-  auto link_graph = std::move(*graph_or_err);
-
-  if (!pd_resolve_reloc(assembler, relocs, link_graph.get())) {
+  if (!pd_resolve_reloc(assembler, relocs, link_graph)) {
     for (auto *block : link_graph->blocks()) {
       // Resolve relocations in the compiled code and constant pool.
       if (block->getSection().getName().compare(".text") != 0 &&
@@ -382,7 +508,7 @@ void JeandleCompiledCode::resolve_reloc_info(JeandleAssembler& assembler) {
 
   // Step 2: Resolve stackmaps.
   SectionInfo section_info(".llvm_stackmaps");
-  if (ReadELF::findSection(*_elf, section_info)) {
+  if (find_section_cached(".llvm_stackmaps", section_info)) {
     StackMapParser stackmaps(llvm::ArrayRef(((uint8_t*)object_start()) + section_info._offset, section_info._size));
     for (auto record = stackmaps.records_begin(); record != stackmaps.records_end(); ++record) {
       assert(_prolog_length != -1, "prolog length must be initialized");
@@ -445,24 +571,1034 @@ void JeandleCompiledCode::resolve_reloc_info(JeandleAssembler& assembler) {
   }
 }
 
-address JeandleCompiledCode::lookup_const_section(llvm::StringRef name, JeandleAssembler& assembler) {
-  auto it = _const_sections.find(name);
-  if (it == _const_sections.end()) {
-    // Copy to CodeBuffer if const section is not found.
-    SectionInfo section_info(name);
-    bool found = ReadELF::findSection(*_elf, section_info);
-    JEANDLE_ERROR_ASSERT_AND_RET_ON_FAIL(found, "const section not found, bad ELF file", nullptr);
+// ---------------------------------------------------------------------------
+// Allocation strategy decision
+//
+// Why this must run before CodeBuffer::initialize()
+// -------------------------------------------------
+// CodeBuffer fixes three things at initialize() time, and none of them can be
+// changed afterwards:
+//
+//   1. _const_section_alignment is read in initialize() to size the BufferBlob
+//      (total_size includes _consts.alignment()).
+//   2. initialize_section_size(&_consts, size) picks the consts division point
+//      as `limit - size` rounded DOWN to _const_section_alignment. That rounding
+//      is what actually aligns consts base.
+//   3. consts capacity itself.
+//
+// The consts alignment must not be set inside emit_planned_const_sections():
+// that runs after all three have already happened, so consts base would only
+// ever be aligned to sizeof(jdouble). A 16-byte-aligned .rodata can be
+// emitted at 0x...c98c2578, which is not 16-byte aligned.
+//
+size_t JeandleCompiledCode::prolog_upper_bound(uint64_t func_align) {
+  bool is_osr_compilation = JeandleCompilation::current()->is_osr_compilation();
 
-    address target_base = _code_buffer.consts()->end();
-    int padding = assembler.emit_consts(((address) _obj->getBufferStart()) + section_info._offset,
-                                         section_info._size,
-                                         section_info._alignment);
-    target_base += padding;
-    _const_sections.insert({name, target_base});
-    return target_base;
+  size_t entry_bound = 0;
+  if (is_osr_compilation) {
+    if (PoisonOSREntry) {
+      entry_bound = (size_t)JeandleAssembler::poisoned_osr_entry_upper_bound();
+    }
+  } else if (_method && !_method->is_static()) {
+    entry_bound = (size_t)JeandleAssembler::ic_check_upper_bound();
   }
 
-  return it->getValue();
+  size_t offset_after_interior = align_up(entry_bound, (size_t)JeandleAssembler::interior_entry_alignment());
+  size_t subtotal = offset_after_interior;
+
+  // Verified entry point
+  subtotal += (size_t)JeandleAssembler::verified_entry_upper_bound();
+
+  // Class initialization barrier on entry
+  if (needs_clinit_barrier_on_entry()) {
+    subtotal += (size_t)JeandleAssembler::clinit_barrier_upper_bound();
+  }
+
+  // Stack overflow check
+  int frame_size_in_bytes = _frame_size * BytesPerWord;
+  bool is_method_compilation = _method != nullptr;
+  bool has_java_calls = !_non_routine_call_sites.empty();
+  int bang_size_in_bytes = MAX2(frame_size_in_bytes + os::extra_bang_size_in_bytes(), interpreter_frame_size_in_bytes());
+  if (need_stack_overflow_check(is_method_compilation, has_java_calls, bang_size_in_bytes)) {
+    int page_size = (int)os::vm_page_size();
+    if (page_size <= 0) {
+      page_size = 4096;
+    }
+    int num_bangs = 1;
+    if (bang_size_in_bytes > page_size) {
+      num_bangs += (bang_size_in_bytes / page_size) + 1;
+    }
+    subtotal += (size_t)(num_bangs * JeandleAssembler::stack_bang_instruction_size());
+  }
+
+  // NMethod entry barrier
+  if (needs_nmethod_entry_barrier()) {
+    subtotal += (size_t)JeandleAssembler::nmethod_entry_barrier_upper_bound();
+  }
+
+  // Final alignment to ELF function alignment
+  if (func_align > 1) {
+    subtotal = align_up(subtotal, (size_t)func_align);
+  }
+
+  return subtotal;
+}
+
+size_t JeandleCompiledCode::post_insts_stubs_upper_bound() {
+  if (needs_nmethod_entry_barrier()) {
+    return (size_t)JeandleAssembler::entry_barrier_stub_upper_bound();
+  }
+  return 0;
+}
+
+// ---------------------------------------------------------------------------
+// One LinkGraph per compilation & section cache
+// ---------------------------------------------------------------------------
+llvm::jitlink::LinkGraph* JeandleCompiledCode::shared_link_graph() {
+  if (_link_graph != nullptr) {
+    return _link_graph.get();
+  }
+  if (_elf == nullptr) {
+    return nullptr;
+  }
+  if (!_link_graph_ssp) {
+    _link_graph_ssp = std::make_shared<llvm::orc::SymbolStringPool>();
+  }
+  auto graph_or_err = llvm::jitlink::createLinkGraphFromObject(_elf->getMemoryBufferRef(), _link_graph_ssp);
+  if (!graph_or_err) {
+    llvm::consumeError(graph_or_err.takeError());
+    return nullptr;
+  }
+  _link_graph = std::move(*graph_or_err);
+  return _link_graph.get();
+}
+
+bool JeandleCompiledCode::find_section_cached(llvm::StringRef name, SectionInfo& section_info) {
+  if (!_section_cache_built) {
+    if (_elf == nullptr) {
+      return false;
+    }
+    for (auto sec = _elf->section_begin(); sec != _elf->section_end(); ++sec) {
+      llvm::Expected<llvm::StringRef> cur_name = sec->getName();
+      if (!cur_name) {
+        llvm::consumeError(cur_name.takeError());
+        continue;
+      }
+      if (llvm::any_of(_section_cache, [&](const SectionInfo& info) {
+            return info._name == *cur_name;
+          })) {
+        continue;
+      }
+      SectionInfo info(*cur_name);
+      info._offset = _elf->getSection(sec->getRawDataRefImpl())->sh_offset;
+      info._size = sec->getSize();
+      info._alignment = sec->getAlignment().value();
+      _section_cache.push_back(info);
+    }
+    _section_cache_built = true;
+  }
+  for (const SectionInfo& info : _section_cache) {
+    if (info._name == name) {
+      section_info = info;
+      return true;
+    }
+  }
+  return false;
+}
+
+// ---------------------------------------------------------------------------
+// One census, two reservations
+// ---------------------------------------------------------------------------
+//
+// Walks the object's LinkGraph edges and its LLVM stackmap records and counts what the
+// installation is going to relocate. The classification is written to mirror
+// resolve_reloc_info() step for step - same block filter, same predicate order, same
+// fall-through rules - because the census is only useful as an upper bound if it cannot
+// miss a record the resolver will later emit. Where the two could drift, the census
+// over-counts and says so: unexplained edges and unmapped stackmap records are recorded
+// separately and make the locs plan refuse.
+//
+// This pass includes the LinkGraph build, so there is no separate
+// count_external_calls() walk building its own LinkGraph to ask one
+// question of it.
+bool JeandleCompiledCode::collect_call_site_census(JeandleCallSiteCensus& census) {
+  if (_elf == nullptr) {
+    return false;
+  }
+
+  llvm::jitlink::LinkGraph* link_graph = shared_link_graph();
+  if (link_graph == nullptr) {
+    return false;
+  }
+
+  // Edge census. RISC-V classifies its edges through pd_resolve_reloc(), which pairs every
+  // R_RISCV_PCREL_LO12_I edge with the HI20 edge it refers to before deciding what the
+  // pair means; x86_64 and AArch64 classify each edge on its own. The two walks therefore
+  // live next to the two resolvers and are selected the same way resolve_reloc_info()
+  // selects them, so a drift between resolver and census is a compile-time mismatch, not
+  // an under-provisioned array.
+  if (!pd_collect_call_site_census(link_graph, census)) {
+    for (auto* block : link_graph->blocks()) {
+      const llvm::StringRef block_name = block->getSection().getName();
+      if (block_name.compare(".text") != 0 &&
+          !block_name.starts_with(".data.rel.ro") &&
+          !block_name.starts_with(".rodata")) {
+        continue;
+      }
+      for (auto& edge : block->edges()) {
+        auto& target = edge.getTarget();
+        if (JeandleAssembler::is_routine_call_reloc(target, edge.getKind())) {
+          census._routine_call_sites++;
+        } else if (JeandleAssembler::is_external_call_reloc(target, edge.getKind())) {
+          census._external_call_sites++;
+        } else if (JeandleAssembler::is_section_word_reloc(target, edge.getKind())) {
+          // Which section the record lands in follows the resolver: a reference from code
+          // to a constant is relocated in insts, a constant pointing back at code in consts.
+          if (block_name.compare(".text") == 0) {
+            census._section_word_insts++;
+          } else {
+            census._section_word_consts++;
+          }
+        } else if (JeandleAssembler::is_oop_reloc(target, edge.getKind())) {
+          census._oop_relocs++;
+        } else if (JeandleAssembler::is_oop_addr_reloc(target, edge.getKind())) {
+          census._oop_addr_relocs++;
+        } else {
+          // The resolver would reach ShouldNotReachHere() on this edge. Counting it as
+          // unexplained keeps the census honest instead of optimistically silent.
+          census._unclassified_edges++;
+        }
+      }
+    }
+  }
+
+  // Distinct shared-trampoline targets on the LinkGraph path.
+  // Restricted to platforms that branch far (e.g. RISC-V): only there does
+  // trampoline_call() emit (and share) runtime trampolines.
+  const bool count_shared_targets = JeandleAssembler::needs_trampoline_branches() &&
+                                    JeandleAssembler::shares_runtime_call_trampolines();
+  if (count_shared_targets) {
+    llvm::SmallVector<llvm::StringRef, 8> tramp_names;
+    llvm::SmallVector<address, 8> routine_seen;
+    auto note_name = [&](llvm::StringRef n) {
+      if (std::find(tramp_names.begin(), tramp_names.end(), n) == tramp_names.end()) {
+        tramp_names.push_back(n);
+      }
+    };
+    for (auto* block : link_graph->blocks()) {
+      if (block->getSection().getName().compare(".text") != 0) {
+        continue;
+      }
+      for (auto& edge : block->edges()) {
+        auto& target = edge.getTarget();
+        if (!target.hasName()) {
+          continue;
+        }
+        const llvm::StringRef name = *(target.getName());
+        if (JeandleAssembler::is_routine_call_reloc(target, edge.getKind())) {
+          address entry = JeandleRuntimeRoutine::get_routine_entry(name);
+          if (std::find(routine_seen.begin(), routine_seen.end(), entry) == routine_seen.end()) {
+            routine_seen.push_back(entry);
+            if (JeandleAssembler::runtime_call_needs_trampoline(entry)) {
+              note_name(name);
+            }
+          }
+        } else if (JeandleAssembler::is_external_call_reloc(target, edge.getKind())) {
+          note_name(name);
+        }
+      }
+    }
+    census._shared_trampoline_targets = (int)tramp_names.size();
+  }
+
+  // Stackmap records: one record per physically emitted statepoint call. This is the
+  // The bytecode-level count is not the machine-code count, because LLVM
+  // unrolls loops, duplicates tail calls and inlines, and every copy gets its own record.
+  SectionInfo section_info(".llvm_stackmaps");
+  if (find_section_cached(".llvm_stackmaps", section_info)) {
+    StackMapParser stackmaps(llvm::ArrayRef(((uint8_t*)object_start()) + section_info._offset,
+                                            section_info._size));
+    for (auto record = stackmaps.records_begin(); record != stackmaps.records_end(); ++record) {
+      const int inst_end_offset = static_cast<int>(record->getInstructionOffset());
+      CallSiteInfo* call_info = nullptr;
+      if (record->getID() < _non_routine_call_sites.size()) {
+        call_info = _non_routine_call_sites[record->getID()];
+      } else if (record->getID() != llvm::StatepointDirectives::DefaultStatepointID) {
+        // A record this compilation cannot attribute to a call site. Treat those
+        // as potential static calls for the stubs bound; the locs plan refuses outright,
+        // because an unattributable record has no size it could be counted against.
+        census._unmapped_records++;
+        continue;
+      } else {
+        call_info = _routine_call_sites[inst_end_offset];
+      }
+      if (call_info == nullptr) {
+        continue;
+      }
+      if (call_info->is_method_handle_invoke()) {
+        census._has_method_handle_invoke = true;
+      }
+      switch (call_info->type()) {
+        case JeandleCompiledCall::STATIC_CALL:
+          // patch_static_call_site() picks the reloc type from the resolver stub, and the
+          // site is known here: a call of the opt-virtual resolver becomes an
+          // opt_virtual_call_Relocation instead of a static_call_Relocation.
+          if (call_info->target() == SharedRuntime::get_resolve_opt_virtual_call_stub()) {
+            census._opt_virtual_call_sites++;
+          } else {
+            census._static_call_sites++;
+          }
+          break;
+        case JeandleCompiledCall::DYNAMIC_CALL:
+          census._virtual_call_sites++;
+          break;
+        case JeandleCompiledCall::ROUTINE_CALL:
+          // Already counted from the edges: every routine call site produces exactly one
+          // record whether the reloc is created during the edge walk or here.
+          break;
+        case JeandleCompiledCall::EXTERNAL_CALL:
+          census._external_call_sites++;
+          break;
+        case JeandleCompiledCall::STUB_C_CALL:
+          census._stub_c_call_sites++;
+          break;
+        default:
+          census._unmapped_records++;
+          break;
+      }
+    }
+  } else if (!_non_routine_call_sites.empty()) {
+    // No stackmap section but call sites exist: fall back to the bytecode-level count,
+    // and refuse to plan locs from it.
+    for (const CallSiteInfo* call : _non_routine_call_sites) {
+      if (call == nullptr) {
+        continue;
+      }
+      if (call->is_method_handle_invoke()) {
+        census._has_method_handle_invoke = true;
+      }
+      switch (call->type()) {
+        case JeandleCompiledCall::STATIC_CALL:
+          census._static_call_sites++;
+          break;
+        case JeandleCompiledCall::DYNAMIC_CALL:
+          census._virtual_call_sites++;
+          break;
+        default:
+          break;
+      }
+    }
+    census._unmapped_records++;
+  }
+
+  if (_has_method_handle_invoke) {
+    census._has_method_handle_invoke = true;
+  }
+  return true;
+}
+
+size_t JeandleCompiledCode::stubs_upper_bound(const JeandleCallSiteCensus& census,
+                                              size_t& static_calls, size_t& external_calls,
+                                              bool& has_mh) {
+  // These numbers come from collect_call_site_census(), because the locs
+  // reservation needs exactly the same counts from the LLVM stackmap section
+  // and the LinkGraph edges; one compilation walks the object once
+  // instead of twice, and the two reservations cannot drift apart on a counting rule.
+  //
+  // Unmapped stackmap records are folded into static_calls: an
+  // unattributable statepoint may still be a static call, and a stub is cheap.
+  static_calls  = (size_t)census._static_call_sites + (size_t)census._opt_virtual_call_sites +
+                  (size_t)census._unmapped_records;
+  external_calls = (size_t)census._external_call_sites;
+  has_mh = census._has_method_handle_invoke;
+
+  // If this is a non-method compilation (_method == nullptr), protect against under-reservation
+  if (_method == nullptr) {
+    size_t unmodeled = (size_t)LEGACY_STUBS_SIZE;
+    size_t computed = static_calls * (size_t)JeandleAssembler::static_call_stub_upper_bound() +
+                      external_calls * (size_t)JeandleAssembler::trampoline_call_stub_upper_bound();
+    return align_up(MAX2(unmodeled, computed), (size_t)CodeEntryAlignment);
+  }
+
+  size_t total = 0;
+  total += (size_t)JeandleAssembler::exception_handler_upper_bound();
+  total += (size_t)JeandleAssembler::deopt_handler_upper_bound();
+  if (has_mh) {
+    total += (size_t)JeandleAssembler::deopt_handler_upper_bound();
+  }
+
+  total += static_calls * (size_t)JeandleAssembler::static_call_stub_upper_bound();
+  total += external_calls * (size_t)JeandleAssembler::trampoline_call_stub_upper_bound();
+
+  // Note (statically derived, not yet measured on target): on the
+  // architectures that branch far, patching a call site is not only a stub-to-interpreter
+  // entry but also a trampoline - MacroAssembler::trampoline_call() emits one stub per call
+  // whenever far_branches() holds, for static, virtual, runtime and external calls alike.
+  // Reserving that space only for external calls would be right on x86_64 (no far
+  // branches there, so needs_trampoline_branches() is false and this term vanishes) and too
+  // small on RISC-V and AArch64. Routine calls share one trampoline per target, so this is
+  // deliberately an over-estimate for them: the census counts callers, not targets.
+  if (JeandleAssembler::needs_trampoline_branches()) {
+    size_t trampolines;
+    if (census._shared_trampoline_targets >= 0 && JeandleAssembler::shares_runtime_call_trampolines()) {
+      trampolines = static_calls +
+                    (size_t)census._virtual_call_sites +
+                    (size_t)census._shared_trampoline_targets;
+    } else {
+      trampolines = static_calls +
+                    (size_t)census._virtual_call_sites +
+                    (size_t)census._routine_call_sites +
+                    external_calls;
+    }
+    total += trampolines * (size_t)JeandleAssembler::trampoline_call_stub_upper_bound();
+  }
+
+  if (census._unmapped_records > 0) {
+    total = MAX2(total, (size_t)LEGACY_STUBS_SIZE);
+    if (JeandleCodeBufferInstrument) {
+      tty->print_cr("[JeandleStubsPlan] Warning: method=%s has %d unmapped stackmap records, applied legacy fallback",
+                    _func_name.c_str(), census._unmapped_records);
+    }
+  }
+
+  if (total > 0) {
+    total = align_up(total, (size_t)CodeEntryAlignment);
+  }
+  return total;
+}
+
+// ---------------------------------------------------------------------------
+// The locs reservation
+// ---------------------------------------------------------------------------
+//
+// Turns the census into a capacity request per CodeBuffer section. The plan owns every
+// sizing rule (record widths, gap fillers, relocate()'s headroom probe) so that this
+// function's only job is to say *which* emitters this compilation has - a list that
+// mirrors the prolog and stub emission order in finalize() above.
+void JeandleCompiledCode::plan_locs_capacity(const JeandleCallSiteCensus& census,
+                                             InstallLayoutCore& layout,
+                                             size_t insts_size, size_t consts_size,
+                                             size_t stubs_size) {
+  JeandleRelocPlan::Sources sources;
+  sources._static_call_sites       = census._static_call_sites;
+  sources._opt_virtual_call_sites  = census._opt_virtual_call_sites;
+  sources._virtual_call_sites      = census._virtual_call_sites;
+  sources._routine_call_sites      = census._routine_call_sites;
+  sources._external_call_sites     = census._external_call_sites;
+  sources._section_word_insts      = census._section_word_insts;
+  sources._section_word_consts     = census._section_word_consts;
+  sources._oop_relocs              = census._oop_relocs;
+  sources._oop_addr_relocs         = census._oop_addr_relocs;
+  sources._unique_routine_targets  = 0; // stubs-side information; record count is per caller
+  sources._shared_trampolines      = JeandleAssembler::shares_runtime_call_trampolines();
+  sources._far_branches            = JeandleAssembler::needs_trampoline_branches();
+  sources._entry_barrier_calls_runtime_stub = JeandleAssembler::entry_barrier_calls_runtime_stub();
+  sources._static_call_stub_metadata_record =
+      JeandleAssembler::static_call_stub_has_metadata_record();
+  sources._static_call_stub_runtime_call_record =
+      JeandleAssembler::static_call_stub_has_runtime_call_record();
+  sources._method_compilation      = (_method != nullptr);
+
+  // One handler stub per emitted handler, in the order finalize() emits them: exception,
+  // deopt, and - only when a method handle invoke was recorded - the DeoptMH clone.
+  int handlers = 0;
+  if (_method != nullptr) {
+    handlers += 1;                       // emit_exception_handler()
+    handlers += 1;                       // emit_deopt_handler()
+    if (census._has_method_handle_invoke) {
+      handlers += 1;                     // emit_deopt_handler() again, for DeoptMH
+    }
+  }
+  sources._handlers = handlers;
+
+  // The prolog components, with the same predicates finalize() uses to emit them.
+  const bool is_osr = JeandleCompilation::current()->is_osr_compilation();
+  sources._ic_check = !is_osr && _method != nullptr && !_method->is_static();
+  sources._clinit_barrier = needs_clinit_barrier_on_entry();
+  sources._entry_barrier = needs_nmethod_entry_barrier();
+
+  JeandleRelocPlan plan;
+  plan.compute(sources, insts_size, consts_size, stubs_size);
+
+  if (!JeandleExactLocs) {
+    // A/B switch: still compute and report the plan, but do not hand it to the CodeBuffer.
+    // Computing it in both arms is what makes the latency comparison mean anything - the
+    // planned arm would otherwise appear 21.8% slower per compilation from the
+    // two extra telemetry lines only that arm printed, not from the model's cost. Reporting the
+    // same lines on both sides leaves the allocation behaviour as the only difference.
+    layout.locs_plan_status = JeandleRelocPlan::status_name(JeandleRelocPlan::Status::LegacyDisabled);
+    layout.used_exact_locs = false;
+    _locs_plan_status = layout.locs_plan_status;
+    _used_exact_locs = false;
+    for (int s = 0; s < (int)CodeBuffer::SECT_LIMIT; s++) {
+      layout.planned_locs_records[s]  = plan.record_count(s);
+      layout.planned_locs_elements[s] = plan.elements(s);
+      layout.planned_locs_bytes[s]    = plan.bytes(s);
+      _planned_locs_records[s]  = plan.record_count(s);
+      _planned_locs_elements[s] = plan.elements(s);
+      _planned_locs_bytes[s]    = -1; // deliberately not applied, so telemetry says so
+    }
+    _locs_planned = true;
+    if (JeandleCodeBufferInstrument) {
+      tty->print_cr("[JeandleLocsPlan] method=%s planned_insts_bytes=%zu planned_insts_slots=%zu "
+                    "legacy_insts_slots=%zu records=%d fillers=%zu consts_bytes=%zu stubs_bytes=%zu "
+                    "status=%s",
+                    _func_name.c_str(), plan.bytes(CodeBuffer::SECT_INSTS),
+                    plan.capacity_elements(CodeBuffer::SECT_INSTS),
+                    (size_t)(LEGACY_LOCS_SIZE / sizeof(relocInfo)),
+                    plan.record_count(CodeBuffer::SECT_INSTS),
+                    plan.filler_elements(CodeBuffer::SECT_INSTS),
+                    plan.bytes(CodeBuffer::SECT_CONSTS), plan.bytes(CodeBuffer::SECT_STUBS),
+                    plan.status_name());
+    }
+    return;
+  }
+  layout.locs_plan_status = plan.status_name();
+  layout.used_exact_locs = plan.is_exact();
+  _locs_planned = true;
+
+  if (!plan.is_exact()) {
+    if (JeandleCodeBufferInstrument) {
+      tty->print_cr("[JeandleLocsPlan] method=%s FALLBACK status=%s unclassified_edges=%d unmapped_records=%d",
+                    _func_name.c_str(), plan.status_name(),
+                    census._unclassified_edges, census._unmapped_records);
+    }
+    return;
+  }
+
+  for (int s = 0; s < (int)CodeBuffer::SECT_LIMIT; s++) {
+    layout.planned_locs_records[s]  = plan.record_count(s);
+    layout.planned_locs_elements[s] = plan.elements(s);
+    layout.planned_locs_bytes[s]    = plan.bytes(s);
+    _planned_locs_records[s]  = plan.record_count(s);
+    _planned_locs_elements[s] = plan.elements(s);
+    _planned_locs_bytes[s]    = (int64_t)plan.bytes(s);
+    for (int k = 0; k <= (int)relocInfo::type_mask; k++) {
+      const int expected = plan.records(s, (relocInfo::relocType)k);
+      _planned_locs_kinds[s][k] = expected;
+    }
+  }
+  _locs_plan_status  = plan.status_name();
+  _used_exact_locs   = plan.is_exact();
+
+  // The insts capacity stays in locs_payload because CodeBuffer::initialize() takes it as
+  // an argument; the two secondary sections are asked through set_locs_capacity(), which
+  // initialize_section_size() reads when it divides the blob up.
+  layout.locs_payload = plan.bytes(CodeBuffer::SECT_INSTS);
+  _code_buffer.set_locs_capacity(CodeBuffer::SECT_CONSTS, plan.bytes(CodeBuffer::SECT_CONSTS));
+  _code_buffer.set_locs_capacity(CodeBuffer::SECT_STUBS,  plan.bytes(CodeBuffer::SECT_STUBS));
+
+  if (JeandleCodeBufferInstrument) {
+    size_t legacy_insts_elements = (size_t)LEGACY_LOCS_SIZE / (size_t)sizeof(relocInfo);
+    tty->print_cr("[JeandleLocsPlan] method=%s planned_insts_bytes=%zu planned_insts_slots=%zu "
+                  "legacy_insts_slots=%zu records=%d fillers=%zu consts_bytes=%zu stubs_bytes=%zu "
+                  "status=%s",
+                  _func_name.c_str(), plan.bytes(CodeBuffer::SECT_INSTS),
+                  plan.capacity_elements(CodeBuffer::SECT_INSTS), (size_t)legacy_insts_elements,
+                  plan.record_count(CodeBuffer::SECT_INSTS),
+                  plan.filler_elements(CodeBuffer::SECT_INSTS),
+                  plan.bytes(CodeBuffer::SECT_CONSTS), plan.bytes(CodeBuffer::SECT_STUBS),
+                  plan.status_name());
+    if (JeandleTraceRelocRecords) {
+      tty->print_cr("[JeandleRelocPlan] method=%s insts=%s consts=%s stubs=%s",
+                    _func_name.c_str(),
+                    plan.describe_section(CodeBuffer::SECT_INSTS).c_str(),
+                    plan.describe_section(CodeBuffer::SECT_CONSTS).c_str(),
+                    plan.describe_section(CodeBuffer::SECT_STUBS).c_str());
+    }
+  }
+}
+
+// Everything allocation-relevant therefore has to be decided here, up front.
+void JeandleCompiledCode::decide_install_layout(uint64_t elf_text_size,
+                                                uint64_t func_align,
+                                                InstallLayoutCore& layout) {
+  // Start from the legacy values so every field is defined even if we bail
+  // out early, and so the legacy path stays bit-for-bit identical.
+  layout.planned_prolog       = INSTS_PROLOG_RESERVE;
+  layout.planned_post_stubs   = 0;
+  layout.planned_stubs        = LEGACY_STUBS_SIZE;
+  layout.insts_payload        = (size_t)elf_text_size + INSTS_PROLOG_RESERVE;
+  layout.stubs_payload        = LEGACY_STUBS_SIZE;
+  layout.locs_payload         = LEGACY_LOCS_SIZE;
+  layout.consts_payload       = LEGACY_CONSTS_SIZE;
+  layout.used_legacy_fallback = true;
+  layout.plan_status          = "legacy";
+
+  ConstLayoutStats::record_method();
+
+  // One walk over the object's edges and stackmap records, shared by the stubs and
+  // the locs reservation below. Computed only when stubs or locs exact planning is active.
+  JeandleCallSiteCensus census;
+  bool census_ok = false;
+  if (JeandleExactStubs || JeandleExactLocs) {
+    census_ok = collect_call_site_census(census);
+  }
+
+  // Consts base alignment the planner may assume.
+  //
+  // A consts base at 8 mod 16 would cap this at HeapWordSize.
+  // The order is: plan -> set_const_section_alignment(max) ->
+  // blob sizing -> initialize_consts_size(). Both places the constants ever live then honour
+  // the plan's maximum alignment A in ABSOLUTE terms:
+  //  * in the CodeBuffer: initialize_section_size() aligns the consts start address itself down to A;
+  //  * in the nmethod: compute_final_layout() puts consts first, at offset 0 of the content,
+  //    and the content begins at a CodeEntryAlignment boundary of a CodeCacheSegmentSize-aligned heap block.
+  // So the guarantee is min(MAX_SUPPORTED_CONST_ALIGNMENT, CodeEntryAlignment, CodeCacheSegmentSize).
+  const uint64_t guaranteed_base_align =
+      MIN3(ConstSectionPlan::MAX_SUPPORTED_CONST_ALIGNMENT, (uint64_t)CodeEntryAlignment,
+           (uint64_t)CodeCacheSegmentSize);
+  bool plan_ok = ReadELF::build_const_section_plan(*_elf, _const_plan, guaranteed_base_align);
+
+  // Diagnostic escape hatch. A real planner failure depends on the ELF
+  // contents, so without this the legacy fallback - the safety net that
+  // covers the case where something unexpected shows up - would never be
+  // executed by a test.
+  if (plan_ok && JeandleForceConstPlanFallback) {
+    _const_plan.force_forced_fallback();
+    plan_ok = false;
+  }
+
+  layout.plan_status = ConstSectionPlan::status_name(_const_plan.status());
+
+  if (!plan_ok) {
+    // Planner refused. Every refusal has a documented reason in
+    // _const_plan.status(); fall back to the strategy that has worked so far.
+    ConstLayoutStats::record_plan_failure();
+    ConstLayoutStats::record_legacy(layout.consts_payload);
+    _plan_status = layout.plan_status;
+    _planned_consts_size = -1;
+    _planned_stubs_size = -1;
+    _used_exact_allocation = false;
+
+    if (CodeBufferInstrumentation::enabled()) {
+      tty->print_cr("[JeandleConstPlan] method=%s FALLBACK status=%s failing_section=%u -> legacy consts %zu bytes",
+                    _func_name.c_str(), layout.plan_status,
+                    _const_plan.failed_section_index(), layout.consts_payload);
+    }
+  } else {
+    // Tell the CodeBuffer how the consts section itself has to be
+    // aligned BEFORE any blob is sized. Once consts base is aligned to
+    // max_alignment, aligning each section's *relative* offset is equivalent to
+    // aligning its absolute address.
+    _code_buffer.set_const_section_alignment((int)_const_plan.max_alignment());
+    // Publish the same alignment to the compilation. CodeBuffer::expand()
+    // builds its replacement buffer through the CodeBuffer constructor, and
+    // that constructor takes the consts alignment from
+    // jeandle_const_section_alignment(), i.e. from this JeandleCompilation,
+    // not from _code_buffer. The legacy path publishes it inside
+    // JeandleAssembler::emit_consts(); the planned path copies the sections
+    // itself in emit_planned_const_sections() and never goes through there.
+    // Without this, the first expansion of any section (typically stubs)
+    // re-divides the blob with sizeof(jdouble)-aligned consts while
+    // _code_buffer still requires max_alignment: debug builds stop at the
+    // guarantee in CodeBuffer::verify_section_allocation(), product builds
+    // install misaligned vector constants.
+    JeandleCompilation::current()->set_const_section_alignment((int)_const_plan.max_alignment());
+
+    layout.consts_payload       = (size_t)_const_plan.total_size();
+    layout.used_legacy_fallback = false;
+    layout.planned_padding      = (size_t)_const_plan.total_padding();
+    layout.planned_alignment    = (size_t)_const_plan.max_alignment();
+    layout.planned_entries      = (size_t)_const_plan.entry_count();
+
+    _planned_consts_size   = (int64_t)_const_plan.total_size();
+    _planned_padding       = layout.planned_padding;
+    _planned_alignment     = layout.planned_alignment;
+    _planned_entries       = layout.planned_entries;
+    _plan_status           = layout.plan_status;
+    _used_exact_allocation = plan_ok && JeandleExactInsts && JeandleExactStubs;
+
+    // Tightened insts capacity model using exact mathematical upper bound
+    if (JeandleExactInsts) {
+      size_t exact_prolog = prolog_upper_bound(func_align);
+      size_t exact_post_stubs = post_insts_stubs_upper_bound();
+      layout.planned_prolog = exact_prolog;
+      layout.planned_post_stubs = exact_post_stubs;
+      layout.insts_payload = (size_t)elf_text_size + exact_prolog + exact_post_stubs;
+    } else {
+      layout.planned_prolog = INSTS_PROLOG_RESERVE;
+      layout.planned_post_stubs = 0;
+      layout.insts_payload = (size_t)elf_text_size + INSTS_PROLOG_RESERVE;
+    }
+
+    // Tightened stubs capacity model using exact mathematical upper bound
+    if (JeandleExactStubs) {
+      size_t static_calls = 0;
+      size_t external_calls = 0;
+      bool has_mh = false;
+      size_t exact_stubs = stubs_upper_bound(census, static_calls, external_calls, has_mh);
+      layout.planned_stubs = exact_stubs;
+      layout.stubs_payload = exact_stubs;
+      layout.planned_static_calls = static_calls;
+      layout.planned_external_calls = external_calls;
+      layout.has_mh_invoke = has_mh;
+      _planned_stubs_size = (int64_t)exact_stubs;
+    } else {
+      layout.planned_stubs = LEGACY_STUBS_SIZE;
+      layout.stubs_payload = LEGACY_STUBS_SIZE;
+      layout.planned_static_calls = 0;
+      layout.planned_external_calls = 0;
+      layout.has_mh_invoke = false;
+      _planned_stubs_size = (int64_t)LEGACY_STUBS_SIZE;
+    }
+
+    // Tightened locs capacity model from the relocation record census. It has to
+    // run after insts and stubs are known, because the record gaps it has to budget for are
+    // bounded by the size of the section the records belong to.
+    if (census_ok) {
+      plan_locs_capacity(census, layout, layout.insts_payload, layout.consts_payload,
+                         layout.stubs_payload);
+    } else {
+      layout.locs_plan_status = "ObjectUnavailable";
+    }
+
+    ConstLayoutStats::record_exact(layout.consts_payload);
+
+    if (CodeBufferInstrumentation::enabled() && _const_plan.entry_count() > 0) {
+      tty->print_cr("[JeandleConstPlan] Method: %s, entries: %zu, planned_total_size: %llu, padding: %llu, max_align: %llu",
+                    _func_name.c_str(), _const_plan.entry_count(),
+                    (unsigned long long)_const_plan.total_size(),
+                    (unsigned long long)_const_plan.total_padding(),
+                    (unsigned long long)_const_plan.max_alignment());
+      for (const auto& entry : _const_plan.entries()) {
+        tty->print_cr("  [PlanEntry] idx=%u, name=%s, size=%llu, align=%llu, planned_offset=%llu",
+                      entry._section_index, entry._section_name.c_str(),
+                      (unsigned long long)entry._size,
+                      (unsigned long long)entry._alignment,
+                      (unsigned long long)entry._consts_offset);
+      }
+    }
+  }
+
+  // Testing only: start the stubs section empty, so the first stub this
+  // method emits goes through CodeBuffer::expand(). This makes the expansion
+  // path, which re-divides every section including a planned consts section,
+  // reachable on demand instead of only when a workload happens to outgrow
+  // the stubs reservation.
+  if (JeandleStressCodeBufferExpand) {
+    layout.stubs_payload = 0;
+  }
+
+  // CodeBuffer::initialize(inst_size, locs, stubs, oop_recorder) forwards
+  // `inst_size + stubs_size` as the raw code budget, so code_size_input must NOT
+  // already contain the stubs payload. Using
+  // insts + consts + stubs here would reserve the stubs twice.
+  layout.code_size_input = layout.insts_payload + layout.consts_payload;
+
+  if (CodeBufferInstrumentation::enabled()) {
+    tty->print_cr("[JeandleInstallLayout] method=%s insts=%zu consts=%zu stubs=%zu locs=%zu code_size_input=%zu strategy=%s locs_strategy=%s",
+                  _func_name.c_str(), layout.insts_payload, layout.consts_payload,
+                  layout.stubs_payload, layout.locs_payload, layout.code_size_input,
+                  layout.used_legacy_fallback ? "legacy" : "exact",
+                  layout.locs_plan_status);
+  }
+}
+
+void JeandleCompiledCode::record_finalize_telemetry(const InstallLayoutCore& layout) {
+  if (!CodeBufferInstrumentation::enabled()) return;
+  // Early-return failure paths may reach the destructor before the CodeBuffer
+  // ever owned a blob; those are simply not measured.
+  if (_code_buffer.blob() == nullptr) return;
+
+  int64_t actual_used = (int64_t)_code_buffer.consts()->size();
+
+  CodeBufferInstrumentation::instance()->record_finalize(&_code_buffer,
+    (int)_code_buffer.consts()->size(),
+    (int)_code_buffer.consts()->capacity(),
+    (int)_code_buffer.insts()->size(),
+    (int)_code_buffer.stubs()->size(),
+    (int)_planned_consts_size,
+    (int)_planned_padding,
+    (int)_planned_alignment,
+    (int)_planned_entries,
+    _plan_status,
+    _used_exact_allocation,
+    _layout_fallback_count);
+
+  // Pull the relocation census for this buffer into the same record. The planned
+  // column comes from the layout decision, which is the only place that knows whether the
+  // record model sized the section or HotSpot's heuristic did.
+  int planned_locs[CodeBuffer::SECT_LIMIT];
+  for (int s = 0; s < (int)CodeBuffer::SECT_LIMIT; s++) {
+    planned_locs[s] = layout.used_exact_locs ? (int)layout.planned_locs_bytes[s] : -1;
+  }
+  CodeBufferInstrumentation::instance()->record_locs(&_code_buffer, planned_locs);
+
+  // The record census lives in CodeBuffer only in non-product builds, so everything that
+  // reads it is compiled out with it. The locs plan itself is not: JeandleExactLocs is a
+  // product flag and the reservation works in a release JVM - which is the right split, a
+  // changed allocation in both builds and a measurement facility in the one that can use it.
+  // The member must exist in product builds; fastdebug does not surface it.
+#ifndef PRODUCT
+  if (layout.used_exact_locs || _locs_planned) {
+    // Reported whenever a plan was computed, in both arms of the A/B: the numbers are only
+    // comparable if the same work and the same lines happen on both sides.
+    // The claim per section: the relocation array that was allocated held
+    // every record that was written, and never had to be reallocated to do it. `slots` are
+    // relocInfo elements (2 bytes each).
+    const bool planned_applied = layout.used_exact_locs;
+    const int insts_used   = _code_buffer.insts()->locs_count();
+    const int insts_cap    = _code_buffer.insts()->locs_capacity();
+    const int consts_used  = _code_buffer.consts()->has_locs() ? _code_buffer.consts()->locs_count() : 0;
+    const int stubs_used   = _code_buffer.stubs()->has_locs() ? _code_buffer.stubs()->locs_count() : 0;
+    tty->print_cr("[JeandleLocsTotal] method=%s planned_slots=%zu actual_slots=%d capacity_slots=%d "
+                  "consts_slots=%d stubs_slots=%d expands=%d records=%d fillers=%d legacy_slots=%zu applied=%d",
+                  _func_name.c_str(), layout.planned_locs_elements[CodeBuffer::SECT_INSTS],
+                  insts_used, insts_cap, consts_used, stubs_used,
+                  _code_buffer.locs_expand_count(CodeBuffer::SECT_INSTS),
+                  _code_buffer.reloc_records(CodeBuffer::SECT_INSTS, relocInfo::static_call_type) +
+                  _code_buffer.reloc_records(CodeBuffer::SECT_INSTS, relocInfo::opt_virtual_call_type) +
+                  _code_buffer.reloc_records(CodeBuffer::SECT_INSTS, relocInfo::virtual_call_type) +
+                  _code_buffer.reloc_records(CodeBuffer::SECT_INSTS, relocInfo::runtime_call_type) +
+                  _code_buffer.reloc_records(CodeBuffer::SECT_INSTS, relocInfo::metadata_type) +
+                  _code_buffer.reloc_records(CodeBuffer::SECT_INSTS, relocInfo::jeandle_section_word_type) +
+                  _code_buffer.reloc_records(CodeBuffer::SECT_INSTS, relocInfo::jeandle_oop_type),
+                  _code_buffer.locs_gap_fillers(CodeBuffer::SECT_INSTS),
+                  (size_t)(LEGACY_LOCS_SIZE / sizeof(relocInfo)),
+                  planned_applied ? 1 : 0);
+
+#ifdef ASSERT
+    // The safety claim: what the sections
+    // hold must fit what the record model asked for. Unlike consts, an under-provisioned
+    // locs array is not a corruption risk - CodeSection::relocate() grows it - so a
+    // violation here means the model missed a record, which is exactly what the
+    // planned/actual columns are for.
+    for (int s = 0; s < (int)CodeBuffer::SECT_LIMIT; s++) {
+      const CodeSection* cs = _code_buffer.code_section(s);
+      const int used = cs->has_locs() ? cs->locs_count() : 0;
+      if (used > (int)layout.planned_locs_elements[s] + (int)relocInfo::length_limit) {
+        // Dump the census of the offending section before asserting. The assert says how
+        // far off the model was; only the per-kind tally says which emitter it missed,
+        // and without it the fix would be guesswork over a
+        // rebuild cycle of many minutes.
+        tty->print_cr("[JeandleLocsViolation] method=%s section=%d used=%d planned=%zu status=%s",
+                      _func_name.c_str(), s, used,
+                      layout.planned_locs_elements[s], layout.locs_plan_status);
+        static const char* const section_names[CodeBuffer::SECT_LIMIT] =
+            { "consts", "insts", "stubs" };
+        for (int kind = 0; kind < CodeBuffer::reloc_kind_count(); kind++) {
+          const int count = _code_buffer.reloc_records(s, kind);
+          if (count == 0) {
+            continue;
+          }
+          tty->print_cr("  [ViolationCensus] %s kind=%s records=%d slots=%d",
+                        section_names[s], JeandleRelocPlan::type_name((relocInfo::relocType)kind),
+                        count, _code_buffer.reloc_elements(s, kind));
+        }
+        for (int kind = 0; kind < CodeBuffer::reloc_kind_count(); kind++) {
+          const int planned = _planned_locs_kinds[s][kind];
+          if (planned > 0) {
+            tty->print_cr("  [ViolationPlan] %s kind=%s expected=%d",
+                          section_names[s],
+                          JeandleRelocPlan::type_name((relocInfo::relocType)kind), planned);
+          }
+        }
+      }
+      assert(used <= (int)layout.planned_locs_elements[s] + (int)relocInfo::length_limit,
+             "locs section %d holds %d slots, planned %zu payload slots; the record model "
+             "missed a relocation (status %s)",
+             s, used, layout.planned_locs_elements[s], layout.locs_plan_status);
+    }
+    // The stronger claim: with the headroom
+    // JeandleRelocPlan adds, relocate() should never have needed to reallocate. Reported
+    // as a counter rather than asserted, because an expansion is a performance miss, not a
+    // correctness failure, and the run must survive long enough to say which methods miss.
+    if (_code_buffer.locs_expand_count(CodeBuffer::SECT_INSTS) +
+        _code_buffer.locs_expand_count(CodeBuffer::SECT_CONSTS) +
+        _code_buffer.locs_expand_count(CodeBuffer::SECT_STUBS) > 0) {
+      ConstLayoutStats::record_locs_expand_after_plan();
+    }
+#endif // ASSERT
+  }
+#endif // PRODUCT
+
+  if (_used_exact_allocation) {
+    int64_t allocated = (int64_t)_code_buffer.consts()->capacity();
+    // CodeBuffer::initialize_section_size() picks the division point as
+    //   middle = (limit - requested) rounded DOWN to the section alignment
+    // and then grants capacity = limit - middle, i.e.
+    //   capacity = requested + ((limit - requested) & (alignment - 1)).
+    // The extra bytes depend on the absolute blob address (unknown until
+    // BufferBlob::create() runs inside initialize()), not on the request, so
+    // they cannot be planned away -- only bounded, by (alignment - 1).
+    // The governing alignment is the EFFECTIVE one: CodeBuffer floors it at
+    // sizeof(jdouble) via set_const_section_alignment(align_up(align,
+    // HeapWordSize)), so it is NOT necessarily _const_plan.max_alignment().
+    // Reading it back here keeps the bound tied to what CodeBuffer really did.
+    int64_t effective_align = (int64_t)_code_buffer.consts()->alignment();
+    // How many times this CodeBuffer grew. CodeBuffer::expand() keeps the dead
+    // incarnation on a chain, so the length of that chain is the expand count.
+    int expand_chain = 0;
+    for (const CodeBuffer* cb = _code_buffer.before_expand(); cb != nullptr; cb = cb->before_expand()) {
+      ++expand_chain;
+    }
+    tty->print_cr("[JeandleConstTotal] Method: %s, planned=%lld, allocated=%lld, actual=%lld, diff=%lld, entries=%zu, fallback=%d, align=%lld, expands=%d",
+                  _func_name.c_str(),
+                  (long long)_planned_consts_size, (long long)allocated,
+                  (long long)actual_used,
+                  (long long)(actual_used - _planned_consts_size),
+                  (size_t)_planned_entries, _layout_fallback_count,
+                  (long long)effective_align, expand_chain);
+
+    // Three separate claims, deliberately scoped differently:
+    //   actual    <= allocated   we never wrote past what we reserved; holds
+    //                            unconditionally, this is the safety net.
+    //   actual    == planned     the payload is byte-for-byte what the planner
+    //                            predicted; unaffected by how the section was
+    //                            sized, so also unconditional.
+    //   allocated - planned < A  the address-rounding residual stays below one
+    //                            alignment step. This one only holds for a
+    //                            buffer that was divided up exactly once.
+    //
+    // The bound is derived from CodeBuffer::initialize_section_size(), which
+    // splits the blob that initialize() allocated. Any section expanding later
+    // (in -Xcomp runs it is the un-modelled stubs section, still on its legacy
+    // reservation) makes CodeBuffer::expand() allocate a larger blob and
+    // re-divide every section from the recorded size specs, so the consts
+    // capacity is then bounded by the new blob layout, not by `planned + A - 1`.
+    // A stubs expansion can leave an empty consts plan holding
+    // exactly CodeSection::end_slop() (64) bytes of capacity. Claiming the
+    // rounding bound there would assert on a CodeBuffer that did nothing wrong;
+    // the expand count is printed above so the case stays observable.
+#ifdef ASSERT
+    assert(actual_used <= allocated, "consts wrote past reserved capacity");
+    if (_layout_fallback_count == 0) {
+      assert(actual_used == _planned_consts_size,
+             "exact allocation must emit exactly the planned consts bytes");
+      if (expand_chain == 0) {
+        assert(allocated >= _planned_consts_size,
+               "allocated consts must cover the planned size");
+        assert((uint64_t)(allocated - _planned_consts_size) < (uint64_t)effective_align,
+               "consts capacity over-allocation must stay within one alignment step");
+      }
+    }
+#endif
+  }
+}
+
+void JeandleCompiledCode::emit_planned_const_sections(JeandleAssembler& assembler) {
+  if (!_const_plan.is_valid() || _const_plan.is_empty()) {
+    return;
+  }
+
+  // The alignment was published to both _code_buffer and the compilation in
+  // decide_install_layout(). Check the compilation-level value: it is the one
+  // CodeBuffer::expand() reads, so a broken link fails here, next to its
+  // cause, rather than at the first expansion.
+  assert(JeandleCompilation::current()->const_section_alignment() >= (int)_const_plan.max_alignment(),
+         "planned consts alignment must be visible to CodeBuffer::expand()");
+
+  address consts_start = _code_buffer.consts()->start();
+  // NOTE: set_const_section_alignment() must not be called here. It is too late
+  // at this point: CodeBuffer::initialize() already consumed the alignment to
+  // size the blob and to pick the consts division point. It is called in
+  // decide_install_layout(), which runs before any allocation.
+
+  for (const auto& entry : _const_plan.entries()) {
+    // Direct zero-parsing retrieval using plan entry properties
+    address src = ((address)_obj->getBufferStart()) + entry._elf_offset;
+    address expected_base = consts_start + entry._consts_offset;
+    address current_end = _code_buffer.consts()->end();
+    assert(current_end <= expected_base, "consts buffer overlap or layout inversion");
+
+    if (expected_base > current_end) {
+      // Zero the alignment gap. BufferBlob memory is reused across
+      // compilations, so leaving it untouched puts stale bytes inside the
+      // nmethod's consts section and makes dumps and future byte-comparisons
+      // non-deterministic.
+      memset(current_end, 0, (size_t)(expected_base - current_end));
+      _code_buffer.consts()->set_end(expected_base);
+    }
+
+    // Direct memory copy to planned location
+    memcpy(expected_base, src, (size_t)entry._size);
+    _code_buffer.consts()->set_end(expected_base + entry._size);
+
+    // Primary identity indexing
+    _const_section_addrs_by_index.insert({entry._section_index, expected_base});
+    _const_sections.insert({entry._section_name, expected_base});
+
+    if (CodeBufferInstrumentation::enabled()) {
+      tty->print_cr("[JeandlePlannedEmit] Method: %s, Section: %s, idx=%u, offset=%llu, size=%llu, base=" PTR_FORMAT,
+                    _func_name.c_str(), entry._section_name.c_str(), entry._section_index,
+                    (unsigned long long)entry._consts_offset,
+                    (unsigned long long)entry._size,
+                    p2i(expected_base));
+    }
+  }
+
+  // Strict assert decoupled from fallback
+  if (!_used_const_layout_fallback) {
+    assert(_code_buffer.consts()->size() == (int)_const_plan.total_size(),
+           "emitted consts size must strictly match planned total size");
+  }
+}
+
+address JeandleCompiledCode::lookup_const_section(uint32_t section_index, JeandleAssembler& assembler) {
+  // Primary lookup by ELF section index (canonical identity)
+  auto it = _const_section_addrs_by_index.find(section_index);
+  if (it != _const_section_addrs_by_index.end()) {
+    return it->second;
+  }
+
+  const auto* entry = _const_plan.find_by_index(section_index);
+  if (entry != nullptr) {
+    auto it_name = _const_sections.find(entry->_section_name);
+    if (it_name != _const_sections.end()) {
+      _const_section_addrs_by_index.insert({section_index, it_name->getValue()});
+      return it_name->getValue();
+    }
+    return lookup_const_section_fallback(entry->_section_name, assembler);
+  }
+
+  return nullptr;
+}
+
+address JeandleCompiledCode::lookup_const_section(llvm::StringRef name, JeandleAssembler& assembler) {
+  // Resolve name to canonical index if present in plan
+  const auto* entry = _const_plan.find_by_name(name.str());
+  if (entry != nullptr) {
+    return lookup_const_section(entry->_section_index, assembler);
+  }
+
+  // Check name cache
+  auto it = _const_sections.find(name);
+  if (it != _const_sections.end()) {
+    return it->getValue();
+  }
+
+  // Fallback for unpredicted / unexpected sections
+  return lookup_const_section_fallback(name, assembler);
+}
+
+address JeandleCompiledCode::lookup_const_section_fallback(llvm::StringRef name, JeandleAssembler& assembler) {
+  _used_const_layout_fallback = true;
+  _layout_fallback_count++;
+  ConstLayoutStats::record_fallback();
+
+  // This degradation is made *visible* rather than
+  // silent: an unplanned section can only be discovered while
+  // resolving relocations, long after the allocation decision was made, so it
+  // may legitimately force a consts expansion. It is recorded, counted and
+  // attributed, never presented as a target.
+  if (CodeBufferInstrumentation::enabled()) {
+    tty->print_cr("[JeandleFallback] method=%s const section=%s not covered by ConstSectionPlan; "
+                  "falling back to dynamic discovery/append",
+                  _func_name.c_str(), name.str().c_str());
+  }
+
+  SectionInfo section_info(name);
+  bool found = find_section_cached(name, section_info);
+  JEANDLE_ERROR_ASSERT_AND_RET_ON_FAIL(found, "const section not found, bad ELF file", nullptr);
+
+  address target_base = _code_buffer.consts()->end();
+  int padding = assembler.emit_consts(((address) _obj->getBufferStart()) + section_info._offset,
+                                       section_info._size,
+                                       section_info._alignment);
+  target_base += padding;
+  _const_sections.insert({name, target_base});
+  return target_base;
 }
 
 address JeandleCompiledCode::resolve_const_reloc_site(LinkBlock& block, LinkEdge& edge, JeandleAssembler& assembler) {
@@ -474,6 +1610,19 @@ address JeandleCompiledCode::resolve_const_reloc_site(LinkBlock& block, LinkEdge
   if (section_base == nullptr) {
     return nullptr;
   }
+
+#ifdef ASSERT
+  if (_const_plan.is_valid() && !_used_const_layout_fallback) {
+    address consts_begin = _code_buffer.consts()->start();
+    assert(section_base >= consts_begin, "const section base must be inside consts section");
+    const auto* entry = _const_plan.find_by_name(section_name.str());
+    if (entry != nullptr) {
+      assert(entry->_consts_offset <= _const_plan.total_size(), "entry offset overflow");
+      assert(entry->_size <= _const_plan.total_size() - entry->_consts_offset, "entry size overflow");
+      assert(section_base == consts_begin + entry->_consts_offset, "const section base does not match planned offset");
+    }
+  }
+#endif
 
   llvm::jitlink::SectionRange range(block.getSection());
   uint64_t offset_in_section = block.getAddress() - range.getFirstBlock()->getAddress();
@@ -489,6 +1638,19 @@ address JeandleCompiledCode::resolve_const_edge(LinkBlock& block, LinkEdge& edge
   if (target_base == nullptr) {
     return nullptr;
   }
+
+#ifdef ASSERT
+  if (_const_plan.is_valid() && !_used_const_layout_fallback) {
+    address consts_begin = _code_buffer.consts()->start();
+    assert(target_base >= consts_begin, "const section base must be inside consts section");
+    const auto* entry = _const_plan.find_by_name(target_name.str());
+    if (entry != nullptr) {
+      assert(entry->_consts_offset <= _const_plan.total_size(), "entry offset overflow");
+      assert(entry->_size <= _const_plan.total_size() - entry->_consts_offset, "entry size overflow");
+      assert(target_base == consts_begin + entry->_consts_offset, "const section base does not match planned offset");
+    }
+  }
+#endif
 
   llvm::jitlink::SectionRange range(target_section);
   uint64_t offset_in_section = target.getAddress() - range.getFirstBlock()->getAddress();
@@ -1147,7 +2309,7 @@ JeandleStackMap* JeandleCompiledCode::parse_stackmap(StackMapParser& stackmaps,
 
 void JeandleCompiledCode::build_exception_handler_table() {
   SectionInfo except_table_section(".gcc_except_table");
-  if (ReadELF::findSection(*_elf, except_table_section)) {
+  if (find_section_cached(".gcc_except_table", except_table_section)) {
     // Start of the exception handler table.
     const char* except_table_pointer = object_start() + except_table_section._offset;
 
@@ -1195,7 +2357,7 @@ void JeandleCompiledCode::build_exception_handler_table() {
 
 void JeandleCompiledCode::build_implicit_exception_table() {
   SectionInfo section_info(".llvm_faultmaps");
-  if (!ReadELF::findSection(*_elf, section_info)) {
+  if (!find_section_cached(".llvm_faultmaps", section_info)) {
       // No implicit exception table.
       return;
   }

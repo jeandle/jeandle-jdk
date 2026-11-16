@@ -207,7 +207,7 @@ void JeandleAssembler::emit_clinit_barrier_on_entry(Klass* klass) {
   __ bind(fallthrough);
 }
 
-int JeandleAssembler::interior_entry_alignment() const {
+int JeandleAssembler::interior_entry_alignment() {
   // Keep interior entry 16-byte aligned (matches default HotSpot interior entry alignment).
   return 16;
 }
@@ -377,4 +377,121 @@ void JeandleEntryBarrierStub::emit(MacroAssembler* _masm) {
   __ bind(guard());
   __ relocate(entry_guard_Relocation::spec());
   __ emit_int32(0);   // nmethod guard value
+}
+
+int JeandleAssembler::ic_check_upper_bound() {
+  // cmp_klass + far_jump + align(CodeEntryAlignment)
+  return 64;
+}
+
+int JeandleAssembler::poisoned_osr_entry_upper_bound() {
+  // ebreak
+  return 4;
+}
+
+int JeandleAssembler::verified_entry_upper_bound() {
+  // nop
+  return 4;
+}
+
+int JeandleAssembler::clinit_barrier_upper_bound() {
+  // mov_metadata + clinit_barrier + far_jump
+  return 64;
+}
+
+int JeandleAssembler::stack_bang_instruction_size() {
+  // sub + sd (up to 4 instructions)
+  return 16;
+}
+
+int JeandleAssembler::nmethod_entry_barrier_upper_bound() {
+  // atomic check + branch
+  return 36;
+}
+
+int JeandleAssembler::entry_barrier_stub_upper_bound() {
+  // addi + sd + movptr + jalr + ld + addi + j + guard word
+  return 40;
+}
+
+int JeandleAssembler::exception_handler_upper_bound() {
+  // far_branch_size (6 instructions = 24 bytes)
+  return 24;
+}
+
+int JeandleAssembler::deopt_handler_upper_bound() {
+  // deopt_handler_size() = auipc + far_branch = 4 + 20 = 24 bytes
+  return 24;
+}
+
+int JeandleAssembler::static_call_stub_upper_bound() {
+  // 14 * NativeInstruction::instruction_size + (4 + 16) = 76 bytes
+  return 76;
+}
+
+int JeandleAssembler::trampoline_call_stub_upper_bound() {
+  // max_trampoline_stub_size() = NativeInstruction::instruction_size + NativeCallTrampolineStub::instruction_size (32 bytes)
+  return 32;
+}
+
+// ---------------------------------------------------------------------------
+// Relocation record census for this architecture.
+// ---------------------------------------------------------------------------
+//
+// RISC-V reaches a call target with auipc + jalr when the branch is too far for one
+// instruction, and every such trampoline records the call site that owns it. Runtime calls
+// share one trampoline per target (MacroAssembler::trampoline_call hands
+// runtime_call_type edges to CodeBuffer::share_trampoline_for), but sharing changes the
+// number of *stubs*, not the number of *records*: emit_shared_trampolines() in
+// codeBuffer_riscv.cpp writes one trampoline_stub record per caller offset.
+bool JeandleAssembler::needs_trampoline_branches() {
+  return MacroAssembler::far_branches();
+}
+
+bool JeandleAssembler::shares_runtime_call_trampolines() {
+  return CodeBuffer::supports_shared_stubs();
+}
+
+bool JeandleAssembler::entry_barrier_calls_runtime_stub() {
+  // JeandleEntryBarrierStub::emit() above loads the barrier routine with movptr + jalr,
+  // which relocates nothing; the guard word below it is the record.
+  return false;
+}
+
+bool JeandleAssembler::static_call_stub_has_metadata_record() {
+  // MacroAssembler::emit_static_call_stub() starts with mov_metadata(xmethod, nullptr),
+  // which relocates with metadata_type (macroAssembler_riscv.cpp).
+  return true;
+}
+
+bool JeandleAssembler::static_call_stub_has_runtime_call_record() {
+  // The rest of that stub is movptr + jalr over a plain address: no relocation record.
+  return false;
+}
+
+// Unlike x86_64 and AArch64, RISC-V does not fall back to the generic packing:
+// pd_pack_data_to() writes the record's own fields (relocInfo_riscv.cpp), including the
+// `_rel_offset` that a R_RISCV_PCREL_LO12_I edge carries relative to its HI20 partner -
+// and such a pair contributes one record per edge, because
+// JeandleAssembler::is_section_word_reloc() accepts both halves of the pair.
+bool JeandleAssembler::runtime_call_needs_trampoline(address target) {
+  return true;
+}
+
+int JeandleAssembler::reloc_record_data_halfwords(relocInfo::relocType type) {
+  switch (type) {
+    case relocInfo::jeandle_oop_type:
+      // _oop_index, _offset, and _rel_offset as hi/lo: 4 jints.
+      return 8;
+    case relocInfo::jeandle_oop_addr_type:
+      // Same shape as jeandle_oop_Relocation.
+      return 8;
+    case relocInfo::jeandle_section_word_type:
+      // section offset hi/lo, _section, _offset and _rel_offset hi/lo: 6 jints, which is
+      // also why RelocationHolder gives RISC-V 6 instead of 5 pointer-sized slots.
+      return 12;
+    default:
+      ShouldNotReachHere();
+      return 0;
+  }
 }
