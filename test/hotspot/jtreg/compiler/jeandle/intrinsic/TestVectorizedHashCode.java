@@ -685,6 +685,14 @@ public class TestVectorizedHashCode {
         if (dynDumpContains(dumpsA, "<16 x i32>")) {
             throw new AssertionError("UseAVX=2 IR unexpectedly retains 16-lane hash IR");
         }
+        for (String method : new String[]{"hashShortConst8", "hashCharConst8", "hashUtf16Const8"}) {
+            for (java.nio.file.Path dump : requireDumps(dumpsA, method)) {
+                String text = dumpText(dump);
+                if (!text.contains("mul <4 x i32>") || text.contains("load <8 x i16>")) {
+                    throw new AssertionError("short word hash must use narrow vector reads: " + dump);
+                }
+            }
+        }
         // Tier boundaries: 7 stays on the scalar tail, 31 takes the single-
         // accumulator mid tier (its blocks of eight fit three short chains),
         // and 32 enters the grouped vector loop.

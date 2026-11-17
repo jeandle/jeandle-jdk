@@ -22,7 +22,7 @@
 
 /*
  * @test
- * @summary Hash results in virtual arrays survive active-frame deoptimization
+ * @summary Vectorized virtual-array hashes survive GC and active-frame deoptimization
  * @requires (vm.cpu.features ~= ".*avx2.*") | (vm.simpleArch == "aarch64")
  * @library /test/lib /
  * @modules java.base/jdk.internal.misc
@@ -90,6 +90,7 @@ public class TestVectorizedHashCodeDeopt {
         PEATestUtils.IRBody after = report.finalAfter();
         Asserts.assertEquals(after.peaAllocCount(), 0, "array remains virtual at the checkpoint");
         after.assertAbsent("jeandle.vectorized_hashcode");
+        report.rounds().get(0).after().assertPresent("mul <4 x i32>");
         PEATestUtils.IRBody lowered = PEATestUtils.finalIR(dumps, id);
         Asserts.assertEquals(lowered.loweredAllocCount(), 0, "final code does not allocate");
         lowered.assertAbsent("%tlab_");
@@ -100,7 +101,7 @@ public class TestVectorizedHashCodeDeopt {
         PEATestUtils.VirtualObjectDescriptor array = bundle.virtualObject(0);
         Asserts.assertEquals(array.kind(), PEATestUtils.DescriptorKind.ARRAY, "virtual array descriptor");
         int base = Unsafe.ARRAY_INT_BASE_OFFSET;
-        Asserts.assertEquals(array.elements().size(), 4, "all four initialized cells are described");
+        Asserts.assertEquals(array.elements().size(), 40, "all initialized cells are described");
         PEATestUtils.DeoptValue hash = bundle.rootScope().locals().get(4);
         Asserts.assertNotNull(hash, "live scalar hash local");
         Asserts.assertEquals(hash.kind(), PEATestUtils.DeoptValueKind.SCALAR, "hash is scalar state");
@@ -131,14 +132,27 @@ public class TestVectorizedHashCodeDeopt {
         }
 
         static int target(int value, boolean trigger) {
-            int[] a = {value, 7, 0, -1};
+            int[] a = {
+                    value, 7, 0, -1, value + 4, value + 5,
+                    value + 6, value + 7, value + 8, value + 9, value + 10, value + 11,
+                    value + 12, value + 13, value + 14, value + 15, value + 16, value + 17,
+                    value + 18, value + 19, value + 20, value + 21, value + 22, value + 23,
+                    value + 24, value + 25, value + 26, value + 27, value + 28, value + 29,
+                    value + 30, value + 31, value + 32, value + 33, value + 34, value + 35,
+                    value + 36, value + 37, value + 38, value + 39
+            };
             int[] alias = a;
             int hash = Arrays.hashCode(a);
             a[2] = hash;
             checkpoint(trigger);
-            if (a != alias || alias.length != 4 || alias[0] != value
+            if (a != alias || alias.length != 40 || alias[0] != value
                     || alias[1] != 7 || alias[2] != hash || alias[3] != -1) {
                 throw new AssertionError("reconstructed array identity or cells");
+            }
+            for (int i = 4; i < alias.length; i++) {
+                if (alias[i] != value + i) {
+                    throw new AssertionError("reconstructed vector input cell " + i);
+                }
             }
             alias[1]++;
             if (a[1] != 8) {
@@ -174,7 +188,8 @@ public class TestVectorizedHashCodeDeopt {
             }
             PEATestUtils.enqueueAndAwaitLevel4(TARGET);
             int hash = 1;
-            for (int cell : new int[]{value, 7, 0, -1}) {
+            for (int i = 0; i < 40; i++) {
+                int cell = i == 0 ? value : i == 1 ? 7 : i == 2 ? 0 : i == 3 ? -1 : value + i;
                 hash = 31 * hash + cell;
             }
             int actual = target(value, true);

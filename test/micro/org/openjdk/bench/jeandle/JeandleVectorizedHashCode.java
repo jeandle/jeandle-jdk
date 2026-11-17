@@ -71,6 +71,7 @@ public class JeandleVectorizedHashCode {
     // loop; a fresh field read keeps every iteration's call site dynamic.
     volatile byte[] bytes;
     volatile char[] chars;
+    volatile short[] shorts;
     volatile int[] ints;
     volatile int[] scalarInputs;
     volatile char[] latinChars;
@@ -83,14 +84,17 @@ public class JeandleVectorizedHashCode {
     public void setup() {
         byte[] b = new byte[length];
         char[] c = new char[length];
+        short[] sh = new short[length];
         int[] ia = new int[length];
         for (int i = 0; i < length; i++) {
             b[i] = (byte) (i * 31 + 0x80);
             c[i] = (char) (i * 131 + 0x100);
+            sh[i] = (short) (i * 131 + 0x8000);
             ia[i] = i * 0x9E3779B9;
         }
         bytes = b;
         chars = c;
+        shorts = sh;
         ints = ia;
         int[] scalar = new int[40];
         for (int i = 0; i < scalar.length; i++) {
@@ -129,6 +133,18 @@ public class JeandleVectorizedHashCode {
     @Benchmark
     public int intArrayHashCode() {
         return Arrays.hashCode(ints);
+    }
+
+    @Benchmark
+    public int copiedCharArrayHashCode() {
+        char[] source = chars;
+        return Arrays.hashCode(Arrays.copyOf(source, source.length));
+    }
+
+    @Benchmark
+    public int copiedShortArrayHashCode() {
+        short[] source = shorts;
+        return Arrays.hashCode(Arrays.copyOf(source, source.length));
     }
 
     // First hash, including construction and encoding of the new String.

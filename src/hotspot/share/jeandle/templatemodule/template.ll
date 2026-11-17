@@ -2412,6 +2412,8 @@ entry:
 ; accumulators hide the vector multiply latency. The 64-element tier feeds
 ; its remainder through the 32-element tier. Remaining groups of eight precede
 ; a pairwise scalar tail, h = 961*h + 31*x + y, as in C2/Graal.
+; Word inputs of 8..15 elements use two 4-lane reads, matching buffers
+; initialized by separate 8-byte stores.
 ; Signed length comparisons make empty/negative counts return initialValue.
 ; T_BOOLEAN reads unsigned bytes and T_CHAR unsigned native-order shorts
 ; from a byte[] payload, matching StringLatin1/StringUTF16.
@@ -2627,7 +2629,26 @@ char.mid.select:
   ; Short inputs and grouped-loop remainders use one 8-lane accumulator
   ; before the scalar tail.
   %char.ge8 = icmp sge i64 %char.remaining, 8
-  br i1 %char.ge8, label %char.mid.check, label %char.tail
+  br i1 %char.ge8, label %char.mid.dispatch, label %char.tail
+char.mid.dispatch:
+  %char.is.short = icmp ult i64 %char.count, 16
+  br i1 %char.is.short, label %char.short, label %char.mid.check
+char.short:
+  ; Two narrow reads also cover buffers initialized by separate word stores.
+  %char.short.p0 = getelementptr i16, ptr addrspace(1) %char.data, i64 %char.start
+  %char.short.i1 = add i64 %char.start, 4
+  %char.short.p1 = getelementptr i16, ptr addrspace(1) %char.data, i64 %char.short.i1
+  %char.short.raw0 = load <4 x i16>, ptr addrspace(1) %char.short.p0, align 2
+  %char.short.raw1 = load <4 x i16>, ptr addrspace(1) %char.short.p1, align 2
+  %char.short.v0 = zext <4 x i16> %char.short.raw0 to <4 x i32>
+  %char.short.v1 = zext <4 x i16> %char.short.raw1 to <4 x i32>
+  %char.short.w0 = mul <4 x i32> %char.short.v0, <i32 1742810335, i32 887503681, i32 28629151, i32 923521>
+  %char.short.w1 = mul <4 x i32> %char.short.v1, <i32 29791, i32 961, i32 31, i32 1>
+  %char.short.sum = add <4 x i32> %char.short.w0, %char.short.w1
+  %char.short.reduced = call i32 @llvm.vector.reduce.add.v4i32(<4 x i32> %char.short.sum)
+  %char.short.seed = mul i32 %initialValue, 2487512833
+  %char.short.hash = add i32 %char.short.seed, %char.short.reduced
+  br label %char.tail
 char.w16.check:
   %char.w16.k = phi i64 [ 0, %char.entry ], [ %char.w16.k.next, %char.w16.body ]
   %char.w16.h = phi i32 [ %initialValue, %char.entry ], [ %char.w16.h.next, %char.w16.body ]
@@ -2731,9 +2752,9 @@ char.w8.done:
   %char.h.final = add i32 %char.h, %char.reduced
   br label %char.mid.check
 char.mid.check:
-  %char.mid.k = phi i64 [ %char.k.begin, %char.mid.select ], [ %char.k, %char.w8.done ], [ %char.mid.k.next, %char.mid.body ]
-  %char.mid.h = phi i32 [ %char.h.begin, %char.mid.select ], [ %char.h.final, %char.w8.done ], [ %char.mid.h.next, %char.mid.body ]
-  %char.mid.acc = phi <8 x i32> [ zeroinitializer, %char.mid.select ], [ zeroinitializer, %char.w8.done ], [ %char.mid.acc.next, %char.mid.body ]
+  %char.mid.k = phi i64 [ %char.k.begin, %char.mid.dispatch ], [ %char.k, %char.w8.done ], [ %char.mid.k.next, %char.mid.body ]
+  %char.mid.h = phi i32 [ %char.h.begin, %char.mid.dispatch ], [ %char.h.final, %char.w8.done ], [ %char.mid.h.next, %char.mid.body ]
+  %char.mid.acc = phi <8 x i32> [ zeroinitializer, %char.mid.dispatch ], [ zeroinitializer, %char.w8.done ], [ %char.mid.acc.next, %char.mid.body ]
   %char.mid.end = add i64 %char.count, -7
   %char.mid.more = icmp slt i64 %char.mid.k, %char.mid.end
   br i1 %char.mid.more, label %char.mid.body, label %char.mid.done
@@ -2753,8 +2774,8 @@ char.mid.done:
   %char.mid.h.final = add i32 %char.mid.h, %char.mid.sum
   br label %char.tail
 char.tail:
-  %char.t = phi i64 [ %char.k.begin, %char.mid.select ], [ %char.mid.k, %char.mid.done ], [ %char.t.next, %char.tail.body ]
-  %char.t.h = phi i32 [ %char.h.begin, %char.mid.select ], [ %char.mid.h.final, %char.mid.done ], [ %char.t.h.next, %char.tail.body ]
+  %char.t = phi i64 [ 8, %char.short ], [ %char.k.begin, %char.mid.select ], [ %char.mid.k, %char.mid.done ], [ %char.t.next, %char.tail.body ]
+  %char.t.h = phi i32 [ %char.short.hash, %char.short ], [ %char.h.begin, %char.mid.select ], [ %char.mid.h.final, %char.mid.done ], [ %char.t.h.next, %char.tail.body ]
   %char.pair.end = add i64 %char.count, -1
   %char.pair.more = icmp slt i64 %char.t, %char.pair.end
   br i1 %char.pair.more, label %char.tail.body, label %char.tail.last
@@ -2983,7 +3004,26 @@ short.mid.select:
   ; Short inputs and grouped-loop remainders use one 8-lane accumulator
   ; before the scalar tail.
   %short.ge8 = icmp sge i64 %short.remaining, 8
-  br i1 %short.ge8, label %short.mid.check, label %short.tail
+  br i1 %short.ge8, label %short.mid.dispatch, label %short.tail
+short.mid.dispatch:
+  %short.is.short = icmp ult i64 %short.count, 16
+  br i1 %short.is.short, label %short.short, label %short.mid.check
+short.short:
+  ; Two narrow reads also cover buffers initialized by separate word stores.
+  %short.short.p0 = getelementptr i16, ptr addrspace(1) %short.data, i64 %short.start
+  %short.short.i1 = add i64 %short.start, 4
+  %short.short.p1 = getelementptr i16, ptr addrspace(1) %short.data, i64 %short.short.i1
+  %short.short.raw0 = load <4 x i16>, ptr addrspace(1) %short.short.p0, align 2
+  %short.short.raw1 = load <4 x i16>, ptr addrspace(1) %short.short.p1, align 2
+  %short.short.v0 = sext <4 x i16> %short.short.raw0 to <4 x i32>
+  %short.short.v1 = sext <4 x i16> %short.short.raw1 to <4 x i32>
+  %short.short.w0 = mul <4 x i32> %short.short.v0, <i32 1742810335, i32 887503681, i32 28629151, i32 923521>
+  %short.short.w1 = mul <4 x i32> %short.short.v1, <i32 29791, i32 961, i32 31, i32 1>
+  %short.short.sum = add <4 x i32> %short.short.w0, %short.short.w1
+  %short.short.reduced = call i32 @llvm.vector.reduce.add.v4i32(<4 x i32> %short.short.sum)
+  %short.short.seed = mul i32 %initialValue, 2487512833
+  %short.short.hash = add i32 %short.short.seed, %short.short.reduced
+  br label %short.tail
 short.w16.check:
   %short.w16.k = phi i64 [ 0, %short.entry ], [ %short.w16.k.next, %short.w16.body ]
   %short.w16.h = phi i32 [ %initialValue, %short.entry ], [ %short.w16.h.next, %short.w16.body ]
@@ -3087,9 +3127,9 @@ short.w8.done:
   %short.h.final = add i32 %short.h, %short.reduced
   br label %short.mid.check
 short.mid.check:
-  %short.mid.k = phi i64 [ %short.k.begin, %short.mid.select ], [ %short.k, %short.w8.done ], [ %short.mid.k.next, %short.mid.body ]
-  %short.mid.h = phi i32 [ %short.h.begin, %short.mid.select ], [ %short.h.final, %short.w8.done ], [ %short.mid.h.next, %short.mid.body ]
-  %short.mid.acc = phi <8 x i32> [ zeroinitializer, %short.mid.select ], [ zeroinitializer, %short.w8.done ], [ %short.mid.acc.next, %short.mid.body ]
+  %short.mid.k = phi i64 [ %short.k.begin, %short.mid.dispatch ], [ %short.k, %short.w8.done ], [ %short.mid.k.next, %short.mid.body ]
+  %short.mid.h = phi i32 [ %short.h.begin, %short.mid.dispatch ], [ %short.h.final, %short.w8.done ], [ %short.mid.h.next, %short.mid.body ]
+  %short.mid.acc = phi <8 x i32> [ zeroinitializer, %short.mid.dispatch ], [ zeroinitializer, %short.w8.done ], [ %short.mid.acc.next, %short.mid.body ]
   %short.mid.end = add i64 %short.count, -7
   %short.mid.more = icmp slt i64 %short.mid.k, %short.mid.end
   br i1 %short.mid.more, label %short.mid.body, label %short.mid.done
@@ -3109,8 +3149,8 @@ short.mid.done:
   %short.mid.h.final = add i32 %short.mid.h, %short.mid.sum
   br label %short.tail
 short.tail:
-  %short.t = phi i64 [ %short.k.begin, %short.mid.select ], [ %short.mid.k, %short.mid.done ], [ %short.t.next, %short.tail.body ]
-  %short.t.h = phi i32 [ %short.h.begin, %short.mid.select ], [ %short.mid.h.final, %short.mid.done ], [ %short.t.h.next, %short.tail.body ]
+  %short.t = phi i64 [ 8, %short.short ], [ %short.k.begin, %short.mid.select ], [ %short.mid.k, %short.mid.done ], [ %short.t.next, %short.tail.body ]
+  %short.t.h = phi i32 [ %short.short.hash, %short.short ], [ %short.h.begin, %short.mid.select ], [ %short.mid.h.final, %short.mid.done ], [ %short.t.h.next, %short.tail.body ]
   %short.pair.end = add i64 %short.count, -1
   %short.pair.more = icmp slt i64 %short.t, %short.pair.end
   br i1 %short.pair.more, label %short.tail.body, label %short.tail.last
@@ -3955,6 +3995,7 @@ entry:
 
 declare i1 @llvm.vector.reduce.or.v16i1(<16 x i1>)
 declare i1 @llvm.vector.reduce.or.v32i1(<32 x i1>)
+declare i32 @llvm.vector.reduce.add.v4i32(<4 x i32>)
 declare i32 @llvm.vector.reduce.add.v8i32(<8 x i32>)
 declare i32 @llvm.vector.reduce.add.v16i32(<16 x i32>)
 declare i8 @llvm.bitreverse.i8(i8)
