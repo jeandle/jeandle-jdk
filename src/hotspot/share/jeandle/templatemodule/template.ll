@@ -963,6 +963,57 @@ check_subtype:
 }
 
 ; Implementation of Java idiv operation
+; Java round uses ties toward positive infinity and saturates on overflow/NaN.
+; Preserve the semantic call through high-tier optimization, then expand before
+; O3. The shift is evaluated only in its valid LLVM range.
+declare i32 @llvm.fptosi.sat.i32.f32(float)
+define hotspotcc i32 @jeandle.round.float(float %a) noinline nounwind willreturn memory(none) "gc-leaf-function" "lower-phase"="1" {
+entry:
+  %bits = bitcast float %a to i32
+  %raw_exp = lshr i32 %bits, 23
+  %exponent = and i32 %raw_exp, 255
+  %shift = sub i32 149, %exponent
+  %in_range = icmp ult i32 %shift, 32
+  br i1 %in_range, label %round_significand, label %round_cast
+round_significand:
+  %fraction = and i32 %bits, 8388607
+  %significand = or i32 %fraction, 8388608
+  %negative = icmp slt i32 %bits, 0
+  %negated = sub i32 0, %significand
+  %signed_significand = select i1 %negative, i32 %negated, i32 %significand
+  %shifted = ashr i32 %signed_significand, %shift
+  %biased = add i32 %shifted, 1
+  %rounded = ashr i32 %biased, 1
+  ret i32 %rounded
+round_cast:
+  %converted = call i32 @llvm.fptosi.sat.i32.f32(float %a)
+  ret i32 %converted
+}
+
+declare i64 @llvm.fptosi.sat.i64.f64(double)
+define hotspotcc i64 @jeandle.round.double(double %a) noinline nounwind willreturn memory(none) "gc-leaf-function" "lower-phase"="1" {
+entry:
+  %bits = bitcast double %a to i64
+  %raw_exp = lshr i64 %bits, 52
+  %exponent = and i64 %raw_exp, 2047
+  %shift = sub i64 1074, %exponent
+  %in_range = icmp ult i64 %shift, 64
+  br i1 %in_range, label %round_significand, label %round_cast
+round_significand:
+  %fraction = and i64 %bits, 4503599627370495
+  %significand = or i64 %fraction, 4503599627370496
+  %negative = icmp slt i64 %bits, 0
+  %negated = sub i64 0, %significand
+  %signed_significand = select i1 %negative, i64 %negated, i64 %significand
+  %shifted = ashr i64 %signed_significand, %shift
+  %biased = add i64 %shifted, 1
+  %rounded = ashr i64 %biased, 1
+  ret i64 %rounded
+round_cast:
+  %converted = call i64 @llvm.fptosi.sat.i64.f64(double %a)
+  ret i64 %converted
+}
+
 define hotspotcc i32 @jeandle.idiv(i32 %dividend, i32 %divisor) noinline "lower-phase"="0" #0 {
 entry:
   ; Check if dividend == Integer.MIN_VALUE (-2147483648)

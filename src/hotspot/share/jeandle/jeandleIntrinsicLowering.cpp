@@ -134,6 +134,23 @@ bool JeandleIntrinsicLowering::is_supported(vmIntrinsics::ID id) {
     case vmIntrinsics::_bitCount_l:
       return cpu_supports_popcount();
 
+    // Integer/Long.compress/expand lower to BMI2 PEXT/PDEP (see
+    // lower_bit_shuffle). There is no dedicated VM flag gate for these IDs
+    // in vmIntrinsics::disabled_by_jvm_flags(). C2 gates the
+    // CompressBits/ExpandBits match rules on the raw hardware feature bit
+    // (VM_Version::supports_bmi2() in Matcher::match_rule_supported) and
+    // does not read UseBMI2Instructions; Jeandle instead keys on the flag,
+    // deliberately: apply_vm_flag_feature_overrides() strips the LLVM
+    // "bmi2" target feature whenever the flag is off, so honoring the same
+    // flag here keeps the gate and the emitted intrinsic consistent. With
+    // -XX:-UseBMI2Instructions the call falls back to the normal invoke,
+    // whose inlinable Java body implements the exact same bit semantics.
+    case vmIntrinsics::_compress_i:
+    case vmIntrinsics::_compress_l:
+    case vmIntrinsics::_expand_i:
+    case vmIntrinsics::_expand_l:
+      return cpu_supports_bit_shuffle();
+
     case vmIntrinsics::_onSpinWait:
       return cpu_supports_spin_wait();
 
@@ -160,7 +177,13 @@ bool JeandleIntrinsicLowering::is_supported(vmIntrinsics::ID id) {
     default: break;
   }
 
-  // Always-supported intrinsics — no CPU feature dependency
+  // Always-supported intrinsics — no CPU feature dependency.
+  //
+  // Flag gating for every ID in this switch is enforced by
+  // vmIntrinsics::is_disabled_by_flags(), which try_lower_intrinsic() runs
+  // unconditionally after is_supported() returns true (-XX:-InlineNatives,
+  // -XX:-InlineMathNatives, per-intrinsic flags, and DisableIntrinsic all
+  // act there); the per-case comments below only name the flags involved.
   switch (id) {
     // math
     case vmIntrinsics::_dabs:
@@ -175,6 +198,41 @@ bool JeandleIntrinsicLowering::is_supported(vmIntrinsics::ID id) {
     case vmIntrinsics::_dlog:
     case vmIntrinsics::_dlog10:
     case vmIntrinsics::_dexp:
+
+    // Math.atan2 (_datan2) is deliberately absent from this list: HotSpot has
+    // no runtime entry for it (no StubRoutines::datan2, no
+    // SharedRuntime::datan2) and C2's LibraryCallKit rejects it too, so
+    // Jeandle does not intrinsify it either. Math.atan2 goes through the
+    // normally-inlined pure-Java FdLibm.Atan2 chain, which is bit-identical
+    // to what the interpreter runs.
+
+    // Math.pow: no CPU gating. The dual-path lowering picks the platform's
+    // dpow entry at lowering time (StubRoutines::dpow where the libm stubs
+    // were generated, else SharedRuntime::dpow, else llvm.pow), so no
+    // feature check applies here. Gated by InlineMathNatives.
+    case vmIntrinsics::_dpow:
+
+    // Math.copySign: llvm.copysign is exactly the IEEE copySign operation
+    // the javadoc specifies -- the sign bit of the second operand is copied
+    // verbatim (even when that operand is a NaN or a signed zero) and the
+    // first operand's payload bits, NaN payloads included, pass through
+    // untouched. It lowers to a bit-level sign move on every target Jeandle
+    // supports, never a libcall. Gated by InlineMathNatives &&
+    // UseCopySignIntrinsic.
+    case vmIntrinsics::_dcopySign:
+    case vmIntrinsics::_fcopySign:
+
+    // Math.signum: compare/select IR valid on every target Jeandle supports
+    // (see lower_signum). Gated by InlineMathNatives && UseSignumIntrinsic.
+    case vmIntrinsics::_dsignum:
+    case vmIntrinsics::_fsignum:
+
+    // Math.round(float/double) implement the integer significand algorithm
+    // of java.lang.Math.round with a saturating-cast fallback (see
+    // lower_round); neither requires SSE4.1, matching C2's always-supported
+    // Op_RoundF/Op_RoundD on x86-64. Opt-out uses DisableIntrinsic.
+    case vmIntrinsics::_roundF:
+    case vmIntrinsics::_roundD:
 
     // min/max: no CPU gating needed. llvm.smin/smax always lower to a
     // compare+select/cmov sequence and llvm.minimum/maximum always lower to
@@ -196,11 +254,9 @@ bool JeandleIntrinsicLowering::is_supported(vmIntrinsics::ID id) {
     case vmIntrinsics::_minD_strict:
     case vmIntrinsics::_maxD_strict:
 
-    // fmaD/fmaF: no separate cpu_supports_fma() gate needed. Unlike
-    // rounding/popcount (which have no shared-infrastructure flag check),
-    // vmIntrinsics::is_disabled_by_flags() already requires UseFMA for these
-    // two IDs and runs unconditionally after is_supported() in
-    // try_lower_intrinsic(), so a hardware-less target is rejected there.
+    // fmaD/fmaF: no separate cpu_supports_fma() gate needed: unlike
+    // rounding/popcount, is_disabled_by_flags() already requires UseFMA for
+    // these two IDs (see the note above this switch).
     // (apply_vm_flag_feature_overrides() also strips the LLVM "fma" target
     // feature when UseFMA is off, so even a hypothetical direct call here
     // would still lower correctly, just via a libcall instead of hardware.)
@@ -454,9 +510,44 @@ bool JeandleIntrinsicLowering::lower(vmIntrinsics::ID id, const ciMethod* target
     case vmIntrinsics::_fmaF:
       return emit_llvm_builtin(llvm::Intrinsic::fma);
 
+    // Math.copySign: llvm.copysign is bit-identical to the IEEE copySign
+    // operation the javadoc specifies -- the magnitude operand with the sign
+    // bit of the sign operand, copied verbatim even when the sign operand is
+    // a NaN or a signed zero, leaving NaN payloads of the magnitude operand
+    // unmodified. The overloaded intrinsic selects its f32/f64 form from the
+    // Java return type.
+    case vmIntrinsics::_dcopySign:
+    case vmIntrinsics::_fcopySign:
+      return emit_llvm_builtin(llvm::Intrinsic::copysign);
+
+    // Math.signum: single unordered compare + select + copysign
+    // (see lower_signum).
+    case vmIntrinsics::_dsignum:
+    case vmIntrinsics::_fsignum:
+      return lower_signum(id);
+
+    // Math.round: exact ties toward +infinity and Java's saturating
+    // fp->int conversion (see lower_round).
+    case vmIntrinsics::_roundF:
+    case vmIntrinsics::_roundD:
+      return lower_round(id);
+
     case vmIntrinsics::_bitCount_i:
     case vmIntrinsics::_bitCount_l:
       return lower_bit_count(id);
+
+    // Integer/Long.compress/expand: arch-specific BMI2 PEXT/PDEP emission.
+    // lower_bit_shuffle only emits the intrinsic -- constant arguments
+    // (including ones that only later passes reveal, e.g. behind selects or
+    // inlined callers) are folded on the LLVM side by the X86 target's
+    // instCombineIntrinsic hook (X86InstCombineIntrinsic.cpp), which is
+    // active because the optimization pipeline is built with the
+    // compilation TargetMachine; TestBitShuffle covers the fold paths.
+    case vmIntrinsics::_compress_i:
+    case vmIntrinsics::_compress_l:
+    case vmIntrinsics::_expand_i:
+    case vmIntrinsics::_expand_l:
+      return lower_bit_shuffle(id);
 
     case vmIntrinsics::_numberOfLeadingZeros_i:
     case vmIntrinsics::_numberOfLeadingZeros_l:
@@ -479,17 +570,19 @@ bool JeandleIntrinsicLowering::lower(vmIntrinsics::ID id, const ciMethod* target
     case vmIntrinsics::_reverseBytes_s:
       return lower_reverse_bytes_narrow(id);
 
-    // Dual-path libm (JeandleUseHotspotIntrinsics selects the path)
-    // TODO/FIXME: LLVM's `llvm.sin`, `llvm.cos`, etc. do **not** guarantee
-    // fdlibm-compatible results, especially for large inputs where range
-    // reduction quality varies by target. This will cause the calculation
-    // results to be inconsistent with those of the interpreter.
-    //
-    // TODO(#424): This is not AArch64-specific; x86 can diverge too when LLVM
-    // lowers these intrinsics to a different libm implementation. We have
-    // reproduced bit mismatches for dlog and dlog10, so the final design should
-    // decide whether these stay LLVM-backed, become runtime-only, or get a
-    // platform/semantics policy instead of this global switch.
+    // Dual-path libm (JeandleUseHotspotIntrinsics, default true). Selection
+    // is runtime-first (see select_dual_path_libm_callee): the StubRoutines
+    // libm entry when the platform generated one, else the always-linked
+    // SharedRuntime fdlibm port; the llvm builtin is used only when the flag
+    // opts out or no runtime entry is registered. The default makes compiled
+    // Math.{sin,cos,tan,log,log10,exp} (and pow, see lower_pow) call the very
+    // routines the interpreter's Math.* entries call, so compiled and
+    // interpreted execution agree bit-for-bit on x86, where both sides use
+    // the same StubRoutines entry. The LLVM path instead trades that
+    // agreement for compile-time constant folding: llvm.* lowers to the host
+    // libm, whose results can differ from the fdlibm port by 1-2 ulp, and
+    // llvm.pow additionally returns 1.0 instead of the specified NaN for
+    // pow(1.0, non-finite) and pow(-1.0, +-inf) (pinned in TestPowDouble).
     case vmIntrinsics::_dsin:
       return lower_dual_path_libm(llvm::Intrinsic::sin,
                                   "StubRoutines_dsin",
@@ -526,6 +619,11 @@ bool JeandleIntrinsicLowering::lower(vmIntrinsics::ID id, const ciMethod* target
                                   &JeandleRuntimeRoutine::StubRoutines_dexp_callee,
                                   "SharedRuntime_dexp",
                                   &JeandleRuntimeRoutine::SharedRuntime_dexp_callee);
+    // Math.pow: two-argument dual-path call with the guarded sqrt
+    // specialization for a literal 0.5 exponent (see lower_pow); the exact
+    // constant-exponent identities (2.0, +-0.0) are folded on the LLVM side.
+    case vmIntrinsics::_dpow:
+      return lower_pow();
 
     // getClass
     //
@@ -845,32 +943,74 @@ bool JeandleIntrinsicLowering::emit_llvm_builtin(llvm::Intrinsic::ID llvm_id,
 // lower_dual_path_libm — JeandleUseHotspotIntrinsics selection
 // =============================================================================
 
-bool JeandleIntrinsicLowering::lower_dual_path_libm(llvm::Intrinsic::ID llvm_id,
-                                                     const char* stub_name,
-                                                     JeandleRuntimeCalleeFn stub_fn,
-                                                     const char* shared_name,
-                                                     JeandleRuntimeCalleeFn shared_fn) {
-  if (JeandleUseHotspotIntrinsics) {
-    // Try HotSpot runtime stub -> SharedRuntime -> llvm builtin
-    JeandleRuntimeCalleeFn fn = nullptr;
-    if (JeandleRuntimeRoutine::find_routine_entry(stub_name) != nullptr) {
-      fn = stub_fn;
-    } else if (JeandleRuntimeRoutine::find_routine_entry(shared_name) != nullptr) {
-      fn = shared_fn;
-    }
-    if (fn != nullptr) {
-      static constexpr CallSiteAttributeMetadata libm_attrs = {CTRL_NONE, MEM_NONE};
-      llvm::Value* arg = _interp->_jvm->dpop();
-      llvm::CallBase* site = emit_callsite(fn(_interp->_module), llvm::CallingConv::C,
-                                           {arg}, libm_attrs, /*is_gc_leaf_entry=*/true);
-      _interp->_jvm->dpush(site);
-      return true;
-    }
-    // No runtime available, fall through to LLVM builtin
-    return emit_llvm_builtin(llvm_id);
-  } else {
-    return emit_llvm_builtin(llvm_id);
+// Resolve the runtime callee a dual-path libm lowering should call: the
+// StubRoutines entry when its platform stub was generated, else the
+// always-linked SharedRuntime port. Returns nullptr when
+// JeandleUseHotspotIntrinsics is off or neither entry is registered, in
+// which case the llvm builtin is used instead.
+static JeandleRuntimeCalleeFn select_dual_path_libm_callee(
+    const char* stub_name, JeandleRuntimeCalleeFn stub_fn,
+    const char* shared_name, JeandleRuntimeCalleeFn shared_fn) {
+  if (!JeandleUseHotspotIntrinsics) {
+    return nullptr;
   }
+  // Prefer the stub: it is the very entry the interpreter's Math.* entries
+  // call (the fdlibm-derived ports on some platforms, the Intel LIBM
+  // assembly stubs on x86), so compiled and interpreted results stay
+  // bit-identical on platforms that generate it; SharedRuntime::d* is the
+  // fdlibm port in C and matches the interpreter's fallback configuration.
+  if (JeandleRuntimeRoutine::find_routine_entry(stub_name) != nullptr) {
+    return stub_fn;
+  }
+  if (JeandleRuntimeRoutine::find_routine_entry(shared_name) != nullptr) {
+    return shared_fn;
+  }
+  return nullptr;
+}
+
+llvm::CallBase* JeandleIntrinsicLowering::emit_libm_call(
+    JeandleRuntimeCalleeFn fn, llvm::ArrayRef<llvm::Value*> args) {
+  static constexpr CallSiteAttributeMetadata libm_attrs = {CTRL_NONE, MEM_NONE};
+  llvm::CallBase* call = emit_callsite(fn(_interp->_module), llvm::CallingConv::C, args,
+                                       libm_attrs, /*is_gc_leaf_entry=*/true);
+  // Selected libm entries terminate for every Java floating-point input.
+  call->addFnAttr(llvm::Attribute::WillReturn);
+  return call;
+}
+
+bool JeandleIntrinsicLowering::lower_dual_path_libm(
+    llvm::Intrinsic::ID llvm_id,
+    const char* stub_name, JeandleRuntimeCalleeFn stub_fn,
+    const char* shared_name, JeandleRuntimeCalleeFn shared_fn) {
+  JeandleRuntimeCalleeFn fn =
+      select_dual_path_libm_callee(stub_name, stub_fn, shared_name, shared_fn);
+  if (fn != nullptr) {
+    _interp->_jvm->dpush(emit_libm_call(fn, {_interp->_jvm->dpop()}));
+    return true;
+  }
+  // No runtime available, fall through to the LLVM builtin, which pops the
+  // Java arguments from the target signature itself.
+  return emit_llvm_builtin(llvm_id);
+}
+
+// ---- lower_pow ----
+//
+// Keep the selected runtime call visible to LLVM. LibmIdentityFolding
+// specializes exact constant exponents and guarded fast paths after inlining,
+// including exponents that are not yet constant in the frontend.
+bool JeandleIntrinsicLowering::lower_pow() {
+  JeandleRuntimeCalleeFn dpow_callee = select_dual_path_libm_callee(
+      "StubRoutines_dpow", &JeandleRuntimeRoutine::StubRoutines_dpow_callee,
+      "SharedRuntime_dpow", &JeandleRuntimeRoutine::SharedRuntime_dpow_callee);
+
+  if (dpow_callee != nullptr) {
+    // Pop the JVM-stack doubles in reverse order to preserve (base, exponent).
+    llvm::Value* exponent = _interp->_jvm->dpop();
+    llvm::Value* base = _interp->_jvm->dpop();
+    _interp->_jvm->dpush(emit_libm_call(dpow_callee, {base, exponent}));
+    return true;
+  }
+  return emit_llvm_builtin(llvm::Intrinsic::pow);
 }
 
 // =============================================================================
@@ -2393,6 +2533,53 @@ bool JeandleIntrinsicLowering::lower_fp_range_check(vmIntrinsics::ID id) {
       {arg, builder.getInt32(static_cast<uint32_t>(mask))});
   _interp->_jvm->ipush(builder.CreateZExt(result, builder.getInt32Ty()));
   return true;
+}
+
+// ---- lower_signum ----
+// Math.signum(double|float) lowers its Java body
+//   return (x == 0.0 || Double.isNaN(x)) ? x : copySign(1.0, x);
+// with the two guard conditions folded into a single unordered compare:
+//   special = fcmp ueq x, 0.0  ; true iff x is NaN or x == 0.0 --
+//                              ; ueq is unordered-or-equal and 0.0 is
+//                              ; never NaN, so this is exactly the Java
+//                              ; disjunction (+0.0 and -0.0 both)
+//   cs      = llvm.copysign(1.0, x) ; +-1.0 carrying the sign of x
+//   res     = select special, x, cs
+// A NaN input returns the original value -- payload and sign preserved,
+// select is not a floating-point operation -- and the zeros return the
+// original signed zero; every other input becomes a signed 1.0.
+bool JeandleIntrinsicLowering::lower_signum(vmIntrinsics::ID id) {
+  llvm::IRBuilder<>& builder = _interp->_ir_builder;
+  bool is_double = (id == vmIntrinsics::_dsignum);
+
+  llvm::Value* x = is_double ? _interp->_jvm->dpop() : _interp->_jvm->fpop();
+  // The value is observed by the guard, passthrough and copysign arms.
+  // A stable choice also exposes the signum identities to LLVM consumers.
+  x = builder.CreateFreeze(x, "signum.input");
+  llvm::Type* fp_ty = x->getType();
+  llvm::Value* special = builder.CreateFCmp(
+      llvm::CmpInst::FCMP_UEQ, x, llvm::ConstantFP::get(fp_ty, 0.0));
+  llvm::Value* cs = builder.CreateIntrinsic(
+      fp_ty, llvm::Intrinsic::copysign,
+      {llvm::ConstantFP::get(fp_ty, 1.0), x});
+  llvm::Value* res = builder.CreateSelect(special, x, cs);
+
+  if (is_double) {
+    _interp->_jvm->dpush(res);
+  } else {
+    _interp->_jvm->fpush(res);
+  }
+  return true;
+}
+
+// ---- lower_round ----
+// Preserve Java round semantics through inlining and high-tier simplification.
+// Exact integer-to-FP round trips can then fold before the phase-1 JavaOp
+// expands the guarded integer-significand algorithm for general inputs.
+bool JeandleIntrinsicLowering::lower_round(vmIntrinsics::ID id) {
+  static constexpr CallSiteAttributeMetadata attrs = {CTRL_NONE, MEM_NONE};
+  return lower_java_op(id == vmIntrinsics::_roundD ? "jeandle.round.double"
+                                                  : "jeandle.round.float", attrs);
 }
 
 // ---- lower_reverse_bytes_narrow ----
