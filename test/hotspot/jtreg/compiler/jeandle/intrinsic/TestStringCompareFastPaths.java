@@ -32,6 +32,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.Arrays;
 import java.util.regex.Pattern;
+import java.util.stream.IntStream;
 
 import jdk.test.lib.process.ProcessTools;
 
@@ -39,8 +40,7 @@ public class TestStringCompareFastPaths {
     private static final String CALLER = "java.lang.JeandleStringIntrinsicCaller";
     private static final String[] METHODS = {"compareToL", "compareToU", "compareToLU", "compareToUL",
                                              "equalsL", "equalsU"};
-    private static final int[] LENGTHS = {0, 1, 2, 3, 4, 5, 7, 8, 9, 15, 16, 17,
-                                        31, 32, 33, 63, 64, 65, 129};
+    private static final int[] LENGTHS = IntStream.range(0, 161).toArray();
 
     public static void main(String[] args) throws Exception {
         if (args.length != 0) {
@@ -76,6 +76,17 @@ public class TestStringCompareFastPaths {
     }
 
     private static void checkIR(String name, String ir) {
+        var root = Pattern.compile("(?ms)^define [^\\n]*\\.root\"[^\\n]*\\{\\n(.*?)^}").matcher(ir);
+        if (!root.find()) {
+            throw new AssertionError("Missing comparison root: " + name);
+        }
+        ir = root.group(1);
+        if (name.equals("compareToL") && ir.contains("<32 x i16>")) {
+            throw new AssertionError("Latin1 comparison retains redundant UTF16 vector tier");
+        }
+        if (name.equals("compareToL") && ir.contains("<4 x i16>")) {
+            throw new AssertionError("Latin1 short comparison widens bytes into UTF16 lanes");
+        }
         if (name.startsWith("equals")) {
             if (!ir.contains("load <")
                     || !Pattern.compile("icmp eq ptr addrspace\\(1\\) %[\\w.]+, %[\\w.]+")
@@ -84,7 +95,13 @@ public class TestStringCompareFastPaths {
             }
             return;
         }
-        if (!ir.contains("load <8 x i") || !ir.contains("@llvm.cttz.")) {
+        boolean latinInteger = name.equals("compareToL");
+        if (latinInteger && (!ir.contains("load i64") || !ir.contains("load i32")
+                || !ir.contains("load i16") || (!ir.contains("@llvm.cttz.") && !ir.contains("@llvm.ctlz."))
+                || Pattern.compile("call[^\\n]*@jeandle\\.string_compare_latin_tail").matcher(ir).find())) {
+            throw new AssertionError("Missing inline integer Latin1 short comparison");
+        }
+        if (!latinInteger && (!ir.contains("load <8 x i") || (!ir.contains("@llvm.cttz.") && !ir.contains("@llvm.ctlz.")))) {
             throw new AssertionError("Missing live vector mismatch recovery: " + name);
         }
         if (Pattern.compile("extractelement <(?:4|8) x i16>[^\\n]*, i(?:32|64) %").matcher(ir).find()) {
@@ -106,8 +123,14 @@ public class TestStringCompareFastPaths {
                 && !Pattern.compile("lshr i64 %n4\\.").matcher(ir).find()) {
             throw new AssertionError("Missing packed four-word mismatch recovery: " + name);
         }
-        if (!Pattern.compile("@llvm\\.(?:cttz|ctlz)\\.i64\\(i64 %n4\\.").matcher(ir).find()) {
+        if (!latinInteger
+                && !Pattern.compile("@llvm\\.(?:cttz|ctlz)\\.i64\\(i64 %n4\\.").matcher(ir).find()) {
             throw new AssertionError("Missing integer four-word mismatch detection: " + name);
+        }
+        if (!name.equals("compareToL")
+                && !Pattern.compile("%vw32\\.length\\.ok[\\w.]* = icmp (?:samesign )?"
+                        + "(?:uge i32 %[\\w.]+, 128|ugt i32 %[\\w.]+, 127)").matcher(ir).find()) {
+            throw new AssertionError("Missing length guard on wide UTF16 comparisons: " + name);
         }
         if (!name.equals("compareToL")
                 && ir.contains("load <32 x i16>")
@@ -141,10 +164,21 @@ public class TestStringCompareFastPaths {
                 }
                 for (int lane = 0; lane < length; lane++) {
                     char original = chars[lane];
+                    chars[lane] ^= 1;
+                    check(method, left, encode(chars, bu), au, bu);
+                    check(method, encode(chars, au), encode(originalChars, bu), au, bu);
+                    chars[lane] = original;
                     chars[lane] ^= 0x80;
                     right = encode(chars, bu);
                     check(method, left, right, au, bu);
                     check(method, encode(chars, au), encode(originalChars, bu), au, bu);
+                    if (lane + 1 < length) {
+                        char last = chars[length - 1];
+                        chars[length - 1] = 255;
+                        check(method, left, encode(chars, bu), au, bu);
+                        check(method, encode(chars, au), encode(originalChars, bu), au, bu);
+                        chars[length - 1] = last;
+                    }
                     if (bu) {
                         chars[lane] = (char) (original + 0x8000);
                         check(method, left, encode(chars, true), au, true);
@@ -157,7 +191,14 @@ public class TestStringCompareFastPaths {
                 }
                 if (length != 0) {
                     check(method, left, encode(Arrays.copyOf(chars, length - 1), bu), au, bu);
+                    check(method, encode(Arrays.copyOf(chars, length - 1), au), right, au, bu);
                 }
+                char[] extremes = new char[length];
+                byte[] zeroLeft = encode(extremes, au);
+                byte[] zeroRight = encode(extremes, bu);
+                Arrays.fill(extremes, (char) 255);
+                check(method, zeroLeft, encode(extremes, bu), au, bu);
+                check(method, encode(extremes, au), zeroRight, au, bu);
                 // Genuine wide values exercise unsigned code units in both
                 // directions, independently of the common Latin1 fixture.
                 if (au && bu) {

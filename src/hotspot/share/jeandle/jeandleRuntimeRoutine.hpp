@@ -794,6 +794,18 @@ def(StubRoutines_generic_arraycopy,                                             
       llvm::Type::getInt64Ty(context),                                              \
       llvm::PointerType::get(context, llvm::jeandle::AddrSpace::CHeapAddrSpace))    \
                                                                                     \
+  def(JeandleRuntime_string_indexof_linear,                                          \
+      JeandleRuntimeRoutine::string_indexof_linear,                                  \
+      true,                                                                         \
+      true,                                                                         \
+      llvm::Type::getInt32Ty(context),                                              \
+      llvm::PointerType::get(context, llvm::jeandle::AddrSpace::JavaHeapAddrSpace), \
+      llvm::Type::getInt32Ty(context),                                              \
+      llvm::PointerType::get(context, llvm::jeandle::AddrSpace::JavaHeapAddrSpace), \
+      llvm::Type::getInt32Ty(context),                                              \
+      llvm::Type::getInt32Ty(context),                                              \
+      llvm::Type::getInt32Ty(context))                                              \
+                                                                                    \
   def(JeandleRuntime_clone,                                                         \
       JeandleRuntimeRoutine::clone,                                                 \
       false,                                                                        \
@@ -925,6 +937,11 @@ class JeandleRuntimeRoutine : public AllStatic {
   // (java.lang.Class) and allocates via Reflection::reflect_new_array.  Used when the
   // cached array_klass field in the mirror has not been populated yet.
   static void new_array_from_mirror(oopDesc* mirror, int length, JavaThread* current);
+
+  // Character-data pointers remain valid throughout this allocation-free leaf.
+  static jint string_indexof_linear(const uint8_t* src, jint src_count,
+                                    const uint8_t* tgt, jint tgt_count,
+                                    jint from, jint encoding);
 
   // Leaf entry used by collector-aware clone expansion.
   static void clone(oopDesc* src, oopDesc* dst, size_t object_heap_word_count);

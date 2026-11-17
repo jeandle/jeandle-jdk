@@ -330,19 +330,37 @@ void JeandleRuntimeRoutine::generate_string_inflate_stub() {
   const Register src = c_rarg0;
   const Register dst = c_rarg1;
   const Register count = c_rarg2;
-  Label vector_loop, scalar, scalar_loop, done;
+  Label loop32, vector_loop, scalar, scalar_loop, done;
   address start = __ pc();
 
   __ uxtw(count, count);
   __ fmovd(v1, 0.0);
-  __ bind(vector_loop);
   __ cmpw(count, 8);
   __ br(Assembler::LT, scalar);
+  __ cmpw(count, 32);
+  __ br(Assembler::LT, vector_loop);
+  __ bind(loop32);
+  __ ld1(v0, v1, __ T16B, Address(__ post(src, 32)));
+  __ uxtl(v2, __ T8H, v0, __ T8B);
+  __ ushll2(v3, __ T8H, v0, __ T16B, 0);
+  __ uxtl(v4, __ T8H, v1, __ T8B);
+  __ ushll2(v5, __ T8H, v1, __ T16B, 0);
+  // Halfword stores preserve each destination char, including unaligned
+  // payloads. All temporaries belong to the C ABI's caller-saved vector set.
+  __ st1(v2, v3, v4, v5, __ T8H, Address(__ post(dst, 64)));
+  __ subw(count, count, 32);
+  __ cmpw(count, 32);
+  __ br(Assembler::GE, loop32);
+  __ fmovd(v1, 0.0);
+  __ cmpw(count, 8);
+  __ br(Assembler::LT, scalar);
+  __ bind(vector_loop);
   __ ldrd(v0, Address(__ post(src, 8)));
   __ zip1(v0, __ T16B, v0, v1);
   __ st1(v0, __ T8H, Address(__ post(dst, 16)));
   __ subw(count, count, 8);
-  __ b(vector_loop);
+  __ cmpw(count, 8);
+  __ br(Assembler::GE, vector_loop);
   __ bind(scalar);
   __ cbzw(count, done);
   __ bind(scalar_loop);
