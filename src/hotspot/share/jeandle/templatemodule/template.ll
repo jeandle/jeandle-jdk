@@ -85,6 +85,7 @@
 @Klass.layout_helper_offset = external global i32
 @Klass.modifier_flags_offset = external global i32
 @java_lang_Object.klass = external global i64
+@java_lang_Class.klass = external global i64
 @Klass.secondary_super_cache_offset = external global i32
 @Klass.secondary_supers_offset = external global i32
 @Klass.super_check_offset_offset = external global i32
@@ -493,10 +494,6 @@ return_false:
 ; ConstantFieldFolding selects this form only after proving the target Klass.
 define hotspotcc i1 @jeandle.check_klass_subtype_with_offset(ptr addrspace(0) nocapture %sub_klass, ptr addrspace(0) nocapture %super_klass, i32 %super_check_offset) "lower-phase"="1" #0 {
 entry:
-  %is_same_klass = icmp eq ptr addrspace(0) %sub_klass, %super_klass
-  br i1 %is_same_klass, label %return_true, label %check_primary_supers
-
-check_primary_supers:
   ; Load super_check klass from _primary_supers of the sub_klass.
   %super_check_addr = getelementptr inbounds i8, ptr addrspace(0) %sub_klass, i32 %super_check_offset
   %super_check = load atomic ptr addrspace(0), ptr addrspace(0) %super_check_addr unordered, align 8
@@ -512,7 +509,12 @@ check_secondary_supers:
   %secondary_super_cache_offset = load i32, ptr @Klass.secondary_super_cache_offset
   %has_secondary = icmp eq i32 %super_check_offset, %secondary_super_cache_offset
   %has_secondary_unlikely = call i1 @llvm.expect.with.probability.i1(i1 %has_secondary, i1 false, double 6.300000e-01)
-  br i1 %has_secondary_unlikely, label %slow_path, label %return_false
+  br i1 %has_secondary_unlikely, label %check_same_klass, label %return_false
+
+check_same_klass:
+  ; Primary supers contain the klass itself; secondary supers may not.
+  %is_same_klass = icmp eq ptr addrspace(0) %sub_klass, %super_klass
+  br i1 %is_same_klass, label %return_true, label %slow_path
 
 slow_path:
   %is_subtype_slow = call hotspotcc i1 @jeandle.check_klass_subtype_slow_path(ptr addrspace(0) %sub_klass, ptr addrspace(0) %super_klass)

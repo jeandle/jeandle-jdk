@@ -26,15 +26,11 @@ import java.util.concurrent.TimeUnit;
 
 import jdk.internal.reflect.Reflection;
 
-import org.openjdk.jmh.infra.Blackhole;
-
 import org.openjdk.jmh.annotations.Benchmark;
 import org.openjdk.jmh.annotations.BenchmarkMode;
-import org.openjdk.jmh.annotations.CompilerControl;
 import org.openjdk.jmh.annotations.Fork;
 import org.openjdk.jmh.annotations.Measurement;
 import org.openjdk.jmh.annotations.Mode;
-import org.openjdk.jmh.annotations.OperationsPerInvocation;
 import org.openjdk.jmh.annotations.OutputTimeUnit;
 import org.openjdk.jmh.annotations.Param;
 import org.openjdk.jmh.annotations.Scope;
@@ -51,7 +47,7 @@ import org.openjdk.jmh.annotations.Warmup;
         "--add-exports=java.base/jdk.internal.reflect=ALL-UNNAMED"
 })
 public class ClassQueries {
-    private static final int LOOP_COUNT = 1_000_000;
+    private int cursor;
 
     public enum Kind {
         OBJECT,
@@ -141,248 +137,115 @@ public class ClassQueries {
     }
 
     @Benchmark
-    @CompilerControl(CompilerControl.Mode.DONT_INLINE)
-    @OperationsPerInvocation(LOOP_COUNT)
     public boolean isInstance() {
-        boolean result = false;
-        for (int i = 0; i < LOOP_COUNT; i++) {
-            result ^= ((i & 1) == 0 ? klass : alternateKlass)
-                    .isInstance((i & 1) == 0 ? object : alternateObject);
-        }
-        return result;
+        boolean first = (cursor++ & 1) == 0;
+        return (first ? klass : alternateKlass).isInstance(first ? object : alternateObject);
     }
 
     @Benchmark
-    @CompilerControl(CompilerControl.Mode.DONT_INLINE)
-    @OperationsPerInvocation(LOOP_COUNT)
     public int getModifiers() {
-        int result = 0;
-        for (int i = 0; i < LOOP_COUNT; i++) {
-            result += ((i & 1) == 0 ? klass : alternateKlass).getModifiers();
-        }
-        return result;
+        return ((cursor++ & 1) == 0 ? klass : alternateKlass).getModifiers();
     }
 
     @Benchmark
-    @CompilerControl(CompilerControl.Mode.DONT_INLINE)
-    @OperationsPerInvocation(LOOP_COUNT)
     public boolean isArray() {
-        boolean result = false;
-        for (int i = 0; i < LOOP_COUNT; i++) {
-            result ^= ((i & 1) == 0 ? klass : alternateKlass).isArray();
-        }
-        return result;
+        return ((cursor++ & 1) == 0 ? klass : alternateKlass).isArray();
     }
 
     @Benchmark
-    @CompilerControl(CompilerControl.Mode.DONT_INLINE)
-    @OperationsPerInvocation(LOOP_COUNT)
     public boolean isPrimitive() {
-        boolean result = false;
-        for (int i = 0; i < LOOP_COUNT; i++) {
-            result ^= ((i & 1) == 0 ? klass : alternateKlass).isPrimitive();
-        }
-        return result;
+        return ((cursor++ & 1) == 0 ? klass : alternateKlass).isPrimitive();
     }
 
     @Benchmark
-    @CompilerControl(CompilerControl.Mode.DONT_INLINE)
-    @OperationsPerInvocation(LOOP_COUNT)
     public boolean isInterface() {
-        boolean result = false;
-        for (int i = 0; i < LOOP_COUNT; i++) {
-            result ^= ((i & 1) == 0 ? klass : alternateKlass).isInterface();
-        }
-        return result;
+        return ((cursor++ & 1) == 0 ? klass : alternateKlass).isInterface();
     }
 
     @Benchmark
-    @CompilerControl(CompilerControl.Mode.DONT_INLINE)
-    @OperationsPerInvocation(LOOP_COUNT)
     public boolean isHidden() {
-        boolean result = false;
-        for (int i = 0; i < LOOP_COUNT; i++) {
-            result ^= ((i & 1) == 0 ? klass : alternateKlass).isHidden();
-        }
-        return result;
+        return ((cursor++ & 1) == 0 ? klass : alternateKlass).isHidden();
     }
 
     @Benchmark
-    @CompilerControl(CompilerControl.Mode.DONT_INLINE)
-    @OperationsPerInvocation(LOOP_COUNT)
-    public void getSuperclass(Blackhole bh) {
-        Object v1 = null, v2 = null;
-        for (int i = 0; i < LOOP_COUNT; i++) {
-            Object value = ((i & 1) == 0 ? klass : alternateKlass).getSuperclass();
-            if ((i & 5) == 1) v1 = value; else v2 = value;
-        }
-        bh.consume(v1); bh.consume(v2);
+    public Class<?> getSuperclass() {
+        return ((cursor++ & 1) == 0 ? klass : alternateKlass).getSuperclass();
     }
 
     @Benchmark
-    @CompilerControl(CompilerControl.Mode.DONT_INLINE)
-    @OperationsPerInvocation(LOOP_COUNT)
     public int getClassAccessFlags() {
-        int result = 0;
-        for (int i = 0; i < LOOP_COUNT; i++) {
-            result += Reflection.getClassAccessFlags(
-                    (i & 1) == 0 ? klass : alternateKlass);
-        }
-        return result;
+        return Reflection.getClassAccessFlags((cursor++ & 1) == 0 ? klass : alternateKlass);
     }
 
     @Benchmark
-    @CompilerControl(CompilerControl.Mode.DONT_INLINE)
-    @OperationsPerInvocation(LOOP_COUNT)
-    public void cast(Blackhole bh) {
-        Object v1 = null, v2 = null;
-        for (int i = 0; i < LOOP_COUNT; i++) {
-            Object value = ((i & 1) == 0 ? klass : alternateKlass)
-                    .cast((i & 1) == 0 ? castObject : alternateCastObject);
-            if ((i & 5) == 1) v1 = value; else v2 = value;
-        }
-        bh.consume(v1); bh.consume(v2);
+    public Object cast() {
+        boolean first = (cursor++ & 1) == 0;
+        return (first ? klass : alternateKlass).cast(first ? castObject : alternateCastObject);
     }
 
     @Benchmark
-    @CompilerControl(CompilerControl.Mode.DONT_INLINE)
-    @OperationsPerInvocation(LOOP_COUNT)
     public boolean isAssignableFrom() {
-        boolean result = false;
-        for (int i = 0; i < LOOP_COUNT; i++) {
-            result ^= ((i & 1) == 0 ? klass : alternateKlass)
-                    .isAssignableFrom(alternateKlass);
-        }
-        return result;
+        return ((cursor++ & 1) == 0 ? klass : alternateKlass).isAssignableFrom(alternateKlass);
     }
 
+    // Constant queries intentionally measure the remaining cost per invocation
+    // after folding, including consumption by the JMH harness.
     @Benchmark
-    @CompilerControl(CompilerControl.Mode.DONT_INLINE)
-    @OperationsPerInvocation(LOOP_COUNT)
     public boolean constantIsInstanceHit() {
-        boolean result = false;
-        for (int i = 0; i < LOOP_COUNT; i++) {
-            result ^= String.class.isInstance("value");
-        }
-        return result;
+        return String.class.isInstance("value");
     }
 
     @Benchmark
-    @CompilerControl(CompilerControl.Mode.DONT_INLINE)
-    @OperationsPerInvocation(LOOP_COUNT)
     public boolean constantIsInstanceMiss() {
-        Object value = Integer.valueOf(1);
-        boolean result = false;
-        for (int i = 0; i < LOOP_COUNT; i++) {
-            result ^= String.class.isInstance(value);
-        }
-        return result;
+        return String.class.isInstance(Integer.valueOf(1));
     }
 
     @Benchmark
-    @CompilerControl(CompilerControl.Mode.DONT_INLINE)
-    @OperationsPerInvocation(LOOP_COUNT)
     public boolean constantIsInstanceNull() {
-        boolean result = false;
-        for (int i = 0; i < LOOP_COUNT; i++) {
-            result ^= String.class.isInstance(null);
-        }
-        return result;
+        return String.class.isInstance(null);
     }
 
     @Benchmark
-    @CompilerControl(CompilerControl.Mode.DONT_INLINE)
-    @OperationsPerInvocation(LOOP_COUNT)
-    public void constantCastTyped(Blackhole bh) {
+    public Object constantCastTyped() {
         String value = "value";
-        Object v1 = null, v2 = null;
-        for (int i = 0; i < LOOP_COUNT; i++) {
-            Object result = String.class.cast(value);
-            if ((i & 5) == 1) v1 = result; else v2 = result;
-        }
-        bh.consume(v1); bh.consume(v2);
+        return String.class.cast(value);
     }
 
     @Benchmark
-    @CompilerControl(CompilerControl.Mode.DONT_INLINE)
-    @OperationsPerInvocation(LOOP_COUNT)
-    public void constantCastObject(Blackhole bh) {
+    public Object constantCastObject() {
         Object value = "value";
-        Object v1 = null, v2 = null;
-        for (int i = 0; i < LOOP_COUNT; i++) {
-            Object result = String.class.cast(value);
-            if ((i & 5) == 1) v1 = result; else v2 = result;
-        }
-        bh.consume(v1); bh.consume(v2);
+        return String.class.cast(value);
     }
 
     @Benchmark
-    @CompilerControl(CompilerControl.Mode.DONT_INLINE)
-    @OperationsPerInvocation(LOOP_COUNT)
-    public void constantCastNull(Blackhole bh) {
-        Object v1 = null, v2 = null;
-        for (int i = 0; i < LOOP_COUNT; i++) {
-            Object value = String.class.cast(null);
-            if ((i & 5) == 1) v1 = value; else v2 = value;
-        }
-        bh.consume(v1); bh.consume(v2);
+    public Object constantCastNull() {
+        return String.class.cast(null);
     }
 
     @Benchmark
-    @CompilerControl(CompilerControl.Mode.DONT_INLINE)
-    @OperationsPerInvocation(LOOP_COUNT)
-    public void constantGetSuperclass(Blackhole bh) {
-        Object v1 = null, v2 = null;
-        for (int i = 0; i < LOOP_COUNT; i++) {
-            Object value = String.class.getSuperclass();
-            if ((i & 5) == 1) v1 = value; else v2 = value;
-        }
-        bh.consume(v1); bh.consume(v2);
+    public Class<?> constantGetSuperclass() {
+        return String.class.getSuperclass();
     }
 
     @Benchmark
-    @CompilerControl(CompilerControl.Mode.DONT_INLINE)
-    @OperationsPerInvocation(LOOP_COUNT)
     public int constantGetClassAccessFlags() {
-        int result = 0;
-        for (int i = 0; i < LOOP_COUNT; i++) {
-            result += Reflection.getClassAccessFlags(String.class);
-        }
-        return result;
+        return Reflection.getClassAccessFlags(String.class);
     }
 
     @Benchmark
-    @CompilerControl(CompilerControl.Mode.DONT_INLINE)
-    @OperationsPerInvocation(LOOP_COUNT)
     public boolean constantAssignableFrom() {
-        boolean result = false;
-        for (int i = 0; i < LOOP_COUNT; i++) {
-            result ^= Object.class.isAssignableFrom(String.class);
-        }
-        return result;
+        return Object.class.isAssignableFrom(String.class);
     }
 
     @Benchmark
-    @CompilerControl(CompilerControl.Mode.DONT_INLINE)
-    @OperationsPerInvocation(LOOP_COUNT)
     public boolean constantPrimitiveAssignableFrom() {
-        boolean result = false;
-        for (int i = 0; i < LOOP_COUNT; i++) {
-            result ^= int.class.isAssignableFrom(long.class);
-        }
-        return result;
+        return int.class.isAssignableFrom(long.class);
     }
 
     @Benchmark
-    @CompilerControl(CompilerControl.Mode.DONT_INLINE)
-    @OperationsPerInvocation(LOOP_COUNT)
     public boolean phiPrimitiveAssignableFrom() {
-        boolean result = false;
-        for (int i = 0; i < LOOP_COUNT; i++) {
-            Class<?> receiver = (i & 1) == 0 ? int.class : long.class;
-            result ^= receiver.isAssignableFrom(float.class);
-        }
-        return result;
+        Class<?> receiver = (cursor++ & 1) == 0 ? int.class : long.class;
+        return receiver.isAssignableFrom(float.class);
     }
 
     static class Parent {}

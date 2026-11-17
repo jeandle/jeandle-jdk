@@ -1210,6 +1210,7 @@ void RuntimeDefinedJavaOps::define_global_variables(llvm::Module& template_modul
   define_global("arrayOopDesc.element_size.object",                 int32_type, static_cast<uint64_t>(type2aelembytes(T_OBJECT)));
   define_global("Klass.super_offset", int32_type, static_cast<uint64_t>(in_bytes(Klass::super_offset())));
   define_global("java_lang_Object.klass", int64_type, reinterpret_cast<uintptr_t>(vmClasses::Object_klass()));
+  define_global("java_lang_Class.klass", int64_type, reinterpret_cast<uintptr_t>(vmClasses::Class_klass()));
   define_global("Klass.access_flags_offset",                        int32_type, static_cast<uint64_t>(Klass::access_flags_offset()));
   define_global("Klass.java_mirror_offset",                         int32_type, static_cast<uint64_t>(in_bytes(Klass::java_mirror_offset())));
   define_global("Klass.layout_helper_offset",                       int32_type, static_cast<uint64_t>(in_bytes(Klass::layout_helper_offset())));
