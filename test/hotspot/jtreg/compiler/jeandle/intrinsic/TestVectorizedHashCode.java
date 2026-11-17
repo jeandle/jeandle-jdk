@@ -27,6 +27,7 @@ import java.util.Arrays;
 
 import jdk.internal.misc.Unsafe;
 import jdk.internal.util.ArraysSupport;
+import jdk.test.whitebox.WhiteBox;
 
 /*
  * @test
@@ -35,10 +36,13 @@ import jdk.internal.util.ArraysSupport;
  * @modules java.base/jdk.internal.misc
  *          java.base/jdk.internal.util
  * @library /test/lib /
+ * @build jdk.test.whitebox.WhiteBox
+ * @run driver jdk.test.lib.helpers.ClassFileInstaller jdk.test.whitebox.WhiteBox
  *
- * @run main/othervm -XX:CompileCommand=quiet
+ * @run main/othervm/timeout=600 -Xbootclasspath/a:. -XX:+UnlockDiagnosticVMOptions -XX:+WhiteBoxAPI -XX:CompileCommand=quiet
  *                   -XX:CompileCommand=compileonly,compiler.jeandle.intrinsic.TestVectorizedHashCode::hash*
  *                   -XX:CompileCommand=compileonly,java.lang.String*::hashCode
+ *                   -XX:CompileCommand=dontinline,compiler.jeandle.intrinsic.TestVectorizedHashCode::observeMaterialized
  *                   -XX:+UseJeandleCompiler -XX:CompileThreshold=1000 -Xbatch -XX:-TieredCompilation
  *                    compiler.jeandle.intrinsic.TestVectorizedHashCode
  */
@@ -46,6 +50,7 @@ import jdk.internal.util.ArraysSupport;
 public class TestVectorizedHashCode {
 
     private static final Unsafe U = Unsafe.getUnsafe();
+    private static final WhiteBox WB = WhiteBox.getWhiteBox();
 
     // Dynamic-length wrappers keep lengths non-constant at the call site so the
     // intrinsic's runtime path (tier dispatch + tail loop) executes. Constant
@@ -60,7 +65,7 @@ public class TestVectorizedHashCode {
     static int[] intData = fillInts(1200);
     static byte[] utf16Bytes = fillUtf16Bytes(1200);
 
-    static int dynamicType = ArraysSupport.T_BYTE;
+    static volatile int dynamicType = ArraysSupport.T_BYTE;
 
     private static byte[] fillBytes(int n) {
         byte[] a = new byte[n];
@@ -151,6 +156,11 @@ public class TestVectorizedHashCode {
 
     // ---- wrappers (compileonly target: *::hash*) ----
 
+    static int hashArraysByte(byte[] a) { return Arrays.hashCode(a); }
+    static int hashArraysShort(short[] a) { return Arrays.hashCode(a); }
+    static int hashArraysChar(char[] a) { return Arrays.hashCode(a); }
+    static int hashArraysInt(int[] a) { return Arrays.hashCode(a); }
+
     static int hashByteDyn(byte[] a, int from, int length, int init) {
         return ArraysSupport.vectorizedHashCode(a, from, length, init, ArraysSupport.T_BYTE);
     }
@@ -229,9 +239,8 @@ public class TestVectorizedHashCode {
         return ArraysSupport.vectorizedHashCode(a, from, length, init, dynamicType);
     }
 
-    // PEA shapes: a fresh allocation hashed with a constant length folds on
-    // the virtual array (no materialization); a dynamic length keeps the
-    // allocation and the op's vector body.
+    // Constant ranges fold on virtual arrays; a dynamic allocation size
+    // cannot establish a fixed-size virtual object.
     static int hashFreshConstant() {
         return Arrays.hashCode(new byte[]{1, 2, 3, 4});
     }
@@ -253,8 +262,90 @@ public class TestVectorizedHashCode {
         return Arrays.hashCode(b);
     }
 
+    static int hashFreshByte22(int value) {
+        byte[] a = {
+            (byte) value, (byte) (value + 1), (byte) (value + 2), (byte) (value + 3), (byte) (value + 4),
+            (byte) (value + 5), (byte) (value + 6), (byte) (value + 7), (byte) (value + 8), (byte) (value + 9),
+            (byte) (value + 10), (byte) (value + 11), (byte) (value + 12), (byte) (value + 13), (byte) (value + 14),
+            (byte) (value + 15), (byte) (value + 16), (byte) (value + 17), (byte) (value + 18), (byte) (value + 19),
+            (byte) (value + 20), (byte) (value + 21)
+        };
+        return Arrays.hashCode(a);
+    }
+
+    static int hashFreshChar22(int value) {
+        char[] a = {
+            (char) value, (char) (value + 1), (char) (value + 2), (char) (value + 3), (char) (value + 4),
+            (char) (value + 5), (char) (value + 6), (char) (value + 7), (char) (value + 8), (char) (value + 9),
+            (char) (value + 10), (char) (value + 11), (char) (value + 12), (char) (value + 13), (char) (value + 14),
+            (char) (value + 15), (char) (value + 16), (char) (value + 17), (char) (value + 18), (char) (value + 19),
+            (char) (value + 20), (char) (value + 21)
+        };
+        return Arrays.hashCode(a);
+    }
+
+    static int hashFreshInt33(int value) {
+        int[] a = {
+            value, value + 1, value + 2, value + 3, value + 4,
+            value + 5, value + 6, value + 7, value + 8, value + 9,
+            value + 10, value + 11, value + 12, value + 13, value + 14,
+            value + 15, value + 16, value + 17, value + 18, value + 19,
+            value + 20, value + 21, value + 22, value + 23, value + 24,
+            value + 25, value + 26, value + 27, value + 28, value + 29,
+            value + 30, value + 31, value + 32
+        };
+        return Arrays.hashCode(a);
+    }
+
+    static int hashFreshUtf16(int low, int high, int init) {
+        byte[] a = {(byte) low, (byte) high};
+        return ArraysSupport.vectorizedHashCode(a, 0, 1, init, ArraysSupport.T_CHAR);
+    }
+
+    // The ordinary native Unsafe call makes the array escape before hashing.
+    static int hashFreshUtf16Packed(int value, int init) {
+        byte[] a = new byte[4];
+        U.putIntUnaligned(a, Unsafe.ARRAY_BYTE_BASE_OFFSET, value);
+        return ArraysSupport.vectorizedHashCode(a, 0, 2, init, ArraysSupport.T_CHAR);
+    }
+
+    static int hashFreshDynamicRange(int value, int from, int length, int init) {
+        byte[] a = {(byte) value, -1, 127, -128, (byte) (value >>> 8), 5, 7, 9};
+        byte[] alias = a;
+        a[6] = (byte) (value >>> 16);
+        int hash = ArraysSupport.vectorizedHashCode(a, from, length, init, ArraysSupport.T_BYTE);
+        // The non-inlined observer reads the replayed cells after the hash
+        // forces this fixed-size virtual object to materialize.
+        return hash ^ observeMaterialized(a, alias, value);
+    }
+
+    static int observeMaterialized(byte[] a, byte[] alias, int value) {
+        if (a != alias || a.length != 8 || a[0] != (byte) value
+                || a[1] != -1 || a[2] != 127 || a[3] != -128
+                || a[4] != (byte) (value >>> 8) || a[5] != 5
+                || a[6] != (byte) (value >>> 16) || a[7] != 9) {
+            throw new AssertionError("materialized array lost identity or initialized cells");
+        }
+        alias[7] = (byte) (value >>> 24);
+        if (a[7] != (byte) (value >>> 24)) {
+            throw new AssertionError("materialized aliases diverged");
+        }
+        return a[0] + a[4] + a[6] + a[7];
+    }
+
     static int hashStringDyn(String s) {
         return s.hashCode();
+    }
+
+    private static void requireCompiled(String name, Class<?>... parameters) {
+        try {
+            java.lang.reflect.Method method = TestVectorizedHashCode.class.getDeclaredMethod(name, parameters);
+            if (!WB.isMethodCompiled(method, false) || WB.getMethodCompilationLevel(method, false) != 4) {
+                throw new AssertionError("missing level-4 compilation of " + method);
+            }
+        } catch (ReflectiveOperationException e) {
+            throw new AssertionError(e);
+        }
     }
 
     private static void expect(int expected, int actual, String what) {
@@ -277,6 +368,7 @@ public class TestVectorizedHashCode {
     private static final int[] INITS = {0, 1, Integer.MIN_VALUE, Integer.MAX_VALUE};
 
     private static void verifyDynamic() {
+        requireCompiled("hashDynamicType", byte[].class, int.class, int.class, int.class);
         for (int from : FROMS) {
             for (int init : INITS) {
                 for (int length : LENGTHS) {
@@ -292,8 +384,12 @@ public class TestVectorizedHashCode {
                            hashUtf16Dyn(utf16Bytes, from, length, init), "utf16 dyn " + from + "/" + length + "/" + init);
                     expect(refInt(init, intData, from, length),
                            hashIntDyn(intData, from, length, init), "int dyn " + from + "/" + length + "/" + init);
+                    dynamicType = ArraysSupport.T_BYTE;
                     expect(refSigned(init, byteData, from, length),
-                           hashDynamicType(byteData, from, length, init), "dynamic-type " + from + "/" + length + "/" + init);
+                           hashDynamicType(byteData, from, length, init), "dynamic signed " + from + "/" + length + "/" + init);
+                    dynamicType = ArraysSupport.T_BOOLEAN;
+                    expect(refUnsigned(init, byteData, from, length),
+                           hashDynamicType(byteData, from, length, init), "dynamic unsigned " + from + "/" + length + "/" + init);
                 }
             }
         }
@@ -301,6 +397,15 @@ public class TestVectorizedHashCode {
         // fallback's empty loop and C2's signed short-loop fall-through.
         expect(42, hashByteDyn(byteData, 0, -3, 42), "byte negative length");
         expect(42, hashIntDyn(intData, 0, Integer.MIN_VALUE, 42), "int min length");
+        requireCompiled("hashDynamicType", byte[].class, int.class, int.class, int.class);
+        dynamicType = 6;
+        try {
+            hashDynamicType(byteData, 0, 8, 1);
+            throw new AssertionError("unsupported basicType did not throw");
+        } catch (IllegalArgumentException expected) {
+        } finally {
+            dynamicType = ArraysSupport.T_BYTE;
+        }
     }
 
     private static void verifyConstants() {
@@ -350,23 +455,31 @@ public class TestVectorizedHashCode {
     }
 
     private static void verifyPublicApis() {
+        requireCompiled("hashArraysByte", byte[].class);
+        requireCompiled("hashArraysShort", short[].class);
+        requireCompiled("hashArraysChar", char[].class);
+        requireCompiled("hashArraysInt", int[].class);
         // Arrays.hashCode delegates to vectorizedHashCode with initialValue 1.
-        for (int length : CONST_LENGTHS) {
-            byte[] b = new byte[length + 3];
-            char[] c = new char[length + 3];
-            short[] s = new short[length + 3];
-            int[] ia = new int[length + 3];
-            for (int i = 0; i < length + 3; i++) {
+        for (int length : LENGTHS) {
+            byte[] b = new byte[length];
+            char[] c = new char[length];
+            short[] s = new short[length];
+            int[] ia = new int[length];
+            for (int i = 0; i < length; i++) {
                 b[i] = (byte) (i * 31 + 0x80);
                 c[i] = (char) (i * 131 + 0x100);
                 s[i] = (short) (i * 131 - 0x3000);
                 ia[i] = i * 0x9E3779B9;
             }
-            expect(Arrays.hashCode(b), refSigned(1, b, 0, b.length), "Arrays.hashCode byte " + length);
-            expect(Arrays.hashCode(c), refChar(1, c, 0, c.length), "Arrays.hashCode char " + length);
-            expect(Arrays.hashCode(s), refShort(1, s, 0, s.length), "Arrays.hashCode short " + length);
-            expect(Arrays.hashCode(ia), refInt(1, ia, 0, ia.length), "Arrays.hashCode int " + length);
+            expect(refSigned(1, b, 0, b.length), hashArraysByte(b), "Arrays.hashCode byte " + length);
+            expect(refChar(1, c, 0, c.length), hashArraysChar(c), "Arrays.hashCode char " + length);
+            expect(refShort(1, s, 0, s.length), hashArraysShort(s), "Arrays.hashCode short " + length);
+            expect(refInt(1, ia, 0, ia.length), hashArraysInt(ia), "Arrays.hashCode int " + length);
         }
+        expect(0, hashArraysByte(null), "Arrays.hashCode null byte");
+        expect(0, hashArraysShort(null), "Arrays.hashCode null short");
+        expect(0, hashArraysChar(null), "Arrays.hashCode null char");
+        expect(0, hashArraysInt(null), "Arrays.hashCode null int");
         // String.hashCode exercises T_BOOLEAN (latin1) and T_CHAR-on-byte[]
         // (utf16) with initialValue 0. Fresh copies defeat the cached hash.
         for (int length : CONST_LENGTHS) {
@@ -414,9 +527,15 @@ public class TestVectorizedHashCode {
             h ^= hashCharDyn(charData, 3, length, i);
             h ^= hashUtf16Dyn(utf16Bytes, 3, length, i);
             h ^= hashIntDyn(intData, 3, length, i);
+            dynamicType = (i & 1) == 0 ? ArraysSupport.T_BYTE : ArraysSupport.T_BOOLEAN;
             h ^= hashDynamicType(byteData, 3, length, i);
+            h ^= hashArraysByte(byteData) ^ hashArraysShort(shortData);
+            h ^= hashArraysChar(charData) ^ hashArraysInt(intData);
+            h ^= hashFreshDynamicRange(i * 0x9e3779b9, i % 9, 8 - i % 9, i);
             h ^= hashFreshConstant() ^ hashFreshEmpty();
             h ^= hashFreshSeventeen(i) ^ hashFreshDynamicLen(64);
+            h ^= hashFreshByte22(i) ^ hashFreshChar22(i) ^ hashFreshInt33(i);
+            h ^= hashFreshUtf16(i, i * 17, i) ^ hashFreshUtf16Packed(i * 0x9e3779b9, i);
             // Construct from chars: copying a String can copy its cached hash.
             h ^= hashStringDyn(new String(latin));
             h ^= hashStringDyn(new String(wide));
@@ -476,8 +595,58 @@ public class TestVectorizedHashCode {
         expect(955331, hashFreshConstant(), "fresh constant");
         expect(1, hashFreshEmpty(), "fresh empty");
         expect(refSigned(1, byteData, 0, 64), hashFreshDynamicLen(64), "fresh dynamic 64");
+        verifyMaterialization();
+        verifyScalarization();
+        System.out.println("HASH-VALIDATION-PASSED");
         if (args.length == 0) {
             verifyIntrinsicLowering();
+        }
+    }
+
+    private static void verifyScalarization() {
+        java.util.Random random = new java.util.Random(0x6a09e667L);
+        int[] boundaries = {0, -1, 127, 128, 255, 256, 32767, 32768, 65535, 65536,
+                            Integer.MIN_VALUE, Integer.MAX_VALUE};
+        for (int sample = 0; sample < boundaries.length + 64; sample++) {
+            int value = sample < boundaries.length ? boundaries[sample] : random.nextInt();
+            byte[] bytes = new byte[22];
+            char[] chars = new char[22];
+            int[] ints = new int[33];
+            for (int i = 0; i < ints.length; i++) {
+                ints[i] = value + i;
+                if (i < bytes.length) {
+                    bytes[i] = (byte) (value + i);
+                    chars[i] = (char) (value + i);
+                }
+            }
+            expect(refSigned(1, bytes, 0, bytes.length), hashFreshByte22(value), "fresh byte22 " + value);
+            expect(refChar(1, chars, 0, chars.length), hashFreshChar22(value), "fresh char22 " + value);
+            expect(refInt(1, ints, 0, ints.length), hashFreshInt33(value), "fresh int33 " + value);
+            int high = random.nextInt();
+            byte[] utf16 = {(byte) value, (byte) high};
+            byte[] packed = java.nio.ByteBuffer.allocate(4).order(ByteOrder.nativeOrder()).putInt(value).array();
+            for (int init : INITS) {
+                expect(refUtf16(init, utf16, 0, 1), hashFreshUtf16(value, high, init), "fresh utf16 " + value);
+                expect(refUtf16(init, packed, 0, 2), hashFreshUtf16Packed(value, init), "fresh packed utf16 " + value);
+            }
+        }
+    }
+
+    private static void verifyMaterialization() {
+        requireCompiled("hashFreshDynamicRange", int.class, int.class, int.class, int.class);
+        for (int value : new int[]{0, -1, Integer.MIN_VALUE, Integer.MAX_VALUE, 0x817f0080}) {
+            byte[] a = {(byte) value, -1, 127, -128, (byte) (value >>> 8), 5,
+                        (byte) (value >>> 16), 9};
+            int cells = a[0] + a[4] + a[6] + (byte) (value >>> 24);
+            for (int from = 0; from <= 8; from++) {
+                for (int length = 0; length <= 8 - from; length++) {
+                    for (int init : INITS) {
+                        expect(refSigned(init, a, from, length) ^ cells,
+                               hashFreshDynamicRange(value, from, length, init),
+                               "materialization " + value + "/" + from + "/" + length + "/" + init);
+                    }
+                }
+            }
         }
     }
 
@@ -509,13 +678,12 @@ public class TestVectorizedHashCode {
         // Tier boundaries: 7 stays on the scalar tail, 31 takes the single-
         // accumulator mid tier (its blocks of eight fit three short chains),
         // and 32 enters the grouped vector loop.
-        boolean const7HasVector = dumpsA.stream()
-                .filter(p -> p.getFileName().toString().contains("hashByteConst7_"))
+        boolean const7HasVector = requireDumps(dumpsA, "hashByteConst7").stream()
                 .anyMatch(q -> dumpText(q).contains("<8 x i32>"));
         if (const7HasVector) {
             throw new AssertionError("constant length 7 unexpectedly uses a vector tier");
         }
-        for (String boundary : new String[]{"hashByteConst31_", "hashByteConst32_"}) {
+        for (String boundary : new String[]{"hashByteConst17_", "hashByteConst31_", "hashByteConst32_"}) {
             boolean hasVector = dumpsA.stream()
                     .filter(p -> p.getFileName().toString().contains(boundary))
                     .anyMatch(q -> dumpText(q).contains("mul <8 x i32>"));
@@ -525,8 +693,7 @@ public class TestVectorizedHashCode {
         }
         // The trailing underscore matters: "hashByteConst1" is a prefix of the
         // Const15/16/17 dumps, which legitimately keep vector IR.
-        boolean constSmallHasVector = dumpsA.stream()
-                .filter(p -> p.getFileName().toString().contains("hashByteConst1_"))
+        boolean constSmallHasVector = requireDumps(dumpsA, "hashByteConst1").stream()
                 .anyMatch(p -> dumpText(p).contains("<8 x i32>"));
         if (constSmallHasVector) {
             throw new AssertionError("constant length 1 unexpectedly retains vector hash IR");
@@ -548,12 +715,45 @@ public class TestVectorizedHashCode {
             throw new AssertionError("dynamic-length fresh-array hash lost the vector body");
         }
 
+        for (String type : new String[]{"Byte", "Short", "Char", "Int"}) {
+            if (requireDumps(dumpsA, "hashArrays" + type).stream()
+                    .noneMatch(p -> dumpText(p).contains("mul <8 x i32>"))) {
+                throw new AssertionError("public " + type + " hash wrapper has no vector body");
+            }
+        }
+        requireDumps(dumpsA, "hashDynamicType");
+        for (java.nio.file.Path dump : requireDumps(dumpsA, "hashFreshDynamicRange")) {
+            String text = dumpText(dump);
+            if (!text.contains("%pea.matslot") || !text.contains("store atomic i8")
+                    || !text.contains("observeMaterialized")) {
+                throw new AssertionError("fixed-array dynamic range has no materialization/replay: " + dump);
+            }
+        }
+
         // The coder helpers can be compiled callees rather than inlined.
         // Require each vector body on the actual String caller chain.
         for (String coder : new String[]{"StringLatin1", "StringUTF16"}) {
             boolean stringLowered = stringHashLowered(dumpsA, coder);
             if (!stringLowered) {
                 throw new AssertionError("compiled String caller chain has no " + coder + " vector hash body");
+            }
+        }
+        for (String method : new String[]{"hashFreshByte22", "hashFreshChar22", "hashFreshInt33",
+                                          "hashFreshUtf16"}) {
+            for (java.nio.file.Path dump : requireDumps(dumpsA, method)) {
+                String text = dumpText(dump);
+                if (allocates(text) || dumpCallsOp(dump)) {
+                    throw new AssertionError(method + " did not eliminate its hash and allocation: " + dump);
+                }
+            }
+        }
+        for (java.nio.file.Path dump : requireDumps(dumpsA, "hashFreshUtf16Packed")) {
+            String text = dumpText(dump);
+            boolean nativeStore = text.lines().anyMatch(line ->
+                    (line.contains(" call ") || line.contains(" invoke "))
+                    && line.contains("@\"jdk_internal_misc_Unsafe_putInt("));
+            if (!allocates(text) || !nativeStore) {
+                throw new AssertionError("native packed store lost conservative materialization: " + dump);
             }
         }
         boolean seventeenFolded = freshSeventeenFolded(dumpsA);
@@ -589,6 +789,11 @@ public class TestVectorizedHashCode {
                                 .anyMatch(vectorBody)));
     }
 
+    private static boolean allocates(String text) {
+        return text.contains("%tlab_")
+                || text.matches("(?s).*\\b(?:call|invoke)\\b[^\\n]*@(?:jeandle\\.new_array|new_array)\\b.*");
+    }
+
     private static boolean freshSeventeenFolded(java.util.List<java.nio.file.Path> dumps) {
         return dumps.stream()
                 .filter(p -> p.getFileName().toString().contains("hashFreshSeventeen_"))
@@ -596,9 +801,7 @@ public class TestVectorizedHashCode {
                     String text = dumpText(p);
                     // At this phase retained allocations use TLAB IR and a
                     // statepoint whose runtime target is new_array.
-                    boolean allocates = text.contains("%tlab_")
-                            || text.matches("(?s).*\\b(?:call|invoke)\\b[^\\n]*@(?:jeandle\\.new_array|new_array)\\b.*");
-                    return !allocates
+                    return !allocates(text)
                             && text.matches("(?s).*\\bmul i32 [^\\n]*, 1353309697(?:\\n|, !).*")
                             && !text.contains("mul <8 x i32>");
                 });
@@ -609,19 +812,22 @@ public class TestVectorizedHashCode {
         java.util.List<String> command = java.util.List.of(
                 "--add-exports=java.base/jdk.internal.misc=ALL-UNNAMED",
                 "--add-exports=java.base/jdk.internal.util=ALL-UNNAMED",
+                "-Xbootclasspath/a:.", "-XX:+UnlockDiagnosticVMOptions", "-XX:+WhiteBoxAPI",
                 "-Xbatch", "-XX:-TieredCompilation", "-XX:CompileThreshold=1000",
-                "-XX:+UnlockDiagnosticVMOptions", "-XX:+IgnoreUnrecognizedVMOptions",
+                "-XX:+IgnoreUnrecognizedVMOptions",
                 "-XX:+UseJeandleCompiler", avxFlag,
                 "-Xlog:jeandle=debug", "-XX:+JeandleDumpIR",
                 "-XX:JeandleDumpDirectory=" + dumpDirectory,
                 "-XX:CompileCommand=quiet",
                 "-XX:CompileCommand=compileonly,compiler.jeandle.intrinsic.TestVectorizedHashCode::hash*",
                 "-XX:CompileCommand=compileonly,java.lang.String*::hashCode",
+                "-XX:CompileCommand=dontinline,compiler.jeandle.intrinsic.TestVectorizedHashCode::observeMaterialized",
                 TestVectorizedHashCode.class.getName(), "functional");
         jdk.test.lib.process.OutputAnalyzer output = jdk.test.lib.process.ProcessTools.executeCommand(
                 jdk.test.lib.process.ProcessTools.createLimitedTestJavaProcessBuilder(
                         command.toArray(new String[0])));
         return output.shouldHaveExitValue(0)
+                     .shouldContain("HASH-VALIDATION-PASSED")
                      .shouldContain("jdk.internal.util.ArraysSupport.vectorizedHashCode")
                      .shouldContain("is parsed as intrinsic");
     }
@@ -632,6 +838,17 @@ public class TestVectorizedHashCode {
         try (java.util.stream.Stream<java.nio.file.Path> files = java.nio.file.Files.walk(dir)) {
             return files.filter(p -> p.getFileName().toString().endsWith("_optimized.ll")).toList();
         }
+    }
+
+    private static java.util.List<java.nio.file.Path> requireDumps(
+            java.util.List<java.nio.file.Path> dumps, String method) {
+        String prefix = TestVectorizedHashCode.class.getName().replace('.', '_') + "_" + method + "_";
+        java.util.List<java.nio.file.Path> matches = dumps.stream()
+                .filter(p -> p.getFileName().toString().startsWith(prefix)).toList();
+        if (matches.isEmpty()) {
+            throw new AssertionError("missing optimized dump for " + method);
+        }
+        return matches;
     }
 
     private static boolean dynDumpContains(java.util.List<java.nio.file.Path> dumps, String needle) {

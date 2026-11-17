@@ -2409,8 +2409,9 @@ entry:
 ; Four independent vector accumulators and the scalar h chain multiply by
 ; 31^group_size; the epilogue applies per-lane coefficients
 ; 31^(group_size-1-laneoffset) and wrapping horizontal adds. Independent
-; accumulators hide the vector multiply latency. Remaining groups of eight
-; precede a pairwise scalar tail, h = 961*h + 31*x + y, as in C2/Graal.
+; accumulators hide the vector multiply latency. The 64-element tier feeds
+; its remainder through the 32-element tier. Remaining groups of eight precede
+; a pairwise scalar tail, h = 961*h + 31*x + y, as in C2/Graal.
 ; Signed length comparisons make empty/negative counts return initialValue.
 ; T_BOOLEAN reads unsigned bytes and T_CHAR unsigned native-order shorts
 ; from a byte[] payload, matching StringLatin1/StringUTF16.
@@ -2435,16 +2436,19 @@ boolean.entry:
   %boolean.count = sext i32 %length to i64
   ; Four independent chains cover 64 elements on AVX-512 and 32 on AVX2.
   %boolean.avx512 = load i1, ptr @VM_Version.hashcode_vector_512bit
-  %boolean.ge32 = icmp sge i64 %boolean.count, 32
   %boolean.ge64 = icmp sge i64 %boolean.count, 64
   %boolean.use.w16 = and i1 %boolean.avx512, %boolean.ge64
   br i1 %boolean.use.w16, label %boolean.w16.check, label %boolean.w8.select
 boolean.w8.select:
+  %boolean.k.begin = phi i64 [ 0, %boolean.entry ], [ %boolean.w16.k, %boolean.w16.done ]
+  %boolean.h.begin = phi i32 [ %initialValue, %boolean.entry ], [ %boolean.w16.h.final, %boolean.w16.done ]
+  %boolean.remaining = sub i64 %boolean.count, %boolean.k.begin
+  %boolean.ge32 = icmp sge i64 %boolean.remaining, 32
   br i1 %boolean.ge32, label %boolean.w8.check, label %boolean.mid.select
 boolean.mid.select:
   ; Short inputs and grouped-loop remainders use one 8-lane accumulator
   ; before the scalar tail.
-  %boolean.ge8 = icmp sge i64 %boolean.count, 8
+  %boolean.ge8 = icmp sge i64 %boolean.remaining, 8
   br i1 %boolean.ge8, label %boolean.mid.check, label %boolean.tail
 boolean.w16.check:
   %boolean.w16.k = phi i64 [ 0, %boolean.entry ], [ %boolean.w16.k.next, %boolean.w16.body ]
@@ -2497,10 +2501,10 @@ boolean.w16.done:
   %boolean.w16.sum = add <16 x i32> %boolean.w16.sum01, %boolean.w16.sum23
   %boolean.w16.reduced = call i32 @llvm.vector.reduce.add.v16i32(<16 x i32> %boolean.w16.sum)
   %boolean.w16.h.final = add i32 %boolean.w16.h, %boolean.w16.reduced
-  br label %boolean.mid.check
+  br label %boolean.w8.select
 boolean.w8.check:
-  %boolean.k = phi i64 [ 0, %boolean.w8.select ], [ %boolean.k.next, %boolean.w8.body ]
-  %boolean.h = phi i32 [ %initialValue, %boolean.w8.select ], [ %boolean.h.next, %boolean.w8.body ]
+  %boolean.k = phi i64 [ %boolean.k.begin, %boolean.w8.select ], [ %boolean.k.next, %boolean.w8.body ]
+  %boolean.h = phi i32 [ %boolean.h.begin, %boolean.w8.select ], [ %boolean.h.next, %boolean.w8.body ]
   %boolean.a0 = phi <8 x i32> [ zeroinitializer, %boolean.w8.select ], [ %boolean.a0.next, %boolean.w8.body ]
   %boolean.a1 = phi <8 x i32> [ zeroinitializer, %boolean.w8.select ], [ %boolean.a1.next, %boolean.w8.body ]
   %boolean.a2 = phi <8 x i32> [ zeroinitializer, %boolean.w8.select ], [ %boolean.a2.next, %boolean.w8.body ]
@@ -2549,9 +2553,9 @@ boolean.w8.done:
   %boolean.h.final = add i32 %boolean.h, %boolean.reduced
   br label %boolean.mid.check
 boolean.mid.check:
-  %boolean.mid.k = phi i64 [ 0, %boolean.mid.select ], [ %boolean.k, %boolean.w8.done ], [ %boolean.mid.k.next, %boolean.mid.body ], [ %boolean.w16.k, %boolean.w16.done ]
-  %boolean.mid.h = phi i32 [ %initialValue, %boolean.mid.select ], [ %boolean.h.final, %boolean.w8.done ], [ %boolean.mid.h.next, %boolean.mid.body ], [ %boolean.w16.h.final, %boolean.w16.done ]
-  %boolean.mid.acc = phi <8 x i32> [ zeroinitializer, %boolean.mid.select ], [ zeroinitializer, %boolean.w8.done ], [ %boolean.mid.acc.next, %boolean.mid.body ], [ zeroinitializer, %boolean.w16.done ]
+  %boolean.mid.k = phi i64 [ %boolean.k.begin, %boolean.mid.select ], [ %boolean.k, %boolean.w8.done ], [ %boolean.mid.k.next, %boolean.mid.body ]
+  %boolean.mid.h = phi i32 [ %boolean.h.begin, %boolean.mid.select ], [ %boolean.h.final, %boolean.w8.done ], [ %boolean.mid.h.next, %boolean.mid.body ]
+  %boolean.mid.acc = phi <8 x i32> [ zeroinitializer, %boolean.mid.select ], [ zeroinitializer, %boolean.w8.done ], [ %boolean.mid.acc.next, %boolean.mid.body ]
   %boolean.mid.end = add i64 %boolean.count, -7
   %boolean.mid.more = icmp slt i64 %boolean.mid.k, %boolean.mid.end
   br i1 %boolean.mid.more, label %boolean.mid.body, label %boolean.mid.done
@@ -2571,8 +2575,8 @@ boolean.mid.done:
   %boolean.mid.h.final = add i32 %boolean.mid.h, %boolean.mid.sum
   br label %boolean.tail
 boolean.tail:
-  %boolean.t = phi i64 [ 0, %boolean.mid.select ], [ %boolean.mid.k, %boolean.mid.done ], [ %boolean.t.next, %boolean.tail.body ]
-  %boolean.t.h = phi i32 [ %initialValue, %boolean.mid.select ], [ %boolean.mid.h.final, %boolean.mid.done ], [ %boolean.t.h.next, %boolean.tail.body ]
+  %boolean.t = phi i64 [ %boolean.k.begin, %boolean.mid.select ], [ %boolean.mid.k, %boolean.mid.done ], [ %boolean.t.next, %boolean.tail.body ]
+  %boolean.t.h = phi i32 [ %boolean.h.begin, %boolean.mid.select ], [ %boolean.mid.h.final, %boolean.mid.done ], [ %boolean.t.h.next, %boolean.tail.body ]
   %boolean.pair.end = add i64 %boolean.count, -1
   %boolean.pair.more = icmp slt i64 %boolean.t, %boolean.pair.end
   br i1 %boolean.pair.more, label %boolean.tail.body, label %boolean.tail.last
@@ -2610,16 +2614,19 @@ char.entry:
   %char.count = sext i32 %length to i64
   ; Four independent chains cover 64 elements on AVX-512 and 32 on AVX2.
   %char.avx512 = load i1, ptr @VM_Version.hashcode_vector_512bit
-  %char.ge32 = icmp sge i64 %char.count, 32
   %char.ge64 = icmp sge i64 %char.count, 64
   %char.use.w16 = and i1 %char.avx512, %char.ge64
   br i1 %char.use.w16, label %char.w16.check, label %char.w8.select
 char.w8.select:
+  %char.k.begin = phi i64 [ 0, %char.entry ], [ %char.w16.k, %char.w16.done ]
+  %char.h.begin = phi i32 [ %initialValue, %char.entry ], [ %char.w16.h.final, %char.w16.done ]
+  %char.remaining = sub i64 %char.count, %char.k.begin
+  %char.ge32 = icmp sge i64 %char.remaining, 32
   br i1 %char.ge32, label %char.w8.check, label %char.mid.select
 char.mid.select:
   ; Short inputs and grouped-loop remainders use one 8-lane accumulator
   ; before the scalar tail.
-  %char.ge8 = icmp sge i64 %char.count, 8
+  %char.ge8 = icmp sge i64 %char.remaining, 8
   br i1 %char.ge8, label %char.mid.check, label %char.tail
 char.w16.check:
   %char.w16.k = phi i64 [ 0, %char.entry ], [ %char.w16.k.next, %char.w16.body ]
@@ -2672,10 +2679,10 @@ char.w16.done:
   %char.w16.sum = add <16 x i32> %char.w16.sum01, %char.w16.sum23
   %char.w16.reduced = call i32 @llvm.vector.reduce.add.v16i32(<16 x i32> %char.w16.sum)
   %char.w16.h.final = add i32 %char.w16.h, %char.w16.reduced
-  br label %char.mid.check
+  br label %char.w8.select
 char.w8.check:
-  %char.k = phi i64 [ 0, %char.w8.select ], [ %char.k.next, %char.w8.body ]
-  %char.h = phi i32 [ %initialValue, %char.w8.select ], [ %char.h.next, %char.w8.body ]
+  %char.k = phi i64 [ %char.k.begin, %char.w8.select ], [ %char.k.next, %char.w8.body ]
+  %char.h = phi i32 [ %char.h.begin, %char.w8.select ], [ %char.h.next, %char.w8.body ]
   %char.a0 = phi <8 x i32> [ zeroinitializer, %char.w8.select ], [ %char.a0.next, %char.w8.body ]
   %char.a1 = phi <8 x i32> [ zeroinitializer, %char.w8.select ], [ %char.a1.next, %char.w8.body ]
   %char.a2 = phi <8 x i32> [ zeroinitializer, %char.w8.select ], [ %char.a2.next, %char.w8.body ]
@@ -2724,9 +2731,9 @@ char.w8.done:
   %char.h.final = add i32 %char.h, %char.reduced
   br label %char.mid.check
 char.mid.check:
-  %char.mid.k = phi i64 [ 0, %char.mid.select ], [ %char.k, %char.w8.done ], [ %char.mid.k.next, %char.mid.body ], [ %char.w16.k, %char.w16.done ]
-  %char.mid.h = phi i32 [ %initialValue, %char.mid.select ], [ %char.h.final, %char.w8.done ], [ %char.mid.h.next, %char.mid.body ], [ %char.w16.h.final, %char.w16.done ]
-  %char.mid.acc = phi <8 x i32> [ zeroinitializer, %char.mid.select ], [ zeroinitializer, %char.w8.done ], [ %char.mid.acc.next, %char.mid.body ], [ zeroinitializer, %char.w16.done ]
+  %char.mid.k = phi i64 [ %char.k.begin, %char.mid.select ], [ %char.k, %char.w8.done ], [ %char.mid.k.next, %char.mid.body ]
+  %char.mid.h = phi i32 [ %char.h.begin, %char.mid.select ], [ %char.h.final, %char.w8.done ], [ %char.mid.h.next, %char.mid.body ]
+  %char.mid.acc = phi <8 x i32> [ zeroinitializer, %char.mid.select ], [ zeroinitializer, %char.w8.done ], [ %char.mid.acc.next, %char.mid.body ]
   %char.mid.end = add i64 %char.count, -7
   %char.mid.more = icmp slt i64 %char.mid.k, %char.mid.end
   br i1 %char.mid.more, label %char.mid.body, label %char.mid.done
@@ -2746,8 +2753,8 @@ char.mid.done:
   %char.mid.h.final = add i32 %char.mid.h, %char.mid.sum
   br label %char.tail
 char.tail:
-  %char.t = phi i64 [ 0, %char.mid.select ], [ %char.mid.k, %char.mid.done ], [ %char.t.next, %char.tail.body ]
-  %char.t.h = phi i32 [ %initialValue, %char.mid.select ], [ %char.mid.h.final, %char.mid.done ], [ %char.t.h.next, %char.tail.body ]
+  %char.t = phi i64 [ %char.k.begin, %char.mid.select ], [ %char.mid.k, %char.mid.done ], [ %char.t.next, %char.tail.body ]
+  %char.t.h = phi i32 [ %char.h.begin, %char.mid.select ], [ %char.mid.h.final, %char.mid.done ], [ %char.t.h.next, %char.tail.body ]
   %char.pair.end = add i64 %char.count, -1
   %char.pair.more = icmp slt i64 %char.t, %char.pair.end
   br i1 %char.pair.more, label %char.tail.body, label %char.tail.last
@@ -2785,16 +2792,19 @@ byte.entry:
   %byte.count = sext i32 %length to i64
   ; Four independent chains cover 64 elements on AVX-512 and 32 on AVX2.
   %byte.avx512 = load i1, ptr @VM_Version.hashcode_vector_512bit
-  %byte.ge32 = icmp sge i64 %byte.count, 32
   %byte.ge64 = icmp sge i64 %byte.count, 64
   %byte.use.w16 = and i1 %byte.avx512, %byte.ge64
   br i1 %byte.use.w16, label %byte.w16.check, label %byte.w8.select
 byte.w8.select:
+  %byte.k.begin = phi i64 [ 0, %byte.entry ], [ %byte.w16.k, %byte.w16.done ]
+  %byte.h.begin = phi i32 [ %initialValue, %byte.entry ], [ %byte.w16.h.final, %byte.w16.done ]
+  %byte.remaining = sub i64 %byte.count, %byte.k.begin
+  %byte.ge32 = icmp sge i64 %byte.remaining, 32
   br i1 %byte.ge32, label %byte.w8.check, label %byte.mid.select
 byte.mid.select:
   ; Short inputs and grouped-loop remainders use one 8-lane accumulator
   ; before the scalar tail.
-  %byte.ge8 = icmp sge i64 %byte.count, 8
+  %byte.ge8 = icmp sge i64 %byte.remaining, 8
   br i1 %byte.ge8, label %byte.mid.check, label %byte.tail
 byte.w16.check:
   %byte.w16.k = phi i64 [ 0, %byte.entry ], [ %byte.w16.k.next, %byte.w16.body ]
@@ -2847,10 +2857,10 @@ byte.w16.done:
   %byte.w16.sum = add <16 x i32> %byte.w16.sum01, %byte.w16.sum23
   %byte.w16.reduced = call i32 @llvm.vector.reduce.add.v16i32(<16 x i32> %byte.w16.sum)
   %byte.w16.h.final = add i32 %byte.w16.h, %byte.w16.reduced
-  br label %byte.mid.check
+  br label %byte.w8.select
 byte.w8.check:
-  %byte.k = phi i64 [ 0, %byte.w8.select ], [ %byte.k.next, %byte.w8.body ]
-  %byte.h = phi i32 [ %initialValue, %byte.w8.select ], [ %byte.h.next, %byte.w8.body ]
+  %byte.k = phi i64 [ %byte.k.begin, %byte.w8.select ], [ %byte.k.next, %byte.w8.body ]
+  %byte.h = phi i32 [ %byte.h.begin, %byte.w8.select ], [ %byte.h.next, %byte.w8.body ]
   %byte.a0 = phi <8 x i32> [ zeroinitializer, %byte.w8.select ], [ %byte.a0.next, %byte.w8.body ]
   %byte.a1 = phi <8 x i32> [ zeroinitializer, %byte.w8.select ], [ %byte.a1.next, %byte.w8.body ]
   %byte.a2 = phi <8 x i32> [ zeroinitializer, %byte.w8.select ], [ %byte.a2.next, %byte.w8.body ]
@@ -2899,9 +2909,9 @@ byte.w8.done:
   %byte.h.final = add i32 %byte.h, %byte.reduced
   br label %byte.mid.check
 byte.mid.check:
-  %byte.mid.k = phi i64 [ 0, %byte.mid.select ], [ %byte.k, %byte.w8.done ], [ %byte.mid.k.next, %byte.mid.body ], [ %byte.w16.k, %byte.w16.done ]
-  %byte.mid.h = phi i32 [ %initialValue, %byte.mid.select ], [ %byte.h.final, %byte.w8.done ], [ %byte.mid.h.next, %byte.mid.body ], [ %byte.w16.h.final, %byte.w16.done ]
-  %byte.mid.acc = phi <8 x i32> [ zeroinitializer, %byte.mid.select ], [ zeroinitializer, %byte.w8.done ], [ %byte.mid.acc.next, %byte.mid.body ], [ zeroinitializer, %byte.w16.done ]
+  %byte.mid.k = phi i64 [ %byte.k.begin, %byte.mid.select ], [ %byte.k, %byte.w8.done ], [ %byte.mid.k.next, %byte.mid.body ]
+  %byte.mid.h = phi i32 [ %byte.h.begin, %byte.mid.select ], [ %byte.h.final, %byte.w8.done ], [ %byte.mid.h.next, %byte.mid.body ]
+  %byte.mid.acc = phi <8 x i32> [ zeroinitializer, %byte.mid.select ], [ zeroinitializer, %byte.w8.done ], [ %byte.mid.acc.next, %byte.mid.body ]
   %byte.mid.end = add i64 %byte.count, -7
   %byte.mid.more = icmp slt i64 %byte.mid.k, %byte.mid.end
   br i1 %byte.mid.more, label %byte.mid.body, label %byte.mid.done
@@ -2921,8 +2931,8 @@ byte.mid.done:
   %byte.mid.h.final = add i32 %byte.mid.h, %byte.mid.sum
   br label %byte.tail
 byte.tail:
-  %byte.t = phi i64 [ 0, %byte.mid.select ], [ %byte.mid.k, %byte.mid.done ], [ %byte.t.next, %byte.tail.body ]
-  %byte.t.h = phi i32 [ %initialValue, %byte.mid.select ], [ %byte.mid.h.final, %byte.mid.done ], [ %byte.t.h.next, %byte.tail.body ]
+  %byte.t = phi i64 [ %byte.k.begin, %byte.mid.select ], [ %byte.mid.k, %byte.mid.done ], [ %byte.t.next, %byte.tail.body ]
+  %byte.t.h = phi i32 [ %byte.h.begin, %byte.mid.select ], [ %byte.mid.h.final, %byte.mid.done ], [ %byte.t.h.next, %byte.tail.body ]
   %byte.pair.end = add i64 %byte.count, -1
   %byte.pair.more = icmp slt i64 %byte.t, %byte.pair.end
   br i1 %byte.pair.more, label %byte.tail.body, label %byte.tail.last
@@ -2960,16 +2970,19 @@ short.entry:
   %short.count = sext i32 %length to i64
   ; Four independent chains cover 64 elements on AVX-512 and 32 on AVX2.
   %short.avx512 = load i1, ptr @VM_Version.hashcode_vector_512bit
-  %short.ge32 = icmp sge i64 %short.count, 32
   %short.ge64 = icmp sge i64 %short.count, 64
   %short.use.w16 = and i1 %short.avx512, %short.ge64
   br i1 %short.use.w16, label %short.w16.check, label %short.w8.select
 short.w8.select:
+  %short.k.begin = phi i64 [ 0, %short.entry ], [ %short.w16.k, %short.w16.done ]
+  %short.h.begin = phi i32 [ %initialValue, %short.entry ], [ %short.w16.h.final, %short.w16.done ]
+  %short.remaining = sub i64 %short.count, %short.k.begin
+  %short.ge32 = icmp sge i64 %short.remaining, 32
   br i1 %short.ge32, label %short.w8.check, label %short.mid.select
 short.mid.select:
   ; Short inputs and grouped-loop remainders use one 8-lane accumulator
   ; before the scalar tail.
-  %short.ge8 = icmp sge i64 %short.count, 8
+  %short.ge8 = icmp sge i64 %short.remaining, 8
   br i1 %short.ge8, label %short.mid.check, label %short.tail
 short.w16.check:
   %short.w16.k = phi i64 [ 0, %short.entry ], [ %short.w16.k.next, %short.w16.body ]
@@ -3022,10 +3035,10 @@ short.w16.done:
   %short.w16.sum = add <16 x i32> %short.w16.sum01, %short.w16.sum23
   %short.w16.reduced = call i32 @llvm.vector.reduce.add.v16i32(<16 x i32> %short.w16.sum)
   %short.w16.h.final = add i32 %short.w16.h, %short.w16.reduced
-  br label %short.mid.check
+  br label %short.w8.select
 short.w8.check:
-  %short.k = phi i64 [ 0, %short.w8.select ], [ %short.k.next, %short.w8.body ]
-  %short.h = phi i32 [ %initialValue, %short.w8.select ], [ %short.h.next, %short.w8.body ]
+  %short.k = phi i64 [ %short.k.begin, %short.w8.select ], [ %short.k.next, %short.w8.body ]
+  %short.h = phi i32 [ %short.h.begin, %short.w8.select ], [ %short.h.next, %short.w8.body ]
   %short.a0 = phi <8 x i32> [ zeroinitializer, %short.w8.select ], [ %short.a0.next, %short.w8.body ]
   %short.a1 = phi <8 x i32> [ zeroinitializer, %short.w8.select ], [ %short.a1.next, %short.w8.body ]
   %short.a2 = phi <8 x i32> [ zeroinitializer, %short.w8.select ], [ %short.a2.next, %short.w8.body ]
@@ -3074,9 +3087,9 @@ short.w8.done:
   %short.h.final = add i32 %short.h, %short.reduced
   br label %short.mid.check
 short.mid.check:
-  %short.mid.k = phi i64 [ 0, %short.mid.select ], [ %short.k, %short.w8.done ], [ %short.mid.k.next, %short.mid.body ], [ %short.w16.k, %short.w16.done ]
-  %short.mid.h = phi i32 [ %initialValue, %short.mid.select ], [ %short.h.final, %short.w8.done ], [ %short.mid.h.next, %short.mid.body ], [ %short.w16.h.final, %short.w16.done ]
-  %short.mid.acc = phi <8 x i32> [ zeroinitializer, %short.mid.select ], [ zeroinitializer, %short.w8.done ], [ %short.mid.acc.next, %short.mid.body ], [ zeroinitializer, %short.w16.done ]
+  %short.mid.k = phi i64 [ %short.k.begin, %short.mid.select ], [ %short.k, %short.w8.done ], [ %short.mid.k.next, %short.mid.body ]
+  %short.mid.h = phi i32 [ %short.h.begin, %short.mid.select ], [ %short.h.final, %short.w8.done ], [ %short.mid.h.next, %short.mid.body ]
+  %short.mid.acc = phi <8 x i32> [ zeroinitializer, %short.mid.select ], [ zeroinitializer, %short.w8.done ], [ %short.mid.acc.next, %short.mid.body ]
   %short.mid.end = add i64 %short.count, -7
   %short.mid.more = icmp slt i64 %short.mid.k, %short.mid.end
   br i1 %short.mid.more, label %short.mid.body, label %short.mid.done
@@ -3096,8 +3109,8 @@ short.mid.done:
   %short.mid.h.final = add i32 %short.mid.h, %short.mid.sum
   br label %short.tail
 short.tail:
-  %short.t = phi i64 [ 0, %short.mid.select ], [ %short.mid.k, %short.mid.done ], [ %short.t.next, %short.tail.body ]
-  %short.t.h = phi i32 [ %initialValue, %short.mid.select ], [ %short.mid.h.final, %short.mid.done ], [ %short.t.h.next, %short.tail.body ]
+  %short.t = phi i64 [ %short.k.begin, %short.mid.select ], [ %short.mid.k, %short.mid.done ], [ %short.t.next, %short.tail.body ]
+  %short.t.h = phi i32 [ %short.h.begin, %short.mid.select ], [ %short.mid.h.final, %short.mid.done ], [ %short.t.h.next, %short.tail.body ]
   %short.pair.end = add i64 %short.count, -1
   %short.pair.more = icmp slt i64 %short.t, %short.pair.end
   br i1 %short.pair.more, label %short.tail.body, label %short.tail.last
@@ -3135,16 +3148,19 @@ int.entry:
   %int.count = sext i32 %length to i64
   ; Four independent chains cover 64 elements on AVX-512 and 32 on AVX2.
   %int.avx512 = load i1, ptr @VM_Version.hashcode_vector_512bit
-  %int.ge32 = icmp sge i64 %int.count, 32
   %int.ge64 = icmp sge i64 %int.count, 64
   %int.use.w16 = and i1 %int.avx512, %int.ge64
   br i1 %int.use.w16, label %int.w16.check, label %int.w8.select
 int.w8.select:
+  %int.k.begin = phi i64 [ 0, %int.entry ], [ %int.w16.k, %int.w16.done ]
+  %int.h.begin = phi i32 [ %initialValue, %int.entry ], [ %int.w16.h.final, %int.w16.done ]
+  %int.remaining = sub i64 %int.count, %int.k.begin
+  %int.ge32 = icmp sge i64 %int.remaining, 32
   br i1 %int.ge32, label %int.w8.check, label %int.mid.select
 int.mid.select:
   ; Short inputs and grouped-loop remainders use one 8-lane accumulator
   ; before the scalar tail.
-  %int.ge8 = icmp sge i64 %int.count, 8
+  %int.ge8 = icmp sge i64 %int.remaining, 8
   br i1 %int.ge8, label %int.mid.check, label %int.tail
 int.w16.check:
   %int.w16.k = phi i64 [ 0, %int.entry ], [ %int.w16.k.next, %int.w16.body ]
@@ -3193,10 +3209,10 @@ int.w16.done:
   %int.w16.sum = add <16 x i32> %int.w16.sum01, %int.w16.sum23
   %int.w16.reduced = call i32 @llvm.vector.reduce.add.v16i32(<16 x i32> %int.w16.sum)
   %int.w16.h.final = add i32 %int.w16.h, %int.w16.reduced
-  br label %int.mid.check
+  br label %int.w8.select
 int.w8.check:
-  %int.k = phi i64 [ 0, %int.w8.select ], [ %int.k.next, %int.w8.body ]
-  %int.h = phi i32 [ %initialValue, %int.w8.select ], [ %int.h.next, %int.w8.body ]
+  %int.k = phi i64 [ %int.k.begin, %int.w8.select ], [ %int.k.next, %int.w8.body ]
+  %int.h = phi i32 [ %int.h.begin, %int.w8.select ], [ %int.h.next, %int.w8.body ]
   %int.a0 = phi <8 x i32> [ zeroinitializer, %int.w8.select ], [ %int.a0.next, %int.w8.body ]
   %int.a1 = phi <8 x i32> [ zeroinitializer, %int.w8.select ], [ %int.a1.next, %int.w8.body ]
   %int.a2 = phi <8 x i32> [ zeroinitializer, %int.w8.select ], [ %int.a2.next, %int.w8.body ]
@@ -3241,9 +3257,9 @@ int.w8.done:
   %int.h.final = add i32 %int.h, %int.reduced
   br label %int.mid.check
 int.mid.check:
-  %int.mid.k = phi i64 [ 0, %int.mid.select ], [ %int.k, %int.w8.done ], [ %int.mid.k.next, %int.mid.body ], [ %int.w16.k, %int.w16.done ]
-  %int.mid.h = phi i32 [ %initialValue, %int.mid.select ], [ %int.h.final, %int.w8.done ], [ %int.mid.h.next, %int.mid.body ], [ %int.w16.h.final, %int.w16.done ]
-  %int.mid.acc = phi <8 x i32> [ zeroinitializer, %int.mid.select ], [ zeroinitializer, %int.w8.done ], [ %int.mid.acc.next, %int.mid.body ], [ zeroinitializer, %int.w16.done ]
+  %int.mid.k = phi i64 [ %int.k.begin, %int.mid.select ], [ %int.k, %int.w8.done ], [ %int.mid.k.next, %int.mid.body ]
+  %int.mid.h = phi i32 [ %int.h.begin, %int.mid.select ], [ %int.h.final, %int.w8.done ], [ %int.mid.h.next, %int.mid.body ]
+  %int.mid.acc = phi <8 x i32> [ zeroinitializer, %int.mid.select ], [ zeroinitializer, %int.w8.done ], [ %int.mid.acc.next, %int.mid.body ]
   %int.mid.end = add i64 %int.count, -7
   %int.mid.more = icmp slt i64 %int.mid.k, %int.mid.end
   br i1 %int.mid.more, label %int.mid.body, label %int.mid.done
@@ -3262,8 +3278,8 @@ int.mid.done:
   %int.mid.h.final = add i32 %int.mid.h, %int.mid.sum
   br label %int.tail
 int.tail:
-  %int.t = phi i64 [ 0, %int.mid.select ], [ %int.mid.k, %int.mid.done ], [ %int.t.next, %int.tail.body ]
-  %int.t.h = phi i32 [ %initialValue, %int.mid.select ], [ %int.mid.h.final, %int.mid.done ], [ %int.t.h.next, %int.tail.body ]
+  %int.t = phi i64 [ %int.k.begin, %int.mid.select ], [ %int.mid.k, %int.mid.done ], [ %int.t.next, %int.tail.body ]
+  %int.t.h = phi i32 [ %int.h.begin, %int.mid.select ], [ %int.mid.h.final, %int.mid.done ], [ %int.t.h.next, %int.tail.body ]
   %int.pair.end = add i64 %int.count, -1
   %int.pair.more = icmp slt i64 %int.t, %int.pair.end
   br i1 %int.pair.more, label %int.tail.body, label %int.tail.last
