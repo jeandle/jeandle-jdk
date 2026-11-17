@@ -46,6 +46,7 @@
 #include "classfile/systemDictionary.hpp"
 #include "classfile/vmClasses.hpp"
 #include "ci/ciField.hpp"
+#include "ci/ciArrayKlass.hpp"
 #include "ci/ciInstance.hpp"
 #include "ci/ciMetadata.hpp"
 #include "ci/ciMethod.hpp"
@@ -64,6 +65,7 @@
 #include "oops/objArrayKlass.hpp"
 #include "oops/typeArrayKlass.hpp"
 #include "runtime/globals.hpp"
+#include "runtime/reflection.hpp"
 #include "runtime/javaThread.hpp"
 #include "runtime/sharedRuntime.hpp"
 #include "runtime/stubRoutines.hpp"
@@ -528,6 +530,31 @@ uintptr_t JeandleVMCallback::get_mirror_klass(int oop_id) {
 
   ciKlass* klass = mirror_type->as_klass();
   if (!klass->is_loaded()) {
+    return llvm::jeandle::MirrorKlassUnavailable;
+  }
+  return record_klass_metadata(klass);
+}
+
+uintptr_t JeandleVMCallback::get_mirror_array_klass(int oop_id) {
+  ciObject* object = oop_by_id(oop_id);
+  if (object == nullptr || object->is_null_object() || !object->is_instance()) {
+    return llvm::jeandle::MirrorKlassUnavailable;
+  }
+  ciType* component = object->as_instance()->java_mirror_type();
+  if (component == nullptr) {
+    return llvm::jeandle::MirrorKlassUnavailable;
+  }
+  if (component->is_void()) {
+    return 0;
+  }
+  if (component->is_array_klass() &&
+      component->as_array_klass()->dimension() >= Reflection::MAX_DIM) {
+    return 0;
+  }
+  // Match LoadKlassNode's constant-mirror array_klass folding. The ci query
+  // resolves the array type without initializing its component class.
+  ciArrayKlass* klass = ciArrayKlass::make(component);
+  if (klass == nullptr || !klass->is_loaded()) {
     return llvm::jeandle::MirrorKlassUnavailable;
   }
   return record_klass_metadata(klass);
@@ -1249,6 +1276,7 @@ void JeandleVMCallback::register_callbacks() {
   callbacks.GetOopKlass = &JeandleVMCallback::get_oop_klass;
   callbacks.GetKlassConstant = &JeandleVMCallback::get_klass_constant;
   callbacks.GetMirrorKlass = &JeandleVMCallback::get_mirror_klass;
+  callbacks.GetMirrorArrayKlass = &JeandleVMCallback::get_mirror_array_klass;
   callbacks.GetKlassLayoutHelper = &JeandleVMCallback::get_klass_layout_helper;
   callbacks.GetKlassConstantField = &JeandleVMCallback::get_klass_constant_field;
   callbacks.IsKlassInitialized = &JeandleVMCallback::is_klass_initialized;

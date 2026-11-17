@@ -254,6 +254,17 @@ entry:
   ret i32 %layout_helper
 }
 
+; Resolve the array Klass for a nonnull component mirror. A constant mirror
+; can use the compiler's ciArrayKlass query; dynamic mirrors use the acquire
+; load of the cache, with null requesting the Java allocation fallback.
+define hotspotcc ptr @jeandle.load_mirror_array_klass(ptr addrspace(1) nocapture readonly %mirror) noinline "lower-phase"="1" #0 {
+entry:
+  %offset = load i32, ptr @java_lang_Class.array_klass_offset
+  %addr = getelementptr inbounds i8, ptr addrspace(1) %mirror, i32 %offset
+  %klass = load atomic ptr, ptr addrspace(1) %addr acquire, align 8
+  ret ptr %klass
+}
+
 ; Query a Klass' current initialization state. Keeping this opaque through
 ; phase 0 lets ConstantFieldFolding replace the query with true for a constant
 ; Klass already known by the VM to be initialized. Otherwise phase 1 lowers it
