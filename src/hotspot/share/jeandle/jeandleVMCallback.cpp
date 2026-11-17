@@ -66,6 +66,7 @@
 #include "runtime/globals.hpp"
 #include "runtime/javaThread.hpp"
 #include "runtime/sharedRuntime.hpp"
+#include "runtime/stubRoutines.hpp"
 #include "utilities/globalDefinitions.hpp"
 
 #include <cstdint>
@@ -1274,6 +1275,50 @@ JeandleVMCallback::get_clone_instance_info(uintptr_t klass_ptr,
           std::move(fields)};
 }
 
+// Raw-bit helpers keep NaN payloads and signed zeros intact across the
+// callback boundary; the LLVM pass passes and receives double bit patterns.
+static jdouble libm_arg_bits_to_double(int64_t bits) {
+  jdouble value;
+  memcpy(&value, &bits, sizeof(value));
+  return value;
+}
+
+static int64_t libm_result_to_bits(jdouble value) {
+  int64_t bits;
+  memcpy(&bits, &value, sizeof(bits));
+  return bits;
+}
+
+// Selector values mirror llvm::jeandle::LibmEntry: the callee kind plus the
+// entry the folded call targets. Stub selectors are only produced when the
+// platform generated that stub, so the routine address is non-null there.
+int64_t JeandleVMCallback::evaluate_libm(int entry, int64_t arg_bits, int64_t arg2_bits) {
+  using llvm::jeandle::LibmEntry;
+  using UnaryFn = jdouble (*)(jdouble);
+  using BinaryFn = jdouble (*)(jdouble, jdouble);
+
+  const jdouble x = libm_arg_bits_to_double(arg_bits);
+  const jdouble y = libm_arg_bits_to_double(arg2_bits);
+
+  switch (static_cast<LibmEntry>(entry)) {
+    case LibmEntry::SinStub:   return libm_result_to_bits(reinterpret_cast<UnaryFn>(StubRoutines::dsin())(x));
+    case LibmEntry::SinShared: return libm_result_to_bits(SharedRuntime::dsin(x));
+    case LibmEntry::CosStub:   return libm_result_to_bits(reinterpret_cast<UnaryFn>(StubRoutines::dcos())(x));
+    case LibmEntry::CosShared: return libm_result_to_bits(SharedRuntime::dcos(x));
+    case LibmEntry::TanStub:   return libm_result_to_bits(reinterpret_cast<UnaryFn>(StubRoutines::dtan())(x));
+    case LibmEntry::TanShared: return libm_result_to_bits(SharedRuntime::dtan(x));
+    case LibmEntry::LogStub:   return libm_result_to_bits(reinterpret_cast<UnaryFn>(StubRoutines::dlog())(x));
+    case LibmEntry::LogShared: return libm_result_to_bits(SharedRuntime::dlog(x));
+    case LibmEntry::Log10Stub: return libm_result_to_bits(reinterpret_cast<UnaryFn>(StubRoutines::dlog10())(x));
+    case LibmEntry::Log10Shared: return libm_result_to_bits(SharedRuntime::dlog10(x));
+    case LibmEntry::ExpStub:   return libm_result_to_bits(reinterpret_cast<UnaryFn>(StubRoutines::dexp())(x));
+    case LibmEntry::ExpShared: return libm_result_to_bits(SharedRuntime::dexp(x));
+    case LibmEntry::PowStub:   return libm_result_to_bits(reinterpret_cast<BinaryFn>(StubRoutines::dpow())(x, y));
+    case LibmEntry::PowShared: return libm_result_to_bits(SharedRuntime::dpow(x, y));
+  }
+  return libm_result_to_bits(x);
+}
+
 void JeandleVMCallback::register_callbacks() {
   llvm::jeandle::VMCallbacks callbacks;
   callbacks.IsSubtype = &JeandleVMCallback::is_subtype;
@@ -1312,6 +1357,7 @@ void JeandleVMCallback::register_callbacks() {
   callbacks.IsOkToInline = &JeandleVMCallback::is_ok_to_inline;
   callbacks.RecordInlineResult = &JeandleVMCallback::record_inline_result;
   callbacks.RecordInliningComplete = &JeandleVMCallback::record_inlining_complete;
+  callbacks.EvaluateLibm = &JeandleVMCallback::evaluate_libm;
   callbacks.GetCHAOptInfo = &JeandleVMCallback::get_cha_opt_info;
   callbacks.UpdateCallSite = &JeandleVMCallback::update_call_site;
   callbacks.GetSignatureAccessingKlass = &JeandleVMCallback::get_signature_accessing_klass;

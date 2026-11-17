@@ -93,6 +93,10 @@ class JeandleVMCallback : public AllStatic {
   static bool      is_ok_to_inline(int scope_id, int bci, uintptr_t callee_method);
   static bool      record_inline_result(int scope_id, int bci, uintptr_t callee_method, int result);
   static bool      record_inlining_complete();
+  // Evaluates a Jeandle libm entry (llvm::jeandle::LibmEntry selector) on the
+  // exact runtime routine the folded call targets; arguments and result are
+  // raw double bit patterns.
+  static int64_t   evaluate_libm(int entry, int64_t arg_bits, int64_t arg2_bits);
 
   // CHA devirtualization.
   static llvm::jeandle::CHAOptResult get_cha_opt_info(uintptr_t caller_ptr, uintptr_t callee_ptr,

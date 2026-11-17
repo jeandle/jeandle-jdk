@@ -4077,6 +4077,8 @@ public final class PEATestUtils {
             "%(" + LLVM_BLOCK_NAME + ")");
     private static final Pattern PHI_INCOMING_BLOCK = Pattern.compile(
             ",\\s*%(" + LLVM_BLOCK_NAME + ")\\s*\\]");
+    private static final Pattern POISON_PHI_INCOMING = Pattern.compile(
+            "\\[\\s*poison\\s*,\\s*%(" + LLVM_BLOCK_NAME + ")\\s*\\]");
     private static final Pattern POISON_TOKEN = Pattern.compile(
             "(?<![-A-Za-z$._0-9%@!])poison(?![-A-Za-z$._0-9:])");
     private static final Pattern CONSTANT_BRANCH = Pattern.compile(
@@ -4204,6 +4206,67 @@ public final class PEATestUtils {
                 "%value = phi i32 [ poison, %dead ], [ 7, %live ]",
                 "ret i32 %value");
         validateNoLivePoison(deadPhiIncoming, "dead PHI incoming", "synthetic");
+
+        List<String> runtimeUnrollSkipPoison = List.of(
+                "entry:",
+                "br i1 %remainder.zero, label %skip, label %loop.prol",
+                "skip: ; preds = %entry",
+                "br label %prol.exit",
+                "loop.prol: ; preds = %entry",
+                "%next.prol = add i32 %carry.in, 1",
+                "br label %prol.exit",
+                "prol.exit: ; preds = %skip, %loop.prol",
+                "%carry.lcssa.unr = phi i32 [ poison, %skip ], [ %next.prol, %loop.prol ]",
+                "ret i32 %carry.lcssa.unr");
+        validateNoLivePoison(runtimeUnrollSkipPoison,
+                "runtime-unroll skip PHI", "synthetic");
+
+        List<String> unrollLikeWithoutSuffix = List.of(
+                "entry:",
+                "br i1 %remainder.zero, label %skip, label %loop.prol",
+                "skip: ; preds = %entry",
+                "br label %prol.exit",
+                "loop.prol: ; preds = %entry",
+                "%next.prol = add i32 %carry.in, 1",
+                "br label %prol.exit",
+                "prol.exit: ; preds = %skip, %loop.prol",
+                "%carry.lcssa = phi i32 [ poison, %skip ], [ %next.prol, %loop.prol ]",
+                "ret i32 %carry.lcssa");
+        List<String> unrollNameWithoutPrologue = List.of(
+                "entry:",
+                "br i1 %c, label %left, label %right",
+                "left: ; preds = %entry",
+                "%l = add i32 0, 1",
+                "br label %merge",
+                "right: ; preds = %entry",
+                "%r = add i32 0, 2",
+                "br label %merge",
+                "merge: ; preds = %left, %right",
+                "%carry.lcssa.unr = phi i32 [ poison, %left ], [ %r, %right ]",
+                "ret i32 %carry.lcssa.unr");
+        List<String> unrollPoisonOnPrologueEdge = List.of(
+                "entry:",
+                "br i1 %remainder.zero, label %skip, label %loop.prol",
+                "skip: ; preds = %entry",
+                "%next.skip = add i32 %carry.in, 1",
+                "br label %prol.exit",
+                "loop.prol: ; preds = %entry",
+                "br label %prol.exit",
+                "prol.exit: ; preds = %skip, %loop.prol",
+                "%carry.lcssa.unr = phi i32 [ %next.skip, %skip ], [ poison, %loop.prol ]",
+                "ret i32 %carry.lcssa.unr");
+        boolean rejectedNoSuffix = rejectsLivePoison(unrollLikeWithoutSuffix,
+                "unroll-like PHI without .unr name");
+        boolean rejectedNoPrologue = rejectsLivePoison(unrollNameWithoutPrologue,
+                "unroll-named PHI without prologue latch edge");
+        boolean rejectedPoisonOnPrologue = rejectsLivePoison(
+                unrollPoisonOnPrologueEdge, "unroll PHI poison on the prologue edge");
+        Asserts.assertTrue(rejectedNoSuffix && rejectedNoPrologue
+                && rejectedPoisonOnPrologue,
+                "poison parser must only exempt the runtime-unroll skip edge: "
+                        + "noSuffix=" + rejectedNoSuffix
+                        + ", noPrologue=" + rejectedNoPrologue
+                        + ", poisonOnPrologue=" + rejectedPoisonOnPrologue);
 
         List<String> constantSwitch = List.of(
                 "entry:",
@@ -4468,6 +4531,7 @@ public final class PEATestUtils {
             String instruction = withoutInlineComment(lines.get(i));
             String reachableInstruction = withoutUnreachablePhiIncoming(
                     instruction, reachability.blocks());
+            reachableInstruction = withoutRuntimeUnrollSkipPoison(reachableInstruction);
             reachableInstruction = withoutUnselectedShuffleOperands(reachableInstruction);
             if (!containsPoison(reachableInstruction)) {
                 continue;
@@ -4684,6 +4748,59 @@ public final class PEATestUtils {
             reachable.replace(range[0], range[1], "[ 0, %unreachable ]");
         }
         return reachable.toString();
+    }
+
+    // LLVM's runtime loop unrolling (ConnectProlog in LoopUnrollRuntime.cpp)
+    // gives the skip-prologue incoming of every rewired loop-exit PHI a
+    // `poison` placeholder: on that edge the prologue ran zero iterations, so
+    // the PHI's "value after the prologue" does not exist. The edge is dead
+    // by construction — arriving from the preheader means the remainder is
+    // zero, so control always continues into the unrolled loop, which
+    // redefines every value the exit consumes. Upstream relies on that
+    // control-flow invariant, so the final IR legitimately contains these
+    // placeholders for ordinary value-out-of-loop code shapes; any other
+    // reachable poison remains a failure.
+    private static String withoutRuntimeUnrollSkipPoison(String instruction) {
+        if (!instruction.contains(" = phi ") || !containsPoison(instruction)) {
+            return instruction;
+        }
+        Matcher assignment =
+                ASSIGNED_INSTRUCTION.matcher(instruction.stripLeading());
+        if (!assignment.find()
+                || !stripQuotes(assignment.group(1)).endsWith(".unr")) {
+            return instruction;
+        }
+        ArrayList<String> incomingBlocks = new ArrayList<>();
+        Matcher incoming = PHI_INCOMING_BLOCK.matcher(instruction);
+        while (incoming.find()) {
+            incomingBlocks.add(incoming.group(1));
+        }
+        long prologueEdges = incomingBlocks.stream()
+                .filter(block -> stripQuotes(block).endsWith(".prol"))
+                .count();
+        boolean twoEdgesWithOnePrologueLatch =
+                incomingBlocks.size() == 2 && prologueEdges == 1;
+        StringBuilder filtered = new StringBuilder(instruction);
+        Matcher poisonIncoming = POISON_PHI_INCOMING.matcher(instruction);
+        boolean removed = false;
+        while (poisonIncoming.find()) {
+            String block = poisonIncoming.group(1);
+            if (!twoEdgesWithOnePrologueLatch
+                    || stripQuotes(block).endsWith(".prol")) {
+                return instruction;
+            }
+            filtered.replace(poisonIncoming.start(), poisonIncoming.end(),
+                    "[ 0, %runtime-unroll-skip ]");
+            removed = true;
+        }
+        return removed ? filtered.toString() : instruction;
+    }
+
+    private static String stripQuotes(String name) {
+        if (name.length() >= 2 && name.startsWith("\"") && name.endsWith("\"")) {
+            return name.substring(1, name.length() - 1);
+        }
+        return name;
     }
 
     private static int matchingOpeningSquare(String text, int close) {
