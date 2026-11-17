@@ -401,6 +401,16 @@ reference:
   %interface = icmp ne i32 %flags, 0
   br i1 %interface, label %null_result, label %non_interface
 non_interface:
+  %result = call hotspotcc ptr addrspace(1) @jeandle.klass_get_superclass(ptr %klass)
+  ret ptr addrspace(1) %result
+null_result:
+  ret ptr addrspace(1) null
+}
+
+; Java superclass of a concrete object Klass, which cannot be an interface or
+; primitive. Arrays return Object independently of their internal super chain.
+define hotspotcc ptr addrspace(1) @jeandle.klass_get_superclass(ptr nocapture nonnull readonly %klass) noinline memory(read) "lower-phase"="1" #0 {
+entry:
   %layout = call hotspotcc i32 @jeandle.layout_helper(ptr %klass)
   %array = icmp slt i32 %layout, 0
   br i1 %array, label %array_result, label %ordinary

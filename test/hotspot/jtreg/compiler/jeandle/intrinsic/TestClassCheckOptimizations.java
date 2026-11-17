@@ -23,7 +23,10 @@
  * @summary Verify exact Class checks, dynamic object origins and subtype guard edges
  * @requires os.arch=="amd64" | os.arch=="x86_64" | os.arch=="aarch64"
  * @library /test/lib /
- * @run main/othervm -XX:-UseJeandleCompiler compiler.jeandle.intrinsic.TestClassCheckOptimizations
+ * @build jdk.test.whitebox.WhiteBox
+ * @run driver jdk.test.lib.helpers.ClassFileInstaller jdk.test.whitebox.WhiteBox
+ * @run main/othervm -Xbootclasspath/a:. -XX:+UnlockDiagnosticVMOptions -XX:+WhiteBoxAPI
+ *      -XX:-UseJeandleCompiler compiler.jeandle.intrinsic.TestClassCheckOptimizations
  */
 
 package compiler.jeandle.intrinsic;
@@ -36,6 +39,7 @@ import java.util.List;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import jdk.test.lib.process.ProcessTools;
+import jdk.test.whitebox.WhiteBox;
 
 public class TestClassCheckOptimizations {
     private static final List<String> TARGETS = List.of("finalInstance", "primitiveArrayInstance",
@@ -53,10 +57,12 @@ public class TestClassCheckOptimizations {
         }
         Path dumps = Files.createTempDirectory("jeandle-class-check-optimizations");
         Path log = dumps.resolve("compilation.xml");
-        List<String> command = new ArrayList<>(List.of("-Xbatch", "-XX:-TieredCompilation",
+        List<String> command = new ArrayList<>(List.of("-XX:+UnlockDiagnosticVMOptions",
+                "-Xbootclasspath/a:.", "-XX:+WhiteBoxAPI",
+                "-Xbatch", "-XX:-TieredCompilation",
                 "-XX:-UseOnStackReplacement", "-XX:CompileThreshold=100",
                 "-XX:+UseJeandleCompiler", "-XX:+InlineClassNatives",
-                "-XX:+UnlockDiagnosticVMOptions", "-XX:+LogCompilation", "-XX:LogFile=" + log,
+                "-XX:+LogCompilation", "-XX:LogFile=" + log,
                 "-XX:+JeandleDumpIR", "-XX:JeandleDumpDirectory=" + dumps));
         for (String method : TARGETS) {
             command.add("-XX:CompileCommand=compileonly," + TestClassCheckOptimizations.class.getName() + "::" + method);
@@ -112,6 +118,12 @@ public class TestClassCheckOptimizations {
         }
         FileCheck failure = ir(dumps, "exactFailureEdge", true, Object.class);
         failure.checkPattern("(super_check|secondary_supers)");
+        FileCheck assignable = ir(dumps, "dynamicAssignable", true, Class.class, Class.class);
+        assignable.checkPattern("class\\.assignable\\.same_mirror");
+        assignable.checkPattern("super_check");
+        assignable.checkPattern("secondary_supers");
+        assignable.checkPattern("store atomic ptr");
+        checkDistinctMirrorKlasses(dumps);
     }
 
     private static FileCheck ir(Path dumps, String method, boolean optimized, Class<?>... parameters) throws Exception {
@@ -158,6 +170,47 @@ public class TestClassCheckOptimizations {
         require(nullBranch.find(), "Mirror deopt is not guarded by the null receiver: " + method);
         Matcher incoming = Pattern.compile("label %bci_5_null_check_fail(?:,|\\s)").matcher(function);
         require(incoming.find() && !incoming.find(), "Unexpected incoming mirror path: " + method);
+    }
+
+    private static void checkDistinctMirrorKlasses(Path dumps) throws Exception {
+        String prefix = TestClassCheckOptimizations.class.getName().replace('.', '_') + "_dynamicAssignable_";
+        List<Path> files;
+        try (var paths = Files.list(dumps)) {
+            files = paths.filter(path -> path.getFileName().toString().startsWith(prefix)
+                    && path.getFileName().toString().endsWith("_optimized.ll")).sorted().toList();
+        }
+        require(!files.isEmpty(), "Missing optimized dynamicAssignable IR");
+        String module = Files.readString(files.getLast());
+        Matcher definition = Pattern.compile("(?m)^define hotspotcc [^\\r\\n]*dynamicAssignable"
+                + "[^\\r\\n]*\\{\\R([\\s\\S]*?)^}").matcher(module);
+        require(definition.find(), "Missing optimized dynamicAssignable function");
+        String function = definition.group(1);
+        Matcher loads = Pattern.compile("(%[^\\s]+) = load atomic ptr, ptr addrspace\\(1\\)").matcher(function);
+        require(loads.find(), "Missing target mirror Klass load");
+        String first = Pattern.quote(loads.group(1));
+        require(loads.find(), "Missing source mirror Klass load");
+        String second = Pattern.quote(loads.group(1));
+        require(!loads.find(), "Unexpected additional mirror Klass load");
+        Pattern identity = Pattern.compile("(?m)^[ \\t]*(%[^\\s]+) = icmp (?:eq|ne) ptr (?:" + first + ", " + second
+                + "|" + second + ", " + first + ")(?:\\s|$)");
+        Matcher comparisons = identity.matcher(function);
+        while (comparisons.find()) {
+            String value = comparisons.group(1);
+            Pattern use = Pattern.compile(Pattern.quote(value) + "(?![-a-zA-Z$._0-9])");
+            Pattern assume = Pattern.compile("^[ \\t]*(?:tail )?call void @llvm\\.assume\\(i1 "
+                    + Pattern.quote(value) + "\\)(?:[ \\t].*)?$");
+            for (String line : function.lines().toList()) {
+                String instruction = line.split(";", 2)[0];
+                if (instruction.stripLeading().startsWith(value + " = ")) {
+                    continue;
+                }
+                Matcher uses = use.matcher(instruction);
+                if (uses.find()) {
+                    require(assume.matcher(instruction).matches() && !uses.find(),
+                            "Distinct reference mirrors must not repeat runtime Klass identity: " + instruction);
+                }
+            }
+        }
     }
 
     private static void exercise() throws Exception {
@@ -213,6 +266,31 @@ public class TestClassCheckOptimizations {
         require(dynamicAssignable(Cloneable.class, int[].class), "array interface");
         require(dynamicAssignable(int.class, int.class), "primitive identity");
         require(!dynamicAssignable(int.class, long.class), "primitive mismatch");
+        Class<?>[][] assignableCases = {
+                {Object.class, Object.class}, {Marker.class, Marker.class},
+                {int.class, int.class}, {void.class, void.class},
+                {int.class, long.class}, {void.class, int.class},
+                {Object.class, int.class}, {int.class, Object.class},
+                {Base.class, Child.class}, {Child.class, Base.class},
+                {Marker.class, Deep9.class}, {SecondMarker.class, Deep9.class},
+                {Marker.class, Deep9.class}, {Missing.class, Deep9.class},
+                {SecondMarker.class, Deep9.class},
+                {Object[].class, String[].class}, {String[].class, Object[].class},
+                {Cloneable.class, int[].class}, {java.io.Serializable.class, int[].class},
+                {Object[].class, int[].class}, {Object[].class, int[][].class},
+                {int[].class, long[].class}
+        };
+        boolean[] assignableResults = {true, true, true, true, false, false, false, false,
+                true, false, true, true, true, false, true, true, false, true, true, false, true, false};
+        compileAssignable();
+        // Alternating successful interfaces overwrites the one-entry secondary cache.
+        for (int round = 0; round < 1000; round++) {
+            for (int index = 0; index < assignableCases.length; index++) {
+                Class<?>[] pair = assignableCases[index];
+                require(dynamicAssignable(pair[0], pair[1]) == assignableResults[index],
+                        "literal assignable case " + index);
+            }
+        }
         // Check exceptional arguments after ordinary Jeandle compilation.
         for (Class<?> target : new Class<?>[] {FinalValue.class, int.class, void.class, null}) {
             expectNull(() -> originDirect(target, null), "originDirect");
@@ -226,8 +304,12 @@ public class TestClassCheckOptimizations {
         require(observations == 1, "argument evaluated for null receiver");
         expectNull(() -> originDirect(null, new Object()), "originDirect");
         expectNull(() -> originHelper(null, new Object()), "originHelper");
-        expectNull(() -> dynamicAssignable(null, Object.class), "dynamicAssignable");
-        expectNull(() -> dynamicAssignable(Object.class, null), "isAssignableFrom");
+        compileAssignable();
+        expectAssignableNull(() -> dynamicAssignable(null, Object.class));
+        compileAssignable();
+        expectAssignableNull(() -> dynamicAssignable(Object.class, null));
+        compileAssignable();
+        expectAssignableNull(() -> dynamicAssignable(null, null));
         expectNull(() -> impossibleInterface(null), "impossibleInterface");
         expectNull(() -> impossibleAbstract(null), "impossibleAbstract");
         expectNull(() -> exactEq(null), "exactEq");
@@ -239,6 +321,26 @@ public class TestClassCheckOptimizations {
 
     private static void require(boolean value, String message) {
         if (!value) throw new AssertionError(message);
+    }
+
+    private static void compileAssignable() throws Exception {
+        var method = TestClassCheckOptimizations.class.getMethod("dynamicAssignable", Class.class, Class.class);
+        WhiteBox whiteBox = WhiteBox.getWhiteBox();
+        whiteBox.deoptimizeMethod(method);
+        require(whiteBox.enqueueMethodForCompilation(method, 4), "enqueue dynamicAssignable");
+        require(whiteBox.isMethodCompiled(method) && whiteBox.getMethodCompilationLevel(method) == 4,
+                "ordinary level-4 dynamicAssignable must execute");
+        System.out.println("Compiled dynamicAssignable before assertions");
+    }
+
+    private static void expectAssignableNull(Runnable action) {
+        try {
+            action.run();
+            throw new AssertionError("NullPointerException expected");
+        } catch (NullPointerException expected) {
+            System.out.println("Expected dynamicAssignable NPE: "
+                    + java.util.Arrays.toString(expected.getStackTrace()));
+        }
     }
 
     private static void expectNull(Runnable action, String frame) {
@@ -335,12 +437,13 @@ public class TestClassCheckOptimizations {
     }
 
     interface Marker {}
+    interface SecondMarker {}
     interface Missing {}
     static final class FinalValue {}
     abstract static class AbstractBase {}
     static class Base {}
     static class Child extends Base {}
-    static class Deep1 extends Base implements Marker {}
+    static class Deep1 extends Base implements Marker, SecondMarker {}
     static class Deep2 extends Deep1 {}
     static class Deep3 extends Deep2 {}
     static class Deep4 extends Deep3 {}
