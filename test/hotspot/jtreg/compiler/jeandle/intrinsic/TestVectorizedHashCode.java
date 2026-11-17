@@ -333,6 +333,14 @@ public class TestVectorizedHashCode {
         return a[0] + a[4] + a[6] + a[7];
     }
 
+    // A non-positive count folds to the initial value alone even with a
+    // dynamic from index: the kernel exits before its basic-type dispatch,
+    // so the virtual array never materializes.
+    static int hashFreshNegative(int from, int init) {
+        byte[] a = {(byte) from, 7, 9};
+        return ArraysSupport.vectorizedHashCode(a, from & 7, -3, init, ArraysSupport.T_BYTE);
+    }
+
     static int hashStringDyn(String s) {
         return s.hashCode();
     }
@@ -536,6 +544,7 @@ public class TestVectorizedHashCode {
             h ^= hashFreshSeventeen(i) ^ hashFreshDynamicLen(64);
             h ^= hashFreshByte22(i) ^ hashFreshChar22(i) ^ hashFreshInt33(i);
             h ^= hashFreshUtf16(i, i * 17, i) ^ hashFreshUtf16Packed(i * 0x9e3779b9, i);
+            h ^= hashFreshNegative(i, i * 31);
             // Construct from chars: copying a String can copy its cached hash.
             h ^= hashStringDyn(new String(latin));
             h ^= hashStringDyn(new String(wide));
@@ -591,6 +600,7 @@ public class TestVectorizedHashCode {
         for (int value : INITS) {
             int[] a = {value, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16};
             expect(refInt(1, a, 0, a.length), hashFreshSeventeen(value), "fresh seventeen");
+            expect(value, hashFreshNegative(value, value), "fresh negative length");
         }
         expect(955331, hashFreshConstant(), "fresh constant");
         expect(1, hashFreshEmpty(), "fresh empty");
@@ -739,7 +749,7 @@ public class TestVectorizedHashCode {
             }
         }
         for (String method : new String[]{"hashFreshByte22", "hashFreshChar22", "hashFreshInt33",
-                                          "hashFreshUtf16"}) {
+                                          "hashFreshUtf16", "hashFreshNegative"}) {
             for (java.nio.file.Path dump : requireDumps(dumpsA, method)) {
                 String text = dumpText(dump);
                 if (allocates(text) || dumpCallsOp(dump)) {
