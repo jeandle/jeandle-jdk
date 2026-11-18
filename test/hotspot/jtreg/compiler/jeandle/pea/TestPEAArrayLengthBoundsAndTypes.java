@@ -236,11 +236,7 @@ public class TestPEAArrayLengthBoundsAndTypes {
         assertConditionalBoundsFallback(after, 0, 26, firstSuccess);
         assertConditionalBoundsFallback(after, 1, 32, secondSuccess);
         PEATestUtils.IRBody finalIR = run.finalIR(target);
-        assertFinalConditionalBoundsFallback(finalIR, 0,
-                finalIR.blockContaining(BOUNDS_COMPARE, 1));
-        assertFinalConditionalBoundsFallback(finalIR, 1,
-                finalIR.blockContaining("_arrayChecksum", 0));
-        assertLoweredFallback(finalIR, 2);
+        PEATestUtils.assertMergedIntArrayBounds(finalIR, "_arrayChecksum");
 
         PEATestUtils.DeoptBundle first =
                 after.deoptBundleAtCall(DEOPTIMIZE_I64, 0);

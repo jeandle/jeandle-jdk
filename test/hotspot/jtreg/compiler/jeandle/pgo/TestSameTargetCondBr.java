@@ -163,7 +163,7 @@ public class TestSameTargetCondBr {
         compileAndAwaitDump(m, dir);
 
         FileCheck opt = new FileCheck(dir, m, /*optimized=*/true);
-        opt.checkPattern("define hotspotcc i32 .*TestSameTargetCondBr_emptyBranch");
+        opt.checkPattern("define hotspotcc (?:noundef )?i32 .*TestSameTargetCondBr_emptyBranch");
         // SimplifyCFG folds `br i1, %B, %B` to `br %B`, so no same-target
         // CondBr should survive into the optimized IR.
         FileCheck optNoSameTarget = new FileCheck(dir, m, /*optimized=*/true);

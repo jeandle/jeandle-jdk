@@ -3715,6 +3715,38 @@ public final class PEATestUtils {
                 "Malformed deopt bundle for " + method + ": " + detail);
     }
 
+    /** Check the final widened guard for two accesses to a four-element int array. */
+    public static void assertMergedIntArrayBounds(IRBody body, String consumer) {
+        IRBlock guard = body.blockContaining(" = or i32", 0);
+        Matcher combined = Pattern.compile(
+                "(%[-A-Za-z$._0-9]+) = or i32 (%[01]), (%[01])")
+                .matcher(String.join("\n", guard.lines()));
+        Asserts.assertTrue(combined.find(), body.methodId() + ": combined index guard");
+        Asserts.assertNotEquals(combined.group(2), combined.group(3),
+                body.methodId() + ": both distinct index parameters contribute");
+        Matcher comparison = Pattern.compile("(%[-A-Za-z$._0-9]+) = icmp ult i32 "
+                + Pattern.quote(combined.group(1)) + ", 4")
+                .matcher(String.join("\n", guard.lines()));
+        Asserts.assertTrue(comparison.find(), body.methodId() + ": combined unsigned bound");
+        guard.assertPresent("br i1 " + comparison.group(1) + ",");
+        IRBlock success = body.blockContaining(consumer, 0);
+        IRBlock failure = body.blockContaining("@__llvm_deoptimize", 0);
+        List<String> edges = guard.conditionalBranchTargets();
+        Asserts.assertEquals(edges, List.of(success.label(), failure.label()),
+                body.methodId() + ": merged guard selects replay or original failure");
+        body.assertOccurrenceCount("@__llvm_deoptimize", 1);
+        failure.assertAbsent("store atomic");
+        failure.assertAbsent("load atomic");
+        failure.assertPresent("i32 -139, i32 -26");
+        failure.assertPresent("\"deopt\"(i64 1, i32 26, i32 26");
+        success.assertOccurrenceCount("store atomic i32", 5);
+        for (int replay = 0; replay < 4; replay++) {
+            success.assertBefore("store atomic i32", replay, "load atomic i32", 0);
+        }
+        success.assertBefore("load atomic i32", 0, "store atomic i32", 4);
+        success.assertBefore("store atomic i32", 4, consumer, 0);
+    }
+
     /** One labeled LLVM basic block with occurrence-aware assertions. */
     public static final class IRBlock {
         private static final Pattern METADATA_ATTACHMENT = Pattern.compile(
