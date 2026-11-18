@@ -78,6 +78,7 @@ public class TestCopyInitialization {
             return;
         }
         runCase("g1", true, true, true, true);
+        runCase("g1_zero_tlab", true, true, true, true);
         runCase("g1_alignment_16", true, true, true, true);
         runCase("g1_alignment_32", true, true, true, true);
         runCase("serial", false, true, true, true);
@@ -94,7 +95,7 @@ public class TestCopyInitialization {
                 "-Xbatch", "-XX:-BackgroundCompilation", "-XX:-TieredCompilation",
                 "-XX:CompileThreshold=1000000", "-XX:+UseJeandleCompiler",
                 "-XX:+UnlockDiagnosticVMOptions", "-XX:+WhiteBoxAPI", "-Xbootclasspath/a:.",
-                "-XX:-JeandleDoPEA", "-XX:-ZeroTLAB",
+                "-XX:-JeandleDoPEA", name.equals("g1_zero_tlab") ? "-XX:+ZeroTLAB" : "-XX:-ZeroTLAB",
                 name.equals("g1_initial_card_marks") ? "-XX:+ReduceInitialCardMarks" : "-XX:-ReduceInitialCardMarks",
                 "-XX:+CIPrintCompilerName", "-Xlog:jeandle=debug,jit+compilation=debug",
                 "-XX:+JeandleDumpIR", "-XX:JeandleDumpDirectory=" + dump,
@@ -148,8 +149,12 @@ public class TestCopyInitialization {
                     : method(nameWithTail, Object[].class, int.class, int.class);
             FileCheck optimized = new FileCheck(dump.toString(), target, true);
             if (reduceBulkZeroing) {
-                optimized.checkPatternAnywhere("arraycopy\\.zero_tail");
-                optimized.checkPatternAnywhere("call.*@zero_heap_words_stub");
+                if (tlab && !name.equals("g1_zero_tlab")) {
+                    optimized.checkPatternAnywhere("arraycopy\\.zero_tail");
+                    optimized.checkPatternAnywhere("call.*@zero_heap_words_stub");
+                } else {
+                    optimized.checkNotPattern("call.*@zero_heap_words_stub");
+                }
                 optimized.checkNotPattern("call.*@llvm\\.memset");
             }
         }
@@ -270,6 +275,13 @@ public class TestCopyInitialization {
                 checkReferences(cloneReferences(source), source, 0, 3);
                 checkReferences(copyDynamic(new Object[0], length), new Object[0], 0, length);
                 verifySmallClones(iteration);
+            }
+            Object[] empty = new Object[0];
+            for (int length : new int[] {1, 7, 8, 1024, 65536}) {
+                checkReferences(copyDynamic(empty, length), empty, 0, length);
+                checkReferences(copyRange(empty, 0, length), empty, 0, length);
+                checkReferences(copyDynamic(new Object[] {marker}, length),
+                        new Object[] {marker}, 0, length);
             }
             verifyCheckedCopies(wb);
             WeakReference<Marker> weak = createRetainedCopies();

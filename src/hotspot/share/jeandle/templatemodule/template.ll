@@ -651,12 +651,16 @@ declare void @StubRoutines_arrayof_jlong_disjoint_arraycopy(
 ; Unified array allocation JavaOp.  Both bytecode (newarray/anewarray) and intrinsic
 ; (_newArray / Array.newInstance) paths call this function.
 ; LLVM passes identify array allocation by matching on this function name.
+; %zero_start is the HeapWord-aligned fast-path clear start, normally the
+; header size. A post-PEA validated copy may advance it over the copied prefix
+; and defer publication until the copy completes. Slow allocations always
+; initialize their entire payload; ZeroTLAB allocations need no extra clear.
 ; The trailing flags serve tightly coupled initializers such as the string
 ; toBytes copy: %uninitialized skips the bulk payload zeroing because the
 ; caller overwrites every byte before the array can escape, and
 ; %defer_initialization_membar moves the fast path's publication barrier to
 ; that initializer, which re-issues it once the payload is complete.
-define private hotspotcc ptr addrspace(1) @jeandle.new_array(ptr %array_klass, i32 %length, i32 %size_in_bytes, i32 %header_size, i32 %length_limit, i1 %uninitialized, i1 %defer_initialization_membar) noinline "lower-phase"="1" "jeandle.not-guaranteed-safepoint" {
+define private hotspotcc ptr addrspace(1) @jeandle.new_array(ptr %array_klass, i32 %length, i32 %size_in_bytes, i32 %zero_start, i32 %length_limit, i1 %uninitialized, i1 %defer_initialization_membar) noinline "lower-phase"="1" "jeandle.not-guaranteed-safepoint" {
 entry:
   ; Fast-path length cap. %length_limit is a size-derived bound (FastAllocateSizeLimit, scaled
   ; by element size on the caller side) chosen so %size_in_bytes cannot overflow i32 -- it is
@@ -736,10 +740,10 @@ array_post_klass_store:
   br i1 %skip_clear, label %array_after_payload_init, label %array_clear_memory
 
 array_clear_memory:
-  ; Array payloads are HeapWord-aligned. Reuse the platform-aware zeroing
+  ; The clear start is HeapWord-aligned. Reuse the platform-aware zeroing
   ; JavaOp used by new_instance for constant and variable word counts.
-  %base_addr = getelementptr i8, ptr addrspace(1) %tlab_old_top, i32 %header_size
-  %payload_size = sub i32 %size_in_bytes, %header_size
+  %base_addr = getelementptr i8, ptr addrspace(1) %tlab_old_top, i32 %zero_start
+  %payload_size = sub i32 %size_in_bytes, %zero_start
   %payload_words = lshr exact i32 %payload_size, 3
   call hotspotcc void @jeandle.zero_heap_words(
       ptr addrspace(1) %base_addr, i32 %payload_words)
