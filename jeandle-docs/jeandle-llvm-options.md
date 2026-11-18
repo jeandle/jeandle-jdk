@@ -98,3 +98,13 @@ After a predicate failure, subsequent compilation of that method keeps ordinary
 checks. Widening requires trap profiling and an enabled interpreter; hot throws
 and `-XX:-ProfileTraps` retain ordinary checks. Non-speculative elimination and
 array-length folding remain available in those configurations.
+
+`-passes=jeandle-affine-check-versioning` complements the standard transforms
+for affine checks whose index stride differs from the loop controller stride.
+It requires an innermost canonical loop and a dominating array length. It checks
+controller wrap and index endpoints independently in a wider integer, then
+selects a fast loop or the original checked loop. Failed guards preserve the
+original exceptions and partial effects without new deoptimization states.
+The pass versions at most four loops per function, each at most 200 instructions
+and eight candidate checks. Both versions are marked to prevent repeated cloning.
+Use `-jeandle-affine-check-versioning=false` to disable this complementary stage.

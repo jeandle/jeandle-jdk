@@ -24,21 +24,21 @@
  * @build compiler.jeandle.fileCheck.FileCheck jdk.test.whitebox.WhiteBox
  * @run driver jdk.test.lib.helpers.ClassFileInstaller jdk.test.whitebox.WhiteBox
  * @run main/othervm -Xbootclasspath/a:. -XX:+UnlockDiagnosticVMOptions -XX:+WhiteBoxAPI
- *      -Xbatch -XX:-TieredCompilation -XX:+UseJeandleCompiler -XX:CompileThreshold=100
+ *      -XX:-OmitStackTraceInFastThrow -Xbatch -XX:-TieredCompilation -XX:+UseJeandleCompiler -XX:CompileThreshold=100
  *      -XX:+JeandleDumpIR -XX:CompileCommand=compileonly,compiler.jeandle.checks.TestLoopChecks::test*
  *      compiler.jeandle.checks.TestLoopChecks
  * @run main/othervm -Xbootclasspath/a:. -XX:+UnlockDiagnosticVMOptions -XX:+WhiteBoxAPI
- *      -Xbatch -XX:-TieredCompilation -XX:+UseJeandleCompiler -XX:CompileThreshold=100
+ *      -XX:-OmitStackTraceInFastThrow -Xbatch -XX:-TieredCompilation -XX:+UseJeandleCompiler -XX:CompileThreshold=100
  *      -XX:+JeandleDumpIR -XX:CompileCommand=compileonly,compiler.jeandle.checks.TestLoopChecks::test*
  *      -XX:-JeandleDoPEA
  *      compiler.jeandle.checks.TestLoopChecks
  * @run main/othervm -Xbootclasspath/a:. -XX:+UnlockDiagnosticVMOptions -XX:+WhiteBoxAPI
- *      -Xbatch -XX:-TieredCompilation -XX:+UseJeandleCompiler -XX:CompileThreshold=100
+ *      -XX:-OmitStackTraceInFastThrow -Xbatch -XX:-TieredCompilation -XX:+UseJeandleCompiler -XX:CompileThreshold=100
  *      -XX:+JeandleDumpIR -XX:CompileCommand=compileonly,compiler.jeandle.checks.TestLoopChecks::test*
  *      -XX:JeandleLLVMOptions=-jeandle-loop-strip-mining-iter=0
  *      compiler.jeandle.checks.TestLoopChecks
  * @run main/othervm -Xbootclasspath/a:. -XX:+UnlockDiagnosticVMOptions -XX:+WhiteBoxAPI
- *      -Xbatch -XX:-TieredCompilation -XX:+UseJeandleCompiler -XX:CompileThreshold=100
+ *      -XX:-OmitStackTraceInFastThrow -Xbatch -XX:-TieredCompilation -XX:+UseJeandleCompiler -XX:CompileThreshold=100
  *      -XX:+JeandleDumpIR -XX:CompileCommand=compileonly,compiler.jeandle.checks.TestLoopChecks::test*
  *      -XX:-JeandleDoPEA -XX:JeandleLLVMOptions=-jeandle-loop-strip-mining-iter=0
  *      compiler.jeandle.checks.TestLoopChecks
@@ -63,6 +63,12 @@ public class TestLoopChecks {
         return sum;
     }
 
+    public static int testFeedback(int[] a, int first, int last) {
+        int value = a[first];
+        effects++;
+        return value + a[last];
+    }
+
     public static int testReverse(int[] a, int from) {
         int sum = a.length;
         for (int i = from; i >= 0; i--) {
@@ -75,6 +81,38 @@ public class TestLoopChecks {
         int sum = 0;
         for (int i = 0; i < end; i++) sum += a[i];
         return sum;
+    }
+
+    public static int testScale(int[] a, int end, int offset) {
+        int sum = 0;
+        for (int i = 0; i < end; i++) {
+            effects++;
+            sum += a[3 * i + offset];
+        }
+        return sum;
+    }
+
+    public static int testStrided(int[] a, int from, int end, int offset) {
+        int sum = 0;
+        for (int i = from; i < end; i += 3) {
+            effects++;
+            sum += a[2 * i + offset];
+        }
+        return sum;
+    }
+
+    private static void expectScaleFailure(int[] a, int end, int offset, int count) throws Exception {
+        Method target = TestLoopChecks.class.getDeclaredMethod("testScale", int[].class, int.class, int.class);
+        WB.enqueueMethodForCompilation(target, 4);
+        Asserts.assertTrue(WB.isMethodCompiled(target), "scaled target compiled for failure input");
+        effects = 0;
+        try {
+            testScale(a, end, offset);
+            throw new AssertionError("missing scaled-index exception");
+        } catch (ArrayIndexOutOfBoundsException expected) {
+            Asserts.assertEquals(effects, count, "effects before scaled-index failure");
+            Asserts.assertEquals(expected.getStackTrace()[0].getMethodName(), "testScale");
+        }
     }
 
     public static int testPairs(int[] a, int[] b, int end) {
@@ -93,27 +131,54 @@ public class TestLoopChecks {
         int[] a = new int[32];
         java.util.Arrays.fill(a, 3);
         for (int n = 0; n < 20000; n++) {
+            Asserts.assertEquals(testScale(a, 10, 1), 30);
+            Asserts.assertEquals(testStrided(a, 0, 10, 1), 12);
             Asserts.assertEquals(testSum(a, 32), 128);
+            Asserts.assertEquals(testFeedback(a, 0, 1), 6);
             Asserts.assertEquals(testReverse(a, 31), 128);
             Asserts.assertEquals(testZero(a, 32), 96);
             Asserts.assertEquals(testConditional(a, 32, true), 96);
         }
-        Method method = TestLoopChecks.class.getDeclaredMethod("testSum", int[].class, int.class);
+        Method method = TestLoopChecks.class.getDeclaredMethod("testFeedback", int[].class, int.class, int.class);
         Asserts.assertTrue(WB.isMethodCompiled(method), "target compiled before failure");
         FileCheck before = new FileCheck(System.getProperty("user.dir"), method, false);
         before.checkPattern("call i1 @llvm.experimental.widenable.condition");
         FileCheck after = new FileCheck(System.getProperty("user.dir"), method, true);
         after.checkNotPattern("call i1 @llvm.experimental.widenable.condition");
+        new FileCheck(System.getProperty("user.dir"),
+                TestLoopChecks.class.getDeclaredMethod("testScale", int[].class, int.class, int.class), true)
+                .checkPattern("affine");
+        Method scaled = TestLoopChecks.class.getDeclaredMethod("testScale", int[].class, int.class, int.class);
+        Asserts.assertTrue(WB.isMethodCompiled(scaled));
+        Asserts.assertEquals(testScale(null, 0, 0), 0);
+        expectScaleFailure(a, 12, 1, 12);
+        expectScaleFailure(a, Integer.MAX_VALUE, 1, 12);
+        expectScaleFailure(a, 1, Integer.MIN_VALUE, 1);
+        expectScaleFailure(a, 1, Integer.MAX_VALUE, 1);
+        effects = 0;
+        try {
+            testStrided(a, Integer.MAX_VALUE - 1, Integer.MAX_VALUE, 4);
+            throw new AssertionError("missing wrapping-controller exception");
+        } catch (ArrayIndexOutOfBoundsException expected) {
+            Asserts.assertEquals(effects, 7, "wrapping controller keeps checked fallback");
+        }
         int predicates = WB.getMethodTrapCount(method, "predicate");
         effects = 0;
         try {
-            testSum(a, 33);
+            testFeedback(a, 0, 33);
             throw new AssertionError("missing bounds exception");
         } catch (ArrayIndexOutOfBoundsException expected) {
-            Asserts.assertEquals(effects, 33, "effects before throwing access");
+            Asserts.assertEquals(effects, 1, "effects before throwing access");
         }
         Asserts.assertTrue(WB.getMethodTrapCount(method, "predicate") > predicates,
                 "widened check failure records predicate feedback");
+        effects = 0;
+        try {
+            testSum(a, 33);
+            throw new AssertionError("missing loop bounds exception");
+        } catch (ArrayIndexOutOfBoundsException expected) {
+            Asserts.assertEquals(effects, 33, "loop effects before throwing access");
+        }
         Asserts.assertEquals(testZero(null, 0), 0);
         Asserts.assertEquals(testZero(null, -1), 0);
         Asserts.assertEquals(testConditional(null, 5, false), 0);
@@ -135,10 +200,10 @@ public class TestLoopChecks {
                 .checkNotPattern("call i1 @llvm.experimental.widenable.condition");
         effects = 0;
         try {
-            testSum(a, 34);
+            testFeedback(a, 0, 34);
             throw new AssertionError("missing second bounds exception");
         } catch (ArrayIndexOutOfBoundsException expected) {
-            Asserts.assertEquals(effects, 33);
+            Asserts.assertEquals(effects, 1);
         }
         Asserts.assertEquals(WB.getMethodTrapCount(method, "predicate"), recorded);
         System.out.println("LOOP_CHECKS_EXECUTED predicates=" + recorded);
