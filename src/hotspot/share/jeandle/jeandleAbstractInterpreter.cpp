@@ -1581,7 +1581,8 @@ void JeandleAbstractInterpreter::interpret_block(JeandleBasicBlock* block) {
   }
 }
 
-void JeandleAbstractInterpreter::uncommon_trap(Deoptimization::DeoptReason reason, Deoptimization::DeoptAction action, llvm::BasicBlock* insert_block) {
+void JeandleAbstractInterpreter::uncommon_trap(Deoptimization::DeoptReason reason, Deoptimization::DeoptAction action,
+                                                llvm::BasicBlock* insert_block, llvm::Value* original_check) {
   JeandlePreserveReexecuteState reexecute_scope(this);
   _should_reexecute = true;
   auto saved_insert_block = _ir_builder.GetInsertBlock();
@@ -1592,6 +1593,13 @@ void JeandleAbstractInterpreter::uncommon_trap(Deoptimization::DeoptReason reaso
   }
 
   llvm::Value* request = _ir_builder.getInt32(Deoptimization::make_trap_request(reason, action));
+  if (original_check != nullptr) {
+    // A widened condition may fail even when this bytecode's check succeeds.
+    // Record that failed speculation separately, using this original state.
+    llvm::Value* predicate_request = _ir_builder.getInt32(Deoptimization::make_trap_request(
+        Deoptimization::Reason_predicate, Deoptimization::Action_reinterpret));
+    request = _ir_builder.CreateSelect(original_check, predicate_request, request, "check.trap_request");
+  }
 
   // Emit the trap via `llvm.experimental.deoptimize.<ret_type>`. LLVM's
   // optimization passes (CFG-simplify, JumpThreading, CVP/SCCP, InstCombine)
@@ -3460,7 +3468,7 @@ bool JeandleAbstractInterpreter::has_exception_handler() {
 
 // This is a logical copy of GraphKit::builtin_throw
 // TODO: may need to adjust it for Jeandle's features.
-void JeandleAbstractInterpreter::builtin_throw(Deoptimization::DeoptReason reason, llvm::BasicBlock* insert_block) {
+bool JeandleAbstractInterpreter::builtin_throw_is_hot(Deoptimization::DeoptReason reason) {
   bool treat_throw_as_hot = false;
   int cur_bci = _bytecodes.cur_bci();
 
@@ -3480,6 +3488,42 @@ void JeandleAbstractInterpreter::builtin_throw(Deoptimization::DeoptReason reaso
     }
   }
 
+  return treat_throw_as_hot;
+}
+
+llvm::Value* JeandleAbstractInterpreter::create_check_branch(
+    llvm::Value* ok, llvm::BasicBlock* pass, llvm::BasicBlock* fail,
+    Deoptimization::DeoptReason reason) {
+  assert(reason == Deoptimization::Reason_null_check || reason == Deoptimization::Reason_range_check,
+         "only null and bounds checks can be widened");
+  // Predicate traps are recorded per method (including the inlinee scope).
+  // One failure disables further widening for that method. Without feedback
+  // or an interpreter to resume, retain the ordinary throwing check.
+  bool hot = builtin_throw_is_hot(reason);
+  bool widen = ProfileTraps && UseInterpreter && !hot &&
+               trap_count(Deoptimization::Reason_predicate) == 0 &&
+               _method->method_data()->trap_count(Deoptimization::Reason_predicate) == 0;
+  llvm::Value* condition = ok;
+  if (widen) {
+    llvm::Function* wc = llvm::Intrinsic::getOrInsertDeclaration(
+        &_module, llvm::Intrinsic::experimental_widenable_condition);
+    condition = _ir_builder.CreateAnd(ok, _ir_builder.CreateCall(wc), "check.widenable");
+  }
+  llvm::BranchInst* branch = _ir_builder.CreateCondBr(condition, pass, fail);
+  llvm::MDBuilder md_builder(*_context);
+  if (!hot) {
+    branch->setMetadata(llvm::LLVMContext::MD_prof, md_builder.createBranchWeights(1048575, 1));
+  }
+  if (!widen && reason == Deoptimization::Reason_null_check) {
+    branch->setMetadata(llvm::LLVMContext::MD_make_implicit, llvm::MDNode::get(*_context, {}));
+  }
+  return widen ? ok : nullptr;
+}
+
+void JeandleAbstractInterpreter::builtin_throw(Deoptimization::DeoptReason reason, llvm::BasicBlock* insert_block,
+                                               llvm::Value* original_check) {
+  bool treat_throw_as_hot = builtin_throw_is_hot(reason);
+  int cur_bci = _bytecodes.cur_bci();
   // If this throw happens frequently, an uncommon trap might cause
   // a performance pothole.  If there is a local exception handler,
   // and if this particular bytecode appears to be deoptimizing often,
@@ -3549,7 +3593,7 @@ void JeandleAbstractInterpreter::builtin_throw(Deoptimization::DeoptReason reaso
     action = Deoptimization::Action_none;
   }
 
-  uncommon_trap(reason, action, insert_block);
+  uncommon_trap(reason, action, insert_block, original_check);
 }
 
 void JeandleAbstractInterpreter::newarray(int element_type) {
@@ -4011,16 +4055,10 @@ void JeandleAbstractInterpreter::null_check(llvm::Value* obj) {
   llvm::BasicBlock* null_check_fail = llvm::BasicBlock::Create(*_context,
                                                                "bci_" + std::to_string(cur_bci) + "_null_check_fail",
                                                                _llvm_func);
-  llvm::Value* if_null = _ir_builder.CreateICmp(llvm::CmpInst::ICMP_EQ,
-                                                obj,
-                                                llvm::ConstantPointerNull::get(llvm::cast<llvm::PointerType>(obj->getType())));
-  llvm::BranchInst* null_check_br = _ir_builder.CreateCondBr(if_null, null_check_fail, null_check_pass);
-
-  // Add make.implicit metadata, and the ImplicitNullChecksPass will transform it into an implicit check.
-  llvm::MDNode* make_implicit = llvm::MDNode::get(*_context, {});
-  null_check_br->setMetadata(llvm::LLVMContext::MD_make_implicit, make_implicit);
-
-  builtin_throw(Deoptimization::Reason_null_check, null_check_fail);
+  llvm::Value* ok = _ir_builder.CreateIsNotNull(obj);
+  llvm::Value* original_check = create_check_branch(ok, null_check_pass, null_check_fail,
+                                                   Deoptimization::Reason_null_check);
+  builtin_throw(Deoptimization::Reason_null_check, null_check_fail, original_check);
 
   _ir_builder.SetInsertPoint(null_check_pass);
   _block->set_tail_llvm_block(null_check_pass);
@@ -4083,10 +4121,10 @@ void JeandleAbstractInterpreter::boundary_check(llvm::Value* array_oop, llvm::Va
                                                                    "bci_" + std::to_string(cur_bci) + "_boundary_check_fail",
                                                                    _llvm_func);
   llvm::CallInst* call = call_java_op("jeandle.arraylength", {array_oop});
-  llvm::Value* if_out_of_bounds = _ir_builder.CreateICmp(llvm::CmpInst::ICMP_UGE, index, call);
-  _ir_builder.CreateCondBr(if_out_of_bounds, boundary_check_fail, boundary_check_pass);
-
-  builtin_throw(Deoptimization::Reason_range_check, boundary_check_fail);
+  llvm::Value* ok = _ir_builder.CreateICmpULT(index, call);
+  llvm::Value* original_check = create_check_branch(ok, boundary_check_pass, boundary_check_fail,
+                                                   Deoptimization::Reason_range_check);
+  builtin_throw(Deoptimization::Reason_range_check, boundary_check_fail, original_check);
 
   _ir_builder.SetInsertPoint(boundary_check_pass);
   _block->set_tail_llvm_block(boundary_check_pass);

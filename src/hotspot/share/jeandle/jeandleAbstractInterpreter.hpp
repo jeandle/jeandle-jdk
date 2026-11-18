@@ -500,7 +500,11 @@ class JeandleAbstractInterpreter : public StackObj {
   void throw_exception(llvm::Value* exception_oop, llvm::LandingPadInst* landingpad = nullptr);
   void uncommon_trap_if_should_post_on_exceptions(Deoptimization::DeoptReason reason);
   bool has_exception_handler();
-  void builtin_throw(Deoptimization::DeoptReason reason, llvm::BasicBlock *insert_block);
+  bool builtin_throw_is_hot(Deoptimization::DeoptReason reason);
+  llvm::Value* create_check_branch(llvm::Value* ok, llvm::BasicBlock* pass,
+                                   llvm::BasicBlock* fail, Deoptimization::DeoptReason reason);
+  void builtin_throw(Deoptimization::DeoptReason reason, llvm::BasicBlock* insert_block,
+                     llvm::Value* original_check = nullptr);
 
   void newarray(int element_type);
   void anewarray(int klass_index);
@@ -558,7 +562,8 @@ class JeandleAbstractInterpreter : public StackObj {
 
   void boundary_check(llvm::Value* array_oop, llvm::Value* index);
 
-  void uncommon_trap(Deoptimization::DeoptReason, Deoptimization::DeoptAction, llvm::BasicBlock* insert_block = nullptr);
+  void uncommon_trap(Deoptimization::DeoptReason, Deoptimization::DeoptAction,
+                     llvm::BasicBlock* insert_block = nullptr, llvm::Value* original_check = nullptr);
 
   void return_current(llvm::Value* value);
 

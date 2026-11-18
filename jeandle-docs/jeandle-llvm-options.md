@@ -75,3 +75,13 @@ The callee IR file is loaded on demand, only when replay executes a
 is executed, the file does not need to exist. When it is needed, a missing or
 invalid file, or a missing callee definition for the recorded method ID, causes
 replay to fail.
+
+### Null and array bounds checks
+
+Cold null and bounds checks may use LLVM widenable branches. A real check
+failure retains its original exception reason; a failure introduced by widening
+uses `predicate / reinterpret` and resumes at the original bytecode state.
+After a predicate failure, subsequent compilation of that method keeps ordinary
+checks. Widening requires trap profiling and an enabled interpreter; hot throws
+and `-XX:-ProfileTraps` retain ordinary checks. Non-speculative elimination and
+array-length folding remain available in those configurations.

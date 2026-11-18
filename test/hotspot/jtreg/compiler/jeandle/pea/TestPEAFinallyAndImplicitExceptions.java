@@ -162,12 +162,12 @@ public class TestPEAFinallyAndImplicitExceptions {
                 target + ": the live VO stays virtual across the trap");
         // A trap deopt bundle describes the live VO. p.x is 1 at the trap (the
         // write of 10+result has not happened yet on the trapping path).
-        PEATestUtils.DeoptBundle bundle = findVOBundle(after, target);
+        int xOffset = offset(TestWrapper.Box.class, "x");
+        PEATestUtils.DeoptBundle bundle = findVOBundle(after, target, xOffset);
         bundle.assertVirtualObjectIds(0);
         PEATestUtils.VirtualObjectDescriptor p = bundle.virtualObject(0);
         Asserts.assertEquals(p.kind(), PEATestUtils.DescriptorKind.INSTANCE,
                 target + ": live VO descriptor kind");
-        int xOffset = offset(TestWrapper.Box.class, "x");
         Asserts.assertEquals(p.fields().keySet(), Set.of(xOffset),
                 target + ": live VO carries only its touched field");
         PEATestUtils.VirtualObjectEntry x = p.fields().get(xOffset);
@@ -183,7 +183,7 @@ public class TestPEAFinallyAndImplicitExceptions {
 
     // Find a deopt bundle in the body that describes at least one VO.
     private static PEATestUtils.DeoptBundle findVOBundle(
-            PEATestUtils.IRBody after, Method target) {
+            PEATestUtils.IRBody after, Method target, int fieldOffset) {
         for (int occurrence = 0; ; occurrence++) {
             PEATestUtils.DeoptBundle bundle;
             try {
@@ -192,7 +192,10 @@ public class TestPEAFinallyAndImplicitExceptions {
             } catch (IllegalStateException e) {
                 break;
             }
-            if (!bundle.virtualObjects().isEmpty()) {
+            // Constructor guards precede the field initialization. Select
+            // the live object at an exception in the surrounding try block.
+            if (!bundle.virtualObjects().isEmpty() &&
+                    bundle.virtualObject(0).fields().containsKey(fieldOffset)) {
                 return bundle;
             }
         }
