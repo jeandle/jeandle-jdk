@@ -2631,6 +2631,11 @@ llvm::InvokeInst* JeandleAbstractInterpreter::call_java_op_ex(llvm::StringRef ja
   llvm::Function* java_op_func = _module.getFunction(java_op);
   assert(java_op_func != nullptr, "invalid JavaOp");
   llvm::InvokeInst* invoke_inst = create_call_ex(java_op_func, args, llvm::CallingConv::Hotspot_JIT, deopt_bundle, deoptimize_on_exception);
+  if (java_op == "jeandle.new_instance" || java_op == "jeandle.new_array") {
+    // Allocation either returns a concrete object or takes the unwind edge.
+    invoke_inst->addRetAttr(llvm::Attribute::NonNull);
+    invoke_inst->addRetAttr(llvm::Attribute::NoUndef);
+  }
   return invoke_inst;
 }
 
@@ -3205,6 +3210,9 @@ void JeandleAbstractInterpreter::do_new() {
                         {klass_ptr, size_in_bytes, _ir_builder.getFalse()},
                         {create_current_deopt_bundle()}));
   }
+
+  new_inst->addRetAttr(llvm::Attribute::NonNull);
+  new_inst->addRetAttr(llvm::Attribute::NoUndef);
 
   // new always produces an exact type.
   new_inst->addRetAttr(llvm::Attribute::get(*_context,
@@ -3871,6 +3879,8 @@ void JeandleAbstractInterpreter::multianewarray() {
   llvm::InvokeInst* result = create_call_ex(callee, args, llvm::CallingConv::Hotspot_JIT,
                                           {create_current_deopt_bundle()});
   RETURN_VOID_ON_JEANDLE_ERROR();
+  result->addRetAttr(llvm::Attribute::NonNull);
+  result->addRetAttr(llvm::Attribute::NoUndef);
   result->addRetAttr(llvm::Attribute::get(*_context,
       llvm::jeandle::Attribute::JavaKlass,
       std::to_string((uintptr_t)array_klass->constant_encoding())));

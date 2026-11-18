@@ -161,9 +161,14 @@ llvm::Function* JeandleFuncSig::create_llvm_func(ciMethod* method, llvm::Module&
       std::to_string(reinterpret_cast<uintptr_t>(method))));
 
   if (!is_osr_entry) {
+    // Java arguments contain concrete values, including nullable references.
+    for (unsigned i = 0; i < func->arg_size(); i++) {
+      func->addParamAttr(i, llvm::Attribute::NoUndef);
+    }
     // Attach java-klass type attributes to parameters.
     int arg_idx = 0;
     if (!method->is_static()) {
+      func->addParamAttr(arg_idx, llvm::Attribute::NonNull);
       ciInstanceKlass* holder = method->holder();
       // Skip interface types: the verifier does not enforce interface types,
       // so a parameter declared as an interface could hold any Object at runtime.
