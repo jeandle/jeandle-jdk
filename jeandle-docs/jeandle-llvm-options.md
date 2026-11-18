@@ -78,6 +78,19 @@ replay to fail.
 
 ### Null and array bounds checks
 
+`-passes=jeandle-array-length-optimization` performs immutable array-length CSE
+and safe loop motion. `-passes=jeandle-check-optimization` runs bounded standard
+LLVM scalar and loop check transforms, then lowers widenable conditions and
+restores canonical loop form. Both operate on Java method compilation modules.
+The JIT schedules them before safepoint strip mining, independently of PEA.
+
+`-jeandle-optimize-checks=false` disables the additional loop/widening transforms;
+scalar cleanup and lowering of temporary widenable conditions still run. The
+expensive stage is capped at 256 guards and 10000 instructions per function;
+LLVM profitability limits also constrain loop cloning. Use
+`-pass-remarks-missed=jeandle-check-optimization` to diagnose the method budget.
+
+
 Cold null and bounds checks may use LLVM widenable branches. A real check
 failure retains its original exception reason; a failure introduced by widening
 uses `predicate / reinterpret` and resumes at the original bytecode state.
