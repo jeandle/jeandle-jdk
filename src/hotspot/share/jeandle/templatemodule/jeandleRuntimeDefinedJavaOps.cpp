@@ -35,6 +35,7 @@
 
 #include "jeandle/__hotspotHeadersBegin__.hpp"
 #include "ci/ciUtilities.hpp"
+#include "classfile/vmClasses.hpp"
 #include "gc/g1/g1BarrierSetRuntime.hpp"
 #include "gc/g1/g1CardTable.hpp"
 #include "gc/g1/g1ThreadLocalData.hpp"
@@ -653,6 +654,7 @@ JAVA_OP_END
 // whose exact Klass is unavailable.
 DEF_JAVA_OP(get_class, 1, llvm::PointerType::get(context, llvm::jeandle::AddrSpace::JavaHeapAddrSpace),
             llvm::PointerType::get(context, llvm::jeandle::AddrSpace::JavaHeapAddrSpace))  // obj (receiver)
+  func->addRetAttr(llvm::Attribute::NonNull);
   llvm::Value* obj = func->getArg(0);
   // Step 1: load klass pointer from object header
   llvm::Function* load_klass_func = template_module.getFunction("jeandle.load_klass");
@@ -1159,6 +1161,17 @@ void RuntimeDefinedJavaOps::define_global_variables(llvm::Module& template_modul
   define_global("DEBUG_MODE",                                       int1_type,  static_cast<uint64_t>(false));
 #endif
 
+  // JVM access flag bits from accessFlags.hpp. The template's class_* JavaOps
+  // test them through these globals, and ConstantFieldFolding reads them back
+  // via VMConstants::fromModule. Defining them from the real macros keeps both
+  // sides synchronized with HotSpot without manual maintenance.
+  define_global("AccessFlags.jvm_acc_written_flags", int32_type, static_cast<uint64_t>(JVM_ACC_WRITTEN_FLAGS));
+  define_global("AccessFlags.jvm_acc_public",                   int32_type, static_cast<uint64_t>(JVM_ACC_PUBLIC));
+  define_global("AccessFlags.jvm_acc_final",                    int32_type, static_cast<uint64_t>(JVM_ACC_FINAL));
+  define_global("AccessFlags.jvm_acc_abstract",                 int32_type, static_cast<uint64_t>(JVM_ACC_ABSTRACT));
+  define_global("AccessFlags.jvm_acc_interface",                int32_type, static_cast<uint64_t>(JVM_ACC_INTERFACE));
+  define_global("AccessFlags.jvm_acc_is_hidden_class",          int32_type, static_cast<uint64_t>(JVM_ACC_IS_HIDDEN_CLASS));
+
   // Widest usable vector width for the string kernels. The kernels branch on
   // this constant so LLVM folds away the unused width at compile time.
 #ifdef X86
@@ -1195,9 +1208,13 @@ void RuntimeDefinedJavaOps::define_global_variables(llvm::Module& template_modul
   define_global("arrayOopDesc.element_size.float",                  int32_type, static_cast<uint64_t>(type2aelembytes(T_FLOAT)));
   define_global("arrayOopDesc.element_size.double",                 int32_type, static_cast<uint64_t>(type2aelembytes(T_DOUBLE)));
   define_global("arrayOopDesc.element_size.object",                 int32_type, static_cast<uint64_t>(type2aelembytes(T_OBJECT)));
+  define_global("Klass.super_offset", int32_type, static_cast<uint64_t>(in_bytes(Klass::super_offset())));
+  define_global("java_lang_Object.klass", int64_type, reinterpret_cast<uintptr_t>(vmClasses::Object_klass()));
+  define_global("java_lang_Class.klass", int64_type, reinterpret_cast<uintptr_t>(vmClasses::Class_klass()));
   define_global("Klass.access_flags_offset",                        int32_type, static_cast<uint64_t>(Klass::access_flags_offset()));
   define_global("Klass.java_mirror_offset",                         int32_type, static_cast<uint64_t>(in_bytes(Klass::java_mirror_offset())));
   define_global("Klass.layout_helper_offset",                       int32_type, static_cast<uint64_t>(in_bytes(Klass::layout_helper_offset())));
+  define_global("Klass.modifier_flags_offset",                      int32_type, static_cast<uint64_t>(in_bytes(Klass::modifier_flags_offset())));
   define_global("Klass.secondary_super_cache_offset",               int32_type, static_cast<uint64_t>(Klass::secondary_super_cache_offset()));
   define_global("Klass.secondary_supers_offset",                    int32_type, static_cast<uint64_t>(Klass::secondary_supers_offset()));
   define_global("Klass.super_check_offset_offset",                  int32_type, static_cast<uint64_t>(Klass::super_check_offset_offset()));

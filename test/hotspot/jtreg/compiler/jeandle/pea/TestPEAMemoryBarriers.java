@@ -48,8 +48,11 @@ public class TestPEAMemoryBarriers {
         Method[] targets = {local, escape, virtualClone, concreteClone, stable, staticStable, fences, reference};
         exports(PEATestUtils.behaviorRun(TestWrapper.class.getName(), targets))
                 .runPEAOnOffEquivalent();
+        // Leave an idle probe after folding Klass comparisons and cleaning
+        // their constant branches; behavior runs retain the default budget.
         try (PEATestUtils.RunResult run =
-                exports(PEATestUtils.shapeRun(TestWrapper.class.getName(), targets)).run()) {
+                exports(PEATestUtils.shapeRun(TestWrapper.class.getName(), targets)
+                        .peaIterations(3)).run()) {
             var localReport = run.report(local);
             localReport.round0Before().assertPresent("@jeandle.membar_constructor_freeze");
             localReport.finalAfter().assertAbsent("@jeandle.new_instance");

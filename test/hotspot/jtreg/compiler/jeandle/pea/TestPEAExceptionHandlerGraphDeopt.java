@@ -305,7 +305,8 @@ public class TestPEAExceptionHandlerGraphDeopt {
                 "type-check");
         ParsedBlock checkBlock = requireBlock(blocks, typeCheck, target, context);
         Asserts.assertEquals(checkBlock.lines().stream()
-                        .filter(line -> line.contains("@jeandle.check_instanceof(")).count(), 1L,
+                        .filter(line -> line.contains("@jeandle.check_instanceof(")
+                                || line.contains("@jeandle.checkcast_nonnull_with_offset(")).count(), 1L,
                 target + ": exact exception type check for " + context);
 
         List<String> checkSuccessors =
