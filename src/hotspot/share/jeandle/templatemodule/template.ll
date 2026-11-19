@@ -2406,12 +2406,14 @@ entry:
 ; updates (all arithmetic wraps mod 2^32 like Java int). The frontend emits
 ; only the five constant basic types below, so the switch folds after inline.
 ; Each grouped iteration covers 32 elements with AVX2 or 64 with AVX-512.
-; Four independent vector accumulators and the scalar h chain multiply by
-; 31^group_size; the epilogue applies per-lane coefficients
-; 31^(group_size-1-laneoffset) and wrapping horizontal adds. Independent
-; accumulators hide the vector multiply latency. The 64-element tier feeds
-; its remainder through the 32-element tier. Remaining groups of eight precede
-; a pairwise scalar tail, h = 961*h + 31*x + y, as in C2/Graal.
+; Four independent raw vector accumulators and the scalar seed chain multiply
+; by 31^group_size. The epilogue applies per-lane coefficients
+; 31^(group_size-1-laneoffset). With the AVX-512 tier enabled, weighted vectors
+; carry the input terms across tiers until one final wrapping reduction; the
+; scalar chain contains only seed*31^prefix_length. Otherwise each tier reduces
+; separately, keeping the narrower kernels' control flow independent.
+; Remaining groups of eight precede a pairwise scalar tail,
+; h = 961*h + 31*x + y, as in C2/Graal.
 ; Word inputs of 8..15 elements use two 4-lane reads, matching buffers
 ; initialized by separate 8-byte stores.
 ; Signed length comparisons make empty/negative counts return initialValue.
@@ -2422,6 +2424,7 @@ entry:
   %empty = icmp sle i32 %length, 0
   br i1 %empty, label %done, label %dispatch
 dispatch:
+  %delayed.reduction = load i1, ptr @VM_Version.hashcode_vector_512bit
   switch i32 %basicType, label %unsupported [
     i32 4, label %boolean.entry
     i32 5, label %char.entry
@@ -2440,10 +2443,10 @@ boolean.entry:
   %boolean.avx512 = load i1, ptr @VM_Version.hashcode_vector_512bit
   %boolean.ge64 = icmp sge i64 %boolean.count, 64
   %boolean.use.w16 = and i1 %boolean.avx512, %boolean.ge64
-  br i1 %boolean.use.w16, label %boolean.w16.check, label %boolean.w8.select
+  br i1 %boolean.use.w16, label %boolean.w16.entry, label %boolean.w8.select
 boolean.w8.select:
-  %boolean.k.begin = phi i64 [ 0, %boolean.entry ], [ %boolean.w16.k, %boolean.w16.done ]
-  %boolean.h.begin = phi i32 [ %initialValue, %boolean.entry ], [ %boolean.w16.h.final, %boolean.w16.done ]
+  %boolean.k.begin = phi i64 [ 0, %boolean.entry ], [ %boolean.w16.k, %boolean.w16.reduce ]
+  %boolean.h.begin = phi i32 [ %initialValue, %boolean.entry ], [ %boolean.w16.h.final, %boolean.w16.reduce ]
   %boolean.remaining = sub i64 %boolean.count, %boolean.k.begin
   %boolean.ge32 = icmp sge i64 %boolean.remaining, 32
   br i1 %boolean.ge32, label %boolean.w8.check, label %boolean.mid.select
@@ -2451,47 +2454,67 @@ boolean.mid.select:
   ; Short inputs and grouped-loop remainders use one 8-lane accumulator
   ; before the scalar tail.
   %boolean.ge8 = icmp sge i64 %boolean.remaining, 8
-  br i1 %boolean.ge8, label %boolean.mid.check, label %boolean.tail
+  br i1 %boolean.ge8, label %boolean.mid.arch, label %boolean.tail
+boolean.mid.arch:
+  br i1 %delayed.reduction, label %boolean.x86.mid.entry, label %boolean.mid.check
+
+boolean.w16.entry:
+  br i1 %delayed.reduction, label %boolean.w16.load, label %boolean.w16.check
+boolean.w16.first:
+  ; The guarded first group initializes raw chains directly from its loads.
+  %boolean.w16.first.h = mul i32 %initialValue, 1304393729
+  br label %boolean.w16.check
 boolean.w16.check:
-  %boolean.w16.k = phi i64 [ 0, %boolean.entry ], [ %boolean.w16.k.next, %boolean.w16.body ]
-  %boolean.w16.h = phi i32 [ %initialValue, %boolean.entry ], [ %boolean.w16.h.next, %boolean.w16.body ]
-  %boolean.w16.a0 = phi <16 x i32> [ zeroinitializer, %boolean.entry ], [ %boolean.w16.a0.next, %boolean.w16.body ]
-  %boolean.w16.a1 = phi <16 x i32> [ zeroinitializer, %boolean.entry ], [ %boolean.w16.a1.next, %boolean.w16.body ]
-  %boolean.w16.a2 = phi <16 x i32> [ zeroinitializer, %boolean.entry ], [ %boolean.w16.a2.next, %boolean.w16.body ]
-  %boolean.w16.a3 = phi <16 x i32> [ zeroinitializer, %boolean.entry ], [ %boolean.w16.a3.next, %boolean.w16.body ]
+  %boolean.w16.k = phi i64 [ 0, %boolean.w16.entry ], [ 64, %boolean.w16.first ], [ %boolean.w16.k.next, %boolean.w16.accumulate ]
+  %boolean.w16.h = phi i32 [ %initialValue, %boolean.w16.entry ], [ %boolean.w16.first.h, %boolean.w16.first ], [ %boolean.w16.h.next, %boolean.w16.accumulate ]
+  %boolean.w16.a0 = phi <16 x i32> [ zeroinitializer, %boolean.w16.entry ], [ %boolean.w16.b0.wide, %boolean.w16.first ], [ %boolean.w16.a0.next, %boolean.w16.accumulate ]
+  %boolean.w16.a1 = phi <16 x i32> [ zeroinitializer, %boolean.w16.entry ], [ %boolean.w16.b1.wide, %boolean.w16.first ], [ %boolean.w16.a1.next, %boolean.w16.accumulate ]
+  %boolean.w16.a2 = phi <16 x i32> [ zeroinitializer, %boolean.w16.entry ], [ %boolean.w16.b2.wide, %boolean.w16.first ], [ %boolean.w16.a2.next, %boolean.w16.accumulate ]
+  %boolean.w16.a3 = phi <16 x i32> [ zeroinitializer, %boolean.w16.entry ], [ %boolean.w16.b3.wide, %boolean.w16.first ], [ %boolean.w16.a3.next, %boolean.w16.accumulate ]
   %boolean.w16.end = add i64 %boolean.count, -63
   %boolean.w16.more = icmp slt i64 %boolean.w16.k, %boolean.w16.end
   br i1 %boolean.w16.more, label %boolean.w16.body, label %boolean.w16.done
 boolean.w16.body:
-  %boolean.w16.b0.off = add i64 %boolean.start, %boolean.w16.k
+  br label %boolean.w16.load
+boolean.w16.load:
+  %boolean.w16.load.k = phi i64 [ 0, %boolean.w16.entry ], [ %boolean.w16.k, %boolean.w16.body ]
+  %boolean.w16.load.h = phi i32 [ poison, %boolean.w16.entry ], [ %boolean.w16.h, %boolean.w16.body ]
+  %boolean.w16.load.first = phi i1 [ true, %boolean.w16.entry ], [ false, %boolean.w16.body ]
+  %boolean.w16.load.a0 = phi <16 x i32> [ poison, %boolean.w16.entry ], [ %boolean.w16.a0, %boolean.w16.body ]
+  %boolean.w16.load.a1 = phi <16 x i32> [ poison, %boolean.w16.entry ], [ %boolean.w16.a1, %boolean.w16.body ]
+  %boolean.w16.load.a2 = phi <16 x i32> [ poison, %boolean.w16.entry ], [ %boolean.w16.a2, %boolean.w16.body ]
+  %boolean.w16.load.a3 = phi <16 x i32> [ poison, %boolean.w16.entry ], [ %boolean.w16.a3, %boolean.w16.body ]
+  %boolean.w16.b0.off = add i64 %boolean.start, %boolean.w16.load.k
   %boolean.w16.b0.p = getelementptr i8, ptr addrspace(1) %boolean.data, i64 %boolean.w16.b0.off
   %boolean.w16.b0.raw = load <16 x i8>, ptr addrspace(1) %boolean.w16.b0.p, align 1
   %boolean.w16.b0.wide = zext <16 x i8> %boolean.w16.b0.raw to <16 x i32>
-  %boolean.w16.b1.pre = add i64 %boolean.start, %boolean.w16.k
+  %boolean.w16.b1.pre = add i64 %boolean.start, %boolean.w16.load.k
   %boolean.w16.b1.off = add i64 %boolean.w16.b1.pre, 16
   %boolean.w16.b1.p = getelementptr i8, ptr addrspace(1) %boolean.data, i64 %boolean.w16.b1.off
   %boolean.w16.b1.raw = load <16 x i8>, ptr addrspace(1) %boolean.w16.b1.p, align 1
   %boolean.w16.b1.wide = zext <16 x i8> %boolean.w16.b1.raw to <16 x i32>
-  %boolean.w16.b2.pre = add i64 %boolean.start, %boolean.w16.k
+  %boolean.w16.b2.pre = add i64 %boolean.start, %boolean.w16.load.k
   %boolean.w16.b2.off = add i64 %boolean.w16.b2.pre, 32
   %boolean.w16.b2.p = getelementptr i8, ptr addrspace(1) %boolean.data, i64 %boolean.w16.b2.off
   %boolean.w16.b2.raw = load <16 x i8>, ptr addrspace(1) %boolean.w16.b2.p, align 1
   %boolean.w16.b2.wide = zext <16 x i8> %boolean.w16.b2.raw to <16 x i32>
-  %boolean.w16.b3.pre = add i64 %boolean.start, %boolean.w16.k
+  %boolean.w16.b3.pre = add i64 %boolean.start, %boolean.w16.load.k
   %boolean.w16.b3.off = add i64 %boolean.w16.b3.pre, 48
   %boolean.w16.b3.p = getelementptr i8, ptr addrspace(1) %boolean.data, i64 %boolean.w16.b3.off
   %boolean.w16.b3.raw = load <16 x i8>, ptr addrspace(1) %boolean.w16.b3.p, align 1
   %boolean.w16.b3.wide = zext <16 x i8> %boolean.w16.b3.raw to <16 x i32>
-  %boolean.w16.a0.mul = mul <16 x i32> %boolean.w16.a0, <i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729>
+  br i1 %boolean.w16.load.first, label %boolean.w16.first, label %boolean.w16.accumulate
+boolean.w16.accumulate:
+  %boolean.w16.a0.mul = mul <16 x i32> %boolean.w16.load.a0, <i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729>
   %boolean.w16.a0.next = add <16 x i32> %boolean.w16.a0.mul, %boolean.w16.b0.wide
-  %boolean.w16.a1.mul = mul <16 x i32> %boolean.w16.a1, <i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729>
+  %boolean.w16.a1.mul = mul <16 x i32> %boolean.w16.load.a1, <i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729>
   %boolean.w16.a1.next = add <16 x i32> %boolean.w16.a1.mul, %boolean.w16.b1.wide
-  %boolean.w16.a2.mul = mul <16 x i32> %boolean.w16.a2, <i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729>
+  %boolean.w16.a2.mul = mul <16 x i32> %boolean.w16.load.a2, <i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729>
   %boolean.w16.a2.next = add <16 x i32> %boolean.w16.a2.mul, %boolean.w16.b2.wide
-  %boolean.w16.a3.mul = mul <16 x i32> %boolean.w16.a3, <i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729>
+  %boolean.w16.a3.mul = mul <16 x i32> %boolean.w16.load.a3, <i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729>
   %boolean.w16.a3.next = add <16 x i32> %boolean.w16.a3.mul, %boolean.w16.b3.wide
-  %boolean.w16.h.next = mul i32 %boolean.w16.h, 1304393729
-  %boolean.w16.k.next = add i64 %boolean.w16.k, 64
+  %boolean.w16.h.next = mul i32 %boolean.w16.load.h, 1304393729
+  %boolean.w16.k.next = add i64 %boolean.w16.load.k, 64
   br label %boolean.w16.check
 boolean.w16.done:
   %boolean.w16.a0.coef = mul <16 x i32> %boolean.w16.a0, <i32 2120287199, i32 4086268993, i32 2487119775, i32 3128270977, i32 100911967, i32 280349889, i32 2364348191, i32 630458625, i32 20337375, i32 693392705, i32 438009503, i32 2369433985, i32 769170015, i32 1133190593, i32 4054427167, i32 4287207937>
@@ -2501,21 +2524,49 @@ boolean.w16.done:
   %boolean.w16.sum01 = add <16 x i32> %boolean.w16.a0.coef, %boolean.w16.a1.coef
   %boolean.w16.sum23 = add <16 x i32> %boolean.w16.a2.coef, %boolean.w16.a3.coef
   %boolean.w16.sum = add <16 x i32> %boolean.w16.sum01, %boolean.w16.sum23
+  br i1 %delayed.reduction, label %boolean.x86.w16.select, label %boolean.w16.reduce
+boolean.w16.reduce:
   %boolean.w16.reduced = call i32 @llvm.vector.reduce.add.v16i32(<16 x i32> %boolean.w16.sum)
   %boolean.w16.h.final = add i32 %boolean.w16.h, %boolean.w16.reduced
   br label %boolean.w8.select
+boolean.x86.w16.select:
+  %boolean.x86.w16.remaining = sub i64 %boolean.count, %boolean.w16.k
+  %boolean.x86.w16.ge8 = icmp sge i64 %boolean.x86.w16.remaining, 8
+  br i1 %boolean.x86.w16.ge8, label %boolean.x86.w16.fold, label %boolean.x86.w16.reduce
+boolean.x86.w16.reduce:
+  %boolean.x86.w16.reduced = call i32 @llvm.vector.reduce.add.v16i32(<16 x i32> %boolean.w16.sum)
+  %boolean.x86.w16.final = add i32 %boolean.w16.h, %boolean.x86.w16.reduced
+  br label %boolean.tail
+boolean.x86.w16.fold:
+  ; These lanes already include their position weights. Folding preserves their sum.
+  %boolean.x86.w16.lo = shufflevector <16 x i32> %boolean.w16.sum, <16 x i32> poison, <8 x i32> <i32 0, i32 1, i32 2, i32 3, i32 4, i32 5, i32 6, i32 7>
+  %boolean.x86.w16.hi = shufflevector <16 x i32> %boolean.w16.sum, <16 x i32> poison, <8 x i32> <i32 8, i32 9, i32 10, i32 11, i32 12, i32 13, i32 14, i32 15>
+  %boolean.x86.w16.u = add <8 x i32> %boolean.x86.w16.lo, %boolean.x86.w16.hi
+  %boolean.x86.w16.ge32 = icmp sge i64 %boolean.x86.w16.remaining, 32
+  br i1 %boolean.x86.w16.ge32, label %boolean.w8.load, label %boolean.x86.vector.select
+
 boolean.w8.check:
-  %boolean.k = phi i64 [ %boolean.k.begin, %boolean.w8.select ], [ %boolean.k.next, %boolean.w8.body ]
-  %boolean.h = phi i32 [ %boolean.h.begin, %boolean.w8.select ], [ %boolean.h.next, %boolean.w8.body ]
-  %boolean.a0 = phi <8 x i32> [ zeroinitializer, %boolean.w8.select ], [ %boolean.a0.next, %boolean.w8.body ]
-  %boolean.a1 = phi <8 x i32> [ zeroinitializer, %boolean.w8.select ], [ %boolean.a1.next, %boolean.w8.body ]
-  %boolean.a2 = phi <8 x i32> [ zeroinitializer, %boolean.w8.select ], [ %boolean.a2.next, %boolean.w8.body ]
-  %boolean.a3 = phi <8 x i32> [ zeroinitializer, %boolean.w8.select ], [ %boolean.a3.next, %boolean.w8.body ]
+  %boolean.k = phi i64 [ %boolean.k.begin, %boolean.w8.select ], [ %boolean.k.next, %boolean.w8.accumulate ]
+  %boolean.h = phi i32 [ %boolean.h.begin, %boolean.w8.select ], [ %boolean.h.next, %boolean.w8.accumulate ]
+  %boolean.a0 = phi <8 x i32> [ zeroinitializer, %boolean.w8.select ], [ %boolean.a0.next, %boolean.w8.accumulate ]
+  %boolean.a1 = phi <8 x i32> [ zeroinitializer, %boolean.w8.select ], [ %boolean.a1.next, %boolean.w8.accumulate ]
+  %boolean.a2 = phi <8 x i32> [ zeroinitializer, %boolean.w8.select ], [ %boolean.a2.next, %boolean.w8.accumulate ]
+  %boolean.a3 = phi <8 x i32> [ zeroinitializer, %boolean.w8.select ], [ %boolean.a3.next, %boolean.w8.accumulate ]
   %boolean.end = add i64 %boolean.count, -31
   %boolean.more = icmp slt i64 %boolean.k, %boolean.end
   br i1 %boolean.more, label %boolean.w8.body, label %boolean.w8.done
 boolean.w8.body:
-  %boolean.kbase = add i64 %boolean.start, %boolean.k
+  br label %boolean.w8.load
+boolean.w8.load:
+  %boolean.load.k = phi i64 [ %boolean.k, %boolean.w8.body ], [ %boolean.w16.k, %boolean.x86.w16.fold ]
+  %boolean.load.h = phi i32 [ %boolean.h, %boolean.w8.body ], [ %boolean.w16.h, %boolean.x86.w16.fold ]
+  %boolean.load.u = phi <8 x i32> [ zeroinitializer, %boolean.w8.body ], [ %boolean.x86.w16.u, %boolean.x86.w16.fold ]
+  %boolean.load.r32 = phi i1 [ false, %boolean.w8.body ], [ true, %boolean.x86.w16.fold ]
+  %boolean.load.a0 = phi <8 x i32> [ %boolean.a0, %boolean.w8.body ], [ poison, %boolean.x86.w16.fold ]
+  %boolean.load.a1 = phi <8 x i32> [ %boolean.a1, %boolean.w8.body ], [ poison, %boolean.x86.w16.fold ]
+  %boolean.load.a2 = phi <8 x i32> [ %boolean.a2, %boolean.w8.body ], [ poison, %boolean.x86.w16.fold ]
+  %boolean.load.a3 = phi <8 x i32> [ %boolean.a3, %boolean.w8.body ], [ poison, %boolean.x86.w16.fold ]
+  %boolean.kbase = add i64 %boolean.start, %boolean.load.k
   %boolean.b0.off = add i64 %boolean.kbase, 0
   %boolean.b0.p = getelementptr i8, ptr addrspace(1) %boolean.data, i64 %boolean.b0.off
   %boolean.b0.raw = load <8 x i8>, ptr addrspace(1) %boolean.b0.p, align 1
@@ -2532,16 +2583,18 @@ boolean.w8.body:
   %boolean.b3.p = getelementptr i8, ptr addrspace(1) %boolean.data, i64 %boolean.b3.off
   %boolean.b3.raw = load <8 x i8>, ptr addrspace(1) %boolean.b3.p, align 1
   %boolean.b3.wide = zext <8 x i8> %boolean.b3.raw to <8 x i32>
-  %boolean.a0.mul = mul <8 x i32> %boolean.a0, <i32 2111290369, i32 2111290369, i32 2111290369, i32 2111290369, i32 2111290369, i32 2111290369, i32 2111290369, i32 2111290369>
+  br i1 %boolean.load.r32, label %boolean.x86.r32.dot, label %boolean.w8.accumulate
+boolean.w8.accumulate:
+  %boolean.a0.mul = mul <8 x i32> %boolean.load.a0, <i32 2111290369, i32 2111290369, i32 2111290369, i32 2111290369, i32 2111290369, i32 2111290369, i32 2111290369, i32 2111290369>
   %boolean.a0.next = add <8 x i32> %boolean.a0.mul, %boolean.b0.wide
-  %boolean.a1.mul = mul <8 x i32> %boolean.a1, <i32 2111290369, i32 2111290369, i32 2111290369, i32 2111290369, i32 2111290369, i32 2111290369, i32 2111290369, i32 2111290369>
+  %boolean.a1.mul = mul <8 x i32> %boolean.load.a1, <i32 2111290369, i32 2111290369, i32 2111290369, i32 2111290369, i32 2111290369, i32 2111290369, i32 2111290369, i32 2111290369>
   %boolean.a1.next = add <8 x i32> %boolean.a1.mul, %boolean.b1.wide
-  %boolean.a2.mul = mul <8 x i32> %boolean.a2, <i32 2111290369, i32 2111290369, i32 2111290369, i32 2111290369, i32 2111290369, i32 2111290369, i32 2111290369, i32 2111290369>
+  %boolean.a2.mul = mul <8 x i32> %boolean.load.a2, <i32 2111290369, i32 2111290369, i32 2111290369, i32 2111290369, i32 2111290369, i32 2111290369, i32 2111290369, i32 2111290369>
   %boolean.a2.next = add <8 x i32> %boolean.a2.mul, %boolean.b2.wide
-  %boolean.a3.mul = mul <8 x i32> %boolean.a3, <i32 2111290369, i32 2111290369, i32 2111290369, i32 2111290369, i32 2111290369, i32 2111290369, i32 2111290369, i32 2111290369>
+  %boolean.a3.mul = mul <8 x i32> %boolean.load.a3, <i32 2111290369, i32 2111290369, i32 2111290369, i32 2111290369, i32 2111290369, i32 2111290369, i32 2111290369, i32 2111290369>
   %boolean.a3.next = add <8 x i32> %boolean.a3.mul, %boolean.b3.wide
-  %boolean.h.next = mul i32 %boolean.h, 2111290369
-  %boolean.k.next = add i64 %boolean.k, 32
+  %boolean.h.next = mul i32 %boolean.load.h, 2111290369
+  %boolean.k.next = add i64 %boolean.load.k, 32
   br label %boolean.w8.check
 boolean.w8.done:
   %boolean.a0.coef = mul <8 x i32> %boolean.a0, <i32 2284863455, i32 350799937, i32 11316127, i32 693101697, i32 4040230751, i32 961614017, i32 31019807, i32 2217757953>
@@ -2551,34 +2604,120 @@ boolean.w8.done:
   %boolean.sum01 = add <8 x i32> %boolean.a0.coef, %boolean.a1.coef
   %boolean.sum23 = add <8 x i32> %boolean.a2.coef, %boolean.a3.coef
   %boolean.sum = add <8 x i32> %boolean.sum01, %boolean.sum23
+  br i1 %delayed.reduction, label %boolean.x86.vector.select, label %boolean.w8.reduce
+boolean.w8.reduce:
   %boolean.reduced = call i32 @llvm.vector.reduce.add.v8i32(<8 x i32> %boolean.sum)
   %boolean.h.final = add i32 %boolean.h, %boolean.reduced
   br label %boolean.mid.check
+boolean.x86.r32.dot:
+  ; At most one 32-element block remains after the wide main loop.
+  %boolean.x86.r32.a0.coef = mul <8 x i32> %boolean.b0.wide, <i32 2284863455, i32 350799937, i32 11316127, i32 693101697, i32 4040230751, i32 961614017, i32 31019807, i32 2217757953>
+  %boolean.x86.r32.a1.coef = mul <8 x i32> %boolean.b1.wide, <i32 4227960543, i32 1244764481, i32 2256911007, i32 211350913, i32 3886143071, i32 3450495425, i32 3297894943, i32 1353309697>
+  %boolean.x86.r32.a2.coef = mul <8 x i32> %boolean.b2.wide, <i32 3784433119, i32 1507551809, i32 3789408671, i32 4001564289, i32 129082719, i32 2498015937, i32 4098453791, i32 2487512833>
+  %boolean.x86.r32.a3.coef = mul <8 x i32> %boolean.b3.wide, <i32 1742810335, i32 887503681, i32 28629151, i32 923521, i32 29791, i32 961, i32 31, i32 1>
+  %boolean.x86.r32.sum01 = add <8 x i32> %boolean.x86.r32.a0.coef, %boolean.x86.r32.a1.coef
+  %boolean.x86.r32.sum23 = add <8 x i32> %boolean.x86.r32.a2.coef, %boolean.x86.r32.a3.coef
+  %boolean.x86.r32.sum = add <8 x i32> %boolean.x86.r32.sum01, %boolean.x86.r32.sum23
+  %boolean.x86.r32.scaled = mul <8 x i32> %boolean.load.u, <i32 2111290369, i32 2111290369, i32 2111290369, i32 2111290369, i32 2111290369, i32 2111290369, i32 2111290369, i32 2111290369>
+  %boolean.x86.r32.u = add <8 x i32> %boolean.x86.r32.scaled, %boolean.x86.r32.sum
+  %boolean.x86.r32.s = mul i32 %boolean.load.h, 2111290369
+  %boolean.x86.r32.k = add i64 %boolean.load.k, 32
+  br label %boolean.x86.vector.select
+boolean.x86.vector.select:
+  %boolean.x86.k = phi i64 [ %boolean.k, %boolean.w8.done ], [ %boolean.w16.k, %boolean.x86.w16.fold ], [ %boolean.x86.r32.k, %boolean.x86.r32.dot ]
+  %boolean.x86.s = phi i32 [ %boolean.h, %boolean.w8.done ], [ %boolean.w16.h, %boolean.x86.w16.fold ], [ %boolean.x86.r32.s, %boolean.x86.r32.dot ]
+  %boolean.x86.u = phi <8 x i32> [ %boolean.sum, %boolean.w8.done ], [ %boolean.x86.w16.u, %boolean.x86.w16.fold ], [ %boolean.x86.r32.u, %boolean.x86.r32.dot ]
+  %boolean.x86.remaining = sub i64 %boolean.count, %boolean.x86.k
+  %boolean.x86.ge8 = icmp sge i64 %boolean.x86.remaining, 8
+  br i1 %boolean.x86.ge8, label %boolean.x86.mid.scale, label %boolean.x86.reduce
+boolean.x86.mid.scale:
+  ; Scale the weighted prefix independently of the raw suffix recurrence.
+  %boolean.x86.mid.items = and i64 %boolean.x86.remaining, -8
+  %boolean.x86.mid.is8 = icmp eq i64 %boolean.x86.mid.items, 8
+  %boolean.x86.mid.is16 = icmp eq i64 %boolean.x86.mid.items, 16
+  %boolean.x86.mid.p16or24 = select i1 %boolean.x86.mid.is16, i32 1353309697, i32 2217757953
+  %boolean.x86.mid.power = select i1 %boolean.x86.mid.is8, i32 2487512833, i32 %boolean.x86.mid.p16or24
+  %boolean.x86.mid.power.lane = insertelement <8 x i32> poison, i32 %boolean.x86.mid.power, i32 0
+  %boolean.x86.mid.power.vector = shufflevector <8 x i32> %boolean.x86.mid.power.lane, <8 x i32> poison, <8 x i32> zeroinitializer
+  %boolean.x86.mid.scaled.u = mul <8 x i32> %boolean.x86.u, %boolean.x86.mid.power.vector
+  br label %boolean.x86.mid.entry
+boolean.x86.mid.entry:
+  %boolean.x86.mid.begin = phi i64 [ %boolean.k.begin, %boolean.mid.arch ], [ %boolean.x86.k, %boolean.x86.mid.scale ]
+  %boolean.x86.mid.s = phi i32 [ %boolean.h.begin, %boolean.mid.arch ], [ %boolean.x86.s, %boolean.x86.mid.scale ]
+  %boolean.x86.mid.u = phi <8 x i32> [ zeroinitializer, %boolean.mid.arch ], [ %boolean.x86.mid.scaled.u, %boolean.x86.mid.scale ]
+  %boolean.x86.mid.prefix = phi i1 [ false, %boolean.mid.arch ], [ true, %boolean.x86.mid.scale ]
+  ; The first guarded load initializes the raw suffix without a zero multiply.
+  br label %boolean.mid.load
+boolean.x86.mid.peeled:
+  %boolean.x86.mid.first.next = add i64 %boolean.mid.load.k, 8
+  %boolean.x86.mid.first.s = mul i32 %boolean.mid.load.s, 2487512833
+  br label %boolean.x86.mid.check
+boolean.x86.mid.check:
+  %boolean.x86.mid.k = phi i64 [ %boolean.x86.mid.first.next, %boolean.x86.mid.peeled ], [ %boolean.mid.k.next, %boolean.x86.mid.next ]
+  %boolean.x86.mid.acc = phi <8 x i32> [ %boolean.mid.wide, %boolean.x86.mid.peeled ], [ %boolean.mid.acc.next, %boolean.x86.mid.next ]
+  %boolean.x86.mid.saved.s = phi i32 [ %boolean.x86.mid.first.s, %boolean.x86.mid.peeled ], [ %boolean.x86.mid.next.s, %boolean.x86.mid.next ]
+  %boolean.x86.mid.saved.u = phi <8 x i32> [ %boolean.mid.load.u, %boolean.x86.mid.peeled ], [ %boolean.mid.load.u, %boolean.x86.mid.next ]
+  %boolean.x86.mid.saved.prefix = phi i1 [ %boolean.mid.load.prefix, %boolean.x86.mid.peeled ], [ %boolean.mid.load.prefix, %boolean.x86.mid.next ]
+  %boolean.x86.mid.end = add i64 %boolean.count, -7
+  %boolean.x86.mid.more = icmp slt i64 %boolean.x86.mid.k, %boolean.x86.mid.end
+  br i1 %boolean.x86.mid.more, label %boolean.mid.load, label %boolean.x86.mid.done
+boolean.x86.mid.next:
+  %boolean.x86.mid.next.s = mul i32 %boolean.mid.load.s, 2487512833
+  br label %boolean.x86.mid.check
+boolean.x86.mid.done:
+  %boolean.x86.mid.acc.coef = mul <8 x i32> %boolean.x86.mid.acc, <i32 1742810335, i32 887503681, i32 28629151, i32 923521, i32 29791, i32 961, i32 31, i32 1>
+  br i1 %boolean.x86.mid.saved.prefix, label %boolean.x86.mid.merge, label %boolean.x86.reduce
+boolean.x86.mid.merge:
+  %boolean.x86.mid.merged.u = add <8 x i32> %boolean.x86.mid.saved.u, %boolean.x86.mid.acc.coef
+  br label %boolean.x86.reduce
+boolean.x86.reduce:
+  ; H = S + sum(U): only S contains the seed, and U is already weighted.
+  %boolean.x86.final.k = phi i64 [ %boolean.x86.k, %boolean.x86.vector.select ], [ %boolean.x86.mid.k, %boolean.x86.mid.done ], [ %boolean.x86.mid.k, %boolean.x86.mid.merge ]
+  %boolean.x86.final.s = phi i32 [ %boolean.x86.s, %boolean.x86.vector.select ], [ %boolean.x86.mid.saved.s, %boolean.x86.mid.done ], [ %boolean.x86.mid.saved.s, %boolean.x86.mid.merge ]
+  %boolean.x86.final.u = phi <8 x i32> [ %boolean.x86.u, %boolean.x86.vector.select ], [ %boolean.x86.mid.acc.coef, %boolean.x86.mid.done ], [ %boolean.x86.mid.merged.u, %boolean.x86.mid.merge ]
+  %boolean.x86.reduced = call i32 @llvm.vector.reduce.add.v8i32(<8 x i32> %boolean.x86.final.u)
+  %boolean.x86.final.h = add i32 %boolean.x86.final.s, %boolean.x86.reduced
+  br label %boolean.tail
+
 boolean.mid.check:
-  %boolean.mid.k = phi i64 [ %boolean.k.begin, %boolean.mid.select ], [ %boolean.k, %boolean.w8.done ], [ %boolean.mid.k.next, %boolean.mid.body ]
-  %boolean.mid.h = phi i32 [ %boolean.h.begin, %boolean.mid.select ], [ %boolean.h.final, %boolean.w8.done ], [ %boolean.mid.h.next, %boolean.mid.body ]
-  %boolean.mid.acc = phi <8 x i32> [ zeroinitializer, %boolean.mid.select ], [ zeroinitializer, %boolean.w8.done ], [ %boolean.mid.acc.next, %boolean.mid.body ]
+  %boolean.mid.k = phi i64 [ %boolean.k.begin, %boolean.mid.arch ], [ %boolean.k, %boolean.w8.reduce ], [ %boolean.mid.k.next, %boolean.mid.legacy.next ]
+  %boolean.mid.h = phi i32 [ %boolean.h.begin, %boolean.mid.arch ], [ %boolean.h.final, %boolean.w8.reduce ], [ %boolean.mid.h.next, %boolean.mid.legacy.next ]
+  %boolean.mid.acc = phi <8 x i32> [ zeroinitializer, %boolean.mid.arch ], [ zeroinitializer, %boolean.w8.reduce ], [ %boolean.mid.acc.next, %boolean.mid.legacy.next ]
   %boolean.mid.end = add i64 %boolean.count, -7
   %boolean.mid.more = icmp slt i64 %boolean.mid.k, %boolean.mid.end
   br i1 %boolean.mid.more, label %boolean.mid.body, label %boolean.mid.done
 boolean.mid.body:
-  %boolean.mid.off = add i64 %boolean.start, %boolean.mid.k
+  br label %boolean.mid.load
+boolean.mid.load:
+  %boolean.mid.load.k = phi i64 [ %boolean.mid.k, %boolean.mid.body ], [ %boolean.x86.mid.begin, %boolean.x86.mid.entry ], [ %boolean.x86.mid.k, %boolean.x86.mid.check ]
+  %boolean.mid.load.h = phi i32 [ %boolean.mid.h, %boolean.mid.body ], [ poison, %boolean.x86.mid.entry ], [ poison, %boolean.x86.mid.check ]
+  %boolean.mid.load.acc = phi <8 x i32> [ %boolean.mid.acc, %boolean.mid.body ], [ poison, %boolean.x86.mid.entry ], [ %boolean.x86.mid.acc, %boolean.x86.mid.check ]
+  %boolean.mid.load.first = phi i1 [ false, %boolean.mid.body ], [ true, %boolean.x86.mid.entry ], [ false, %boolean.x86.mid.check ]
+  %boolean.mid.load.s = phi i32 [ poison, %boolean.mid.body ], [ %boolean.x86.mid.s, %boolean.x86.mid.entry ], [ %boolean.x86.mid.saved.s, %boolean.x86.mid.check ]
+  %boolean.mid.load.u = phi <8 x i32> [ poison, %boolean.mid.body ], [ %boolean.x86.mid.u, %boolean.x86.mid.entry ], [ %boolean.x86.mid.saved.u, %boolean.x86.mid.check ]
+  %boolean.mid.load.prefix = phi i1 [ poison, %boolean.mid.body ], [ %boolean.x86.mid.prefix, %boolean.x86.mid.entry ], [ %boolean.x86.mid.saved.prefix, %boolean.x86.mid.check ]
+  %boolean.mid.off = add i64 %boolean.start, %boolean.mid.load.k
   %boolean.mid.p = getelementptr i8, ptr addrspace(1) %boolean.data, i64 %boolean.mid.off
   %boolean.mid.raw = load <8 x i8>, ptr addrspace(1) %boolean.mid.p, align 1
   %boolean.mid.wide = zext <8 x i8> %boolean.mid.raw to <8 x i32>
-  %boolean.mid.acc.mul = mul <8 x i32> %boolean.mid.acc, <i32 2487512833, i32 2487512833, i32 2487512833, i32 2487512833, i32 2487512833, i32 2487512833, i32 2487512833, i32 2487512833>
+  br i1 %boolean.mid.load.first, label %boolean.x86.mid.peeled, label %boolean.mid.recur
+boolean.mid.recur:
+  %boolean.mid.acc.mul = mul <8 x i32> %boolean.mid.load.acc, <i32 2487512833, i32 2487512833, i32 2487512833, i32 2487512833, i32 2487512833, i32 2487512833, i32 2487512833, i32 2487512833>
   %boolean.mid.acc.next = add <8 x i32> %boolean.mid.acc.mul, %boolean.mid.wide
-  %boolean.mid.h.next = mul i32 %boolean.mid.h, 2487512833
-  %boolean.mid.k.next = add i64 %boolean.mid.k, 8
+  %boolean.mid.k.next = add i64 %boolean.mid.load.k, 8
+  br i1 %delayed.reduction, label %boolean.x86.mid.next, label %boolean.mid.legacy.next
+boolean.mid.legacy.next:
+  %boolean.mid.h.next = mul i32 %boolean.mid.load.h, 2487512833
   br label %boolean.mid.check
+
 boolean.mid.done:
   %boolean.mid.acc.coef = mul <8 x i32> %boolean.mid.acc, <i32 1742810335, i32 887503681, i32 28629151, i32 923521, i32 29791, i32 961, i32 31, i32 1>
   %boolean.mid.sum = call i32 @llvm.vector.reduce.add.v8i32(<8 x i32> %boolean.mid.acc.coef)
   %boolean.mid.h.final = add i32 %boolean.mid.h, %boolean.mid.sum
   br label %boolean.tail
 boolean.tail:
-  %boolean.t = phi i64 [ %boolean.k.begin, %boolean.mid.select ], [ %boolean.mid.k, %boolean.mid.done ], [ %boolean.t.next, %boolean.tail.body ]
-  %boolean.t.h = phi i32 [ %boolean.h.begin, %boolean.mid.select ], [ %boolean.mid.h.final, %boolean.mid.done ], [ %boolean.t.h.next, %boolean.tail.body ]
+  %boolean.t = phi i64 [ %boolean.k.begin, %boolean.mid.select ], [ %boolean.mid.k, %boolean.mid.done ], [ %boolean.x86.final.k, %boolean.x86.reduce ], [ %boolean.w16.k, %boolean.x86.w16.reduce ], [ %boolean.t.next, %boolean.tail.body ]
+  %boolean.t.h = phi i32 [ %boolean.h.begin, %boolean.mid.select ], [ %boolean.mid.h.final, %boolean.mid.done ], [ %boolean.x86.final.h, %boolean.x86.reduce ], [ %boolean.x86.w16.final, %boolean.x86.w16.reduce ], [ %boolean.t.h.next, %boolean.tail.body ]
   %boolean.pair.end = add i64 %boolean.count, -1
   %boolean.pair.more = icmp slt i64 %boolean.t, %boolean.pair.end
   br i1 %boolean.pair.more, label %boolean.tail.body, label %boolean.tail.last
@@ -2618,10 +2757,10 @@ char.entry:
   %char.avx512 = load i1, ptr @VM_Version.hashcode_vector_512bit
   %char.ge64 = icmp sge i64 %char.count, 64
   %char.use.w16 = and i1 %char.avx512, %char.ge64
-  br i1 %char.use.w16, label %char.w16.check, label %char.w8.select
+  br i1 %char.use.w16, label %char.w16.entry, label %char.w8.select
 char.w8.select:
-  %char.k.begin = phi i64 [ 0, %char.entry ], [ %char.w16.k, %char.w16.done ]
-  %char.h.begin = phi i32 [ %initialValue, %char.entry ], [ %char.w16.h.final, %char.w16.done ]
+  %char.k.begin = phi i64 [ 0, %char.entry ], [ %char.w16.k, %char.w16.reduce ]
+  %char.h.begin = phi i32 [ %initialValue, %char.entry ], [ %char.w16.h.final, %char.w16.reduce ]
   %char.remaining = sub i64 %char.count, %char.k.begin
   %char.ge32 = icmp sge i64 %char.remaining, 32
   br i1 %char.ge32, label %char.w8.check, label %char.mid.select
@@ -2632,7 +2771,7 @@ char.mid.select:
   br i1 %char.ge8, label %char.mid.dispatch, label %char.tail
 char.mid.dispatch:
   %char.is.short = icmp ult i64 %char.count, 16
-  br i1 %char.is.short, label %char.short, label %char.mid.check
+  br i1 %char.is.short, label %char.short, label %char.mid.arch
 char.short:
   ; Two narrow reads also cover buffers initialized by separate word stores.
   %char.short.p0 = getelementptr i16, ptr addrspace(1) %char.data, i64 %char.start
@@ -2649,46 +2788,66 @@ char.short:
   %char.short.seed = mul i32 %initialValue, 2487512833
   %char.short.hash = add i32 %char.short.seed, %char.short.reduced
   br label %char.tail
+char.mid.arch:
+  br i1 %delayed.reduction, label %char.x86.mid.entry, label %char.mid.check
+
+char.w16.entry:
+  br i1 %delayed.reduction, label %char.w16.load, label %char.w16.check
+char.w16.first:
+  ; The guarded first group initializes raw chains directly from its loads.
+  %char.w16.first.h = mul i32 %initialValue, 1304393729
+  br label %char.w16.check
 char.w16.check:
-  %char.w16.k = phi i64 [ 0, %char.entry ], [ %char.w16.k.next, %char.w16.body ]
-  %char.w16.h = phi i32 [ %initialValue, %char.entry ], [ %char.w16.h.next, %char.w16.body ]
-  %char.w16.a0 = phi <16 x i32> [ zeroinitializer, %char.entry ], [ %char.w16.a0.next, %char.w16.body ]
-  %char.w16.a1 = phi <16 x i32> [ zeroinitializer, %char.entry ], [ %char.w16.a1.next, %char.w16.body ]
-  %char.w16.a2 = phi <16 x i32> [ zeroinitializer, %char.entry ], [ %char.w16.a2.next, %char.w16.body ]
-  %char.w16.a3 = phi <16 x i32> [ zeroinitializer, %char.entry ], [ %char.w16.a3.next, %char.w16.body ]
+  %char.w16.k = phi i64 [ 0, %char.w16.entry ], [ 64, %char.w16.first ], [ %char.w16.k.next, %char.w16.accumulate ]
+  %char.w16.h = phi i32 [ %initialValue, %char.w16.entry ], [ %char.w16.first.h, %char.w16.first ], [ %char.w16.h.next, %char.w16.accumulate ]
+  %char.w16.a0 = phi <16 x i32> [ zeroinitializer, %char.w16.entry ], [ %char.w16.b0.wide, %char.w16.first ], [ %char.w16.a0.next, %char.w16.accumulate ]
+  %char.w16.a1 = phi <16 x i32> [ zeroinitializer, %char.w16.entry ], [ %char.w16.b1.wide, %char.w16.first ], [ %char.w16.a1.next, %char.w16.accumulate ]
+  %char.w16.a2 = phi <16 x i32> [ zeroinitializer, %char.w16.entry ], [ %char.w16.b2.wide, %char.w16.first ], [ %char.w16.a2.next, %char.w16.accumulate ]
+  %char.w16.a3 = phi <16 x i32> [ zeroinitializer, %char.w16.entry ], [ %char.w16.b3.wide, %char.w16.first ], [ %char.w16.a3.next, %char.w16.accumulate ]
   %char.w16.end = add i64 %char.count, -63
   %char.w16.more = icmp slt i64 %char.w16.k, %char.w16.end
   br i1 %char.w16.more, label %char.w16.body, label %char.w16.done
 char.w16.body:
-  %char.w16.b0.off = add i64 %char.start, %char.w16.k
+  br label %char.w16.load
+char.w16.load:
+  %char.w16.load.k = phi i64 [ 0, %char.w16.entry ], [ %char.w16.k, %char.w16.body ]
+  %char.w16.load.h = phi i32 [ poison, %char.w16.entry ], [ %char.w16.h, %char.w16.body ]
+  %char.w16.load.first = phi i1 [ true, %char.w16.entry ], [ false, %char.w16.body ]
+  %char.w16.load.a0 = phi <16 x i32> [ poison, %char.w16.entry ], [ %char.w16.a0, %char.w16.body ]
+  %char.w16.load.a1 = phi <16 x i32> [ poison, %char.w16.entry ], [ %char.w16.a1, %char.w16.body ]
+  %char.w16.load.a2 = phi <16 x i32> [ poison, %char.w16.entry ], [ %char.w16.a2, %char.w16.body ]
+  %char.w16.load.a3 = phi <16 x i32> [ poison, %char.w16.entry ], [ %char.w16.a3, %char.w16.body ]
+  %char.w16.b0.off = add i64 %char.start, %char.w16.load.k
   %char.w16.b0.p = getelementptr i16, ptr addrspace(1) %char.data, i64 %char.w16.b0.off
   %char.w16.b0.raw = load <16 x i16>, ptr addrspace(1) %char.w16.b0.p, align 2
   %char.w16.b0.wide = zext <16 x i16> %char.w16.b0.raw to <16 x i32>
-  %char.w16.b1.pre = add i64 %char.start, %char.w16.k
+  %char.w16.b1.pre = add i64 %char.start, %char.w16.load.k
   %char.w16.b1.off = add i64 %char.w16.b1.pre, 16
   %char.w16.b1.p = getelementptr i16, ptr addrspace(1) %char.data, i64 %char.w16.b1.off
   %char.w16.b1.raw = load <16 x i16>, ptr addrspace(1) %char.w16.b1.p, align 2
   %char.w16.b1.wide = zext <16 x i16> %char.w16.b1.raw to <16 x i32>
-  %char.w16.b2.pre = add i64 %char.start, %char.w16.k
+  %char.w16.b2.pre = add i64 %char.start, %char.w16.load.k
   %char.w16.b2.off = add i64 %char.w16.b2.pre, 32
   %char.w16.b2.p = getelementptr i16, ptr addrspace(1) %char.data, i64 %char.w16.b2.off
   %char.w16.b2.raw = load <16 x i16>, ptr addrspace(1) %char.w16.b2.p, align 2
   %char.w16.b2.wide = zext <16 x i16> %char.w16.b2.raw to <16 x i32>
-  %char.w16.b3.pre = add i64 %char.start, %char.w16.k
+  %char.w16.b3.pre = add i64 %char.start, %char.w16.load.k
   %char.w16.b3.off = add i64 %char.w16.b3.pre, 48
   %char.w16.b3.p = getelementptr i16, ptr addrspace(1) %char.data, i64 %char.w16.b3.off
   %char.w16.b3.raw = load <16 x i16>, ptr addrspace(1) %char.w16.b3.p, align 2
   %char.w16.b3.wide = zext <16 x i16> %char.w16.b3.raw to <16 x i32>
-  %char.w16.a0.mul = mul <16 x i32> %char.w16.a0, <i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729>
+  br i1 %char.w16.load.first, label %char.w16.first, label %char.w16.accumulate
+char.w16.accumulate:
+  %char.w16.a0.mul = mul <16 x i32> %char.w16.load.a0, <i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729>
   %char.w16.a0.next = add <16 x i32> %char.w16.a0.mul, %char.w16.b0.wide
-  %char.w16.a1.mul = mul <16 x i32> %char.w16.a1, <i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729>
+  %char.w16.a1.mul = mul <16 x i32> %char.w16.load.a1, <i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729>
   %char.w16.a1.next = add <16 x i32> %char.w16.a1.mul, %char.w16.b1.wide
-  %char.w16.a2.mul = mul <16 x i32> %char.w16.a2, <i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729>
+  %char.w16.a2.mul = mul <16 x i32> %char.w16.load.a2, <i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729>
   %char.w16.a2.next = add <16 x i32> %char.w16.a2.mul, %char.w16.b2.wide
-  %char.w16.a3.mul = mul <16 x i32> %char.w16.a3, <i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729>
+  %char.w16.a3.mul = mul <16 x i32> %char.w16.load.a3, <i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729>
   %char.w16.a3.next = add <16 x i32> %char.w16.a3.mul, %char.w16.b3.wide
-  %char.w16.h.next = mul i32 %char.w16.h, 1304393729
-  %char.w16.k.next = add i64 %char.w16.k, 64
+  %char.w16.h.next = mul i32 %char.w16.load.h, 1304393729
+  %char.w16.k.next = add i64 %char.w16.load.k, 64
   br label %char.w16.check
 char.w16.done:
   %char.w16.a0.coef = mul <16 x i32> %char.w16.a0, <i32 2120287199, i32 4086268993, i32 2487119775, i32 3128270977, i32 100911967, i32 280349889, i32 2364348191, i32 630458625, i32 20337375, i32 693392705, i32 438009503, i32 2369433985, i32 769170015, i32 1133190593, i32 4054427167, i32 4287207937>
@@ -2698,21 +2857,49 @@ char.w16.done:
   %char.w16.sum01 = add <16 x i32> %char.w16.a0.coef, %char.w16.a1.coef
   %char.w16.sum23 = add <16 x i32> %char.w16.a2.coef, %char.w16.a3.coef
   %char.w16.sum = add <16 x i32> %char.w16.sum01, %char.w16.sum23
+  br i1 %delayed.reduction, label %char.x86.w16.select, label %char.w16.reduce
+char.w16.reduce:
   %char.w16.reduced = call i32 @llvm.vector.reduce.add.v16i32(<16 x i32> %char.w16.sum)
   %char.w16.h.final = add i32 %char.w16.h, %char.w16.reduced
   br label %char.w8.select
+char.x86.w16.select:
+  %char.x86.w16.remaining = sub i64 %char.count, %char.w16.k
+  %char.x86.w16.ge8 = icmp sge i64 %char.x86.w16.remaining, 8
+  br i1 %char.x86.w16.ge8, label %char.x86.w16.fold, label %char.x86.w16.reduce
+char.x86.w16.reduce:
+  %char.x86.w16.reduced = call i32 @llvm.vector.reduce.add.v16i32(<16 x i32> %char.w16.sum)
+  %char.x86.w16.final = add i32 %char.w16.h, %char.x86.w16.reduced
+  br label %char.tail
+char.x86.w16.fold:
+  ; These lanes already include their position weights. Folding preserves their sum.
+  %char.x86.w16.lo = shufflevector <16 x i32> %char.w16.sum, <16 x i32> poison, <8 x i32> <i32 0, i32 1, i32 2, i32 3, i32 4, i32 5, i32 6, i32 7>
+  %char.x86.w16.hi = shufflevector <16 x i32> %char.w16.sum, <16 x i32> poison, <8 x i32> <i32 8, i32 9, i32 10, i32 11, i32 12, i32 13, i32 14, i32 15>
+  %char.x86.w16.u = add <8 x i32> %char.x86.w16.lo, %char.x86.w16.hi
+  %char.x86.w16.ge32 = icmp sge i64 %char.x86.w16.remaining, 32
+  br i1 %char.x86.w16.ge32, label %char.w8.load, label %char.x86.vector.select
+
 char.w8.check:
-  %char.k = phi i64 [ %char.k.begin, %char.w8.select ], [ %char.k.next, %char.w8.body ]
-  %char.h = phi i32 [ %char.h.begin, %char.w8.select ], [ %char.h.next, %char.w8.body ]
-  %char.a0 = phi <8 x i32> [ zeroinitializer, %char.w8.select ], [ %char.a0.next, %char.w8.body ]
-  %char.a1 = phi <8 x i32> [ zeroinitializer, %char.w8.select ], [ %char.a1.next, %char.w8.body ]
-  %char.a2 = phi <8 x i32> [ zeroinitializer, %char.w8.select ], [ %char.a2.next, %char.w8.body ]
-  %char.a3 = phi <8 x i32> [ zeroinitializer, %char.w8.select ], [ %char.a3.next, %char.w8.body ]
+  %char.k = phi i64 [ %char.k.begin, %char.w8.select ], [ %char.k.next, %char.w8.accumulate ]
+  %char.h = phi i32 [ %char.h.begin, %char.w8.select ], [ %char.h.next, %char.w8.accumulate ]
+  %char.a0 = phi <8 x i32> [ zeroinitializer, %char.w8.select ], [ %char.a0.next, %char.w8.accumulate ]
+  %char.a1 = phi <8 x i32> [ zeroinitializer, %char.w8.select ], [ %char.a1.next, %char.w8.accumulate ]
+  %char.a2 = phi <8 x i32> [ zeroinitializer, %char.w8.select ], [ %char.a2.next, %char.w8.accumulate ]
+  %char.a3 = phi <8 x i32> [ zeroinitializer, %char.w8.select ], [ %char.a3.next, %char.w8.accumulate ]
   %char.end = add i64 %char.count, -31
   %char.more = icmp slt i64 %char.k, %char.end
   br i1 %char.more, label %char.w8.body, label %char.w8.done
 char.w8.body:
-  %char.kbase = add i64 %char.start, %char.k
+  br label %char.w8.load
+char.w8.load:
+  %char.load.k = phi i64 [ %char.k, %char.w8.body ], [ %char.w16.k, %char.x86.w16.fold ]
+  %char.load.h = phi i32 [ %char.h, %char.w8.body ], [ %char.w16.h, %char.x86.w16.fold ]
+  %char.load.u = phi <8 x i32> [ zeroinitializer, %char.w8.body ], [ %char.x86.w16.u, %char.x86.w16.fold ]
+  %char.load.r32 = phi i1 [ false, %char.w8.body ], [ true, %char.x86.w16.fold ]
+  %char.load.a0 = phi <8 x i32> [ %char.a0, %char.w8.body ], [ poison, %char.x86.w16.fold ]
+  %char.load.a1 = phi <8 x i32> [ %char.a1, %char.w8.body ], [ poison, %char.x86.w16.fold ]
+  %char.load.a2 = phi <8 x i32> [ %char.a2, %char.w8.body ], [ poison, %char.x86.w16.fold ]
+  %char.load.a3 = phi <8 x i32> [ %char.a3, %char.w8.body ], [ poison, %char.x86.w16.fold ]
+  %char.kbase = add i64 %char.start, %char.load.k
   %char.b0.off = add i64 %char.kbase, 0
   %char.b0.p = getelementptr i16, ptr addrspace(1) %char.data, i64 %char.b0.off
   %char.b0.raw = load <8 x i16>, ptr addrspace(1) %char.b0.p, align 2
@@ -2729,16 +2916,18 @@ char.w8.body:
   %char.b3.p = getelementptr i16, ptr addrspace(1) %char.data, i64 %char.b3.off
   %char.b3.raw = load <8 x i16>, ptr addrspace(1) %char.b3.p, align 2
   %char.b3.wide = zext <8 x i16> %char.b3.raw to <8 x i32>
-  %char.a0.mul = mul <8 x i32> %char.a0, <i32 2111290369, i32 2111290369, i32 2111290369, i32 2111290369, i32 2111290369, i32 2111290369, i32 2111290369, i32 2111290369>
+  br i1 %char.load.r32, label %char.x86.r32.dot, label %char.w8.accumulate
+char.w8.accumulate:
+  %char.a0.mul = mul <8 x i32> %char.load.a0, <i32 2111290369, i32 2111290369, i32 2111290369, i32 2111290369, i32 2111290369, i32 2111290369, i32 2111290369, i32 2111290369>
   %char.a0.next = add <8 x i32> %char.a0.mul, %char.b0.wide
-  %char.a1.mul = mul <8 x i32> %char.a1, <i32 2111290369, i32 2111290369, i32 2111290369, i32 2111290369, i32 2111290369, i32 2111290369, i32 2111290369, i32 2111290369>
+  %char.a1.mul = mul <8 x i32> %char.load.a1, <i32 2111290369, i32 2111290369, i32 2111290369, i32 2111290369, i32 2111290369, i32 2111290369, i32 2111290369, i32 2111290369>
   %char.a1.next = add <8 x i32> %char.a1.mul, %char.b1.wide
-  %char.a2.mul = mul <8 x i32> %char.a2, <i32 2111290369, i32 2111290369, i32 2111290369, i32 2111290369, i32 2111290369, i32 2111290369, i32 2111290369, i32 2111290369>
+  %char.a2.mul = mul <8 x i32> %char.load.a2, <i32 2111290369, i32 2111290369, i32 2111290369, i32 2111290369, i32 2111290369, i32 2111290369, i32 2111290369, i32 2111290369>
   %char.a2.next = add <8 x i32> %char.a2.mul, %char.b2.wide
-  %char.a3.mul = mul <8 x i32> %char.a3, <i32 2111290369, i32 2111290369, i32 2111290369, i32 2111290369, i32 2111290369, i32 2111290369, i32 2111290369, i32 2111290369>
+  %char.a3.mul = mul <8 x i32> %char.load.a3, <i32 2111290369, i32 2111290369, i32 2111290369, i32 2111290369, i32 2111290369, i32 2111290369, i32 2111290369, i32 2111290369>
   %char.a3.next = add <8 x i32> %char.a3.mul, %char.b3.wide
-  %char.h.next = mul i32 %char.h, 2111290369
-  %char.k.next = add i64 %char.k, 32
+  %char.h.next = mul i32 %char.load.h, 2111290369
+  %char.k.next = add i64 %char.load.k, 32
   br label %char.w8.check
 char.w8.done:
   %char.a0.coef = mul <8 x i32> %char.a0, <i32 2284863455, i32 350799937, i32 11316127, i32 693101697, i32 4040230751, i32 961614017, i32 31019807, i32 2217757953>
@@ -2748,34 +2937,120 @@ char.w8.done:
   %char.sum01 = add <8 x i32> %char.a0.coef, %char.a1.coef
   %char.sum23 = add <8 x i32> %char.a2.coef, %char.a3.coef
   %char.sum = add <8 x i32> %char.sum01, %char.sum23
+  br i1 %delayed.reduction, label %char.x86.vector.select, label %char.w8.reduce
+char.w8.reduce:
   %char.reduced = call i32 @llvm.vector.reduce.add.v8i32(<8 x i32> %char.sum)
   %char.h.final = add i32 %char.h, %char.reduced
   br label %char.mid.check
+char.x86.r32.dot:
+  ; At most one 32-element block remains after the wide main loop.
+  %char.x86.r32.a0.coef = mul <8 x i32> %char.b0.wide, <i32 2284863455, i32 350799937, i32 11316127, i32 693101697, i32 4040230751, i32 961614017, i32 31019807, i32 2217757953>
+  %char.x86.r32.a1.coef = mul <8 x i32> %char.b1.wide, <i32 4227960543, i32 1244764481, i32 2256911007, i32 211350913, i32 3886143071, i32 3450495425, i32 3297894943, i32 1353309697>
+  %char.x86.r32.a2.coef = mul <8 x i32> %char.b2.wide, <i32 3784433119, i32 1507551809, i32 3789408671, i32 4001564289, i32 129082719, i32 2498015937, i32 4098453791, i32 2487512833>
+  %char.x86.r32.a3.coef = mul <8 x i32> %char.b3.wide, <i32 1742810335, i32 887503681, i32 28629151, i32 923521, i32 29791, i32 961, i32 31, i32 1>
+  %char.x86.r32.sum01 = add <8 x i32> %char.x86.r32.a0.coef, %char.x86.r32.a1.coef
+  %char.x86.r32.sum23 = add <8 x i32> %char.x86.r32.a2.coef, %char.x86.r32.a3.coef
+  %char.x86.r32.sum = add <8 x i32> %char.x86.r32.sum01, %char.x86.r32.sum23
+  %char.x86.r32.scaled = mul <8 x i32> %char.load.u, <i32 2111290369, i32 2111290369, i32 2111290369, i32 2111290369, i32 2111290369, i32 2111290369, i32 2111290369, i32 2111290369>
+  %char.x86.r32.u = add <8 x i32> %char.x86.r32.scaled, %char.x86.r32.sum
+  %char.x86.r32.s = mul i32 %char.load.h, 2111290369
+  %char.x86.r32.k = add i64 %char.load.k, 32
+  br label %char.x86.vector.select
+char.x86.vector.select:
+  %char.x86.k = phi i64 [ %char.k, %char.w8.done ], [ %char.w16.k, %char.x86.w16.fold ], [ %char.x86.r32.k, %char.x86.r32.dot ]
+  %char.x86.s = phi i32 [ %char.h, %char.w8.done ], [ %char.w16.h, %char.x86.w16.fold ], [ %char.x86.r32.s, %char.x86.r32.dot ]
+  %char.x86.u = phi <8 x i32> [ %char.sum, %char.w8.done ], [ %char.x86.w16.u, %char.x86.w16.fold ], [ %char.x86.r32.u, %char.x86.r32.dot ]
+  %char.x86.remaining = sub i64 %char.count, %char.x86.k
+  %char.x86.ge8 = icmp sge i64 %char.x86.remaining, 8
+  br i1 %char.x86.ge8, label %char.x86.mid.scale, label %char.x86.reduce
+char.x86.mid.scale:
+  ; Scale the weighted prefix independently of the raw suffix recurrence.
+  %char.x86.mid.items = and i64 %char.x86.remaining, -8
+  %char.x86.mid.is8 = icmp eq i64 %char.x86.mid.items, 8
+  %char.x86.mid.is16 = icmp eq i64 %char.x86.mid.items, 16
+  %char.x86.mid.p16or24 = select i1 %char.x86.mid.is16, i32 1353309697, i32 2217757953
+  %char.x86.mid.power = select i1 %char.x86.mid.is8, i32 2487512833, i32 %char.x86.mid.p16or24
+  %char.x86.mid.power.lane = insertelement <8 x i32> poison, i32 %char.x86.mid.power, i32 0
+  %char.x86.mid.power.vector = shufflevector <8 x i32> %char.x86.mid.power.lane, <8 x i32> poison, <8 x i32> zeroinitializer
+  %char.x86.mid.scaled.u = mul <8 x i32> %char.x86.u, %char.x86.mid.power.vector
+  br label %char.x86.mid.entry
+char.x86.mid.entry:
+  %char.x86.mid.begin = phi i64 [ %char.k.begin, %char.mid.arch ], [ %char.x86.k, %char.x86.mid.scale ]
+  %char.x86.mid.s = phi i32 [ %char.h.begin, %char.mid.arch ], [ %char.x86.s, %char.x86.mid.scale ]
+  %char.x86.mid.u = phi <8 x i32> [ zeroinitializer, %char.mid.arch ], [ %char.x86.mid.scaled.u, %char.x86.mid.scale ]
+  %char.x86.mid.prefix = phi i1 [ false, %char.mid.arch ], [ true, %char.x86.mid.scale ]
+  ; The first guarded load initializes the raw suffix without a zero multiply.
+  br label %char.mid.load
+char.x86.mid.peeled:
+  %char.x86.mid.first.next = add i64 %char.mid.load.k, 8
+  %char.x86.mid.first.s = mul i32 %char.mid.load.s, 2487512833
+  br label %char.x86.mid.check
+char.x86.mid.check:
+  %char.x86.mid.k = phi i64 [ %char.x86.mid.first.next, %char.x86.mid.peeled ], [ %char.mid.k.next, %char.x86.mid.next ]
+  %char.x86.mid.acc = phi <8 x i32> [ %char.mid.wide, %char.x86.mid.peeled ], [ %char.mid.acc.next, %char.x86.mid.next ]
+  %char.x86.mid.saved.s = phi i32 [ %char.x86.mid.first.s, %char.x86.mid.peeled ], [ %char.x86.mid.next.s, %char.x86.mid.next ]
+  %char.x86.mid.saved.u = phi <8 x i32> [ %char.mid.load.u, %char.x86.mid.peeled ], [ %char.mid.load.u, %char.x86.mid.next ]
+  %char.x86.mid.saved.prefix = phi i1 [ %char.mid.load.prefix, %char.x86.mid.peeled ], [ %char.mid.load.prefix, %char.x86.mid.next ]
+  %char.x86.mid.end = add i64 %char.count, -7
+  %char.x86.mid.more = icmp slt i64 %char.x86.mid.k, %char.x86.mid.end
+  br i1 %char.x86.mid.more, label %char.mid.load, label %char.x86.mid.done
+char.x86.mid.next:
+  %char.x86.mid.next.s = mul i32 %char.mid.load.s, 2487512833
+  br label %char.x86.mid.check
+char.x86.mid.done:
+  %char.x86.mid.acc.coef = mul <8 x i32> %char.x86.mid.acc, <i32 1742810335, i32 887503681, i32 28629151, i32 923521, i32 29791, i32 961, i32 31, i32 1>
+  br i1 %char.x86.mid.saved.prefix, label %char.x86.mid.merge, label %char.x86.reduce
+char.x86.mid.merge:
+  %char.x86.mid.merged.u = add <8 x i32> %char.x86.mid.saved.u, %char.x86.mid.acc.coef
+  br label %char.x86.reduce
+char.x86.reduce:
+  ; H = S + sum(U): only S contains the seed, and U is already weighted.
+  %char.x86.final.k = phi i64 [ %char.x86.k, %char.x86.vector.select ], [ %char.x86.mid.k, %char.x86.mid.done ], [ %char.x86.mid.k, %char.x86.mid.merge ]
+  %char.x86.final.s = phi i32 [ %char.x86.s, %char.x86.vector.select ], [ %char.x86.mid.saved.s, %char.x86.mid.done ], [ %char.x86.mid.saved.s, %char.x86.mid.merge ]
+  %char.x86.final.u = phi <8 x i32> [ %char.x86.u, %char.x86.vector.select ], [ %char.x86.mid.acc.coef, %char.x86.mid.done ], [ %char.x86.mid.merged.u, %char.x86.mid.merge ]
+  %char.x86.reduced = call i32 @llvm.vector.reduce.add.v8i32(<8 x i32> %char.x86.final.u)
+  %char.x86.final.h = add i32 %char.x86.final.s, %char.x86.reduced
+  br label %char.tail
+
 char.mid.check:
-  %char.mid.k = phi i64 [ %char.k.begin, %char.mid.dispatch ], [ %char.k, %char.w8.done ], [ %char.mid.k.next, %char.mid.body ]
-  %char.mid.h = phi i32 [ %char.h.begin, %char.mid.dispatch ], [ %char.h.final, %char.w8.done ], [ %char.mid.h.next, %char.mid.body ]
-  %char.mid.acc = phi <8 x i32> [ zeroinitializer, %char.mid.dispatch ], [ zeroinitializer, %char.w8.done ], [ %char.mid.acc.next, %char.mid.body ]
+  %char.mid.k = phi i64 [ %char.k.begin, %char.mid.arch ], [ %char.k, %char.w8.reduce ], [ %char.mid.k.next, %char.mid.legacy.next ]
+  %char.mid.h = phi i32 [ %char.h.begin, %char.mid.arch ], [ %char.h.final, %char.w8.reduce ], [ %char.mid.h.next, %char.mid.legacy.next ]
+  %char.mid.acc = phi <8 x i32> [ zeroinitializer, %char.mid.arch ], [ zeroinitializer, %char.w8.reduce ], [ %char.mid.acc.next, %char.mid.legacy.next ]
   %char.mid.end = add i64 %char.count, -7
   %char.mid.more = icmp slt i64 %char.mid.k, %char.mid.end
   br i1 %char.mid.more, label %char.mid.body, label %char.mid.done
 char.mid.body:
-  %char.mid.off = add i64 %char.start, %char.mid.k
+  br label %char.mid.load
+char.mid.load:
+  %char.mid.load.k = phi i64 [ %char.mid.k, %char.mid.body ], [ %char.x86.mid.begin, %char.x86.mid.entry ], [ %char.x86.mid.k, %char.x86.mid.check ]
+  %char.mid.load.h = phi i32 [ %char.mid.h, %char.mid.body ], [ poison, %char.x86.mid.entry ], [ poison, %char.x86.mid.check ]
+  %char.mid.load.acc = phi <8 x i32> [ %char.mid.acc, %char.mid.body ], [ poison, %char.x86.mid.entry ], [ %char.x86.mid.acc, %char.x86.mid.check ]
+  %char.mid.load.first = phi i1 [ false, %char.mid.body ], [ true, %char.x86.mid.entry ], [ false, %char.x86.mid.check ]
+  %char.mid.load.s = phi i32 [ poison, %char.mid.body ], [ %char.x86.mid.s, %char.x86.mid.entry ], [ %char.x86.mid.saved.s, %char.x86.mid.check ]
+  %char.mid.load.u = phi <8 x i32> [ poison, %char.mid.body ], [ %char.x86.mid.u, %char.x86.mid.entry ], [ %char.x86.mid.saved.u, %char.x86.mid.check ]
+  %char.mid.load.prefix = phi i1 [ poison, %char.mid.body ], [ %char.x86.mid.prefix, %char.x86.mid.entry ], [ %char.x86.mid.saved.prefix, %char.x86.mid.check ]
+  %char.mid.off = add i64 %char.start, %char.mid.load.k
   %char.mid.p = getelementptr i16, ptr addrspace(1) %char.data, i64 %char.mid.off
   %char.mid.raw = load <8 x i16>, ptr addrspace(1) %char.mid.p, align 2
   %char.mid.wide = zext <8 x i16> %char.mid.raw to <8 x i32>
-  %char.mid.acc.mul = mul <8 x i32> %char.mid.acc, <i32 2487512833, i32 2487512833, i32 2487512833, i32 2487512833, i32 2487512833, i32 2487512833, i32 2487512833, i32 2487512833>
+  br i1 %char.mid.load.first, label %char.x86.mid.peeled, label %char.mid.recur
+char.mid.recur:
+  %char.mid.acc.mul = mul <8 x i32> %char.mid.load.acc, <i32 2487512833, i32 2487512833, i32 2487512833, i32 2487512833, i32 2487512833, i32 2487512833, i32 2487512833, i32 2487512833>
   %char.mid.acc.next = add <8 x i32> %char.mid.acc.mul, %char.mid.wide
-  %char.mid.h.next = mul i32 %char.mid.h, 2487512833
-  %char.mid.k.next = add i64 %char.mid.k, 8
+  %char.mid.k.next = add i64 %char.mid.load.k, 8
+  br i1 %delayed.reduction, label %char.x86.mid.next, label %char.mid.legacy.next
+char.mid.legacy.next:
+  %char.mid.h.next = mul i32 %char.mid.load.h, 2487512833
   br label %char.mid.check
+
 char.mid.done:
   %char.mid.acc.coef = mul <8 x i32> %char.mid.acc, <i32 1742810335, i32 887503681, i32 28629151, i32 923521, i32 29791, i32 961, i32 31, i32 1>
   %char.mid.sum = call i32 @llvm.vector.reduce.add.v8i32(<8 x i32> %char.mid.acc.coef)
   %char.mid.h.final = add i32 %char.mid.h, %char.mid.sum
   br label %char.tail
 char.tail:
-  %char.t = phi i64 [ 8, %char.short ], [ %char.k.begin, %char.mid.select ], [ %char.mid.k, %char.mid.done ], [ %char.t.next, %char.tail.body ]
-  %char.t.h = phi i32 [ %char.short.hash, %char.short ], [ %char.h.begin, %char.mid.select ], [ %char.mid.h.final, %char.mid.done ], [ %char.t.h.next, %char.tail.body ]
+  %char.t = phi i64 [ 8, %char.short ], [ %char.k.begin, %char.mid.select ], [ %char.mid.k, %char.mid.done ], [ %char.x86.final.k, %char.x86.reduce ], [ %char.w16.k, %char.x86.w16.reduce ], [ %char.t.next, %char.tail.body ]
+  %char.t.h = phi i32 [ %char.short.hash, %char.short ], [ %char.h.begin, %char.mid.select ], [ %char.mid.h.final, %char.mid.done ], [ %char.x86.final.h, %char.x86.reduce ], [ %char.x86.w16.final, %char.x86.w16.reduce ], [ %char.t.h.next, %char.tail.body ]
   %char.pair.end = add i64 %char.count, -1
   %char.pair.more = icmp slt i64 %char.t, %char.pair.end
   br i1 %char.pair.more, label %char.tail.body, label %char.tail.last
@@ -2815,10 +3090,10 @@ byte.entry:
   %byte.avx512 = load i1, ptr @VM_Version.hashcode_vector_512bit
   %byte.ge64 = icmp sge i64 %byte.count, 64
   %byte.use.w16 = and i1 %byte.avx512, %byte.ge64
-  br i1 %byte.use.w16, label %byte.w16.check, label %byte.w8.select
+  br i1 %byte.use.w16, label %byte.w16.entry, label %byte.w8.select
 byte.w8.select:
-  %byte.k.begin = phi i64 [ 0, %byte.entry ], [ %byte.w16.k, %byte.w16.done ]
-  %byte.h.begin = phi i32 [ %initialValue, %byte.entry ], [ %byte.w16.h.final, %byte.w16.done ]
+  %byte.k.begin = phi i64 [ 0, %byte.entry ], [ %byte.w16.k, %byte.w16.reduce ]
+  %byte.h.begin = phi i32 [ %initialValue, %byte.entry ], [ %byte.w16.h.final, %byte.w16.reduce ]
   %byte.remaining = sub i64 %byte.count, %byte.k.begin
   %byte.ge32 = icmp sge i64 %byte.remaining, 32
   br i1 %byte.ge32, label %byte.w8.check, label %byte.mid.select
@@ -2826,47 +3101,67 @@ byte.mid.select:
   ; Short inputs and grouped-loop remainders use one 8-lane accumulator
   ; before the scalar tail.
   %byte.ge8 = icmp sge i64 %byte.remaining, 8
-  br i1 %byte.ge8, label %byte.mid.check, label %byte.tail
+  br i1 %byte.ge8, label %byte.mid.arch, label %byte.tail
+byte.mid.arch:
+  br i1 %delayed.reduction, label %byte.x86.mid.entry, label %byte.mid.check
+
+byte.w16.entry:
+  br i1 %delayed.reduction, label %byte.w16.load, label %byte.w16.check
+byte.w16.first:
+  ; The guarded first group initializes raw chains directly from its loads.
+  %byte.w16.first.h = mul i32 %initialValue, 1304393729
+  br label %byte.w16.check
 byte.w16.check:
-  %byte.w16.k = phi i64 [ 0, %byte.entry ], [ %byte.w16.k.next, %byte.w16.body ]
-  %byte.w16.h = phi i32 [ %initialValue, %byte.entry ], [ %byte.w16.h.next, %byte.w16.body ]
-  %byte.w16.a0 = phi <16 x i32> [ zeroinitializer, %byte.entry ], [ %byte.w16.a0.next, %byte.w16.body ]
-  %byte.w16.a1 = phi <16 x i32> [ zeroinitializer, %byte.entry ], [ %byte.w16.a1.next, %byte.w16.body ]
-  %byte.w16.a2 = phi <16 x i32> [ zeroinitializer, %byte.entry ], [ %byte.w16.a2.next, %byte.w16.body ]
-  %byte.w16.a3 = phi <16 x i32> [ zeroinitializer, %byte.entry ], [ %byte.w16.a3.next, %byte.w16.body ]
+  %byte.w16.k = phi i64 [ 0, %byte.w16.entry ], [ 64, %byte.w16.first ], [ %byte.w16.k.next, %byte.w16.accumulate ]
+  %byte.w16.h = phi i32 [ %initialValue, %byte.w16.entry ], [ %byte.w16.first.h, %byte.w16.first ], [ %byte.w16.h.next, %byte.w16.accumulate ]
+  %byte.w16.a0 = phi <16 x i32> [ zeroinitializer, %byte.w16.entry ], [ %byte.w16.b0.wide, %byte.w16.first ], [ %byte.w16.a0.next, %byte.w16.accumulate ]
+  %byte.w16.a1 = phi <16 x i32> [ zeroinitializer, %byte.w16.entry ], [ %byte.w16.b1.wide, %byte.w16.first ], [ %byte.w16.a1.next, %byte.w16.accumulate ]
+  %byte.w16.a2 = phi <16 x i32> [ zeroinitializer, %byte.w16.entry ], [ %byte.w16.b2.wide, %byte.w16.first ], [ %byte.w16.a2.next, %byte.w16.accumulate ]
+  %byte.w16.a3 = phi <16 x i32> [ zeroinitializer, %byte.w16.entry ], [ %byte.w16.b3.wide, %byte.w16.first ], [ %byte.w16.a3.next, %byte.w16.accumulate ]
   %byte.w16.end = add i64 %byte.count, -63
   %byte.w16.more = icmp slt i64 %byte.w16.k, %byte.w16.end
   br i1 %byte.w16.more, label %byte.w16.body, label %byte.w16.done
 byte.w16.body:
-  %byte.w16.b0.off = add i64 %byte.start, %byte.w16.k
+  br label %byte.w16.load
+byte.w16.load:
+  %byte.w16.load.k = phi i64 [ 0, %byte.w16.entry ], [ %byte.w16.k, %byte.w16.body ]
+  %byte.w16.load.h = phi i32 [ poison, %byte.w16.entry ], [ %byte.w16.h, %byte.w16.body ]
+  %byte.w16.load.first = phi i1 [ true, %byte.w16.entry ], [ false, %byte.w16.body ]
+  %byte.w16.load.a0 = phi <16 x i32> [ poison, %byte.w16.entry ], [ %byte.w16.a0, %byte.w16.body ]
+  %byte.w16.load.a1 = phi <16 x i32> [ poison, %byte.w16.entry ], [ %byte.w16.a1, %byte.w16.body ]
+  %byte.w16.load.a2 = phi <16 x i32> [ poison, %byte.w16.entry ], [ %byte.w16.a2, %byte.w16.body ]
+  %byte.w16.load.a3 = phi <16 x i32> [ poison, %byte.w16.entry ], [ %byte.w16.a3, %byte.w16.body ]
+  %byte.w16.b0.off = add i64 %byte.start, %byte.w16.load.k
   %byte.w16.b0.p = getelementptr i8, ptr addrspace(1) %byte.data, i64 %byte.w16.b0.off
   %byte.w16.b0.raw = load <16 x i8>, ptr addrspace(1) %byte.w16.b0.p, align 1
   %byte.w16.b0.wide = sext <16 x i8> %byte.w16.b0.raw to <16 x i32>
-  %byte.w16.b1.pre = add i64 %byte.start, %byte.w16.k
+  %byte.w16.b1.pre = add i64 %byte.start, %byte.w16.load.k
   %byte.w16.b1.off = add i64 %byte.w16.b1.pre, 16
   %byte.w16.b1.p = getelementptr i8, ptr addrspace(1) %byte.data, i64 %byte.w16.b1.off
   %byte.w16.b1.raw = load <16 x i8>, ptr addrspace(1) %byte.w16.b1.p, align 1
   %byte.w16.b1.wide = sext <16 x i8> %byte.w16.b1.raw to <16 x i32>
-  %byte.w16.b2.pre = add i64 %byte.start, %byte.w16.k
+  %byte.w16.b2.pre = add i64 %byte.start, %byte.w16.load.k
   %byte.w16.b2.off = add i64 %byte.w16.b2.pre, 32
   %byte.w16.b2.p = getelementptr i8, ptr addrspace(1) %byte.data, i64 %byte.w16.b2.off
   %byte.w16.b2.raw = load <16 x i8>, ptr addrspace(1) %byte.w16.b2.p, align 1
   %byte.w16.b2.wide = sext <16 x i8> %byte.w16.b2.raw to <16 x i32>
-  %byte.w16.b3.pre = add i64 %byte.start, %byte.w16.k
+  %byte.w16.b3.pre = add i64 %byte.start, %byte.w16.load.k
   %byte.w16.b3.off = add i64 %byte.w16.b3.pre, 48
   %byte.w16.b3.p = getelementptr i8, ptr addrspace(1) %byte.data, i64 %byte.w16.b3.off
   %byte.w16.b3.raw = load <16 x i8>, ptr addrspace(1) %byte.w16.b3.p, align 1
   %byte.w16.b3.wide = sext <16 x i8> %byte.w16.b3.raw to <16 x i32>
-  %byte.w16.a0.mul = mul <16 x i32> %byte.w16.a0, <i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729>
+  br i1 %byte.w16.load.first, label %byte.w16.first, label %byte.w16.accumulate
+byte.w16.accumulate:
+  %byte.w16.a0.mul = mul <16 x i32> %byte.w16.load.a0, <i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729>
   %byte.w16.a0.next = add <16 x i32> %byte.w16.a0.mul, %byte.w16.b0.wide
-  %byte.w16.a1.mul = mul <16 x i32> %byte.w16.a1, <i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729>
+  %byte.w16.a1.mul = mul <16 x i32> %byte.w16.load.a1, <i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729>
   %byte.w16.a1.next = add <16 x i32> %byte.w16.a1.mul, %byte.w16.b1.wide
-  %byte.w16.a2.mul = mul <16 x i32> %byte.w16.a2, <i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729>
+  %byte.w16.a2.mul = mul <16 x i32> %byte.w16.load.a2, <i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729>
   %byte.w16.a2.next = add <16 x i32> %byte.w16.a2.mul, %byte.w16.b2.wide
-  %byte.w16.a3.mul = mul <16 x i32> %byte.w16.a3, <i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729>
+  %byte.w16.a3.mul = mul <16 x i32> %byte.w16.load.a3, <i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729>
   %byte.w16.a3.next = add <16 x i32> %byte.w16.a3.mul, %byte.w16.b3.wide
-  %byte.w16.h.next = mul i32 %byte.w16.h, 1304393729
-  %byte.w16.k.next = add i64 %byte.w16.k, 64
+  %byte.w16.h.next = mul i32 %byte.w16.load.h, 1304393729
+  %byte.w16.k.next = add i64 %byte.w16.load.k, 64
   br label %byte.w16.check
 byte.w16.done:
   %byte.w16.a0.coef = mul <16 x i32> %byte.w16.a0, <i32 2120287199, i32 4086268993, i32 2487119775, i32 3128270977, i32 100911967, i32 280349889, i32 2364348191, i32 630458625, i32 20337375, i32 693392705, i32 438009503, i32 2369433985, i32 769170015, i32 1133190593, i32 4054427167, i32 4287207937>
@@ -2876,21 +3171,49 @@ byte.w16.done:
   %byte.w16.sum01 = add <16 x i32> %byte.w16.a0.coef, %byte.w16.a1.coef
   %byte.w16.sum23 = add <16 x i32> %byte.w16.a2.coef, %byte.w16.a3.coef
   %byte.w16.sum = add <16 x i32> %byte.w16.sum01, %byte.w16.sum23
+  br i1 %delayed.reduction, label %byte.x86.w16.select, label %byte.w16.reduce
+byte.w16.reduce:
   %byte.w16.reduced = call i32 @llvm.vector.reduce.add.v16i32(<16 x i32> %byte.w16.sum)
   %byte.w16.h.final = add i32 %byte.w16.h, %byte.w16.reduced
   br label %byte.w8.select
+byte.x86.w16.select:
+  %byte.x86.w16.remaining = sub i64 %byte.count, %byte.w16.k
+  %byte.x86.w16.ge8 = icmp sge i64 %byte.x86.w16.remaining, 8
+  br i1 %byte.x86.w16.ge8, label %byte.x86.w16.fold, label %byte.x86.w16.reduce
+byte.x86.w16.reduce:
+  %byte.x86.w16.reduced = call i32 @llvm.vector.reduce.add.v16i32(<16 x i32> %byte.w16.sum)
+  %byte.x86.w16.final = add i32 %byte.w16.h, %byte.x86.w16.reduced
+  br label %byte.tail
+byte.x86.w16.fold:
+  ; These lanes already include their position weights. Folding preserves their sum.
+  %byte.x86.w16.lo = shufflevector <16 x i32> %byte.w16.sum, <16 x i32> poison, <8 x i32> <i32 0, i32 1, i32 2, i32 3, i32 4, i32 5, i32 6, i32 7>
+  %byte.x86.w16.hi = shufflevector <16 x i32> %byte.w16.sum, <16 x i32> poison, <8 x i32> <i32 8, i32 9, i32 10, i32 11, i32 12, i32 13, i32 14, i32 15>
+  %byte.x86.w16.u = add <8 x i32> %byte.x86.w16.lo, %byte.x86.w16.hi
+  %byte.x86.w16.ge32 = icmp sge i64 %byte.x86.w16.remaining, 32
+  br i1 %byte.x86.w16.ge32, label %byte.w8.load, label %byte.x86.vector.select
+
 byte.w8.check:
-  %byte.k = phi i64 [ %byte.k.begin, %byte.w8.select ], [ %byte.k.next, %byte.w8.body ]
-  %byte.h = phi i32 [ %byte.h.begin, %byte.w8.select ], [ %byte.h.next, %byte.w8.body ]
-  %byte.a0 = phi <8 x i32> [ zeroinitializer, %byte.w8.select ], [ %byte.a0.next, %byte.w8.body ]
-  %byte.a1 = phi <8 x i32> [ zeroinitializer, %byte.w8.select ], [ %byte.a1.next, %byte.w8.body ]
-  %byte.a2 = phi <8 x i32> [ zeroinitializer, %byte.w8.select ], [ %byte.a2.next, %byte.w8.body ]
-  %byte.a3 = phi <8 x i32> [ zeroinitializer, %byte.w8.select ], [ %byte.a3.next, %byte.w8.body ]
+  %byte.k = phi i64 [ %byte.k.begin, %byte.w8.select ], [ %byte.k.next, %byte.w8.accumulate ]
+  %byte.h = phi i32 [ %byte.h.begin, %byte.w8.select ], [ %byte.h.next, %byte.w8.accumulate ]
+  %byte.a0 = phi <8 x i32> [ zeroinitializer, %byte.w8.select ], [ %byte.a0.next, %byte.w8.accumulate ]
+  %byte.a1 = phi <8 x i32> [ zeroinitializer, %byte.w8.select ], [ %byte.a1.next, %byte.w8.accumulate ]
+  %byte.a2 = phi <8 x i32> [ zeroinitializer, %byte.w8.select ], [ %byte.a2.next, %byte.w8.accumulate ]
+  %byte.a3 = phi <8 x i32> [ zeroinitializer, %byte.w8.select ], [ %byte.a3.next, %byte.w8.accumulate ]
   %byte.end = add i64 %byte.count, -31
   %byte.more = icmp slt i64 %byte.k, %byte.end
   br i1 %byte.more, label %byte.w8.body, label %byte.w8.done
 byte.w8.body:
-  %byte.kbase = add i64 %byte.start, %byte.k
+  br label %byte.w8.load
+byte.w8.load:
+  %byte.load.k = phi i64 [ %byte.k, %byte.w8.body ], [ %byte.w16.k, %byte.x86.w16.fold ]
+  %byte.load.h = phi i32 [ %byte.h, %byte.w8.body ], [ %byte.w16.h, %byte.x86.w16.fold ]
+  %byte.load.u = phi <8 x i32> [ zeroinitializer, %byte.w8.body ], [ %byte.x86.w16.u, %byte.x86.w16.fold ]
+  %byte.load.r32 = phi i1 [ false, %byte.w8.body ], [ true, %byte.x86.w16.fold ]
+  %byte.load.a0 = phi <8 x i32> [ %byte.a0, %byte.w8.body ], [ poison, %byte.x86.w16.fold ]
+  %byte.load.a1 = phi <8 x i32> [ %byte.a1, %byte.w8.body ], [ poison, %byte.x86.w16.fold ]
+  %byte.load.a2 = phi <8 x i32> [ %byte.a2, %byte.w8.body ], [ poison, %byte.x86.w16.fold ]
+  %byte.load.a3 = phi <8 x i32> [ %byte.a3, %byte.w8.body ], [ poison, %byte.x86.w16.fold ]
+  %byte.kbase = add i64 %byte.start, %byte.load.k
   %byte.b0.off = add i64 %byte.kbase, 0
   %byte.b0.p = getelementptr i8, ptr addrspace(1) %byte.data, i64 %byte.b0.off
   %byte.b0.raw = load <8 x i8>, ptr addrspace(1) %byte.b0.p, align 1
@@ -2907,16 +3230,18 @@ byte.w8.body:
   %byte.b3.p = getelementptr i8, ptr addrspace(1) %byte.data, i64 %byte.b3.off
   %byte.b3.raw = load <8 x i8>, ptr addrspace(1) %byte.b3.p, align 1
   %byte.b3.wide = sext <8 x i8> %byte.b3.raw to <8 x i32>
-  %byte.a0.mul = mul <8 x i32> %byte.a0, <i32 2111290369, i32 2111290369, i32 2111290369, i32 2111290369, i32 2111290369, i32 2111290369, i32 2111290369, i32 2111290369>
+  br i1 %byte.load.r32, label %byte.x86.r32.dot, label %byte.w8.accumulate
+byte.w8.accumulate:
+  %byte.a0.mul = mul <8 x i32> %byte.load.a0, <i32 2111290369, i32 2111290369, i32 2111290369, i32 2111290369, i32 2111290369, i32 2111290369, i32 2111290369, i32 2111290369>
   %byte.a0.next = add <8 x i32> %byte.a0.mul, %byte.b0.wide
-  %byte.a1.mul = mul <8 x i32> %byte.a1, <i32 2111290369, i32 2111290369, i32 2111290369, i32 2111290369, i32 2111290369, i32 2111290369, i32 2111290369, i32 2111290369>
+  %byte.a1.mul = mul <8 x i32> %byte.load.a1, <i32 2111290369, i32 2111290369, i32 2111290369, i32 2111290369, i32 2111290369, i32 2111290369, i32 2111290369, i32 2111290369>
   %byte.a1.next = add <8 x i32> %byte.a1.mul, %byte.b1.wide
-  %byte.a2.mul = mul <8 x i32> %byte.a2, <i32 2111290369, i32 2111290369, i32 2111290369, i32 2111290369, i32 2111290369, i32 2111290369, i32 2111290369, i32 2111290369>
+  %byte.a2.mul = mul <8 x i32> %byte.load.a2, <i32 2111290369, i32 2111290369, i32 2111290369, i32 2111290369, i32 2111290369, i32 2111290369, i32 2111290369, i32 2111290369>
   %byte.a2.next = add <8 x i32> %byte.a2.mul, %byte.b2.wide
-  %byte.a3.mul = mul <8 x i32> %byte.a3, <i32 2111290369, i32 2111290369, i32 2111290369, i32 2111290369, i32 2111290369, i32 2111290369, i32 2111290369, i32 2111290369>
+  %byte.a3.mul = mul <8 x i32> %byte.load.a3, <i32 2111290369, i32 2111290369, i32 2111290369, i32 2111290369, i32 2111290369, i32 2111290369, i32 2111290369, i32 2111290369>
   %byte.a3.next = add <8 x i32> %byte.a3.mul, %byte.b3.wide
-  %byte.h.next = mul i32 %byte.h, 2111290369
-  %byte.k.next = add i64 %byte.k, 32
+  %byte.h.next = mul i32 %byte.load.h, 2111290369
+  %byte.k.next = add i64 %byte.load.k, 32
   br label %byte.w8.check
 byte.w8.done:
   %byte.a0.coef = mul <8 x i32> %byte.a0, <i32 2284863455, i32 350799937, i32 11316127, i32 693101697, i32 4040230751, i32 961614017, i32 31019807, i32 2217757953>
@@ -2926,34 +3251,120 @@ byte.w8.done:
   %byte.sum01 = add <8 x i32> %byte.a0.coef, %byte.a1.coef
   %byte.sum23 = add <8 x i32> %byte.a2.coef, %byte.a3.coef
   %byte.sum = add <8 x i32> %byte.sum01, %byte.sum23
+  br i1 %delayed.reduction, label %byte.x86.vector.select, label %byte.w8.reduce
+byte.w8.reduce:
   %byte.reduced = call i32 @llvm.vector.reduce.add.v8i32(<8 x i32> %byte.sum)
   %byte.h.final = add i32 %byte.h, %byte.reduced
   br label %byte.mid.check
+byte.x86.r32.dot:
+  ; At most one 32-element block remains after the wide main loop.
+  %byte.x86.r32.a0.coef = mul <8 x i32> %byte.b0.wide, <i32 2284863455, i32 350799937, i32 11316127, i32 693101697, i32 4040230751, i32 961614017, i32 31019807, i32 2217757953>
+  %byte.x86.r32.a1.coef = mul <8 x i32> %byte.b1.wide, <i32 4227960543, i32 1244764481, i32 2256911007, i32 211350913, i32 3886143071, i32 3450495425, i32 3297894943, i32 1353309697>
+  %byte.x86.r32.a2.coef = mul <8 x i32> %byte.b2.wide, <i32 3784433119, i32 1507551809, i32 3789408671, i32 4001564289, i32 129082719, i32 2498015937, i32 4098453791, i32 2487512833>
+  %byte.x86.r32.a3.coef = mul <8 x i32> %byte.b3.wide, <i32 1742810335, i32 887503681, i32 28629151, i32 923521, i32 29791, i32 961, i32 31, i32 1>
+  %byte.x86.r32.sum01 = add <8 x i32> %byte.x86.r32.a0.coef, %byte.x86.r32.a1.coef
+  %byte.x86.r32.sum23 = add <8 x i32> %byte.x86.r32.a2.coef, %byte.x86.r32.a3.coef
+  %byte.x86.r32.sum = add <8 x i32> %byte.x86.r32.sum01, %byte.x86.r32.sum23
+  %byte.x86.r32.scaled = mul <8 x i32> %byte.load.u, <i32 2111290369, i32 2111290369, i32 2111290369, i32 2111290369, i32 2111290369, i32 2111290369, i32 2111290369, i32 2111290369>
+  %byte.x86.r32.u = add <8 x i32> %byte.x86.r32.scaled, %byte.x86.r32.sum
+  %byte.x86.r32.s = mul i32 %byte.load.h, 2111290369
+  %byte.x86.r32.k = add i64 %byte.load.k, 32
+  br label %byte.x86.vector.select
+byte.x86.vector.select:
+  %byte.x86.k = phi i64 [ %byte.k, %byte.w8.done ], [ %byte.w16.k, %byte.x86.w16.fold ], [ %byte.x86.r32.k, %byte.x86.r32.dot ]
+  %byte.x86.s = phi i32 [ %byte.h, %byte.w8.done ], [ %byte.w16.h, %byte.x86.w16.fold ], [ %byte.x86.r32.s, %byte.x86.r32.dot ]
+  %byte.x86.u = phi <8 x i32> [ %byte.sum, %byte.w8.done ], [ %byte.x86.w16.u, %byte.x86.w16.fold ], [ %byte.x86.r32.u, %byte.x86.r32.dot ]
+  %byte.x86.remaining = sub i64 %byte.count, %byte.x86.k
+  %byte.x86.ge8 = icmp sge i64 %byte.x86.remaining, 8
+  br i1 %byte.x86.ge8, label %byte.x86.mid.scale, label %byte.x86.reduce
+byte.x86.mid.scale:
+  ; Scale the weighted prefix independently of the raw suffix recurrence.
+  %byte.x86.mid.items = and i64 %byte.x86.remaining, -8
+  %byte.x86.mid.is8 = icmp eq i64 %byte.x86.mid.items, 8
+  %byte.x86.mid.is16 = icmp eq i64 %byte.x86.mid.items, 16
+  %byte.x86.mid.p16or24 = select i1 %byte.x86.mid.is16, i32 1353309697, i32 2217757953
+  %byte.x86.mid.power = select i1 %byte.x86.mid.is8, i32 2487512833, i32 %byte.x86.mid.p16or24
+  %byte.x86.mid.power.lane = insertelement <8 x i32> poison, i32 %byte.x86.mid.power, i32 0
+  %byte.x86.mid.power.vector = shufflevector <8 x i32> %byte.x86.mid.power.lane, <8 x i32> poison, <8 x i32> zeroinitializer
+  %byte.x86.mid.scaled.u = mul <8 x i32> %byte.x86.u, %byte.x86.mid.power.vector
+  br label %byte.x86.mid.entry
+byte.x86.mid.entry:
+  %byte.x86.mid.begin = phi i64 [ %byte.k.begin, %byte.mid.arch ], [ %byte.x86.k, %byte.x86.mid.scale ]
+  %byte.x86.mid.s = phi i32 [ %byte.h.begin, %byte.mid.arch ], [ %byte.x86.s, %byte.x86.mid.scale ]
+  %byte.x86.mid.u = phi <8 x i32> [ zeroinitializer, %byte.mid.arch ], [ %byte.x86.mid.scaled.u, %byte.x86.mid.scale ]
+  %byte.x86.mid.prefix = phi i1 [ false, %byte.mid.arch ], [ true, %byte.x86.mid.scale ]
+  ; The first guarded load initializes the raw suffix without a zero multiply.
+  br label %byte.mid.load
+byte.x86.mid.peeled:
+  %byte.x86.mid.first.next = add i64 %byte.mid.load.k, 8
+  %byte.x86.mid.first.s = mul i32 %byte.mid.load.s, 2487512833
+  br label %byte.x86.mid.check
+byte.x86.mid.check:
+  %byte.x86.mid.k = phi i64 [ %byte.x86.mid.first.next, %byte.x86.mid.peeled ], [ %byte.mid.k.next, %byte.x86.mid.next ]
+  %byte.x86.mid.acc = phi <8 x i32> [ %byte.mid.wide, %byte.x86.mid.peeled ], [ %byte.mid.acc.next, %byte.x86.mid.next ]
+  %byte.x86.mid.saved.s = phi i32 [ %byte.x86.mid.first.s, %byte.x86.mid.peeled ], [ %byte.x86.mid.next.s, %byte.x86.mid.next ]
+  %byte.x86.mid.saved.u = phi <8 x i32> [ %byte.mid.load.u, %byte.x86.mid.peeled ], [ %byte.mid.load.u, %byte.x86.mid.next ]
+  %byte.x86.mid.saved.prefix = phi i1 [ %byte.mid.load.prefix, %byte.x86.mid.peeled ], [ %byte.mid.load.prefix, %byte.x86.mid.next ]
+  %byte.x86.mid.end = add i64 %byte.count, -7
+  %byte.x86.mid.more = icmp slt i64 %byte.x86.mid.k, %byte.x86.mid.end
+  br i1 %byte.x86.mid.more, label %byte.mid.load, label %byte.x86.mid.done
+byte.x86.mid.next:
+  %byte.x86.mid.next.s = mul i32 %byte.mid.load.s, 2487512833
+  br label %byte.x86.mid.check
+byte.x86.mid.done:
+  %byte.x86.mid.acc.coef = mul <8 x i32> %byte.x86.mid.acc, <i32 1742810335, i32 887503681, i32 28629151, i32 923521, i32 29791, i32 961, i32 31, i32 1>
+  br i1 %byte.x86.mid.saved.prefix, label %byte.x86.mid.merge, label %byte.x86.reduce
+byte.x86.mid.merge:
+  %byte.x86.mid.merged.u = add <8 x i32> %byte.x86.mid.saved.u, %byte.x86.mid.acc.coef
+  br label %byte.x86.reduce
+byte.x86.reduce:
+  ; H = S + sum(U): only S contains the seed, and U is already weighted.
+  %byte.x86.final.k = phi i64 [ %byte.x86.k, %byte.x86.vector.select ], [ %byte.x86.mid.k, %byte.x86.mid.done ], [ %byte.x86.mid.k, %byte.x86.mid.merge ]
+  %byte.x86.final.s = phi i32 [ %byte.x86.s, %byte.x86.vector.select ], [ %byte.x86.mid.saved.s, %byte.x86.mid.done ], [ %byte.x86.mid.saved.s, %byte.x86.mid.merge ]
+  %byte.x86.final.u = phi <8 x i32> [ %byte.x86.u, %byte.x86.vector.select ], [ %byte.x86.mid.acc.coef, %byte.x86.mid.done ], [ %byte.x86.mid.merged.u, %byte.x86.mid.merge ]
+  %byte.x86.reduced = call i32 @llvm.vector.reduce.add.v8i32(<8 x i32> %byte.x86.final.u)
+  %byte.x86.final.h = add i32 %byte.x86.final.s, %byte.x86.reduced
+  br label %byte.tail
+
 byte.mid.check:
-  %byte.mid.k = phi i64 [ %byte.k.begin, %byte.mid.select ], [ %byte.k, %byte.w8.done ], [ %byte.mid.k.next, %byte.mid.body ]
-  %byte.mid.h = phi i32 [ %byte.h.begin, %byte.mid.select ], [ %byte.h.final, %byte.w8.done ], [ %byte.mid.h.next, %byte.mid.body ]
-  %byte.mid.acc = phi <8 x i32> [ zeroinitializer, %byte.mid.select ], [ zeroinitializer, %byte.w8.done ], [ %byte.mid.acc.next, %byte.mid.body ]
+  %byte.mid.k = phi i64 [ %byte.k.begin, %byte.mid.arch ], [ %byte.k, %byte.w8.reduce ], [ %byte.mid.k.next, %byte.mid.legacy.next ]
+  %byte.mid.h = phi i32 [ %byte.h.begin, %byte.mid.arch ], [ %byte.h.final, %byte.w8.reduce ], [ %byte.mid.h.next, %byte.mid.legacy.next ]
+  %byte.mid.acc = phi <8 x i32> [ zeroinitializer, %byte.mid.arch ], [ zeroinitializer, %byte.w8.reduce ], [ %byte.mid.acc.next, %byte.mid.legacy.next ]
   %byte.mid.end = add i64 %byte.count, -7
   %byte.mid.more = icmp slt i64 %byte.mid.k, %byte.mid.end
   br i1 %byte.mid.more, label %byte.mid.body, label %byte.mid.done
 byte.mid.body:
-  %byte.mid.off = add i64 %byte.start, %byte.mid.k
+  br label %byte.mid.load
+byte.mid.load:
+  %byte.mid.load.k = phi i64 [ %byte.mid.k, %byte.mid.body ], [ %byte.x86.mid.begin, %byte.x86.mid.entry ], [ %byte.x86.mid.k, %byte.x86.mid.check ]
+  %byte.mid.load.h = phi i32 [ %byte.mid.h, %byte.mid.body ], [ poison, %byte.x86.mid.entry ], [ poison, %byte.x86.mid.check ]
+  %byte.mid.load.acc = phi <8 x i32> [ %byte.mid.acc, %byte.mid.body ], [ poison, %byte.x86.mid.entry ], [ %byte.x86.mid.acc, %byte.x86.mid.check ]
+  %byte.mid.load.first = phi i1 [ false, %byte.mid.body ], [ true, %byte.x86.mid.entry ], [ false, %byte.x86.mid.check ]
+  %byte.mid.load.s = phi i32 [ poison, %byte.mid.body ], [ %byte.x86.mid.s, %byte.x86.mid.entry ], [ %byte.x86.mid.saved.s, %byte.x86.mid.check ]
+  %byte.mid.load.u = phi <8 x i32> [ poison, %byte.mid.body ], [ %byte.x86.mid.u, %byte.x86.mid.entry ], [ %byte.x86.mid.saved.u, %byte.x86.mid.check ]
+  %byte.mid.load.prefix = phi i1 [ poison, %byte.mid.body ], [ %byte.x86.mid.prefix, %byte.x86.mid.entry ], [ %byte.x86.mid.saved.prefix, %byte.x86.mid.check ]
+  %byte.mid.off = add i64 %byte.start, %byte.mid.load.k
   %byte.mid.p = getelementptr i8, ptr addrspace(1) %byte.data, i64 %byte.mid.off
   %byte.mid.raw = load <8 x i8>, ptr addrspace(1) %byte.mid.p, align 1
   %byte.mid.wide = sext <8 x i8> %byte.mid.raw to <8 x i32>
-  %byte.mid.acc.mul = mul <8 x i32> %byte.mid.acc, <i32 2487512833, i32 2487512833, i32 2487512833, i32 2487512833, i32 2487512833, i32 2487512833, i32 2487512833, i32 2487512833>
+  br i1 %byte.mid.load.first, label %byte.x86.mid.peeled, label %byte.mid.recur
+byte.mid.recur:
+  %byte.mid.acc.mul = mul <8 x i32> %byte.mid.load.acc, <i32 2487512833, i32 2487512833, i32 2487512833, i32 2487512833, i32 2487512833, i32 2487512833, i32 2487512833, i32 2487512833>
   %byte.mid.acc.next = add <8 x i32> %byte.mid.acc.mul, %byte.mid.wide
-  %byte.mid.h.next = mul i32 %byte.mid.h, 2487512833
-  %byte.mid.k.next = add i64 %byte.mid.k, 8
+  %byte.mid.k.next = add i64 %byte.mid.load.k, 8
+  br i1 %delayed.reduction, label %byte.x86.mid.next, label %byte.mid.legacy.next
+byte.mid.legacy.next:
+  %byte.mid.h.next = mul i32 %byte.mid.load.h, 2487512833
   br label %byte.mid.check
+
 byte.mid.done:
   %byte.mid.acc.coef = mul <8 x i32> %byte.mid.acc, <i32 1742810335, i32 887503681, i32 28629151, i32 923521, i32 29791, i32 961, i32 31, i32 1>
   %byte.mid.sum = call i32 @llvm.vector.reduce.add.v8i32(<8 x i32> %byte.mid.acc.coef)
   %byte.mid.h.final = add i32 %byte.mid.h, %byte.mid.sum
   br label %byte.tail
 byte.tail:
-  %byte.t = phi i64 [ %byte.k.begin, %byte.mid.select ], [ %byte.mid.k, %byte.mid.done ], [ %byte.t.next, %byte.tail.body ]
-  %byte.t.h = phi i32 [ %byte.h.begin, %byte.mid.select ], [ %byte.mid.h.final, %byte.mid.done ], [ %byte.t.h.next, %byte.tail.body ]
+  %byte.t = phi i64 [ %byte.k.begin, %byte.mid.select ], [ %byte.mid.k, %byte.mid.done ], [ %byte.x86.final.k, %byte.x86.reduce ], [ %byte.w16.k, %byte.x86.w16.reduce ], [ %byte.t.next, %byte.tail.body ]
+  %byte.t.h = phi i32 [ %byte.h.begin, %byte.mid.select ], [ %byte.mid.h.final, %byte.mid.done ], [ %byte.x86.final.h, %byte.x86.reduce ], [ %byte.x86.w16.final, %byte.x86.w16.reduce ], [ %byte.t.h.next, %byte.tail.body ]
   %byte.pair.end = add i64 %byte.count, -1
   %byte.pair.more = icmp slt i64 %byte.t, %byte.pair.end
   br i1 %byte.pair.more, label %byte.tail.body, label %byte.tail.last
@@ -2993,10 +3404,10 @@ short.entry:
   %short.avx512 = load i1, ptr @VM_Version.hashcode_vector_512bit
   %short.ge64 = icmp sge i64 %short.count, 64
   %short.use.w16 = and i1 %short.avx512, %short.ge64
-  br i1 %short.use.w16, label %short.w16.check, label %short.w8.select
+  br i1 %short.use.w16, label %short.w16.entry, label %short.w8.select
 short.w8.select:
-  %short.k.begin = phi i64 [ 0, %short.entry ], [ %short.w16.k, %short.w16.done ]
-  %short.h.begin = phi i32 [ %initialValue, %short.entry ], [ %short.w16.h.final, %short.w16.done ]
+  %short.k.begin = phi i64 [ 0, %short.entry ], [ %short.w16.k, %short.w16.reduce ]
+  %short.h.begin = phi i32 [ %initialValue, %short.entry ], [ %short.w16.h.final, %short.w16.reduce ]
   %short.remaining = sub i64 %short.count, %short.k.begin
   %short.ge32 = icmp sge i64 %short.remaining, 32
   br i1 %short.ge32, label %short.w8.check, label %short.mid.select
@@ -3007,7 +3418,7 @@ short.mid.select:
   br i1 %short.ge8, label %short.mid.dispatch, label %short.tail
 short.mid.dispatch:
   %short.is.short = icmp ult i64 %short.count, 16
-  br i1 %short.is.short, label %short.short, label %short.mid.check
+  br i1 %short.is.short, label %short.short, label %short.mid.arch
 short.short:
   ; Two narrow reads also cover buffers initialized by separate word stores.
   %short.short.p0 = getelementptr i16, ptr addrspace(1) %short.data, i64 %short.start
@@ -3024,46 +3435,66 @@ short.short:
   %short.short.seed = mul i32 %initialValue, 2487512833
   %short.short.hash = add i32 %short.short.seed, %short.short.reduced
   br label %short.tail
+short.mid.arch:
+  br i1 %delayed.reduction, label %short.x86.mid.entry, label %short.mid.check
+
+short.w16.entry:
+  br i1 %delayed.reduction, label %short.w16.load, label %short.w16.check
+short.w16.first:
+  ; The guarded first group initializes raw chains directly from its loads.
+  %short.w16.first.h = mul i32 %initialValue, 1304393729
+  br label %short.w16.check
 short.w16.check:
-  %short.w16.k = phi i64 [ 0, %short.entry ], [ %short.w16.k.next, %short.w16.body ]
-  %short.w16.h = phi i32 [ %initialValue, %short.entry ], [ %short.w16.h.next, %short.w16.body ]
-  %short.w16.a0 = phi <16 x i32> [ zeroinitializer, %short.entry ], [ %short.w16.a0.next, %short.w16.body ]
-  %short.w16.a1 = phi <16 x i32> [ zeroinitializer, %short.entry ], [ %short.w16.a1.next, %short.w16.body ]
-  %short.w16.a2 = phi <16 x i32> [ zeroinitializer, %short.entry ], [ %short.w16.a2.next, %short.w16.body ]
-  %short.w16.a3 = phi <16 x i32> [ zeroinitializer, %short.entry ], [ %short.w16.a3.next, %short.w16.body ]
+  %short.w16.k = phi i64 [ 0, %short.w16.entry ], [ 64, %short.w16.first ], [ %short.w16.k.next, %short.w16.accumulate ]
+  %short.w16.h = phi i32 [ %initialValue, %short.w16.entry ], [ %short.w16.first.h, %short.w16.first ], [ %short.w16.h.next, %short.w16.accumulate ]
+  %short.w16.a0 = phi <16 x i32> [ zeroinitializer, %short.w16.entry ], [ %short.w16.b0.wide, %short.w16.first ], [ %short.w16.a0.next, %short.w16.accumulate ]
+  %short.w16.a1 = phi <16 x i32> [ zeroinitializer, %short.w16.entry ], [ %short.w16.b1.wide, %short.w16.first ], [ %short.w16.a1.next, %short.w16.accumulate ]
+  %short.w16.a2 = phi <16 x i32> [ zeroinitializer, %short.w16.entry ], [ %short.w16.b2.wide, %short.w16.first ], [ %short.w16.a2.next, %short.w16.accumulate ]
+  %short.w16.a3 = phi <16 x i32> [ zeroinitializer, %short.w16.entry ], [ %short.w16.b3.wide, %short.w16.first ], [ %short.w16.a3.next, %short.w16.accumulate ]
   %short.w16.end = add i64 %short.count, -63
   %short.w16.more = icmp slt i64 %short.w16.k, %short.w16.end
   br i1 %short.w16.more, label %short.w16.body, label %short.w16.done
 short.w16.body:
-  %short.w16.b0.off = add i64 %short.start, %short.w16.k
+  br label %short.w16.load
+short.w16.load:
+  %short.w16.load.k = phi i64 [ 0, %short.w16.entry ], [ %short.w16.k, %short.w16.body ]
+  %short.w16.load.h = phi i32 [ poison, %short.w16.entry ], [ %short.w16.h, %short.w16.body ]
+  %short.w16.load.first = phi i1 [ true, %short.w16.entry ], [ false, %short.w16.body ]
+  %short.w16.load.a0 = phi <16 x i32> [ poison, %short.w16.entry ], [ %short.w16.a0, %short.w16.body ]
+  %short.w16.load.a1 = phi <16 x i32> [ poison, %short.w16.entry ], [ %short.w16.a1, %short.w16.body ]
+  %short.w16.load.a2 = phi <16 x i32> [ poison, %short.w16.entry ], [ %short.w16.a2, %short.w16.body ]
+  %short.w16.load.a3 = phi <16 x i32> [ poison, %short.w16.entry ], [ %short.w16.a3, %short.w16.body ]
+  %short.w16.b0.off = add i64 %short.start, %short.w16.load.k
   %short.w16.b0.p = getelementptr i16, ptr addrspace(1) %short.data, i64 %short.w16.b0.off
   %short.w16.b0.raw = load <16 x i16>, ptr addrspace(1) %short.w16.b0.p, align 2
   %short.w16.b0.wide = sext <16 x i16> %short.w16.b0.raw to <16 x i32>
-  %short.w16.b1.pre = add i64 %short.start, %short.w16.k
+  %short.w16.b1.pre = add i64 %short.start, %short.w16.load.k
   %short.w16.b1.off = add i64 %short.w16.b1.pre, 16
   %short.w16.b1.p = getelementptr i16, ptr addrspace(1) %short.data, i64 %short.w16.b1.off
   %short.w16.b1.raw = load <16 x i16>, ptr addrspace(1) %short.w16.b1.p, align 2
   %short.w16.b1.wide = sext <16 x i16> %short.w16.b1.raw to <16 x i32>
-  %short.w16.b2.pre = add i64 %short.start, %short.w16.k
+  %short.w16.b2.pre = add i64 %short.start, %short.w16.load.k
   %short.w16.b2.off = add i64 %short.w16.b2.pre, 32
   %short.w16.b2.p = getelementptr i16, ptr addrspace(1) %short.data, i64 %short.w16.b2.off
   %short.w16.b2.raw = load <16 x i16>, ptr addrspace(1) %short.w16.b2.p, align 2
   %short.w16.b2.wide = sext <16 x i16> %short.w16.b2.raw to <16 x i32>
-  %short.w16.b3.pre = add i64 %short.start, %short.w16.k
+  %short.w16.b3.pre = add i64 %short.start, %short.w16.load.k
   %short.w16.b3.off = add i64 %short.w16.b3.pre, 48
   %short.w16.b3.p = getelementptr i16, ptr addrspace(1) %short.data, i64 %short.w16.b3.off
   %short.w16.b3.raw = load <16 x i16>, ptr addrspace(1) %short.w16.b3.p, align 2
   %short.w16.b3.wide = sext <16 x i16> %short.w16.b3.raw to <16 x i32>
-  %short.w16.a0.mul = mul <16 x i32> %short.w16.a0, <i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729>
+  br i1 %short.w16.load.first, label %short.w16.first, label %short.w16.accumulate
+short.w16.accumulate:
+  %short.w16.a0.mul = mul <16 x i32> %short.w16.load.a0, <i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729>
   %short.w16.a0.next = add <16 x i32> %short.w16.a0.mul, %short.w16.b0.wide
-  %short.w16.a1.mul = mul <16 x i32> %short.w16.a1, <i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729>
+  %short.w16.a1.mul = mul <16 x i32> %short.w16.load.a1, <i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729>
   %short.w16.a1.next = add <16 x i32> %short.w16.a1.mul, %short.w16.b1.wide
-  %short.w16.a2.mul = mul <16 x i32> %short.w16.a2, <i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729>
+  %short.w16.a2.mul = mul <16 x i32> %short.w16.load.a2, <i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729>
   %short.w16.a2.next = add <16 x i32> %short.w16.a2.mul, %short.w16.b2.wide
-  %short.w16.a3.mul = mul <16 x i32> %short.w16.a3, <i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729>
+  %short.w16.a3.mul = mul <16 x i32> %short.w16.load.a3, <i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729>
   %short.w16.a3.next = add <16 x i32> %short.w16.a3.mul, %short.w16.b3.wide
-  %short.w16.h.next = mul i32 %short.w16.h, 1304393729
-  %short.w16.k.next = add i64 %short.w16.k, 64
+  %short.w16.h.next = mul i32 %short.w16.load.h, 1304393729
+  %short.w16.k.next = add i64 %short.w16.load.k, 64
   br label %short.w16.check
 short.w16.done:
   %short.w16.a0.coef = mul <16 x i32> %short.w16.a0, <i32 2120287199, i32 4086268993, i32 2487119775, i32 3128270977, i32 100911967, i32 280349889, i32 2364348191, i32 630458625, i32 20337375, i32 693392705, i32 438009503, i32 2369433985, i32 769170015, i32 1133190593, i32 4054427167, i32 4287207937>
@@ -3073,21 +3504,49 @@ short.w16.done:
   %short.w16.sum01 = add <16 x i32> %short.w16.a0.coef, %short.w16.a1.coef
   %short.w16.sum23 = add <16 x i32> %short.w16.a2.coef, %short.w16.a3.coef
   %short.w16.sum = add <16 x i32> %short.w16.sum01, %short.w16.sum23
+  br i1 %delayed.reduction, label %short.x86.w16.select, label %short.w16.reduce
+short.w16.reduce:
   %short.w16.reduced = call i32 @llvm.vector.reduce.add.v16i32(<16 x i32> %short.w16.sum)
   %short.w16.h.final = add i32 %short.w16.h, %short.w16.reduced
   br label %short.w8.select
+short.x86.w16.select:
+  %short.x86.w16.remaining = sub i64 %short.count, %short.w16.k
+  %short.x86.w16.ge8 = icmp sge i64 %short.x86.w16.remaining, 8
+  br i1 %short.x86.w16.ge8, label %short.x86.w16.fold, label %short.x86.w16.reduce
+short.x86.w16.reduce:
+  %short.x86.w16.reduced = call i32 @llvm.vector.reduce.add.v16i32(<16 x i32> %short.w16.sum)
+  %short.x86.w16.final = add i32 %short.w16.h, %short.x86.w16.reduced
+  br label %short.tail
+short.x86.w16.fold:
+  ; These lanes already include their position weights. Folding preserves their sum.
+  %short.x86.w16.lo = shufflevector <16 x i32> %short.w16.sum, <16 x i32> poison, <8 x i32> <i32 0, i32 1, i32 2, i32 3, i32 4, i32 5, i32 6, i32 7>
+  %short.x86.w16.hi = shufflevector <16 x i32> %short.w16.sum, <16 x i32> poison, <8 x i32> <i32 8, i32 9, i32 10, i32 11, i32 12, i32 13, i32 14, i32 15>
+  %short.x86.w16.u = add <8 x i32> %short.x86.w16.lo, %short.x86.w16.hi
+  %short.x86.w16.ge32 = icmp sge i64 %short.x86.w16.remaining, 32
+  br i1 %short.x86.w16.ge32, label %short.w8.load, label %short.x86.vector.select
+
 short.w8.check:
-  %short.k = phi i64 [ %short.k.begin, %short.w8.select ], [ %short.k.next, %short.w8.body ]
-  %short.h = phi i32 [ %short.h.begin, %short.w8.select ], [ %short.h.next, %short.w8.body ]
-  %short.a0 = phi <8 x i32> [ zeroinitializer, %short.w8.select ], [ %short.a0.next, %short.w8.body ]
-  %short.a1 = phi <8 x i32> [ zeroinitializer, %short.w8.select ], [ %short.a1.next, %short.w8.body ]
-  %short.a2 = phi <8 x i32> [ zeroinitializer, %short.w8.select ], [ %short.a2.next, %short.w8.body ]
-  %short.a3 = phi <8 x i32> [ zeroinitializer, %short.w8.select ], [ %short.a3.next, %short.w8.body ]
+  %short.k = phi i64 [ %short.k.begin, %short.w8.select ], [ %short.k.next, %short.w8.accumulate ]
+  %short.h = phi i32 [ %short.h.begin, %short.w8.select ], [ %short.h.next, %short.w8.accumulate ]
+  %short.a0 = phi <8 x i32> [ zeroinitializer, %short.w8.select ], [ %short.a0.next, %short.w8.accumulate ]
+  %short.a1 = phi <8 x i32> [ zeroinitializer, %short.w8.select ], [ %short.a1.next, %short.w8.accumulate ]
+  %short.a2 = phi <8 x i32> [ zeroinitializer, %short.w8.select ], [ %short.a2.next, %short.w8.accumulate ]
+  %short.a3 = phi <8 x i32> [ zeroinitializer, %short.w8.select ], [ %short.a3.next, %short.w8.accumulate ]
   %short.end = add i64 %short.count, -31
   %short.more = icmp slt i64 %short.k, %short.end
   br i1 %short.more, label %short.w8.body, label %short.w8.done
 short.w8.body:
-  %short.kbase = add i64 %short.start, %short.k
+  br label %short.w8.load
+short.w8.load:
+  %short.load.k = phi i64 [ %short.k, %short.w8.body ], [ %short.w16.k, %short.x86.w16.fold ]
+  %short.load.h = phi i32 [ %short.h, %short.w8.body ], [ %short.w16.h, %short.x86.w16.fold ]
+  %short.load.u = phi <8 x i32> [ zeroinitializer, %short.w8.body ], [ %short.x86.w16.u, %short.x86.w16.fold ]
+  %short.load.r32 = phi i1 [ false, %short.w8.body ], [ true, %short.x86.w16.fold ]
+  %short.load.a0 = phi <8 x i32> [ %short.a0, %short.w8.body ], [ poison, %short.x86.w16.fold ]
+  %short.load.a1 = phi <8 x i32> [ %short.a1, %short.w8.body ], [ poison, %short.x86.w16.fold ]
+  %short.load.a2 = phi <8 x i32> [ %short.a2, %short.w8.body ], [ poison, %short.x86.w16.fold ]
+  %short.load.a3 = phi <8 x i32> [ %short.a3, %short.w8.body ], [ poison, %short.x86.w16.fold ]
+  %short.kbase = add i64 %short.start, %short.load.k
   %short.b0.off = add i64 %short.kbase, 0
   %short.b0.p = getelementptr i16, ptr addrspace(1) %short.data, i64 %short.b0.off
   %short.b0.raw = load <8 x i16>, ptr addrspace(1) %short.b0.p, align 2
@@ -3104,16 +3563,18 @@ short.w8.body:
   %short.b3.p = getelementptr i16, ptr addrspace(1) %short.data, i64 %short.b3.off
   %short.b3.raw = load <8 x i16>, ptr addrspace(1) %short.b3.p, align 2
   %short.b3.wide = sext <8 x i16> %short.b3.raw to <8 x i32>
-  %short.a0.mul = mul <8 x i32> %short.a0, <i32 2111290369, i32 2111290369, i32 2111290369, i32 2111290369, i32 2111290369, i32 2111290369, i32 2111290369, i32 2111290369>
+  br i1 %short.load.r32, label %short.x86.r32.dot, label %short.w8.accumulate
+short.w8.accumulate:
+  %short.a0.mul = mul <8 x i32> %short.load.a0, <i32 2111290369, i32 2111290369, i32 2111290369, i32 2111290369, i32 2111290369, i32 2111290369, i32 2111290369, i32 2111290369>
   %short.a0.next = add <8 x i32> %short.a0.mul, %short.b0.wide
-  %short.a1.mul = mul <8 x i32> %short.a1, <i32 2111290369, i32 2111290369, i32 2111290369, i32 2111290369, i32 2111290369, i32 2111290369, i32 2111290369, i32 2111290369>
+  %short.a1.mul = mul <8 x i32> %short.load.a1, <i32 2111290369, i32 2111290369, i32 2111290369, i32 2111290369, i32 2111290369, i32 2111290369, i32 2111290369, i32 2111290369>
   %short.a1.next = add <8 x i32> %short.a1.mul, %short.b1.wide
-  %short.a2.mul = mul <8 x i32> %short.a2, <i32 2111290369, i32 2111290369, i32 2111290369, i32 2111290369, i32 2111290369, i32 2111290369, i32 2111290369, i32 2111290369>
+  %short.a2.mul = mul <8 x i32> %short.load.a2, <i32 2111290369, i32 2111290369, i32 2111290369, i32 2111290369, i32 2111290369, i32 2111290369, i32 2111290369, i32 2111290369>
   %short.a2.next = add <8 x i32> %short.a2.mul, %short.b2.wide
-  %short.a3.mul = mul <8 x i32> %short.a3, <i32 2111290369, i32 2111290369, i32 2111290369, i32 2111290369, i32 2111290369, i32 2111290369, i32 2111290369, i32 2111290369>
+  %short.a3.mul = mul <8 x i32> %short.load.a3, <i32 2111290369, i32 2111290369, i32 2111290369, i32 2111290369, i32 2111290369, i32 2111290369, i32 2111290369, i32 2111290369>
   %short.a3.next = add <8 x i32> %short.a3.mul, %short.b3.wide
-  %short.h.next = mul i32 %short.h, 2111290369
-  %short.k.next = add i64 %short.k, 32
+  %short.h.next = mul i32 %short.load.h, 2111290369
+  %short.k.next = add i64 %short.load.k, 32
   br label %short.w8.check
 short.w8.done:
   %short.a0.coef = mul <8 x i32> %short.a0, <i32 2284863455, i32 350799937, i32 11316127, i32 693101697, i32 4040230751, i32 961614017, i32 31019807, i32 2217757953>
@@ -3123,34 +3584,120 @@ short.w8.done:
   %short.sum01 = add <8 x i32> %short.a0.coef, %short.a1.coef
   %short.sum23 = add <8 x i32> %short.a2.coef, %short.a3.coef
   %short.sum = add <8 x i32> %short.sum01, %short.sum23
+  br i1 %delayed.reduction, label %short.x86.vector.select, label %short.w8.reduce
+short.w8.reduce:
   %short.reduced = call i32 @llvm.vector.reduce.add.v8i32(<8 x i32> %short.sum)
   %short.h.final = add i32 %short.h, %short.reduced
   br label %short.mid.check
+short.x86.r32.dot:
+  ; At most one 32-element block remains after the wide main loop.
+  %short.x86.r32.a0.coef = mul <8 x i32> %short.b0.wide, <i32 2284863455, i32 350799937, i32 11316127, i32 693101697, i32 4040230751, i32 961614017, i32 31019807, i32 2217757953>
+  %short.x86.r32.a1.coef = mul <8 x i32> %short.b1.wide, <i32 4227960543, i32 1244764481, i32 2256911007, i32 211350913, i32 3886143071, i32 3450495425, i32 3297894943, i32 1353309697>
+  %short.x86.r32.a2.coef = mul <8 x i32> %short.b2.wide, <i32 3784433119, i32 1507551809, i32 3789408671, i32 4001564289, i32 129082719, i32 2498015937, i32 4098453791, i32 2487512833>
+  %short.x86.r32.a3.coef = mul <8 x i32> %short.b3.wide, <i32 1742810335, i32 887503681, i32 28629151, i32 923521, i32 29791, i32 961, i32 31, i32 1>
+  %short.x86.r32.sum01 = add <8 x i32> %short.x86.r32.a0.coef, %short.x86.r32.a1.coef
+  %short.x86.r32.sum23 = add <8 x i32> %short.x86.r32.a2.coef, %short.x86.r32.a3.coef
+  %short.x86.r32.sum = add <8 x i32> %short.x86.r32.sum01, %short.x86.r32.sum23
+  %short.x86.r32.scaled = mul <8 x i32> %short.load.u, <i32 2111290369, i32 2111290369, i32 2111290369, i32 2111290369, i32 2111290369, i32 2111290369, i32 2111290369, i32 2111290369>
+  %short.x86.r32.u = add <8 x i32> %short.x86.r32.scaled, %short.x86.r32.sum
+  %short.x86.r32.s = mul i32 %short.load.h, 2111290369
+  %short.x86.r32.k = add i64 %short.load.k, 32
+  br label %short.x86.vector.select
+short.x86.vector.select:
+  %short.x86.k = phi i64 [ %short.k, %short.w8.done ], [ %short.w16.k, %short.x86.w16.fold ], [ %short.x86.r32.k, %short.x86.r32.dot ]
+  %short.x86.s = phi i32 [ %short.h, %short.w8.done ], [ %short.w16.h, %short.x86.w16.fold ], [ %short.x86.r32.s, %short.x86.r32.dot ]
+  %short.x86.u = phi <8 x i32> [ %short.sum, %short.w8.done ], [ %short.x86.w16.u, %short.x86.w16.fold ], [ %short.x86.r32.u, %short.x86.r32.dot ]
+  %short.x86.remaining = sub i64 %short.count, %short.x86.k
+  %short.x86.ge8 = icmp sge i64 %short.x86.remaining, 8
+  br i1 %short.x86.ge8, label %short.x86.mid.scale, label %short.x86.reduce
+short.x86.mid.scale:
+  ; Scale the weighted prefix independently of the raw suffix recurrence.
+  %short.x86.mid.items = and i64 %short.x86.remaining, -8
+  %short.x86.mid.is8 = icmp eq i64 %short.x86.mid.items, 8
+  %short.x86.mid.is16 = icmp eq i64 %short.x86.mid.items, 16
+  %short.x86.mid.p16or24 = select i1 %short.x86.mid.is16, i32 1353309697, i32 2217757953
+  %short.x86.mid.power = select i1 %short.x86.mid.is8, i32 2487512833, i32 %short.x86.mid.p16or24
+  %short.x86.mid.power.lane = insertelement <8 x i32> poison, i32 %short.x86.mid.power, i32 0
+  %short.x86.mid.power.vector = shufflevector <8 x i32> %short.x86.mid.power.lane, <8 x i32> poison, <8 x i32> zeroinitializer
+  %short.x86.mid.scaled.u = mul <8 x i32> %short.x86.u, %short.x86.mid.power.vector
+  br label %short.x86.mid.entry
+short.x86.mid.entry:
+  %short.x86.mid.begin = phi i64 [ %short.k.begin, %short.mid.arch ], [ %short.x86.k, %short.x86.mid.scale ]
+  %short.x86.mid.s = phi i32 [ %short.h.begin, %short.mid.arch ], [ %short.x86.s, %short.x86.mid.scale ]
+  %short.x86.mid.u = phi <8 x i32> [ zeroinitializer, %short.mid.arch ], [ %short.x86.mid.scaled.u, %short.x86.mid.scale ]
+  %short.x86.mid.prefix = phi i1 [ false, %short.mid.arch ], [ true, %short.x86.mid.scale ]
+  ; The first guarded load initializes the raw suffix without a zero multiply.
+  br label %short.mid.load
+short.x86.mid.peeled:
+  %short.x86.mid.first.next = add i64 %short.mid.load.k, 8
+  %short.x86.mid.first.s = mul i32 %short.mid.load.s, 2487512833
+  br label %short.x86.mid.check
+short.x86.mid.check:
+  %short.x86.mid.k = phi i64 [ %short.x86.mid.first.next, %short.x86.mid.peeled ], [ %short.mid.k.next, %short.x86.mid.next ]
+  %short.x86.mid.acc = phi <8 x i32> [ %short.mid.wide, %short.x86.mid.peeled ], [ %short.mid.acc.next, %short.x86.mid.next ]
+  %short.x86.mid.saved.s = phi i32 [ %short.x86.mid.first.s, %short.x86.mid.peeled ], [ %short.x86.mid.next.s, %short.x86.mid.next ]
+  %short.x86.mid.saved.u = phi <8 x i32> [ %short.mid.load.u, %short.x86.mid.peeled ], [ %short.mid.load.u, %short.x86.mid.next ]
+  %short.x86.mid.saved.prefix = phi i1 [ %short.mid.load.prefix, %short.x86.mid.peeled ], [ %short.mid.load.prefix, %short.x86.mid.next ]
+  %short.x86.mid.end = add i64 %short.count, -7
+  %short.x86.mid.more = icmp slt i64 %short.x86.mid.k, %short.x86.mid.end
+  br i1 %short.x86.mid.more, label %short.mid.load, label %short.x86.mid.done
+short.x86.mid.next:
+  %short.x86.mid.next.s = mul i32 %short.mid.load.s, 2487512833
+  br label %short.x86.mid.check
+short.x86.mid.done:
+  %short.x86.mid.acc.coef = mul <8 x i32> %short.x86.mid.acc, <i32 1742810335, i32 887503681, i32 28629151, i32 923521, i32 29791, i32 961, i32 31, i32 1>
+  br i1 %short.x86.mid.saved.prefix, label %short.x86.mid.merge, label %short.x86.reduce
+short.x86.mid.merge:
+  %short.x86.mid.merged.u = add <8 x i32> %short.x86.mid.saved.u, %short.x86.mid.acc.coef
+  br label %short.x86.reduce
+short.x86.reduce:
+  ; H = S + sum(U): only S contains the seed, and U is already weighted.
+  %short.x86.final.k = phi i64 [ %short.x86.k, %short.x86.vector.select ], [ %short.x86.mid.k, %short.x86.mid.done ], [ %short.x86.mid.k, %short.x86.mid.merge ]
+  %short.x86.final.s = phi i32 [ %short.x86.s, %short.x86.vector.select ], [ %short.x86.mid.saved.s, %short.x86.mid.done ], [ %short.x86.mid.saved.s, %short.x86.mid.merge ]
+  %short.x86.final.u = phi <8 x i32> [ %short.x86.u, %short.x86.vector.select ], [ %short.x86.mid.acc.coef, %short.x86.mid.done ], [ %short.x86.mid.merged.u, %short.x86.mid.merge ]
+  %short.x86.reduced = call i32 @llvm.vector.reduce.add.v8i32(<8 x i32> %short.x86.final.u)
+  %short.x86.final.h = add i32 %short.x86.final.s, %short.x86.reduced
+  br label %short.tail
+
 short.mid.check:
-  %short.mid.k = phi i64 [ %short.k.begin, %short.mid.dispatch ], [ %short.k, %short.w8.done ], [ %short.mid.k.next, %short.mid.body ]
-  %short.mid.h = phi i32 [ %short.h.begin, %short.mid.dispatch ], [ %short.h.final, %short.w8.done ], [ %short.mid.h.next, %short.mid.body ]
-  %short.mid.acc = phi <8 x i32> [ zeroinitializer, %short.mid.dispatch ], [ zeroinitializer, %short.w8.done ], [ %short.mid.acc.next, %short.mid.body ]
+  %short.mid.k = phi i64 [ %short.k.begin, %short.mid.arch ], [ %short.k, %short.w8.reduce ], [ %short.mid.k.next, %short.mid.legacy.next ]
+  %short.mid.h = phi i32 [ %short.h.begin, %short.mid.arch ], [ %short.h.final, %short.w8.reduce ], [ %short.mid.h.next, %short.mid.legacy.next ]
+  %short.mid.acc = phi <8 x i32> [ zeroinitializer, %short.mid.arch ], [ zeroinitializer, %short.w8.reduce ], [ %short.mid.acc.next, %short.mid.legacy.next ]
   %short.mid.end = add i64 %short.count, -7
   %short.mid.more = icmp slt i64 %short.mid.k, %short.mid.end
   br i1 %short.mid.more, label %short.mid.body, label %short.mid.done
 short.mid.body:
-  %short.mid.off = add i64 %short.start, %short.mid.k
+  br label %short.mid.load
+short.mid.load:
+  %short.mid.load.k = phi i64 [ %short.mid.k, %short.mid.body ], [ %short.x86.mid.begin, %short.x86.mid.entry ], [ %short.x86.mid.k, %short.x86.mid.check ]
+  %short.mid.load.h = phi i32 [ %short.mid.h, %short.mid.body ], [ poison, %short.x86.mid.entry ], [ poison, %short.x86.mid.check ]
+  %short.mid.load.acc = phi <8 x i32> [ %short.mid.acc, %short.mid.body ], [ poison, %short.x86.mid.entry ], [ %short.x86.mid.acc, %short.x86.mid.check ]
+  %short.mid.load.first = phi i1 [ false, %short.mid.body ], [ true, %short.x86.mid.entry ], [ false, %short.x86.mid.check ]
+  %short.mid.load.s = phi i32 [ poison, %short.mid.body ], [ %short.x86.mid.s, %short.x86.mid.entry ], [ %short.x86.mid.saved.s, %short.x86.mid.check ]
+  %short.mid.load.u = phi <8 x i32> [ poison, %short.mid.body ], [ %short.x86.mid.u, %short.x86.mid.entry ], [ %short.x86.mid.saved.u, %short.x86.mid.check ]
+  %short.mid.load.prefix = phi i1 [ poison, %short.mid.body ], [ %short.x86.mid.prefix, %short.x86.mid.entry ], [ %short.x86.mid.saved.prefix, %short.x86.mid.check ]
+  %short.mid.off = add i64 %short.start, %short.mid.load.k
   %short.mid.p = getelementptr i16, ptr addrspace(1) %short.data, i64 %short.mid.off
   %short.mid.raw = load <8 x i16>, ptr addrspace(1) %short.mid.p, align 2
   %short.mid.wide = sext <8 x i16> %short.mid.raw to <8 x i32>
-  %short.mid.acc.mul = mul <8 x i32> %short.mid.acc, <i32 2487512833, i32 2487512833, i32 2487512833, i32 2487512833, i32 2487512833, i32 2487512833, i32 2487512833, i32 2487512833>
+  br i1 %short.mid.load.first, label %short.x86.mid.peeled, label %short.mid.recur
+short.mid.recur:
+  %short.mid.acc.mul = mul <8 x i32> %short.mid.load.acc, <i32 2487512833, i32 2487512833, i32 2487512833, i32 2487512833, i32 2487512833, i32 2487512833, i32 2487512833, i32 2487512833>
   %short.mid.acc.next = add <8 x i32> %short.mid.acc.mul, %short.mid.wide
-  %short.mid.h.next = mul i32 %short.mid.h, 2487512833
-  %short.mid.k.next = add i64 %short.mid.k, 8
+  %short.mid.k.next = add i64 %short.mid.load.k, 8
+  br i1 %delayed.reduction, label %short.x86.mid.next, label %short.mid.legacy.next
+short.mid.legacy.next:
+  %short.mid.h.next = mul i32 %short.mid.load.h, 2487512833
   br label %short.mid.check
+
 short.mid.done:
   %short.mid.acc.coef = mul <8 x i32> %short.mid.acc, <i32 1742810335, i32 887503681, i32 28629151, i32 923521, i32 29791, i32 961, i32 31, i32 1>
   %short.mid.sum = call i32 @llvm.vector.reduce.add.v8i32(<8 x i32> %short.mid.acc.coef)
   %short.mid.h.final = add i32 %short.mid.h, %short.mid.sum
   br label %short.tail
 short.tail:
-  %short.t = phi i64 [ 8, %short.short ], [ %short.k.begin, %short.mid.select ], [ %short.mid.k, %short.mid.done ], [ %short.t.next, %short.tail.body ]
-  %short.t.h = phi i32 [ %short.short.hash, %short.short ], [ %short.h.begin, %short.mid.select ], [ %short.mid.h.final, %short.mid.done ], [ %short.t.h.next, %short.tail.body ]
+  %short.t = phi i64 [ 8, %short.short ], [ %short.k.begin, %short.mid.select ], [ %short.mid.k, %short.mid.done ], [ %short.x86.final.k, %short.x86.reduce ], [ %short.w16.k, %short.x86.w16.reduce ], [ %short.t.next, %short.tail.body ]
+  %short.t.h = phi i32 [ %short.short.hash, %short.short ], [ %short.h.begin, %short.mid.select ], [ %short.mid.h.final, %short.mid.done ], [ %short.x86.final.h, %short.x86.reduce ], [ %short.x86.w16.final, %short.x86.w16.reduce ], [ %short.t.h.next, %short.tail.body ]
   %short.pair.end = add i64 %short.count, -1
   %short.pair.more = icmp slt i64 %short.t, %short.pair.end
   br i1 %short.pair.more, label %short.tail.body, label %short.tail.last
@@ -3190,10 +3737,10 @@ int.entry:
   %int.avx512 = load i1, ptr @VM_Version.hashcode_vector_512bit
   %int.ge64 = icmp sge i64 %int.count, 64
   %int.use.w16 = and i1 %int.avx512, %int.ge64
-  br i1 %int.use.w16, label %int.w16.check, label %int.w8.select
+  br i1 %int.use.w16, label %int.w16.entry, label %int.w8.select
 int.w8.select:
-  %int.k.begin = phi i64 [ 0, %int.entry ], [ %int.w16.k, %int.w16.done ]
-  %int.h.begin = phi i32 [ %initialValue, %int.entry ], [ %int.w16.h.final, %int.w16.done ]
+  %int.k.begin = phi i64 [ 0, %int.entry ], [ %int.w16.k, %int.w16.reduce ]
+  %int.h.begin = phi i32 [ %initialValue, %int.entry ], [ %int.w16.h.final, %int.w16.reduce ]
   %int.remaining = sub i64 %int.count, %int.k.begin
   %int.ge32 = icmp sge i64 %int.remaining, 32
   br i1 %int.ge32, label %int.w8.check, label %int.mid.select
@@ -3201,43 +3748,63 @@ int.mid.select:
   ; Short inputs and grouped-loop remainders use one 8-lane accumulator
   ; before the scalar tail.
   %int.ge8 = icmp sge i64 %int.remaining, 8
-  br i1 %int.ge8, label %int.mid.check, label %int.tail
+  br i1 %int.ge8, label %int.mid.arch, label %int.tail
+int.mid.arch:
+  br i1 %delayed.reduction, label %int.x86.mid.entry, label %int.mid.check
+
+int.w16.entry:
+  br i1 %delayed.reduction, label %int.w16.load, label %int.w16.check
+int.w16.first:
+  ; The guarded first group initializes raw chains directly from its loads.
+  %int.w16.first.h = mul i32 %initialValue, 1304393729
+  br label %int.w16.check
 int.w16.check:
-  %int.w16.k = phi i64 [ 0, %int.entry ], [ %int.w16.k.next, %int.w16.body ]
-  %int.w16.h = phi i32 [ %initialValue, %int.entry ], [ %int.w16.h.next, %int.w16.body ]
-  %int.w16.a0 = phi <16 x i32> [ zeroinitializer, %int.entry ], [ %int.w16.a0.next, %int.w16.body ]
-  %int.w16.a1 = phi <16 x i32> [ zeroinitializer, %int.entry ], [ %int.w16.a1.next, %int.w16.body ]
-  %int.w16.a2 = phi <16 x i32> [ zeroinitializer, %int.entry ], [ %int.w16.a2.next, %int.w16.body ]
-  %int.w16.a3 = phi <16 x i32> [ zeroinitializer, %int.entry ], [ %int.w16.a3.next, %int.w16.body ]
+  %int.w16.k = phi i64 [ 0, %int.w16.entry ], [ 64, %int.w16.first ], [ %int.w16.k.next, %int.w16.accumulate ]
+  %int.w16.h = phi i32 [ %initialValue, %int.w16.entry ], [ %int.w16.first.h, %int.w16.first ], [ %int.w16.h.next, %int.w16.accumulate ]
+  %int.w16.a0 = phi <16 x i32> [ zeroinitializer, %int.w16.entry ], [ %int.w16.b0.wide, %int.w16.first ], [ %int.w16.a0.next, %int.w16.accumulate ]
+  %int.w16.a1 = phi <16 x i32> [ zeroinitializer, %int.w16.entry ], [ %int.w16.b1.wide, %int.w16.first ], [ %int.w16.a1.next, %int.w16.accumulate ]
+  %int.w16.a2 = phi <16 x i32> [ zeroinitializer, %int.w16.entry ], [ %int.w16.b2.wide, %int.w16.first ], [ %int.w16.a2.next, %int.w16.accumulate ]
+  %int.w16.a3 = phi <16 x i32> [ zeroinitializer, %int.w16.entry ], [ %int.w16.b3.wide, %int.w16.first ], [ %int.w16.a3.next, %int.w16.accumulate ]
   %int.w16.end = add i64 %int.count, -63
   %int.w16.more = icmp slt i64 %int.w16.k, %int.w16.end
   br i1 %int.w16.more, label %int.w16.body, label %int.w16.done
 int.w16.body:
-  %int.w16.b0.off = add i64 %int.start, %int.w16.k
+  br label %int.w16.load
+int.w16.load:
+  %int.w16.load.k = phi i64 [ 0, %int.w16.entry ], [ %int.w16.k, %int.w16.body ]
+  %int.w16.load.h = phi i32 [ poison, %int.w16.entry ], [ %int.w16.h, %int.w16.body ]
+  %int.w16.load.first = phi i1 [ true, %int.w16.entry ], [ false, %int.w16.body ]
+  %int.w16.load.a0 = phi <16 x i32> [ poison, %int.w16.entry ], [ %int.w16.a0, %int.w16.body ]
+  %int.w16.load.a1 = phi <16 x i32> [ poison, %int.w16.entry ], [ %int.w16.a1, %int.w16.body ]
+  %int.w16.load.a2 = phi <16 x i32> [ poison, %int.w16.entry ], [ %int.w16.a2, %int.w16.body ]
+  %int.w16.load.a3 = phi <16 x i32> [ poison, %int.w16.entry ], [ %int.w16.a3, %int.w16.body ]
+  %int.w16.b0.off = add i64 %int.start, %int.w16.load.k
   %int.w16.b0.p = getelementptr i32, ptr addrspace(1) %int.data, i64 %int.w16.b0.off
   %int.w16.b0.wide = load <16 x i32>, ptr addrspace(1) %int.w16.b0.p, align 4
-  %int.w16.b1.pre = add i64 %int.start, %int.w16.k
+  %int.w16.b1.pre = add i64 %int.start, %int.w16.load.k
   %int.w16.b1.off = add i64 %int.w16.b1.pre, 16
   %int.w16.b1.p = getelementptr i32, ptr addrspace(1) %int.data, i64 %int.w16.b1.off
   %int.w16.b1.wide = load <16 x i32>, ptr addrspace(1) %int.w16.b1.p, align 4
-  %int.w16.b2.pre = add i64 %int.start, %int.w16.k
+  %int.w16.b2.pre = add i64 %int.start, %int.w16.load.k
   %int.w16.b2.off = add i64 %int.w16.b2.pre, 32
   %int.w16.b2.p = getelementptr i32, ptr addrspace(1) %int.data, i64 %int.w16.b2.off
   %int.w16.b2.wide = load <16 x i32>, ptr addrspace(1) %int.w16.b2.p, align 4
-  %int.w16.b3.pre = add i64 %int.start, %int.w16.k
+  %int.w16.b3.pre = add i64 %int.start, %int.w16.load.k
   %int.w16.b3.off = add i64 %int.w16.b3.pre, 48
   %int.w16.b3.p = getelementptr i32, ptr addrspace(1) %int.data, i64 %int.w16.b3.off
   %int.w16.b3.wide = load <16 x i32>, ptr addrspace(1) %int.w16.b3.p, align 4
-  %int.w16.a0.mul = mul <16 x i32> %int.w16.a0, <i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729>
+  br i1 %int.w16.load.first, label %int.w16.first, label %int.w16.accumulate
+int.w16.accumulate:
+  %int.w16.a0.mul = mul <16 x i32> %int.w16.load.a0, <i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729>
   %int.w16.a0.next = add <16 x i32> %int.w16.a0.mul, %int.w16.b0.wide
-  %int.w16.a1.mul = mul <16 x i32> %int.w16.a1, <i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729>
+  %int.w16.a1.mul = mul <16 x i32> %int.w16.load.a1, <i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729>
   %int.w16.a1.next = add <16 x i32> %int.w16.a1.mul, %int.w16.b1.wide
-  %int.w16.a2.mul = mul <16 x i32> %int.w16.a2, <i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729>
+  %int.w16.a2.mul = mul <16 x i32> %int.w16.load.a2, <i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729>
   %int.w16.a2.next = add <16 x i32> %int.w16.a2.mul, %int.w16.b2.wide
-  %int.w16.a3.mul = mul <16 x i32> %int.w16.a3, <i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729>
+  %int.w16.a3.mul = mul <16 x i32> %int.w16.load.a3, <i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729, i32 1304393729>
   %int.w16.a3.next = add <16 x i32> %int.w16.a3.mul, %int.w16.b3.wide
-  %int.w16.h.next = mul i32 %int.w16.h, 1304393729
-  %int.w16.k.next = add i64 %int.w16.k, 64
+  %int.w16.h.next = mul i32 %int.w16.load.h, 1304393729
+  %int.w16.k.next = add i64 %int.w16.load.k, 64
   br label %int.w16.check
 int.w16.done:
   %int.w16.a0.coef = mul <16 x i32> %int.w16.a0, <i32 2120287199, i32 4086268993, i32 2487119775, i32 3128270977, i32 100911967, i32 280349889, i32 2364348191, i32 630458625, i32 20337375, i32 693392705, i32 438009503, i32 2369433985, i32 769170015, i32 1133190593, i32 4054427167, i32 4287207937>
@@ -3247,21 +3814,49 @@ int.w16.done:
   %int.w16.sum01 = add <16 x i32> %int.w16.a0.coef, %int.w16.a1.coef
   %int.w16.sum23 = add <16 x i32> %int.w16.a2.coef, %int.w16.a3.coef
   %int.w16.sum = add <16 x i32> %int.w16.sum01, %int.w16.sum23
+  br i1 %delayed.reduction, label %int.x86.w16.select, label %int.w16.reduce
+int.w16.reduce:
   %int.w16.reduced = call i32 @llvm.vector.reduce.add.v16i32(<16 x i32> %int.w16.sum)
   %int.w16.h.final = add i32 %int.w16.h, %int.w16.reduced
   br label %int.w8.select
+int.x86.w16.select:
+  %int.x86.w16.remaining = sub i64 %int.count, %int.w16.k
+  %int.x86.w16.ge8 = icmp sge i64 %int.x86.w16.remaining, 8
+  br i1 %int.x86.w16.ge8, label %int.x86.w16.fold, label %int.x86.w16.reduce
+int.x86.w16.reduce:
+  %int.x86.w16.reduced = call i32 @llvm.vector.reduce.add.v16i32(<16 x i32> %int.w16.sum)
+  %int.x86.w16.final = add i32 %int.w16.h, %int.x86.w16.reduced
+  br label %int.tail
+int.x86.w16.fold:
+  ; These lanes already include their position weights. Folding preserves their sum.
+  %int.x86.w16.lo = shufflevector <16 x i32> %int.w16.sum, <16 x i32> poison, <8 x i32> <i32 0, i32 1, i32 2, i32 3, i32 4, i32 5, i32 6, i32 7>
+  %int.x86.w16.hi = shufflevector <16 x i32> %int.w16.sum, <16 x i32> poison, <8 x i32> <i32 8, i32 9, i32 10, i32 11, i32 12, i32 13, i32 14, i32 15>
+  %int.x86.w16.u = add <8 x i32> %int.x86.w16.lo, %int.x86.w16.hi
+  %int.x86.w16.ge32 = icmp sge i64 %int.x86.w16.remaining, 32
+  br i1 %int.x86.w16.ge32, label %int.w8.load, label %int.x86.vector.select
+
 int.w8.check:
-  %int.k = phi i64 [ %int.k.begin, %int.w8.select ], [ %int.k.next, %int.w8.body ]
-  %int.h = phi i32 [ %int.h.begin, %int.w8.select ], [ %int.h.next, %int.w8.body ]
-  %int.a0 = phi <8 x i32> [ zeroinitializer, %int.w8.select ], [ %int.a0.next, %int.w8.body ]
-  %int.a1 = phi <8 x i32> [ zeroinitializer, %int.w8.select ], [ %int.a1.next, %int.w8.body ]
-  %int.a2 = phi <8 x i32> [ zeroinitializer, %int.w8.select ], [ %int.a2.next, %int.w8.body ]
-  %int.a3 = phi <8 x i32> [ zeroinitializer, %int.w8.select ], [ %int.a3.next, %int.w8.body ]
+  %int.k = phi i64 [ %int.k.begin, %int.w8.select ], [ %int.k.next, %int.w8.accumulate ]
+  %int.h = phi i32 [ %int.h.begin, %int.w8.select ], [ %int.h.next, %int.w8.accumulate ]
+  %int.a0 = phi <8 x i32> [ zeroinitializer, %int.w8.select ], [ %int.a0.next, %int.w8.accumulate ]
+  %int.a1 = phi <8 x i32> [ zeroinitializer, %int.w8.select ], [ %int.a1.next, %int.w8.accumulate ]
+  %int.a2 = phi <8 x i32> [ zeroinitializer, %int.w8.select ], [ %int.a2.next, %int.w8.accumulate ]
+  %int.a3 = phi <8 x i32> [ zeroinitializer, %int.w8.select ], [ %int.a3.next, %int.w8.accumulate ]
   %int.end = add i64 %int.count, -31
   %int.more = icmp slt i64 %int.k, %int.end
   br i1 %int.more, label %int.w8.body, label %int.w8.done
 int.w8.body:
-  %int.kbase = add i64 %int.start, %int.k
+  br label %int.w8.load
+int.w8.load:
+  %int.load.k = phi i64 [ %int.k, %int.w8.body ], [ %int.w16.k, %int.x86.w16.fold ]
+  %int.load.h = phi i32 [ %int.h, %int.w8.body ], [ %int.w16.h, %int.x86.w16.fold ]
+  %int.load.u = phi <8 x i32> [ zeroinitializer, %int.w8.body ], [ %int.x86.w16.u, %int.x86.w16.fold ]
+  %int.load.r32 = phi i1 [ false, %int.w8.body ], [ true, %int.x86.w16.fold ]
+  %int.load.a0 = phi <8 x i32> [ %int.a0, %int.w8.body ], [ poison, %int.x86.w16.fold ]
+  %int.load.a1 = phi <8 x i32> [ %int.a1, %int.w8.body ], [ poison, %int.x86.w16.fold ]
+  %int.load.a2 = phi <8 x i32> [ %int.a2, %int.w8.body ], [ poison, %int.x86.w16.fold ]
+  %int.load.a3 = phi <8 x i32> [ %int.a3, %int.w8.body ], [ poison, %int.x86.w16.fold ]
+  %int.kbase = add i64 %int.start, %int.load.k
   %int.b0.off = add i64 %int.kbase, 0
   %int.b0.p = getelementptr i32, ptr addrspace(1) %int.data, i64 %int.b0.off
   %int.b0.wide = load <8 x i32>, ptr addrspace(1) %int.b0.p, align 4
@@ -3274,16 +3869,18 @@ int.w8.body:
   %int.b3.off = add i64 %int.kbase, 24
   %int.b3.p = getelementptr i32, ptr addrspace(1) %int.data, i64 %int.b3.off
   %int.b3.wide = load <8 x i32>, ptr addrspace(1) %int.b3.p, align 4
-  %int.a0.mul = mul <8 x i32> %int.a0, <i32 2111290369, i32 2111290369, i32 2111290369, i32 2111290369, i32 2111290369, i32 2111290369, i32 2111290369, i32 2111290369>
+  br i1 %int.load.r32, label %int.x86.r32.dot, label %int.w8.accumulate
+int.w8.accumulate:
+  %int.a0.mul = mul <8 x i32> %int.load.a0, <i32 2111290369, i32 2111290369, i32 2111290369, i32 2111290369, i32 2111290369, i32 2111290369, i32 2111290369, i32 2111290369>
   %int.a0.next = add <8 x i32> %int.a0.mul, %int.b0.wide
-  %int.a1.mul = mul <8 x i32> %int.a1, <i32 2111290369, i32 2111290369, i32 2111290369, i32 2111290369, i32 2111290369, i32 2111290369, i32 2111290369, i32 2111290369>
+  %int.a1.mul = mul <8 x i32> %int.load.a1, <i32 2111290369, i32 2111290369, i32 2111290369, i32 2111290369, i32 2111290369, i32 2111290369, i32 2111290369, i32 2111290369>
   %int.a1.next = add <8 x i32> %int.a1.mul, %int.b1.wide
-  %int.a2.mul = mul <8 x i32> %int.a2, <i32 2111290369, i32 2111290369, i32 2111290369, i32 2111290369, i32 2111290369, i32 2111290369, i32 2111290369, i32 2111290369>
+  %int.a2.mul = mul <8 x i32> %int.load.a2, <i32 2111290369, i32 2111290369, i32 2111290369, i32 2111290369, i32 2111290369, i32 2111290369, i32 2111290369, i32 2111290369>
   %int.a2.next = add <8 x i32> %int.a2.mul, %int.b2.wide
-  %int.a3.mul = mul <8 x i32> %int.a3, <i32 2111290369, i32 2111290369, i32 2111290369, i32 2111290369, i32 2111290369, i32 2111290369, i32 2111290369, i32 2111290369>
+  %int.a3.mul = mul <8 x i32> %int.load.a3, <i32 2111290369, i32 2111290369, i32 2111290369, i32 2111290369, i32 2111290369, i32 2111290369, i32 2111290369, i32 2111290369>
   %int.a3.next = add <8 x i32> %int.a3.mul, %int.b3.wide
-  %int.h.next = mul i32 %int.h, 2111290369
-  %int.k.next = add i64 %int.k, 32
+  %int.h.next = mul i32 %int.load.h, 2111290369
+  %int.k.next = add i64 %int.load.k, 32
   br label %int.w8.check
 int.w8.done:
   %int.a0.coef = mul <8 x i32> %int.a0, <i32 2284863455, i32 350799937, i32 11316127, i32 693101697, i32 4040230751, i32 961614017, i32 31019807, i32 2217757953>
@@ -3293,33 +3890,119 @@ int.w8.done:
   %int.sum01 = add <8 x i32> %int.a0.coef, %int.a1.coef
   %int.sum23 = add <8 x i32> %int.a2.coef, %int.a3.coef
   %int.sum = add <8 x i32> %int.sum01, %int.sum23
+  br i1 %delayed.reduction, label %int.x86.vector.select, label %int.w8.reduce
+int.w8.reduce:
   %int.reduced = call i32 @llvm.vector.reduce.add.v8i32(<8 x i32> %int.sum)
   %int.h.final = add i32 %int.h, %int.reduced
   br label %int.mid.check
+int.x86.r32.dot:
+  ; At most one 32-element block remains after the wide main loop.
+  %int.x86.r32.a0.coef = mul <8 x i32> %int.b0.wide, <i32 2284863455, i32 350799937, i32 11316127, i32 693101697, i32 4040230751, i32 961614017, i32 31019807, i32 2217757953>
+  %int.x86.r32.a1.coef = mul <8 x i32> %int.b1.wide, <i32 4227960543, i32 1244764481, i32 2256911007, i32 211350913, i32 3886143071, i32 3450495425, i32 3297894943, i32 1353309697>
+  %int.x86.r32.a2.coef = mul <8 x i32> %int.b2.wide, <i32 3784433119, i32 1507551809, i32 3789408671, i32 4001564289, i32 129082719, i32 2498015937, i32 4098453791, i32 2487512833>
+  %int.x86.r32.a3.coef = mul <8 x i32> %int.b3.wide, <i32 1742810335, i32 887503681, i32 28629151, i32 923521, i32 29791, i32 961, i32 31, i32 1>
+  %int.x86.r32.sum01 = add <8 x i32> %int.x86.r32.a0.coef, %int.x86.r32.a1.coef
+  %int.x86.r32.sum23 = add <8 x i32> %int.x86.r32.a2.coef, %int.x86.r32.a3.coef
+  %int.x86.r32.sum = add <8 x i32> %int.x86.r32.sum01, %int.x86.r32.sum23
+  %int.x86.r32.scaled = mul <8 x i32> %int.load.u, <i32 2111290369, i32 2111290369, i32 2111290369, i32 2111290369, i32 2111290369, i32 2111290369, i32 2111290369, i32 2111290369>
+  %int.x86.r32.u = add <8 x i32> %int.x86.r32.scaled, %int.x86.r32.sum
+  %int.x86.r32.s = mul i32 %int.load.h, 2111290369
+  %int.x86.r32.k = add i64 %int.load.k, 32
+  br label %int.x86.vector.select
+int.x86.vector.select:
+  %int.x86.k = phi i64 [ %int.k, %int.w8.done ], [ %int.w16.k, %int.x86.w16.fold ], [ %int.x86.r32.k, %int.x86.r32.dot ]
+  %int.x86.s = phi i32 [ %int.h, %int.w8.done ], [ %int.w16.h, %int.x86.w16.fold ], [ %int.x86.r32.s, %int.x86.r32.dot ]
+  %int.x86.u = phi <8 x i32> [ %int.sum, %int.w8.done ], [ %int.x86.w16.u, %int.x86.w16.fold ], [ %int.x86.r32.u, %int.x86.r32.dot ]
+  %int.x86.remaining = sub i64 %int.count, %int.x86.k
+  %int.x86.ge8 = icmp sge i64 %int.x86.remaining, 8
+  br i1 %int.x86.ge8, label %int.x86.mid.scale, label %int.x86.reduce
+int.x86.mid.scale:
+  ; Scale the weighted prefix independently of the raw suffix recurrence.
+  %int.x86.mid.items = and i64 %int.x86.remaining, -8
+  %int.x86.mid.is8 = icmp eq i64 %int.x86.mid.items, 8
+  %int.x86.mid.is16 = icmp eq i64 %int.x86.mid.items, 16
+  %int.x86.mid.p16or24 = select i1 %int.x86.mid.is16, i32 1353309697, i32 2217757953
+  %int.x86.mid.power = select i1 %int.x86.mid.is8, i32 2487512833, i32 %int.x86.mid.p16or24
+  %int.x86.mid.power.lane = insertelement <8 x i32> poison, i32 %int.x86.mid.power, i32 0
+  %int.x86.mid.power.vector = shufflevector <8 x i32> %int.x86.mid.power.lane, <8 x i32> poison, <8 x i32> zeroinitializer
+  %int.x86.mid.scaled.u = mul <8 x i32> %int.x86.u, %int.x86.mid.power.vector
+  br label %int.x86.mid.entry
+int.x86.mid.entry:
+  %int.x86.mid.begin = phi i64 [ %int.k.begin, %int.mid.arch ], [ %int.x86.k, %int.x86.mid.scale ]
+  %int.x86.mid.s = phi i32 [ %int.h.begin, %int.mid.arch ], [ %int.x86.s, %int.x86.mid.scale ]
+  %int.x86.mid.u = phi <8 x i32> [ zeroinitializer, %int.mid.arch ], [ %int.x86.mid.scaled.u, %int.x86.mid.scale ]
+  %int.x86.mid.prefix = phi i1 [ false, %int.mid.arch ], [ true, %int.x86.mid.scale ]
+  ; The first guarded load initializes the raw suffix without a zero multiply.
+  br label %int.mid.load
+int.x86.mid.peeled:
+  %int.x86.mid.first.next = add i64 %int.mid.load.k, 8
+  %int.x86.mid.first.s = mul i32 %int.mid.load.s, 2487512833
+  br label %int.x86.mid.check
+int.x86.mid.check:
+  %int.x86.mid.k = phi i64 [ %int.x86.mid.first.next, %int.x86.mid.peeled ], [ %int.mid.k.next, %int.x86.mid.next ]
+  %int.x86.mid.acc = phi <8 x i32> [ %int.mid.wide, %int.x86.mid.peeled ], [ %int.mid.acc.next, %int.x86.mid.next ]
+  %int.x86.mid.saved.s = phi i32 [ %int.x86.mid.first.s, %int.x86.mid.peeled ], [ %int.x86.mid.next.s, %int.x86.mid.next ]
+  %int.x86.mid.saved.u = phi <8 x i32> [ %int.mid.load.u, %int.x86.mid.peeled ], [ %int.mid.load.u, %int.x86.mid.next ]
+  %int.x86.mid.saved.prefix = phi i1 [ %int.mid.load.prefix, %int.x86.mid.peeled ], [ %int.mid.load.prefix, %int.x86.mid.next ]
+  %int.x86.mid.end = add i64 %int.count, -7
+  %int.x86.mid.more = icmp slt i64 %int.x86.mid.k, %int.x86.mid.end
+  br i1 %int.x86.mid.more, label %int.mid.load, label %int.x86.mid.done
+int.x86.mid.next:
+  %int.x86.mid.next.s = mul i32 %int.mid.load.s, 2487512833
+  br label %int.x86.mid.check
+int.x86.mid.done:
+  %int.x86.mid.acc.coef = mul <8 x i32> %int.x86.mid.acc, <i32 1742810335, i32 887503681, i32 28629151, i32 923521, i32 29791, i32 961, i32 31, i32 1>
+  br i1 %int.x86.mid.saved.prefix, label %int.x86.mid.merge, label %int.x86.reduce
+int.x86.mid.merge:
+  %int.x86.mid.merged.u = add <8 x i32> %int.x86.mid.saved.u, %int.x86.mid.acc.coef
+  br label %int.x86.reduce
+int.x86.reduce:
+  ; H = S + sum(U): only S contains the seed, and U is already weighted.
+  %int.x86.final.k = phi i64 [ %int.x86.k, %int.x86.vector.select ], [ %int.x86.mid.k, %int.x86.mid.done ], [ %int.x86.mid.k, %int.x86.mid.merge ]
+  %int.x86.final.s = phi i32 [ %int.x86.s, %int.x86.vector.select ], [ %int.x86.mid.saved.s, %int.x86.mid.done ], [ %int.x86.mid.saved.s, %int.x86.mid.merge ]
+  %int.x86.final.u = phi <8 x i32> [ %int.x86.u, %int.x86.vector.select ], [ %int.x86.mid.acc.coef, %int.x86.mid.done ], [ %int.x86.mid.merged.u, %int.x86.mid.merge ]
+  %int.x86.reduced = call i32 @llvm.vector.reduce.add.v8i32(<8 x i32> %int.x86.final.u)
+  %int.x86.final.h = add i32 %int.x86.final.s, %int.x86.reduced
+  br label %int.tail
+
 int.mid.check:
-  %int.mid.k = phi i64 [ %int.k.begin, %int.mid.select ], [ %int.k, %int.w8.done ], [ %int.mid.k.next, %int.mid.body ]
-  %int.mid.h = phi i32 [ %int.h.begin, %int.mid.select ], [ %int.h.final, %int.w8.done ], [ %int.mid.h.next, %int.mid.body ]
-  %int.mid.acc = phi <8 x i32> [ zeroinitializer, %int.mid.select ], [ zeroinitializer, %int.w8.done ], [ %int.mid.acc.next, %int.mid.body ]
+  %int.mid.k = phi i64 [ %int.k.begin, %int.mid.arch ], [ %int.k, %int.w8.reduce ], [ %int.mid.k.next, %int.mid.legacy.next ]
+  %int.mid.h = phi i32 [ %int.h.begin, %int.mid.arch ], [ %int.h.final, %int.w8.reduce ], [ %int.mid.h.next, %int.mid.legacy.next ]
+  %int.mid.acc = phi <8 x i32> [ zeroinitializer, %int.mid.arch ], [ zeroinitializer, %int.w8.reduce ], [ %int.mid.acc.next, %int.mid.legacy.next ]
   %int.mid.end = add i64 %int.count, -7
   %int.mid.more = icmp slt i64 %int.mid.k, %int.mid.end
   br i1 %int.mid.more, label %int.mid.body, label %int.mid.done
 int.mid.body:
-  %int.mid.off = add i64 %int.start, %int.mid.k
+  br label %int.mid.load
+int.mid.load:
+  %int.mid.load.k = phi i64 [ %int.mid.k, %int.mid.body ], [ %int.x86.mid.begin, %int.x86.mid.entry ], [ %int.x86.mid.k, %int.x86.mid.check ]
+  %int.mid.load.h = phi i32 [ %int.mid.h, %int.mid.body ], [ poison, %int.x86.mid.entry ], [ poison, %int.x86.mid.check ]
+  %int.mid.load.acc = phi <8 x i32> [ %int.mid.acc, %int.mid.body ], [ poison, %int.x86.mid.entry ], [ %int.x86.mid.acc, %int.x86.mid.check ]
+  %int.mid.load.first = phi i1 [ false, %int.mid.body ], [ true, %int.x86.mid.entry ], [ false, %int.x86.mid.check ]
+  %int.mid.load.s = phi i32 [ poison, %int.mid.body ], [ %int.x86.mid.s, %int.x86.mid.entry ], [ %int.x86.mid.saved.s, %int.x86.mid.check ]
+  %int.mid.load.u = phi <8 x i32> [ poison, %int.mid.body ], [ %int.x86.mid.u, %int.x86.mid.entry ], [ %int.x86.mid.saved.u, %int.x86.mid.check ]
+  %int.mid.load.prefix = phi i1 [ poison, %int.mid.body ], [ %int.x86.mid.prefix, %int.x86.mid.entry ], [ %int.x86.mid.saved.prefix, %int.x86.mid.check ]
+  %int.mid.off = add i64 %int.start, %int.mid.load.k
   %int.mid.p = getelementptr i32, ptr addrspace(1) %int.data, i64 %int.mid.off
   %int.mid.wide = load <8 x i32>, ptr addrspace(1) %int.mid.p, align 4
-  %int.mid.acc.mul = mul <8 x i32> %int.mid.acc, <i32 2487512833, i32 2487512833, i32 2487512833, i32 2487512833, i32 2487512833, i32 2487512833, i32 2487512833, i32 2487512833>
+  br i1 %int.mid.load.first, label %int.x86.mid.peeled, label %int.mid.recur
+int.mid.recur:
+  %int.mid.acc.mul = mul <8 x i32> %int.mid.load.acc, <i32 2487512833, i32 2487512833, i32 2487512833, i32 2487512833, i32 2487512833, i32 2487512833, i32 2487512833, i32 2487512833>
   %int.mid.acc.next = add <8 x i32> %int.mid.acc.mul, %int.mid.wide
-  %int.mid.h.next = mul i32 %int.mid.h, 2487512833
-  %int.mid.k.next = add i64 %int.mid.k, 8
+  %int.mid.k.next = add i64 %int.mid.load.k, 8
+  br i1 %delayed.reduction, label %int.x86.mid.next, label %int.mid.legacy.next
+int.mid.legacy.next:
+  %int.mid.h.next = mul i32 %int.mid.load.h, 2487512833
   br label %int.mid.check
+
 int.mid.done:
   %int.mid.acc.coef = mul <8 x i32> %int.mid.acc, <i32 1742810335, i32 887503681, i32 28629151, i32 923521, i32 29791, i32 961, i32 31, i32 1>
   %int.mid.sum = call i32 @llvm.vector.reduce.add.v8i32(<8 x i32> %int.mid.acc.coef)
   %int.mid.h.final = add i32 %int.mid.h, %int.mid.sum
   br label %int.tail
 int.tail:
-  %int.t = phi i64 [ %int.k.begin, %int.mid.select ], [ %int.mid.k, %int.mid.done ], [ %int.t.next, %int.tail.body ]
-  %int.t.h = phi i32 [ %int.h.begin, %int.mid.select ], [ %int.mid.h.final, %int.mid.done ], [ %int.t.h.next, %int.tail.body ]
+  %int.t = phi i64 [ %int.k.begin, %int.mid.select ], [ %int.mid.k, %int.mid.done ], [ %int.x86.final.k, %int.x86.reduce ], [ %int.w16.k, %int.x86.w16.reduce ], [ %int.t.next, %int.tail.body ]
+  %int.t.h = phi i32 [ %int.h.begin, %int.mid.select ], [ %int.mid.h.final, %int.mid.done ], [ %int.x86.final.h, %int.x86.reduce ], [ %int.x86.w16.final, %int.x86.w16.reduce ], [ %int.t.h.next, %int.tail.body ]
   %int.pair.end = add i64 %int.count, -1
   %int.pair.more = icmp slt i64 %int.t, %int.pair.end
   br i1 %int.pair.more, label %int.tail.body, label %int.tail.last

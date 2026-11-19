@@ -64,6 +64,74 @@ public class JeandleVectorizedHashCodeVirtual {
     }
 
     @Benchmark
+    public int byte16() {
+        int[] a = inputs;
+        return Arrays.hashCode(new byte[]{
+            (byte) a[0], (byte) a[1], (byte) a[2], (byte) a[3], (byte) a[4], (byte) a[5],
+            (byte) a[6], (byte) a[7], (byte) a[8], (byte) a[9], (byte) a[10], (byte) a[11],
+            (byte) a[12], (byte) a[13], (byte) a[14], (byte) a[15]
+        });
+    }
+
+    @Benchmark
+    public int byte17() {
+        int[] a = inputs;
+        return Arrays.hashCode(new byte[]{
+            (byte) a[0], (byte) a[1], (byte) a[2], (byte) a[3], (byte) a[4], (byte) a[5],
+            (byte) a[6], (byte) a[7], (byte) a[8], (byte) a[9], (byte) a[10], (byte) a[11],
+            (byte) a[12], (byte) a[13], (byte) a[14], (byte) a[15], (byte) a[16]
+        });
+    }
+
+    @Benchmark
+    public int int16() {
+        int[] a = inputs;
+        return Arrays.hashCode(new int[]{
+            a[0], a[1], a[2], a[3], a[4], a[5], a[6], a[7],
+            a[8], a[9], a[10], a[11], a[12], a[13], a[14], a[15]
+        });
+    }
+
+    @Benchmark
+    public int int17() {
+        int[] a = inputs;
+        return Arrays.hashCode(new int[]{
+            a[0], a[1], a[2], a[3], a[4], a[5], a[6], a[7],
+            a[8], a[9], a[10], a[11], a[12], a[13], a[14], a[15],
+            a[16]
+        });
+    }
+
+    @Benchmark
+    public int int31() {
+        int[] a = inputs;
+        return Arrays.hashCode(new int[]{
+            a[0], a[1], a[2], a[3], a[4], a[5], a[6], a[7],
+            a[8], a[9], a[10], a[11], a[12], a[13], a[14], a[15],
+            a[16], a[17], a[18], a[19], a[20], a[21], a[22], a[23],
+            a[24], a[25], a[26], a[27], a[28], a[29], a[30]
+        });
+    }
+
+    @Benchmark
+    public int constant17() {
+        return ArraysSupport.vectorizedHashCode(new int[]{
+            7, -1, 0, 5, 31, -128, 255, 32768, -32768,
+            1, 2, 3, 4, 5, 6, 7, 8
+        }, 0, 17, inputs[0], ArraysSupport.T_INT);
+    }
+
+    @Benchmark
+    public int mixed17() {
+        int[] a = inputs;
+        return Arrays.hashCode(new byte[]{
+            (byte) a[0], 7, -1, (byte) a[3], (byte) a[4], (byte) a[5], (byte) a[6],
+            0, 5, (byte) a[9], (byte) a[10], (byte) a[11], (byte) a[12],
+            (byte) a[13], (byte) a[14], (byte) a[15], (byte) a[16]
+        });
+    }
+
+    @Benchmark
     public int byte21() {
         int[] a = inputs;
         return Arrays.hashCode(new byte[]{
