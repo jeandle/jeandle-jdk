@@ -101,6 +101,7 @@
 @VMOptions.ZeroTLAB = external global i1
 @VMOptions.ReduceBulkZeroing = external global i1
 @VMOptions.ReduceInitialCardMarks = external global i1
+@Jeandle.FreshArrayCopyRequiresGCBarriers = external global i1
 @VMOptions.AllocateInstancePrefetchLines = external global i32
 @VMOptions.AllocatePrefetchLines = external global i32
 ; Heap layout switches consumed by VMConstants::fromModule on the LLVM side.
@@ -736,7 +737,9 @@ array_post_klass_store:
   %tlab_is_zeroed = and i1 %use_tlab, %zero_tlab
   ; A tightly coupled initializer overwrites the payload in full before the
   ; array escapes, so its allocation needs no bulk zeroing here.
-  %skip_clear = or i1 %uninitialized, %tlab_is_zeroed
+  %payload_is_empty = icmp eq i32 %zero_start, %size_in_bytes
+  %already_initialized = or i1 %uninitialized, %tlab_is_zeroed
+  %skip_clear = or i1 %already_initialized, %payload_is_empty
   br i1 %skip_clear, label %array_after_payload_init, label %array_clear_memory
 
 array_clear_memory:

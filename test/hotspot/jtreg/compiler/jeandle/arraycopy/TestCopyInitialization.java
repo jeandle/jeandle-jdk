@@ -135,13 +135,14 @@ public class TestCopyInitialization {
                 optimized.checkNotPattern("(?:call|invoke).*@StubRoutines_jlong_disjoint_arraycopy");
             }
         }
-        checkCopyIR(dump, "copyFull", reduceBulkZeroing, tlab, Object[].class);
+        checkCopyIR(dump, "copyFull", reduceBulkZeroing, tlab,
+                name.equals("g1_initial_card_marks"), Object[].class);
         if (name.equals("g1_initial_card_marks")) {
             FileCheck clone = new FileCheck(dump.toString(), method("cloneReferences", Object[].class), true);
             clone.checkPatternAnywhere("call.*@StubRoutines_jlong_disjoint_arraycopy");
             clone.checkNotPattern("call.*@zero_heap_words_stub|call.*@llvm\\.memset");
         } else {
-            checkCopyIR(dump, "cloneReferences", reduceBulkZeroing, tlab, Object[].class);
+            checkCopyIR(dump, "cloneReferences", reduceBulkZeroing, tlab, false, Object[].class);
         }
         for (String nameWithTail : List.of("copyDynamic", "copyRange")) {
             Method target = nameWithTail.equals("copyDynamic")
@@ -168,9 +169,12 @@ public class TestCopyInitialization {
     }
 
     private static void checkCopyIR(Path dump, String name, boolean reduceBulkZeroing,
-                                    boolean tlab, Class<?>... types) throws Exception {
+                                    boolean tlab, boolean reduceInitialCardMarks,
+                                    Class<?>... types) throws Exception {
         FileCheck optimized = new FileCheck(dump.toString(), method(name, types), true);
-        optimized.checkPatternAnywhere("call.*@StubRoutines_(?:arrayof_)?oop_disjoint_arraycopy");
+        String copyType = reduceBulkZeroing && reduceInitialCardMarks ? "jint" : "oop";
+        optimized.checkPatternAnywhere("call.*@StubRoutines_(?:arrayof_)?" + copyType
+                + "_disjoint_arraycopy");
         if (reduceBulkZeroing) {
             optimized.checkNotPattern("call.*@zero_heap_words_stub");
             optimized.checkNotPattern("call.*@llvm\\.memset");
