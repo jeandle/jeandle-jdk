@@ -976,7 +976,8 @@ void JeandleAbstractInterpreter::initialize_VM_state_from_osr_buffer(JeandleVMSt
     llvm::Value* local_addr = _ir_builder.CreateInBoundsGEP(llvm::Type::getInt8Ty(*_context),
                                                             osr_buffer,
                                                             _ir_builder.getInt64(locals_addr_offset - (index + index_offset) * wordSize));
-    llvm::Value* local = load_from_address(local_addr, local_type, false);
+    // Only live, typed interpreter slots contain initialized Java values.
+    llvm::Value* local = load_from_address(local_addr, local_type, false, true /* is_java_value */);
     initial_jvm->set_locals_at(index, TypedValue(local_type, local));
   }
 
@@ -1616,6 +1617,10 @@ void JeandleAbstractInterpreter::uncommon_trap(Deoptimization::DeoptReason reaso
   llvm::CallInst* call = _ir_builder.CreateCall(
       deopt_decl, {request}, {create_current_deopt_bundle()});
   call->setCallingConv(llvm::CallingConv::Hotspot_JIT);
+  if (reason == Deoptimization::Reason_null_check && ProfileTraps && UseInterpreter &&
+      action != Deoptimization::Action_none && !builtin_throw_is_hot(reason)) {
+    call->addFnAttr(llvm::Attribute::get(*_context, llvm::jeandle::Metadata::ImplicitNullCheck));
+  }
 
   // LangRef: the block holding this intrinsic must terminate with a `ret`
   // returning the intrinsic's result. Never executed at runtime (the trap
@@ -2766,9 +2771,12 @@ void JeandleAbstractInterpreter::do_get_xxx(ciField* field, bool is_static) {
   llvm::Value* value;
   if (is_referent) {
     value = call_java_op("jeandle.reference_get", {receiver});
+    // GC may clear the initialized referent to null. Decoding and the SATB
+    // barrier preserve that Java value without making it non-null.
+    llvm::cast<llvm::CallBase>(value)->addRetAttr(llvm::Attribute::NoUndef);
     bt = T_OBJECT; // The JavaOp performs compressed-oop decoding itself.
   } else {
-    value = load_from_address(addr, bt, is_volatile);
+    value = load_from_address(addr, bt, is_volatile, true /* is_java_value */);
   }
 
   // Attach java-klass metadata to the actual field load before decoding.
@@ -2855,7 +2863,8 @@ llvm::Value* JeandleAbstractInterpreter::compute_static_field_address(ciInstance
                                        _ir_builder.getInt64(offset));
 }
 
-llvm::Value* JeandleAbstractInterpreter::load_from_address(llvm::Value* addr, BasicType type, bool is_volatile) {
+llvm::Value* JeandleAbstractInterpreter::load_from_address(llvm::Value* addr, BasicType type, bool is_volatile,
+                                                          bool is_java_value) {
   llvm::Type* expected_ty = JeandleType::java2llvm(type, *_context);
   llvm::LoadInst* load_inst = nullptr;
   llvm::Value* res_inst = nullptr;
@@ -2885,6 +2894,10 @@ llvm::Value* JeandleAbstractInterpreter::load_from_address(llvm::Value* addr, Ba
       res_inst = load_inst;
       break;
     }
+  }
+
+  if (is_java_value) {
+    load_inst->setMetadata(llvm::LLVMContext::MD_noundef, llvm::MDNode::get(*_context, {}));
   }
 
   if (is_volatile) {
@@ -3528,7 +3541,7 @@ llvm::Value* JeandleAbstractInterpreter::create_check_branch(
   if (!hot) {
     branch->setMetadata(llvm::LLVMContext::MD_prof, md_builder.createBranchWeights(1048575, 1));
   }
-  if (!widen && reason == Deoptimization::Reason_null_check) {
+  if (!widen && reason == Deoptimization::Reason_null_check && ProfileTraps && UseInterpreter && !hot) {
     branch->setMetadata(llvm::LLVMContext::MD_make_implicit, llvm::MDNode::get(*_context, {}));
   }
   return widen ? ok : nullptr;
@@ -3579,7 +3592,10 @@ void JeandleAbstractInterpreter::builtin_throw(Deoptimization::DeoptReason reaso
       }
 
       llvm::Value* oop_handle = JeandleCompilation::current()->find_or_insert_oop(ex_obj);
-      llvm::Value* value = _ir_builder.CreateLoad(JeandleType::java2llvm(BasicType::T_OBJECT, *_context), oop_handle);
+      llvm::LoadInst* value = _ir_builder.CreateLoad(JeandleType::java2llvm(BasicType::T_OBJECT, *_context), oop_handle);
+      // The strong handle keeps the preconstructed exception alive across GC.
+      value->setMetadata(llvm::LLVMContext::MD_nonnull, llvm::MDNode::get(*_context, {}));
+      value->setMetadata(llvm::LLVMContext::MD_noundef, llvm::MDNode::get(*_context, {}));
 
       int offset = java_lang_Throwable::get_detailMessage_offset();
       llvm::Value* exception_oop_field_addr = compute_instance_field_address(value, offset);
@@ -3601,8 +3617,7 @@ void JeandleAbstractInterpreter::builtin_throw(Deoptimization::DeoptReason reaso
   // Slow path: Bail to interpreter
   ciMethod* m = Deoptimization::reason_is_speculate(reason) ? JeandleCompilation::current()->method() : nullptr;
   Deoptimization::DeoptAction action = Deoptimization::Action_maybe_recompile;
-  // If we have triggered deoptimization too many times,
-  // Immediately invalidate the code using Deoptimization::Action_none.
+  // Keep the code when further recompilation is unlikely to help this hot throw.
   if (treat_throw_as_hot && (_method->method_data()->trap_recompiled_at(cur_bci, m) || too_many_traps(reason))) {
     action = Deoptimization::Action_none;
   }

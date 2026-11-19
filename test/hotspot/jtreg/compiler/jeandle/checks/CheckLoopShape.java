@@ -50,6 +50,10 @@ final class CheckLoopShape {
     }
 
     static void assertVersioned(Method method) throws Exception {
+        assertVersioned(method, false);
+    }
+
+    static void assertVersioned(Method method, boolean osr) throws Exception {
         String prefix = method.getDeclaringClass().getName().replace('.', '_') + "_" + method.getName() + "_";
         List<Path> candidates;
         try (var paths = Files.list(Path.of(System.getProperty("user.dir")))) {
@@ -60,12 +64,12 @@ final class CheckLoopShape {
         String ir = null;
         for (Path candidate : candidates) {
             String text = Files.readString(candidate);
-            if (text.lines().anyMatch(line -> line.startsWith("define ") && line.contains(".root") && !line.contains("__jeandle_osr"))) {
+            if (text.lines().anyMatch(line -> line.startsWith("define ") && line.contains(".root") && line.contains("__jeandle_osr") == osr)) {
                 ir = text;
                 break;
             }
         }
-        Asserts.assertNotNull(ir, "ordinary-entry optimized IR for " + method.getName());
+        Asserts.assertNotNull(ir, (osr ? "OSR" : "ordinary-entry") + " optimized IR for " + method.getName());
         Map<String, List<String>> blocks = new HashMap<>();
         Map<String, List<String>> edges = new HashMap<>();
         String block = null;

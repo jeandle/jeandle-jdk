@@ -19,15 +19,35 @@
 
 /*
  * @test
- * @summary Preserve implicit null checks with a profiled throwing handler
+ * @summary Keep hot and feedback-disabled null checks explicit
  * @library /test/lib /
  * @build compiler.jeandle.fileCheck.FileCheck jdk.test.whitebox.WhiteBox
  * @run driver jdk.test.lib.helpers.ClassFileInstaller jdk.test.whitebox.WhiteBox
  * @run main/othervm -Xbootclasspath/a:. -XX:+UnlockDiagnosticVMOptions -XX:+WhiteBoxAPI
  *      -Xbatch -XX:-TieredCompilation -XX:+UseJeandleCompiler -XX:CompileThreshold=1000000
  *      -XX:+JeandleDumpIR -XX:+JeandleDumpObjects
- *      -XX:CompileCommand=compileonly,compiler.jeandle.checks.TestImplicitNullChecks::testHotLength
- *      compiler.jeandle.checks.TestImplicitNullChecks
+ *      -XX:CompileCommand=compileonly,compiler.jeandle.checks.TestImplicitNullChecks::testLength
+ *      compiler.jeandle.checks.TestImplicitNullChecks hot
+ * @run main/othervm -Xbootclasspath/a:. -XX:+UnlockDiagnosticVMOptions -XX:+WhiteBoxAPI
+ *      -Xbatch -XX:-TieredCompilation -XX:+UseJeandleCompiler -XX:CompileThreshold=1000000
+ *      -XX:-OmitStackTraceInFastThrow -XX:+JeandleDumpIR -XX:+JeandleDumpObjects
+ *      -XX:CompileCommand=compileonly,compiler.jeandle.checks.TestImplicitNullChecks::testLength
+ *      compiler.jeandle.checks.TestImplicitNullChecks hot-stacktrace
+ * @run main/othervm -Xbootclasspath/a:. -XX:+UnlockDiagnosticVMOptions -XX:+WhiteBoxAPI
+ *      -Xbatch -XX:-TieredCompilation -XX:+UseJeandleCompiler -XX:CompileThreshold=1000000
+ *      -XX:+JeandleDumpIR -XX:+JeandleDumpObjects
+ *      -XX:CompileCommand=compileonly,compiler.jeandle.checks.TestImplicitNullChecks::testLength
+ *      compiler.jeandle.checks.TestImplicitNullChecks cold
+ * @run main/othervm -Xbootclasspath/a:. -XX:+UnlockDiagnosticVMOptions -XX:+WhiteBoxAPI
+ *      -Xbatch -XX:-TieredCompilation -XX:+UseJeandleCompiler -XX:CompileThreshold=1000000
+ *      -XX:-ProfileTraps -XX:+JeandleDumpIR -XX:+JeandleDumpObjects
+ *      -XX:CompileCommand=compileonly,compiler.jeandle.checks.TestImplicitNullChecks::testLength
+ *      compiler.jeandle.checks.TestImplicitNullChecks no-profile
+ * @run main/othervm -Xbootclasspath/a:. -XX:+UnlockDiagnosticVMOptions -XX:+WhiteBoxAPI
+ *      -Xcomp -Xbatch -XX:-TieredCompilation -XX:+UseJeandleCompiler
+ *      -XX:+JeandleDumpIR -XX:+JeandleDumpObjects
+ *      -XX:CompileCommand=compileonly,compiler.jeandle.checks.TestImplicitNullChecks::testLength
+ *      compiler.jeandle.checks.TestImplicitNullChecks no-interpreter
  */
 package compiler.jeandle.checks;
 
@@ -37,31 +57,48 @@ import jdk.test.lib.Asserts;
 import jdk.test.whitebox.WhiteBox;
 
 public class TestImplicitNullChecks {
-    public static int testHotLength(int[] a) {
+    public static int testLength(int[] a) {
         try {
             return a.length;
         } catch (NullPointerException expected) {
-            return -1;
+            return expected == null ? -2 : -1;
         }
     }
 
     public static void main(String[] args) throws Exception {
+        String mode = args[0];
+        boolean hot = mode.startsWith("hot");
         WhiteBox wb = WhiteBox.getWhiteBox();
         int[] a = new int[32];
         for (int i = 0; i < 20000; i++) {
-            Asserts.assertEquals(testHotLength(null), -1);
-            Asserts.assertEquals(testHotLength(a), 32);
+            if (hot) {
+                Asserts.assertEquals(testLength(null), -1);
+            }
+            Asserts.assertEquals(testLength(a), 32);
         }
-        Method target = TestImplicitNullChecks.class.getDeclaredMethod("testHotLength", int[].class);
+        Method target = TestImplicitNullChecks.class.getDeclaredMethod("testLength", int[].class);
         wb.enqueueMethodForCompilation(target, 4);
-        Asserts.assertTrue(wb.isMethodCompiled(target), "ordinary entry compiled with hot exception profile");
-        new FileCheck(System.getProperty("user.dir"), target, false).checkPattern("!make.implicit");
-        new FileCheck(System.getProperty("user.dir"), target, true).checkPattern("!make.implicit");
-        for (int i = 0; i < 1000; i++) {
-            Asserts.assertEquals(testHotLength(a), 32);
-            Asserts.assertEquals(testHotLength(null), -1);
+        Asserts.assertTrue(wb.isMethodCompiled(target), "ordinary entry compiled for " + mode);
+        FileCheck input = new FileCheck(System.getProperty("user.dir"), target, false);
+        FileCheck optimized = new FileCheck(System.getProperty("user.dir"), target, true);
+        if (mode.equals("cold")) {
+            input.checkPattern("jeandle-implicit-null-check");
+            optimized.checkPattern("!make.implicit");
+        } else {
+            input.checkNotPattern("jeandle-implicit-null-check|!make.implicit");
+            optimized.checkNotPattern("!make.implicit");
         }
-        Asserts.assertTrue(wb.isMethodCompiled(target), "hot null handler remains compiled");
-        System.out.println("HOT_NULL_CHECK_EXECUTED");
+        if (mode.equals("hot")) {
+            new FileCheck(System.getProperty("user.dir"), target, false)
+                    .checkPattern("load ptr addrspace\\(1\\).*?(?=.*!nonnull)(?=.*!noundef)");
+        }
+        for (int i = 0; i < 100; i++) {
+            Asserts.assertEquals(testLength(a), 32);
+            Asserts.assertEquals(testLength(null), -1);
+        }
+        if (mode.equals("hot")) {
+            Asserts.assertTrue(wb.isMethodCompiled(target), "hot null handler remains compiled");
+        }
+        System.out.println("NULL_CHECK_EXECUTED " + mode);
     }
 }

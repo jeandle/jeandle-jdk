@@ -470,7 +470,7 @@ class JeandleAbstractInterpreter : public StackObj {
   // Helper methods for field access.
   llvm::Value* compute_instance_field_address(llvm::Value* obj, int offset);
   llvm::Value* compute_static_field_address(ciInstanceKlass* holder, int offset);
-  llvm::Value* load_from_address(llvm::Value* addr, BasicType type, bool is_volatile);
+  llvm::Value* load_from_address(llvm::Value* addr, BasicType type, bool is_volatile, bool is_java_value = false);
   void store_to_address(llvm::Value* addr, llvm::Value* value, BasicType type, bool is_volatile);
 
   void do_get_xxx(ciField* field, bool is_static);

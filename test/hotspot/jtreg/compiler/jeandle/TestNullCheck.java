@@ -124,7 +124,13 @@ public class TestNullCheck {
         String currentDir = System.getProperty("user.dir");
 
         FileCheck fileCheck = new FileCheck(currentDir, method, false);
-        fileCheck.checkPattern("br i1 %[0-9]+, label %bci_[0-9]+_null_check_pass, label %bci_[0-9]+_null_check_fail, .* !make.implicit");
+        fileCheck.checkPattern("br i1 %[0-9]+, label %bci_[0-9]+_null_check_pass, label %bci_[0-9]+_null_check_fail");
+        // With trap profiling disabled, null failures must remain explicit.
+        fileCheck.checkNot("!make.implicit");
+        fileCheck.checkNot("jeandle-implicit-null-check");
+        FileCheck optimized = new FileCheck(currentDir, method, true);
+        optimized.checkNot("!make.implicit");
+        optimized.checkNot("jeandle-implicit-null-check");
     }
 
     private static int testInvoke(MyClass myClass) {
