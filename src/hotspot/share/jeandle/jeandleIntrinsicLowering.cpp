@@ -95,7 +95,7 @@ void apply_memory_attr(llvm::CallBase* call, const CallSiteAttributeMetadata& at
   }
 }
 
-// Native word width of the crypto/digest stub ABI. jeandleRuntimeRoutine.hpp
+// Native word width of the platform stub ABI. jeandleRuntimeRoutine.hpp
 // declares integer arguments with BitsPerWord, so conversions from Java ints
 // target that exact type rather than a data-layout pointer width; a mismatch
 // between the two would be caught by the IR builder at the call site.
@@ -426,6 +426,18 @@ bool JeandleIntrinsicLowering::is_supported(vmIntrinsics::ID id) {
     // arrayequals
     case vmIntrinsics::_equalsB:
     case vmIntrinsics::_equalsC:
+      return true;
+
+    // Checksums and Base64 use conditionally generated platform stubs.
+    case vmIntrinsics::_updateCRC32:
+    case vmIntrinsics::_updateBytesCRC32:
+    case vmIntrinsics::_updateByteBufferCRC32:
+    case vmIntrinsics::_updateBytesCRC32C:
+    case vmIntrinsics::_updateDirectByteBufferCRC32C:
+    case vmIntrinsics::_updateBytesAdler32:
+    case vmIntrinsics::_updateByteBufferAdler32:
+    case vmIntrinsics::_base64_encodeBlock:
+    case vmIntrinsics::_base64_decodeBlock:
       return true;
 
     // Single-block digest compression (MD5 and the SHA family).
@@ -839,6 +851,20 @@ bool JeandleIntrinsicLowering::lower(vmIntrinsics::ID id, const ciMethod* target
     case vmIntrinsics::_equalsC:
       return lower_arrayequals(T_CHAR);
 
+    case vmIntrinsics::_updateCRC32:
+      return lower_update_crc32();
+    case vmIntrinsics::_updateBytesCRC32:
+    case vmIntrinsics::_updateByteBufferCRC32:
+    case vmIntrinsics::_updateBytesCRC32C:
+    case vmIntrinsics::_updateDirectByteBufferCRC32C:
+    case vmIntrinsics::_updateBytesAdler32:
+    case vmIntrinsics::_updateByteBufferAdler32:
+      return lower_update_checksum(id);
+
+    case vmIntrinsics::_base64_encodeBlock:
+    case vmIntrinsics::_base64_decodeBlock:
+      return lower_base64(id);
+
     case vmIntrinsics::_md5_implCompress:
     case vmIntrinsics::_sha_implCompress:
     case vmIntrinsics::_sha2_implCompress:
@@ -1051,9 +1077,197 @@ bool JeandleIntrinsicLowering::lower_pow() {
 }
 
 // =============================================================================
-// lower_digestBase_implCompress — single-block digest compression (MD5/SHA)
+// Checksums and Base64
 // =============================================================================
 
+bool JeandleIntrinsicLowering::lower_update_crc32() {
+  if (!_target->is_static() ||
+      !expect_signature(_target->signature(), {SigKind::Int, SigKind::Int}, T_INT) ||
+      StubRoutines::crc_table_addr() == nullptr) {
+    return false;
+  }
+
+  llvm::IRBuilder<>& builder = _interp->_ir_builder;
+  llvm::Value* byte = _interp->_jvm->ipop();
+  llvm::Value* crc = builder.CreateNot(_interp->_jvm->ipop());
+  llvm::Value* index = builder.CreateAnd(builder.CreateXor(crc, byte), builder.getInt32(0xff));
+  llvm::Type* table_type = llvm::PointerType::get(
+      *_interp->_context, llvm::jeandle::AddrSpace::CHeapAddrSpace);
+  llvm::Value* table = builder.CreateIntToPtr(
+      builder.getInt64((intptr_t)StubRoutines::crc_table_addr()), table_type);
+  llvm::Value* element = builder.CreateInBoundsGEP(
+      builder.getInt32Ty(), table, builder.CreateZExt(index, native_word_type(*_interp->_context)));
+  llvm::Value* value = builder.CreateLoad(builder.getInt32Ty(), element, "crc32.byte.value");
+  _interp->_jvm->ipush(builder.CreateNot(
+      builder.CreateXor(value, builder.CreateLShr(crc, builder.getInt32(8)))));
+  return true;
+}
+
+bool JeandleIntrinsicLowering::lower_update_checksum(vmIntrinsics::ID id) {
+  bool direct;
+  bool crc32c = false;
+  const char* stub_name;
+  JeandleRuntimeCalleeFn callee;
+  switch (id) {
+    case vmIntrinsics::_updateBytesCRC32:
+      direct = false;
+      stub_name = "StubRoutines_updateBytesCRC32";
+      callee = &JeandleRuntimeRoutine::StubRoutines_updateBytesCRC32_callee;
+      break;
+    case vmIntrinsics::_updateByteBufferCRC32:
+      direct = true;
+      stub_name = "StubRoutines_updateBytesCRC32_direct";
+      callee = &JeandleRuntimeRoutine::StubRoutines_updateBytesCRC32_direct_callee;
+      break;
+    case vmIntrinsics::_updateBytesCRC32C:
+      direct = false;
+      crc32c = true;
+      stub_name = "StubRoutines_updateBytesCRC32C";
+      callee = &JeandleRuntimeRoutine::StubRoutines_updateBytesCRC32C_callee;
+      break;
+    case vmIntrinsics::_updateDirectByteBufferCRC32C:
+      direct = true;
+      crc32c = true;
+      stub_name = "StubRoutines_updateBytesCRC32C_direct";
+      callee = &JeandleRuntimeRoutine::StubRoutines_updateBytesCRC32C_direct_callee;
+      break;
+    case vmIntrinsics::_updateBytesAdler32:
+      direct = false;
+      stub_name = "StubRoutines_updateBytesAdler32";
+      callee = &JeandleRuntimeRoutine::StubRoutines_updateBytesAdler32_callee;
+      break;
+    case vmIntrinsics::_updateByteBufferAdler32:
+      direct = true;
+      stub_name = "StubRoutines_updateBytesAdler32_direct";
+      callee = &JeandleRuntimeRoutine::StubRoutines_updateBytesAdler32_direct_callee;
+      break;
+    default:
+      return false;
+  }
+  if (!_target->is_static() ||
+      !expect_signature(_target->signature(),
+                        {SigKind::Int, direct ? SigKind::Long : SigKind::ByteArray,
+                         SigKind::Int, SigKind::Int}, T_INT) ||
+      JeandleRuntimeRoutine::find_routine_entry(stub_name) == nullptr) {
+    return false;
+  }
+
+  ciField* table_field = nullptr;
+  if (crc32c) {
+    ciInstanceKlass* holder = _target->holder();
+    if (!holder->is_initialized()) {
+      return false;
+    }
+    table_field = holder->get_field_by_name(ciSymbol::make("byteTable"),
+                                             ciSymbol::make("[I"), true);
+    if (table_field == nullptr || !table_field->is_static()) {
+      return false;
+    }
+  }
+
+  // Null checks retain the invocation operands for deoptimization.
+  if (!direct) {
+    _interp->null_check(_interp->_jvm->raw_peek(2).value());
+  }
+  llvm::IRBuilder<>& builder = _interp->_ir_builder;
+  llvm::Value* length = _interp->_jvm->ipop();
+  llvm::Value* offset = _interp->_jvm->ipop();
+  llvm::Value* buffer = direct ? _interp->_jvm->lpop() : _interp->_jvm->apop();
+  llvm::Value* state = _interp->_jvm->ipop();
+  if (crc32c) {
+    // CRC32C's final argument is the exclusive end position.
+    length = builder.CreateSub(length, offset);
+  }
+
+  llvm::Value* data;
+  if (direct) {
+    llvm::Type* ptr_type = llvm::PointerType::get(
+        *_interp->_context, llvm::jeandle::AddrSpace::CHeapAddrSpace);
+    data = builder.CreateIntToPtr(buffer, ptr_type);
+    data = builder.CreatePtrAdd(data, builder.CreateSExtOrTrunc(
+        offset, native_word_type(*_interp->_context)));
+  } else {
+    data = array_data_pointer(buffer, T_BYTE, offset);
+  }
+  // Some platform stubs consume the full native register for lengths.
+  llvm::SmallVector<llvm::Value*, 4> args = {
+      state, data, builder.CreateZExtOrTrunc(length, native_word_type(*_interp->_context))};
+  if (table_field != nullptr) {
+    llvm::Value* address = _interp->compute_static_field_address(
+        table_field->holder(), table_field->offset_in_bytes());
+    BasicType ref_type = UseCompressedOops ? T_NARROWOOP : T_ARRAY;
+    llvm::Value* table = _interp->load_from_address(address, ref_type, false);
+    if (UseCompressedOops) {
+      table = builder.CreateAddrSpaceCast(
+          table, JeandleType::java2llvm(T_ARRAY, *_interp->_context));
+    }
+    args.push_back(array_element0_pointer(table, T_INT));
+  }
+  static constexpr CallSiteAttributeMetadata attrs = {CTRL_NONE, MEM_READ};
+  _interp->_jvm->ipush(emit_callsite(callee(_interp->_module), llvm::CallingConv::C,
+                                    args, attrs, /*is_gc_leaf_entry=*/true));
+  return true;
+}
+
+bool JeandleIntrinsicLowering::lower_base64(vmIntrinsics::ID id) {
+  bool encode = id == vmIntrinsics::_base64_encodeBlock;
+  const char* stub_name = encode ? "StubRoutines_base64_encodeBlock"
+                                 : "StubRoutines_base64_decodeBlock";
+  bool signature_ok = encode
+      ? expect_signature(_target->signature(),
+                         {SigKind::ByteArray, SigKind::Int, SigKind::Int,
+                          SigKind::ByteArray, SigKind::Int, SigKind::Boolean}, T_VOID)
+      : expect_signature(_target->signature(),
+                         {SigKind::ByteArray, SigKind::Int, SigKind::Int,
+                          SigKind::ByteArray, SigKind::Int, SigKind::Boolean,
+                          SigKind::Boolean}, T_INT);
+  if (_target->is_static() || !signature_ok ||
+      JeandleRuntimeRoutine::find_routine_entry(stub_name) == nullptr) {
+    return false;
+  }
+
+  _interp->null_check(_interp->_jvm->raw_peek(encode ? 5 : 6).value());
+  _interp->null_check(_interp->_jvm->raw_peek(encode ? 2 : 3).value());
+  llvm::IRBuilder<>& builder = _interp->_ir_builder;
+  llvm::Value* mime = encode ? nullptr : _interp->_jvm->ipop();
+  llvm::Value* url = _interp->_jvm->ipop();
+  llvm::Value* dp = _interp->_jvm->ipop();
+  llvm::Value* dst = _interp->_jvm->apop();
+  llvm::Value* sl = _interp->_jvm->ipop();
+  llvm::Value* sp = _interp->_jvm->ipop();
+  llvm::Value* src = _interp->_jvm->apop();
+  _interp->_jvm->apop();  // receiver, checked by invoke()
+
+  if (!encode) {
+    // Leave the final quartet to Java so padding cannot make a vector store
+    // extend beyond the decoded output. decodeBlock may return any prefix.
+    // Small inputs retain at least one full quartet for scalar-only stubs.
+    llvm::Value* length = builder.CreateSub(sl, sp);
+    llvm::Value* end = builder.CreateSub(sl, builder.getInt32(4));
+    sl = builder.CreateSelect(builder.CreateICmpSGE(length, builder.getInt32(8)), end, sl);
+  }
+  llvm::Type* word = native_word_type(*_interp->_context);
+  // Stubs receive element0 and independent offsets, including the source end.
+  llvm::SmallVector<llvm::Value*, 7> args = {
+      array_element0_pointer(src, T_BYTE), builder.CreateZExtOrTrunc(sp, word),
+      builder.CreateZExtOrTrunc(sl, word), array_element0_pointer(dst, T_BYTE),
+      builder.CreateZExtOrTrunc(dp, word), builder.CreateZExtOrTrunc(url, word)};
+  if (!encode) {
+    args.push_back(builder.CreateZExtOrTrunc(mime, word));
+  }
+  JeandleRuntimeCalleeFn callee = encode
+      ? &JeandleRuntimeRoutine::StubRoutines_base64_encodeBlock_callee
+      : &JeandleRuntimeRoutine::StubRoutines_base64_decodeBlock_callee;
+  static constexpr CallSiteAttributeMetadata attrs = {CTRL_NONE, MEM_READ | MEM_WRITE};
+  llvm::CallBase* result = emit_callsite(callee(_interp->_module), llvm::CallingConv::C,
+                                        args, attrs, /*is_gc_leaf_entry=*/true);
+  if (!encode) {
+    _interp->_jvm->ipush(result);
+  }
+  return true;
+}
+
+// Single-block digest compression (MD5/SHA).
 bool JeandleIntrinsicLowering::lower_digestBase_implCompress(vmIntrinsics::ID id) {
   ciSignature* sig = _target->signature();
   if (!expect_signature(sig, {SigKind::ByteArray, SigKind::Int}, T_ILLEGAL)) {
@@ -1187,7 +1401,9 @@ bool JeandleIntrinsicLowering::expect_signature(
       case SigKind::ByteArray:  basic = T_ARRAY;  array_name = "[B"; break;
       case SigKind::IntArray:   basic = T_ARRAY;  array_name = "[I"; break;
       case SigKind::LongArray:  basic = T_ARRAY;  array_name = "[J"; break;
-      case SigKind::Int:        basic = T_INT;    array_name = nullptr; break;
+      case SigKind::Int:        basic = T_INT;     array_name = nullptr; break;
+      case SigKind::Long:       basic = T_LONG;    array_name = nullptr; break;
+      case SigKind::Boolean:    basic = T_BOOLEAN; array_name = nullptr; break;
       case SigKind::Object:     basic = T_OBJECT; array_name = nullptr; break;
       default:                  return false;
     }
