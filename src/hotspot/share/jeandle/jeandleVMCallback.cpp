@@ -533,12 +533,104 @@ uintptr_t JeandleVMCallback::get_mirror_klass(int oop_id) {
   return record_klass_metadata(klass);
 }
 
+int JeandleVMCallback::are_same_class_mirrors(int left_oop_id, int right_oop_id) {
+  ciObject* left = oop_by_id(left_oop_id);
+  ciObject* right = oop_by_id(right_oop_id);
+  if (left == nullptr || right == nullptr || !left->is_instance() ||
+      !right->is_instance() ||
+      left->as_instance()->java_mirror_type() == nullptr ||
+      right->as_instance()->java_mirror_type() == nullptr) {
+    return -1;
+  }
+  return left->equals(right) ? 1 : 0;
+}
+
 int JeandleVMCallback::get_klass_layout_helper(uintptr_t klass_ptr) {
   if (klass_ptr == 0) {
     return 0;
   }
   Klass* klass = reinterpret_cast<Klass*>(klass_ptr);
   return klass->layout_helper();
+}
+
+int JeandleVMCallback::get_super_check_offset(uintptr_t klass_ptr) {
+  Klass* klass = reinterpret_cast<Klass*>(klass_ptr);
+  return klass->super_check_offset();
+}
+
+int JeandleVMCallback::get_klass_modifier_flags(uintptr_t klass_ptr) {
+  Klass* klass = reinterpret_cast<Klass*>(klass_ptr);
+  return klass->modifier_flags();
+}
+
+int64_t JeandleVMCallback::get_klass_access_flags(uintptr_t klass_ptr, int mask) {
+  static_assert(llvm::jeandle::ClassQueryAccessFlagsMask ==
+                (JVM_ACC_WRITTEN_FLAGS | JVM_ACC_IS_HIDDEN_CLASS));
+  if (klass_ptr == 0 ||
+      (static_cast<uint32_t>(mask) & ~llvm::jeandle::ClassQueryAccessFlagsMask) != 0) {
+    return -1;
+  }
+  return static_cast<uint32_t>(reinterpret_cast<Klass*>(klass_ptr)->access_flags().as_int()) &
+         static_cast<uint32_t>(mask);
+}
+
+uintptr_t JeandleVMCallback::get_super_klass(uintptr_t klass_ptr) {
+  if (klass_ptr == 0) {
+    return llvm::jeandle::MirrorKlassUnavailable;
+  }
+  VM_ENTRY_MARK;
+  Klass* super = reinterpret_cast<Klass*>(klass_ptr)->super();
+  if (super == nullptr) {
+    return 0;
+  }
+  return record_klass_metadata(ciEnv::current()->get_klass(super));
+}
+
+uintptr_t JeandleVMCallback::get_class_superclass(int oop_id) {
+  ciObject* oop = oop_by_id(oop_id);
+  if (oop == nullptr || oop->is_null_object() || !oop->is_instance()) {
+    return llvm::jeandle::MirrorKlassUnavailable;
+  }
+  ciType* type = oop->as_instance()->java_mirror_type();
+  if (type == nullptr) {
+    return llvm::jeandle::MirrorKlassUnavailable;
+  }
+  if (!type->is_klass()) {
+    return 0;
+  }
+  ciKlass* klass = type->as_klass();
+  if (!klass->is_loaded()) {
+    return llvm::jeandle::MirrorKlassUnavailable;
+  }
+  VM_ENTRY_MARK;
+  Klass* raw = static_cast<Klass*>(klass->constant_encoding());
+  if (raw->is_interface()) {
+    return 0;
+  }
+  Klass* super = raw->is_array_klass() ? vmClasses::Object_klass() : raw->super();
+  return super == nullptr ? 0 : record_klass_metadata(ciEnv::current()->get_klass(super));
+}
+
+int JeandleVMCallback::get_caller_class(int scope_id) {
+  if (scope_id < 0) {
+    return -1;
+  }
+  JeandleCompilation* comp = JeandleCompilation::current();
+  assert(comp != nullptr, "Must be called in compile thread");
+  JeandleInlineTree* tree = comp->inline_tree_for_scope(scope_id);
+  if (tree == nullptr || !tree->method()->caller_sensitive()) {
+    return -1;
+  }
+  // The getCallerClass frame itself is not present in the inline tree.
+  // Its direct Java caller must be CallerSensitive, and subsequent ignored
+  // security frames do not determine the requested caller class.
+  for (tree = tree->caller_tree(); tree != nullptr; tree = tree->caller_tree()) {
+    ciMethod* method = tree->method();
+    if (!method->is_ignored_by_security_stack_walk()) {
+      return comp->compiled_code()->find_or_insert_oop(method->holder()->java_mirror());
+    }
+  }
+  return -1;
 }
 
 llvm::jeandle::ConstantFieldResult
@@ -1249,7 +1341,14 @@ void JeandleVMCallback::register_callbacks() {
   callbacks.GetOopKlass = &JeandleVMCallback::get_oop_klass;
   callbacks.GetKlassConstant = &JeandleVMCallback::get_klass_constant;
   callbacks.GetMirrorKlass = &JeandleVMCallback::get_mirror_klass;
+  callbacks.AreSameClassMirrors = &JeandleVMCallback::are_same_class_mirrors;
   callbacks.GetKlassLayoutHelper = &JeandleVMCallback::get_klass_layout_helper;
+  callbacks.GetSuperCheckOffset = &JeandleVMCallback::get_super_check_offset;
+  callbacks.GetKlassModifierFlags = &JeandleVMCallback::get_klass_modifier_flags;
+  callbacks.GetKlassAccessFlags = &JeandleVMCallback::get_klass_access_flags;
+  callbacks.GetSuperKlass = &JeandleVMCallback::get_super_klass;
+  callbacks.GetClassSuperclass = &JeandleVMCallback::get_class_superclass;
+  callbacks.GetCallerClass = &JeandleVMCallback::get_caller_class;
   callbacks.GetKlassConstantField = &JeandleVMCallback::get_klass_constant_field;
   callbacks.IsKlassInitialized = &JeandleVMCallback::is_klass_initialized;
   callbacks.GetJavaMirror = &JeandleVMCallback::get_java_mirror;
