@@ -46,6 +46,14 @@ bool JeandleIntrinsicLowering::cpu_supports_popcount() {
   return true;
 }
 
+bool JeandleIntrinsicLowering::cpu_supports_bit_shuffle() {
+  // C2 lowers compress/expand with the SVE2 BEXT/BDEP instructions, which
+  // Jeandle does not wire up yet (Graal is x86-only here too). Declining
+  // falls back to a normal invoke of the inlinable Java implementation,
+  // which has the exact same bit semantics.
+  return false;
+}
+
 bool JeandleIntrinsicLowering::cpu_supports_cache_writeback() {
   return VM_Version::supports_data_cache_line_flush();
 }
@@ -115,4 +123,13 @@ bool JeandleIntrinsicLowering::lower_writeback_sync(vmIntrinsics::ID id) {
       llvm::Intrinsic::aarch64_dmb, {}, {builder.getInt32(0xb)});
   }
   return true;
+}
+
+bool JeandleIntrinsicLowering::lower_bit_shuffle(vmIntrinsics::ID) {
+  // Unreachable today: is_supported() gates all four bit-shuffle IDs on
+  // cpu_supports_bit_shuffle(), which returns false above. Defined so the
+  // shared translation unit's reference to this function resolves on
+  // aarch64. Returning false keeps the normal-invoke fallback if the gate
+  // ever opens before an aarch64 lowering (SVE2 BEXT/BDEP) exists.
+  return false;
 }

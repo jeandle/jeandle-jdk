@@ -110,6 +110,25 @@ public class FileCheck {
         return signature.toString();
     }
 
+    // Restrict subsequent checks to one multiline LLVM function definition.
+    public void selectFunction(String definitionPattern) {
+        Pattern pattern = Pattern.compile(definitionPattern);
+        for (int start = 0; start < lines.size(); start++) {
+            if (!pattern.matcher(lines.get(start)).find()) {
+                continue;
+            }
+            for (int end = start + 1; end < lines.size(); end++) {
+                if (lines.get(end).equals("}")) {
+                    lines = List.copyOf(lines.subList(start, end + 1));
+                    lineIndex = 0;
+                    return;
+                }
+            }
+            throw new IllegalArgumentException("Unterminated function: " + definitionPattern);
+        }
+        throw new IllegalArgumentException("Function not found: " + definitionPattern);
+    }
+
     // Check if str appears in the file.
     public void check(String content) {
         boolean found = false;

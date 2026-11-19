@@ -233,6 +233,14 @@
       llvm::Type::getDoubleTy(context),                                             \
       llvm::Type::getDoubleTy(context))                                             \
                                                                                     \
+  def(StubRoutines_dpow,                                                            \
+      StubRoutines::dpow(),                                                         \
+      true,                                                                         \
+      true,                                                                         \
+      llvm::Type::getDoubleTy(context),                                             \
+      llvm::Type::getDoubleTy(context),                                             \
+      llvm::Type::getDoubleTy(context))                                             \
+                                                                                    \
   def(__llvm_deoptimize,                                                            \
       SharedRuntime::uncommon_trap_blob()->entry_point(),                           \
       true,                                                                         \
@@ -295,6 +303,14 @@
       SharedRuntime::dexp,                                                          \
       false,                                                                        \
       true,                                                                         \
+      llvm::Type::getDoubleTy(context),                                             \
+      llvm::Type::getDoubleTy(context))                                             \
+                                                                                    \
+  def(SharedRuntime_dpow,                                                           \
+      SharedRuntime::dpow,                                                          \
+      false,                                                                        \
+      true,                                                                         \
+      llvm::Type::getDoubleTy(context),                                             \
       llvm::Type::getDoubleTy(context),                                             \
       llvm::Type::getDoubleTy(context))                                             \
                                                                                     \

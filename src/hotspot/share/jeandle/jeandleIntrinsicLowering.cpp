@@ -39,12 +39,15 @@
 #include "jeandle/jeandleUtils.hpp"
 
 #include "jeandle/__hotspotHeadersBegin__.hpp"
+#include "ci/ciEnv.hpp"
 #include "ci/ciField.hpp"
+#include "ci/ciInstance.hpp"
 #include "ci/ciInstanceKlass.hpp"
 #include "ci/ciKlass.hpp"
 #include "ci/ciMethod.hpp"
 #include "ci/ciSignature.hpp"
 #include "ci/ciSymbol.hpp"
+#include "classfile/vmClasses.hpp"
 #include "classfile/javaClasses.hpp"
 #include "classfile/vmIntrinsics.hpp"
 #include "interpreter/bytecodes.hpp"
@@ -134,11 +137,34 @@ bool JeandleIntrinsicLowering::is_supported(vmIntrinsics::ID id) {
     case vmIntrinsics::_bitCount_l:
       return cpu_supports_popcount();
 
+    // Integer/Long.compress/expand lower to BMI2 PEXT/PDEP (see
+    // lower_bit_shuffle). There is no dedicated VM flag gate for these IDs
+    // in vmIntrinsics::disabled_by_jvm_flags(). C2 gates the
+    // CompressBits/ExpandBits match rules on the raw hardware feature bit
+    // (VM_Version::supports_bmi2() in Matcher::match_rule_supported) and
+    // does not read UseBMI2Instructions; Jeandle instead keys on the flag,
+    // deliberately: apply_vm_flag_feature_overrides() strips the LLVM
+    // "bmi2" target feature whenever the flag is off, so honoring the same
+    // flag here keeps the gate and the emitted intrinsic consistent. With
+    // -XX:-UseBMI2Instructions the call falls back to the normal invoke,
+    // whose inlinable Java body implements the exact same bit semantics.
+    case vmIntrinsics::_compress_i:
+    case vmIntrinsics::_compress_l:
+    case vmIntrinsics::_expand_i:
+    case vmIntrinsics::_expand_l:
+      return cpu_supports_bit_shuffle();
+
     case vmIntrinsics::_onSpinWait:
       return cpu_supports_spin_wait();
 
     case vmIntrinsics::_vectorizedMismatch:
       return UseVectorizedMismatchIntrinsic;
+
+    // The platform flag already encodes the vector capability C2 requires
+    // (x86: UseAVX >= 2, aarch64: NEON); riscv keeps it off and takes the
+    // Java fallback.
+    case vmIntrinsics::_vectorizedHashCode:
+      return UseVectorizedHashCodeIntrinsic;
 
     // floatToFloat16/float16ToFloat: gated on the same
     // VM_Version::supports_float16() predicate that turns on the template
@@ -160,7 +186,13 @@ bool JeandleIntrinsicLowering::is_supported(vmIntrinsics::ID id) {
     default: break;
   }
 
-  // Always-supported intrinsics — no CPU feature dependency
+  // Always-supported intrinsics — no CPU feature dependency.
+  //
+  // Flag gating for every ID in this switch is enforced by
+  // vmIntrinsics::is_disabled_by_flags(), which try_lower_intrinsic() runs
+  // unconditionally after is_supported() returns true (-XX:-InlineNatives,
+  // -XX:-InlineMathNatives, per-intrinsic flags, and DisableIntrinsic all
+  // act there); the per-case comments below only name the flags involved.
   switch (id) {
     // math
     case vmIntrinsics::_dabs:
@@ -175,6 +207,41 @@ bool JeandleIntrinsicLowering::is_supported(vmIntrinsics::ID id) {
     case vmIntrinsics::_dlog:
     case vmIntrinsics::_dlog10:
     case vmIntrinsics::_dexp:
+
+    // Math.atan2 (_datan2) is deliberately absent from this list: HotSpot has
+    // no runtime entry for it (no StubRoutines::datan2, no
+    // SharedRuntime::datan2) and C2's LibraryCallKit rejects it too, so
+    // Jeandle does not intrinsify it either. Math.atan2 goes through the
+    // normally-inlined pure-Java FdLibm.Atan2 chain, which is bit-identical
+    // to what the interpreter runs.
+
+    // Math.pow: no CPU gating. The dual-path lowering picks the platform's
+    // dpow entry at lowering time (StubRoutines::dpow where the libm stubs
+    // were generated, else SharedRuntime::dpow, else llvm.pow), so no
+    // feature check applies here. Gated by InlineMathNatives.
+    case vmIntrinsics::_dpow:
+
+    // Math.copySign: llvm.copysign is exactly the IEEE copySign operation
+    // the javadoc specifies -- the sign bit of the second operand is copied
+    // verbatim (even when that operand is a NaN or a signed zero) and the
+    // first operand's payload bits, NaN payloads included, pass through
+    // untouched. It lowers to a bit-level sign move on every target Jeandle
+    // supports, never a libcall. Gated by InlineMathNatives &&
+    // UseCopySignIntrinsic.
+    case vmIntrinsics::_dcopySign:
+    case vmIntrinsics::_fcopySign:
+
+    // Math.signum: compare/select IR valid on every target Jeandle supports
+    // (see lower_signum). Gated by InlineMathNatives && UseSignumIntrinsic.
+    case vmIntrinsics::_dsignum:
+    case vmIntrinsics::_fsignum:
+
+    // Math.round(float/double) implement the integer significand algorithm
+    // of java.lang.Math.round with a saturating-cast fallback (see
+    // lower_round); neither requires SSE4.1, matching C2's always-supported
+    // Op_RoundF/Op_RoundD on x86-64. Opt-out uses DisableIntrinsic.
+    case vmIntrinsics::_roundF:
+    case vmIntrinsics::_roundD:
 
     // min/max: no CPU gating needed. llvm.smin/smax always lower to a
     // compare+select/cmov sequence and llvm.minimum/maximum always lower to
@@ -196,11 +263,9 @@ bool JeandleIntrinsicLowering::is_supported(vmIntrinsics::ID id) {
     case vmIntrinsics::_minD_strict:
     case vmIntrinsics::_maxD_strict:
 
-    // fmaD/fmaF: no separate cpu_supports_fma() gate needed. Unlike
-    // rounding/popcount (which have no shared-infrastructure flag check),
-    // vmIntrinsics::is_disabled_by_flags() already requires UseFMA for these
-    // two IDs and runs unconditionally after is_supported() in
-    // try_lower_intrinsic(), so a hardware-less target is rejected there.
+    // fmaD/fmaF: no separate cpu_supports_fma() gate needed: unlike
+    // rounding/popcount, is_disabled_by_flags() already requires UseFMA for
+    // these two IDs (see the note above this switch).
     // (apply_vm_flag_feature_overrides() also strips the LLVM "fma" target
     // feature when UseFMA is off, so even a hypothetical direct call here
     // would still lower correctly, just via a libcall instead of hardware.)
@@ -209,10 +274,23 @@ bool JeandleIntrinsicLowering::is_supported(vmIntrinsics::ID id) {
 
     // getClass
     case vmIntrinsics::_getClass:
+    case vmIntrinsics::_getCallerClass:
 
     // System time queries
     case vmIntrinsics::_currentTimeMillis:
     case vmIntrinsics::_nanoTime:
+
+    // Class queries (the same family as C2's inline_native_Class_query)
+    case vmIntrinsics::_isInstance:
+    case vmIntrinsics::_getModifiers:
+    case vmIntrinsics::_isArray:
+    case vmIntrinsics::_isPrimitive:
+    case vmIntrinsics::_isInterface:
+    case vmIntrinsics::_isHidden:
+    case vmIntrinsics::_getSuperclass:
+    case vmIntrinsics::_getClassAccessFlags:
+    case vmIntrinsics::_Class_cast:
+    case vmIntrinsics::_isAssignableFrom:
 
     // currentThread
     case vmIntrinsics::_currentThread:
@@ -454,9 +532,44 @@ bool JeandleIntrinsicLowering::lower(vmIntrinsics::ID id, const ciMethod* target
     case vmIntrinsics::_fmaF:
       return emit_llvm_builtin(llvm::Intrinsic::fma);
 
+    // Math.copySign: llvm.copysign is bit-identical to the IEEE copySign
+    // operation the javadoc specifies -- the magnitude operand with the sign
+    // bit of the sign operand, copied verbatim even when the sign operand is
+    // a NaN or a signed zero, leaving NaN payloads of the magnitude operand
+    // unmodified. The overloaded intrinsic selects its f32/f64 form from the
+    // Java return type.
+    case vmIntrinsics::_dcopySign:
+    case vmIntrinsics::_fcopySign:
+      return emit_llvm_builtin(llvm::Intrinsic::copysign);
+
+    // Math.signum: single unordered compare + select + copysign
+    // (see lower_signum).
+    case vmIntrinsics::_dsignum:
+    case vmIntrinsics::_fsignum:
+      return lower_signum(id);
+
+    // Math.round: exact ties toward +infinity and Java's saturating
+    // fp->int conversion (see lower_round).
+    case vmIntrinsics::_roundF:
+    case vmIntrinsics::_roundD:
+      return lower_round(id);
+
     case vmIntrinsics::_bitCount_i:
     case vmIntrinsics::_bitCount_l:
       return lower_bit_count(id);
+
+    // Integer/Long.compress/expand: arch-specific BMI2 PEXT/PDEP emission.
+    // lower_bit_shuffle only emits the intrinsic -- constant arguments
+    // (including ones that only later passes reveal, e.g. behind selects or
+    // inlined callers) are folded on the LLVM side by the X86 target's
+    // instCombineIntrinsic hook (X86InstCombineIntrinsic.cpp), which is
+    // active because the optimization pipeline is built with the
+    // compilation TargetMachine; TestBitShuffle covers the fold paths.
+    case vmIntrinsics::_compress_i:
+    case vmIntrinsics::_compress_l:
+    case vmIntrinsics::_expand_i:
+    case vmIntrinsics::_expand_l:
+      return lower_bit_shuffle(id);
 
     case vmIntrinsics::_numberOfLeadingZeros_i:
     case vmIntrinsics::_numberOfLeadingZeros_l:
@@ -479,17 +592,19 @@ bool JeandleIntrinsicLowering::lower(vmIntrinsics::ID id, const ciMethod* target
     case vmIntrinsics::_reverseBytes_s:
       return lower_reverse_bytes_narrow(id);
 
-    // Dual-path libm (JeandleUseHotspotIntrinsics selects the path)
-    // TODO/FIXME: LLVM's `llvm.sin`, `llvm.cos`, etc. do **not** guarantee
-    // fdlibm-compatible results, especially for large inputs where range
-    // reduction quality varies by target. This will cause the calculation
-    // results to be inconsistent with those of the interpreter.
-    //
-    // TODO(#424): This is not AArch64-specific; x86 can diverge too when LLVM
-    // lowers these intrinsics to a different libm implementation. We have
-    // reproduced bit mismatches for dlog and dlog10, so the final design should
-    // decide whether these stay LLVM-backed, become runtime-only, or get a
-    // platform/semantics policy instead of this global switch.
+    // Dual-path libm (JeandleUseHotspotIntrinsics, default true). Selection
+    // is runtime-first (see select_dual_path_libm_callee): the StubRoutines
+    // libm entry when the platform generated one, else the always-linked
+    // SharedRuntime fdlibm port; the llvm builtin is used only when the flag
+    // opts out or no runtime entry is registered. The default makes compiled
+    // Math.{sin,cos,tan,log,log10,exp} (and pow, see lower_pow) call the very
+    // routines the interpreter's Math.* entries call, so compiled and
+    // interpreted execution agree bit-for-bit on x86, where both sides use
+    // the same StubRoutines entry. The LLVM path instead trades that
+    // agreement for compile-time constant folding: llvm.* lowers to the host
+    // libm, whose results can differ from the fdlibm port by 1-2 ulp, and
+    // llvm.pow additionally returns 1.0 instead of the specified NaN for
+    // pow(1.0, non-finite) and pow(-1.0, +-inf) (pinned in TestPowDouble).
     case vmIntrinsics::_dsin:
       return lower_dual_path_libm(llvm::Intrinsic::sin,
                                   "StubRoutines_dsin",
@@ -526,6 +641,11 @@ bool JeandleIntrinsicLowering::lower(vmIntrinsics::ID id, const ciMethod* target
                                   &JeandleRuntimeRoutine::StubRoutines_dexp_callee,
                                   "SharedRuntime_dexp",
                                   &JeandleRuntimeRoutine::SharedRuntime_dexp_callee);
+    // Math.pow: two-argument dual-path call with the guarded sqrt
+    // specialization for a literal 0.5 exponent (see lower_pow); the exact
+    // constant-exponent identities (2.0, +-0.0) are folded on the LLVM side.
+    case vmIntrinsics::_dpow:
+      return lower_pow();
 
     // getClass
     //
@@ -539,6 +659,9 @@ bool JeandleIntrinsicLowering::lower(vmIntrinsics::ID id, const ciMethod* target
       return lower_java_op("jeandle.get_class",
                            {CTRL_NONE, MEM_READ});
 
+    case vmIntrinsics::_getCallerClass:
+      return lower_caller_class();
+
     case vmIntrinsics::_currentTimeMillis:
       return lower_native_time_func(
           JeandleRuntimeRoutine::os_javaTimeMillis_callee(_interp->_module));
@@ -551,6 +674,24 @@ bool JeandleIntrinsicLowering::lower(vmIntrinsics::ID id, const ciMethod* target
       return lower_java_op("jeandle.current_thread_obj",
                            {CTRL_NONE, MEM_READ});
 
+    // Class queries
+    case vmIntrinsics::_isArray:
+    case vmIntrinsics::_isPrimitive:
+    case vmIntrinsics::_isInterface:
+    case vmIntrinsics::_isHidden:
+      return lower_class_boolean_query(id);
+    case vmIntrinsics::_getModifiers:
+    case vmIntrinsics::_getClassAccessFlags:
+      return lower_class_flags_query(id);
+    case vmIntrinsics::_isInstance:
+      return lower_class_is_instance();
+    case vmIntrinsics::_getSuperclass:
+      return lower_class_get_superclass();
+    case vmIntrinsics::_Class_cast:
+      return lower_class_cast();
+    case vmIntrinsics::_isAssignableFrom:
+      return lower_class_is_assignable_from();
+
     // Reference*
     case vmIntrinsics::_Reference_get:
       return lower_java_op("jeandle.reference_get",
@@ -562,6 +703,9 @@ bool JeandleIntrinsicLowering::lower(vmIntrinsics::ID id, const ciMethod* target
 
     case vmIntrinsics::_vectorizedMismatch:
       return lower_vectorized_mismatch();
+
+    case vmIntrinsics::_vectorizedHashCode:
+      return lower_vectorized_hashcode();
 
     // newArray
     case vmIntrinsics::_newArray:
@@ -845,32 +989,74 @@ bool JeandleIntrinsicLowering::emit_llvm_builtin(llvm::Intrinsic::ID llvm_id,
 // lower_dual_path_libm — JeandleUseHotspotIntrinsics selection
 // =============================================================================
 
-bool JeandleIntrinsicLowering::lower_dual_path_libm(llvm::Intrinsic::ID llvm_id,
-                                                     const char* stub_name,
-                                                     JeandleRuntimeCalleeFn stub_fn,
-                                                     const char* shared_name,
-                                                     JeandleRuntimeCalleeFn shared_fn) {
-  if (JeandleUseHotspotIntrinsics) {
-    // Try HotSpot runtime stub -> SharedRuntime -> llvm builtin
-    JeandleRuntimeCalleeFn fn = nullptr;
-    if (JeandleRuntimeRoutine::find_routine_entry(stub_name) != nullptr) {
-      fn = stub_fn;
-    } else if (JeandleRuntimeRoutine::find_routine_entry(shared_name) != nullptr) {
-      fn = shared_fn;
-    }
-    if (fn != nullptr) {
-      static constexpr CallSiteAttributeMetadata libm_attrs = {CTRL_NONE, MEM_NONE};
-      llvm::Value* arg = _interp->_jvm->dpop();
-      llvm::CallBase* site = emit_callsite(fn(_interp->_module), llvm::CallingConv::C,
-                                           {arg}, libm_attrs, /*is_gc_leaf_entry=*/true);
-      _interp->_jvm->dpush(site);
-      return true;
-    }
-    // No runtime available, fall through to LLVM builtin
-    return emit_llvm_builtin(llvm_id);
-  } else {
-    return emit_llvm_builtin(llvm_id);
+// Resolve the runtime callee a dual-path libm lowering should call: the
+// StubRoutines entry when its platform stub was generated, else the
+// always-linked SharedRuntime port. Returns nullptr when
+// JeandleUseHotspotIntrinsics is off or neither entry is registered, in
+// which case the llvm builtin is used instead.
+static JeandleRuntimeCalleeFn select_dual_path_libm_callee(
+    const char* stub_name, JeandleRuntimeCalleeFn stub_fn,
+    const char* shared_name, JeandleRuntimeCalleeFn shared_fn) {
+  if (!JeandleUseHotspotIntrinsics) {
+    return nullptr;
   }
+  // Prefer the stub: it is the very entry the interpreter's Math.* entries
+  // call (the fdlibm-derived ports on some platforms, the Intel LIBM
+  // assembly stubs on x86), so compiled and interpreted results stay
+  // bit-identical on platforms that generate it; SharedRuntime::d* is the
+  // fdlibm port in C and matches the interpreter's fallback configuration.
+  if (JeandleRuntimeRoutine::find_routine_entry(stub_name) != nullptr) {
+    return stub_fn;
+  }
+  if (JeandleRuntimeRoutine::find_routine_entry(shared_name) != nullptr) {
+    return shared_fn;
+  }
+  return nullptr;
+}
+
+llvm::CallBase* JeandleIntrinsicLowering::emit_libm_call(
+    JeandleRuntimeCalleeFn fn, llvm::ArrayRef<llvm::Value*> args) {
+  static constexpr CallSiteAttributeMetadata libm_attrs = {CTRL_NONE, MEM_NONE};
+  llvm::CallBase* call = emit_callsite(fn(_interp->_module), llvm::CallingConv::C, args,
+                                       libm_attrs, /*is_gc_leaf_entry=*/true);
+  // Selected libm entries terminate for every Java floating-point input.
+  call->addFnAttr(llvm::Attribute::WillReturn);
+  return call;
+}
+
+bool JeandleIntrinsicLowering::lower_dual_path_libm(
+    llvm::Intrinsic::ID llvm_id,
+    const char* stub_name, JeandleRuntimeCalleeFn stub_fn,
+    const char* shared_name, JeandleRuntimeCalleeFn shared_fn) {
+  JeandleRuntimeCalleeFn fn =
+      select_dual_path_libm_callee(stub_name, stub_fn, shared_name, shared_fn);
+  if (fn != nullptr) {
+    _interp->_jvm->dpush(emit_libm_call(fn, {_interp->_jvm->dpop()}));
+    return true;
+  }
+  // No runtime available, fall through to the LLVM builtin, which pops the
+  // Java arguments from the target signature itself.
+  return emit_llvm_builtin(llvm_id);
+}
+
+// ---- lower_pow ----
+//
+// Keep the selected runtime call visible to LLVM. LibmIdentityFolding
+// specializes exact constant exponents and guarded fast paths after inlining,
+// including exponents that are not yet constant in the frontend.
+bool JeandleIntrinsicLowering::lower_pow() {
+  JeandleRuntimeCalleeFn dpow_callee = select_dual_path_libm_callee(
+      "StubRoutines_dpow", &JeandleRuntimeRoutine::StubRoutines_dpow_callee,
+      "SharedRuntime_dpow", &JeandleRuntimeRoutine::SharedRuntime_dpow_callee);
+
+  if (dpow_callee != nullptr) {
+    // Pop the JVM-stack doubles in reverse order to preserve (base, exponent).
+    llvm::Value* exponent = _interp->_jvm->dpop();
+    llvm::Value* base = _interp->_jvm->dpop();
+    _interp->_jvm->dpush(emit_libm_call(dpow_callee, {base, exponent}));
+    return true;
+  }
+  return emit_llvm_builtin(llvm::Intrinsic::pow);
 }
 
 // =============================================================================
@@ -2064,6 +2250,276 @@ bool JeandleIntrinsicLowering::lower_object_notify(vmIntrinsics::ID id) {
   return true;
 }
 
+llvm::Value* JeandleIntrinsicLowering::klass_value_for_mirror(
+    llvm::Value* mirror) const {
+  return _interp->call_java_op("jeandle.load_mirror_klass", {mirror});
+}
+
+bool JeandleIntrinsicLowering::lower_class_cast() {
+  // A frequently failing cast must use the ordinary Java exception path.
+  if (_interp->too_many_traps(_interp->_method,
+                              _interp->_bytecodes.cur_bci(),
+                              Deoptimization::Reason_intrinsic)) {
+    return false;
+  }
+
+  llvm::LLVMContext& ctx = *_interp->_context;
+  llvm::IRBuilder<>& builder = _interp->_ir_builder;
+  llvm::Value* object = _interp->_jvm->raw_peek(0).value();
+  llvm::Value* mirror = _interp->_jvm->raw_peek(1).value();
+  llvm::PointerType* klass_ty =
+      llvm::PointerType::get(ctx, llvm::jeandle::AddrSpace::CHeapAddrSpace);
+  llvm::Value* is_null = builder.CreateICmpEQ(
+      object, llvm::ConstantPointerNull::get(
+                  llvm::cast<llvm::PointerType>(object->getType())),
+      "class.cast.is_null");
+
+  llvm::BasicBlock* check =
+      llvm::BasicBlock::Create(ctx, "class_cast_check", _interp->_llvm_func);
+  llvm::BasicBlock* pass =
+      llvm::BasicBlock::Create(ctx, "class_cast_pass", _interp->_llvm_func);
+  llvm::BasicBlock* fail =
+      llvm::BasicBlock::Create(ctx, "class_cast_fail", _interp->_llvm_func);
+  llvm::BasicBlock* non_null =
+      llvm::BasicBlock::Create(ctx, "class_cast_non_null", _interp->_llvm_func);
+  builder.CreateCondBr(is_null, pass, non_null);
+
+  builder.SetInsertPoint(non_null);
+  llvm::Value* klass = klass_value_for_mirror(mirror);
+  llvm::Value* is_primitive = builder.CreateICmpEQ(
+      klass, llvm::ConstantPointerNull::get(klass_ty), "class.cast.is_primitive");
+  builder.CreateCondBr(is_primitive, fail, check);
+
+  builder.SetInsertPoint(check);
+  llvm::Value* ok =
+      _interp->call_java_op("jeandle.check_instanceof", {klass, object});
+  builder.CreateCondBr(ok, pass, fail);
+
+  _interp->uncommon_trap(Deoptimization::Reason_intrinsic,
+                         Deoptimization::Action_maybe_recompile, fail);
+  builder.SetInsertPoint(pass);
+  _interp->_block->set_tail_llvm_block(pass);
+  _interp->_jvm->apop();
+  _interp->_jvm->apop();
+  _interp->_jvm->push(T_OBJECT, object);
+  return true;
+}
+
+bool JeandleIntrinsicLowering::lower_class_is_assignable_from() {
+  llvm::LLVMContext& ctx = *_interp->_context;
+  llvm::IRBuilder<>& builder = _interp->_ir_builder;
+  llvm::Value* sub_mirror = _interp->_jvm->raw_peek(0).value();
+  llvm::Value* super_mirror = _interp->_jvm->raw_peek(1).value();
+  // The call entry checks the receiver; the Class argument also needs a check.
+  _interp->null_check(sub_mirror);
+
+  // Identity fast path: equal mirrors denote the same primitive or reference
+  // type, which is always assignable to itself. Testing the mirrors first
+  // keeps both Klass loads and the subtype ladder off this path, like Graal's
+  // isAssignableFrom snippet. Every remaining primitive case is between
+  // distinct mirrors and therefore answers false.
+  //
+  // Emitted only when both mirrors are dynamic values. A compile-time
+  // constant mirror (a load of an oop-handle global) already folds its
+  // primitive test through constant propagation, and the subtype ladder's
+  // self-compare covers the identity case, so an extra compare-and-branch
+  // in front would only add cost to the far more common miss path.
+  auto is_constant_mirror = [](llvm::Value* mirror) {
+    auto* load = llvm::dyn_cast<llvm::LoadInst>(mirror);
+    return load != nullptr &&
+           llvm::isa_and_nonnull<llvm::GlobalVariable>(
+               load->getPointerOperand()->stripPointerCasts());
+  };
+  // A getClass-origin operand keeps the plain shape: the mirror it would
+  // materialize for the comparison is exactly what the load_mirror_klass
+  // round-trip rewrite removes on the Klass path.
+  auto is_get_class_origin = [](llvm::Value* mirror) {
+    auto* call = llvm::dyn_cast<llvm::CallInst>(mirror);
+    return call != nullptr && call->getCalledFunction() != nullptr &&
+           call->getCalledFunction()->getName() == "jeandle.get_class";
+  };
+  const bool emit_identity_fast_path =
+      !is_constant_mirror(super_mirror) && !is_constant_mirror(sub_mirror) &&
+      !is_get_class_origin(super_mirror) && !is_get_class_origin(sub_mirror);
+
+  // The mirror comparison serves two roles: the identity fast-path branch,
+  // and the answer for identical primitive mirrors ({P,P} same mirror is the
+  // only primitive case that returns true). The gated shape keeps it as a
+  // value feeding the merge from the primitive path, as the original lowering.
+  llvm::Value* same_mirror = builder.CreateICmpEQ(
+      super_mirror, sub_mirror, "class.assignable.same_mirror");
+
+  llvm::BasicBlock* identity = builder.GetInsertBlock();
+  llvm::BasicBlock* primitive =
+      llvm::BasicBlock::Create(ctx, "class_assignable_primitive", _interp->_llvm_func);
+  llvm::BasicBlock* reference =
+      llvm::BasicBlock::Create(ctx, "class_assignable_reference", _interp->_llvm_func);
+  llvm::BasicBlock* merge =
+      llvm::BasicBlock::Create(ctx, "class_assignable_merge", _interp->_llvm_func);
+  if (emit_identity_fast_path) {
+    builder.CreateCondBr(same_mirror, merge, primitive);
+  } else {
+    builder.CreateBr(primitive);
+  }
+
+  builder.SetInsertPoint(primitive);
+  llvm::PointerType* klass_ty =
+      llvm::PointerType::get(ctx, llvm::jeandle::AddrSpace::CHeapAddrSpace);
+  llvm::Constant* null_klass = llvm::ConstantPointerNull::get(klass_ty);
+  llvm::Value* super_klass =
+      klass_value_for_mirror(super_mirror);
+  llvm::Value* sub_klass =
+      klass_value_for_mirror(sub_mirror);
+  llvm::Value* super_primitive = builder.CreateICmpEQ(
+      super_klass, null_klass,
+      "class.assignable.super_primitive");
+  llvm::Value* sub_primitive = builder.CreateICmpEQ(
+      sub_klass, null_klass,
+      "class.assignable.sub_primitive");
+  llvm::Value* any_primitive = builder.CreateOr(
+      super_primitive, sub_primitive, "class.assignable.any_primitive");
+  // Built here so the merge phi's incoming value is defined before this
+  // block's terminator, as the phi dominance rule requires.
+  llvm::Value* same_mirror_result =
+      builder.CreateZExt(same_mirror, builder.getInt32Ty());
+  builder.CreateCondBr(any_primitive, merge, reference);
+
+  builder.SetInsertPoint(reference);
+  llvm::Value* subtype = _interp->call_java_op(
+      "jeandle.check_klass_subtype", {sub_klass, super_klass});
+  llvm::Value* subtype_result =
+      builder.CreateZExt(subtype, builder.getInt32Ty());
+  builder.CreateBr(merge);
+  llvm::BasicBlock* reference_end = builder.GetInsertBlock();
+
+  builder.SetInsertPoint(merge);
+  _interp->_block->set_tail_llvm_block(merge);
+  llvm::PHINode* result = builder.CreatePHI(builder.getInt32Ty(),
+                                             emit_identity_fast_path ? 3 : 2,
+                                             "class.assignable.result");
+  if (emit_identity_fast_path) {
+    result->addIncoming(builder.getInt32(1), identity);
+    result->addIncoming(builder.getInt32(0), primitive);
+  } else {
+    result->addIncoming(same_mirror_result, primitive);
+  }
+  result->addIncoming(subtype_result, reference_end);
+  _interp->_jvm->apop();
+  _interp->_jvm->apop();
+  _interp->_jvm->ipush(result);
+  return true;
+}
+
+// Class mirrors for primitive types (including void.class) have a null
+// java_lang_Class::_klass field. Reference and array mirrors point to their
+// Klass metadata.
+bool JeandleIntrinsicLowering::lower_class_boolean_query(vmIntrinsics::ID id) {
+  llvm::Value* mirror = _interp->_jvm->raw_peek(0).value();
+  const char* operation = nullptr;
+  switch (id) {
+    case vmIntrinsics::_isArray:
+      operation = "jeandle.class_is_array";
+      break;
+    case vmIntrinsics::_isPrimitive:
+      operation = "jeandle.class_is_primitive";
+      break;
+    case vmIntrinsics::_isInterface:
+      operation = "jeandle.class_is_interface";
+      break;
+    case vmIntrinsics::_isHidden:
+      operation = "jeandle.class_is_hidden";
+      break;
+    default:
+      ShouldNotReachHere();
+  }
+  _interp->_jvm->apop();
+  _interp->_jvm->ipush(_interp->call_java_op(operation, {mirror}));
+  return true;
+}
+
+// Class.getModifiers() and Reflection.getClassAccessFlags(Class) both return
+// an i32 flag word.  They share the primitive-mirror default and differ only
+// in the Klass field they expose.  The Reflection method is static, so it must
+// explicitly null-check its Class argument before directly loading from the
+// nonnull mirror.
+bool JeandleIntrinsicLowering::lower_class_flags_query(vmIntrinsics::ID id) {
+  assert(id == vmIntrinsics::_getModifiers ||
+         id == vmIntrinsics::_getClassAccessFlags,
+         "unexpected Class flags intrinsic");
+
+  llvm::Value* mirror = _interp->_jvm->raw_peek(0).value();
+
+  if (id == vmIntrinsics::_getClassAccessFlags) {
+    assert(_target->is_static(), "Reflection.getClassAccessFlags must be static");
+    _interp->null_check(mirror);
+  } else {
+    assert(!_target->is_static(), "Class.getModifiers must be an instance method");
+  }
+
+  const char* operation = id == vmIntrinsics::_getModifiers
+      ? "jeandle.class_get_modifiers"
+      : "jeandle.class_get_access_flags";
+  _interp->_jvm->apop();
+  _interp->_jvm->ipush(_interp->call_java_op(operation, {mirror}));
+  return true;
+}
+
+// Class.isInstance(Object) has a two-oop operand stack and a dynamic subtype
+// check. Its slow path may update Klass::_secondary_super_cache, but the
+// complete check is a GC leaf and cannot deopt or throw.
+bool JeandleIntrinsicLowering::lower_class_is_instance() {
+  assert(_target->intrinsic_id() == vmIntrinsics::_isInstance,
+         "unexpected Class.isInstance intrinsic");
+
+  llvm::LLVMContext& ctx = *_interp->_context;
+  llvm::IRBuilder<>& builder = _interp->_ir_builder;
+
+  // Physical JVM slot map, top to bottom:
+  //   raw depth 0: Object argument
+  //   raw depth 1: java.lang.Class receiver
+  llvm::Value* object = _interp->_jvm->raw_peek(0).value();
+  llvm::Value* mirror = _interp->_jvm->raw_peek(1).value();
+  llvm::Value* klass = klass_value_for_mirror(mirror);
+  klass->setName("class.is_instance.klass");
+
+  llvm::PointerType* c_heap_ptr_ty =
+      llvm::PointerType::get(ctx, llvm::jeandle::AddrSpace::CHeapAddrSpace);
+  llvm::Value* is_primitive = builder.CreateICmpEQ(
+      klass, llvm::ConstantPointerNull::get(c_heap_ptr_ty),
+      "class.is_instance.is_primitive");
+
+  llvm::BasicBlock* primitive_bb = builder.GetInsertBlock();
+  llvm::BasicBlock* instance_bb =
+      llvm::BasicBlock::Create(ctx, "class_is_instance_non_primitive", _interp->_llvm_func);
+  llvm::BasicBlock* merge_bb =
+      llvm::BasicBlock::Create(ctx, "class_is_instance_merge", _interp->_llvm_func);
+  builder.CreateCondBr(is_primitive, merge_bb, instance_bb);
+
+  builder.SetInsertPoint(instance_bb);
+  llvm::Value* instance_result =
+      _interp->call_java_op("jeandle.instanceof", {klass, object});
+  builder.CreateBr(merge_bb);
+  llvm::BasicBlock* instance_end_bb = builder.GetInsertBlock();
+
+  builder.SetInsertPoint(merge_bb);
+  _interp->_block->set_tail_llvm_block(merge_bb);
+  llvm::PHINode* result =
+      builder.CreatePHI(builder.getInt32Ty(), 2, "class.is_instance.result");
+  result->addIncoming(builder.getInt32(0), primitive_bb);
+  result->addIncoming(instance_result, instance_end_bb);
+
+  _interp->_jvm->apop(); // object
+  _interp->_jvm->apop(); // Class receiver
+  _interp->_jvm->ipush(result);
+  return true;
+}
+
+bool JeandleIntrinsicLowering::lower_class_get_superclass() {
+  llvm::Value* mirror = _interp->_jvm->apop();
+  _interp->_jvm->apush(_interp->call_java_op("jeandle.class_get_superclass", {mirror}));
+  return true;
+}
+
 // ---- lower_llvm_bitcast ----
 bool JeandleIntrinsicLowering::lower_llvm_bitcast() {
   llvm::LLVMContext& ctx = *_interp->_context;
@@ -2393,6 +2849,53 @@ bool JeandleIntrinsicLowering::lower_fp_range_check(vmIntrinsics::ID id) {
       {arg, builder.getInt32(static_cast<uint32_t>(mask))});
   _interp->_jvm->ipush(builder.CreateZExt(result, builder.getInt32Ty()));
   return true;
+}
+
+// ---- lower_signum ----
+// Math.signum(double|float) lowers its Java body
+//   return (x == 0.0 || Double.isNaN(x)) ? x : copySign(1.0, x);
+// with the two guard conditions folded into a single unordered compare:
+//   special = fcmp ueq x, 0.0  ; true iff x is NaN or x == 0.0 --
+//                              ; ueq is unordered-or-equal and 0.0 is
+//                              ; never NaN, so this is exactly the Java
+//                              ; disjunction (+0.0 and -0.0 both)
+//   cs      = llvm.copysign(1.0, x) ; +-1.0 carrying the sign of x
+//   res     = select special, x, cs
+// A NaN input returns the original value -- payload and sign preserved,
+// select is not a floating-point operation -- and the zeros return the
+// original signed zero; every other input becomes a signed 1.0.
+bool JeandleIntrinsicLowering::lower_signum(vmIntrinsics::ID id) {
+  llvm::IRBuilder<>& builder = _interp->_ir_builder;
+  bool is_double = (id == vmIntrinsics::_dsignum);
+
+  llvm::Value* x = is_double ? _interp->_jvm->dpop() : _interp->_jvm->fpop();
+  // The value is observed by the guard, passthrough and copysign arms.
+  // A stable choice also exposes the signum identities to LLVM consumers.
+  x = builder.CreateFreeze(x, "signum.input");
+  llvm::Type* fp_ty = x->getType();
+  llvm::Value* special = builder.CreateFCmp(
+      llvm::CmpInst::FCMP_UEQ, x, llvm::ConstantFP::get(fp_ty, 0.0));
+  llvm::Value* cs = builder.CreateIntrinsic(
+      fp_ty, llvm::Intrinsic::copysign,
+      {llvm::ConstantFP::get(fp_ty, 1.0), x});
+  llvm::Value* res = builder.CreateSelect(special, x, cs);
+
+  if (is_double) {
+    _interp->_jvm->dpush(res);
+  } else {
+    _interp->_jvm->fpush(res);
+  }
+  return true;
+}
+
+// ---- lower_round ----
+// Preserve Java round semantics through inlining and high-tier simplification.
+// Exact integer-to-FP round trips can then fold before the phase-1 JavaOp
+// expands the guarded integer-significand algorithm for general inputs.
+bool JeandleIntrinsicLowering::lower_round(vmIntrinsics::ID id) {
+  static constexpr CallSiteAttributeMetadata attrs = {CTRL_NONE, MEM_NONE};
+  return lower_java_op(id == vmIntrinsics::_roundD ? "jeandle.round.double"
+                                                  : "jeandle.round.float", attrs);
 }
 
 // ---- lower_reverse_bytes_narrow ----
@@ -2914,6 +3417,62 @@ bool JeandleIntrinsicLowering::lower_vectorized_mismatch() {
   result->addIncoming(call, stub_done_bb);
   _interp->_block->set_tail_llvm_block(done_bb);
   _interp->_jvm->ipush(result);
+  return true;
+}
+
+// ---- lower_vectorized_hashcode ----
+//
+// ArraysSupport.vectorizedHashCode(Object array, int fromIndex, int length,
+//                                  int initialValue, int basicType) forwards
+// every argument to the jeandle.vectorized_hashcode JavaOp. The op body owns
+// the element interpretation; like C2's inline_vectorizedHashCode, only a
+// compile-time-constant basicType in the set the Java switch implements is
+// intrinsifiable, and anything else replays the Java method (including its
+// IllegalArgumentException). The API is a trusted internal one: as with
+// vectorizedMismatch, no null/range guards are emitted here.
+bool JeandleIntrinsicLowering::lower_vectorized_hashcode() {
+  const char* const op = "jeandle.vectorized_hashcode";
+  llvm::Function* function = _interp->_module.getFunction(op);
+  if (function == nullptr || function->isDeclaration()) {
+    return false;
+  }
+
+  // Operand stack, top to bottom: basicType, initialValue, length,
+  // fromIndex, array. Decline before touching the stack or emitting IR.
+  llvm::Value* basic_type = _interp->_jvm->peek_value(0).value();
+  auto* basic_type_const = llvm::dyn_cast<llvm::ConstantInt>(basic_type);
+  if (basic_type_const == nullptr) {
+    return false;
+  }
+  // The Java constants (ArraysSupport.T_*) share the BasicType numbering.
+  switch (static_cast<BasicType>(static_cast<int>(basic_type_const->getSExtValue()))) {
+    case T_BOOLEAN:
+    case T_CHAR:
+    case T_BYTE:
+    case T_SHORT:
+    case T_INT:
+      break;
+    default:
+      return false;
+  }
+
+  const int nargs = _target->signature()->count();
+  assert(nargs == 5, "vectorizedHashCode has 5 parameters");
+  llvm::SmallVector<llvm::Value*, 5> args;
+  for (int i = 0; i < nargs; ++i) {
+    args.push_back(_interp->_jvm->peek_value(nargs - i - 1).value());
+  }
+  for (int i = nargs - 1; i >= 0; --i) {
+    _interp->_jvm->pop(JeandleType::actual2computational(_target->signature()->type_at(i)->basic_type()));
+  }
+
+  static constexpr CallSiteAttributeMetadata attrs = {CTRL_NONE, MEM_READ};
+  llvm::CallBase* call = _interp->call_java_op(op, args);
+  call->setDoesNotThrow();
+  annotate_call(call, attrs);
+  apply_memory_attr(call, attrs);
+  _interp->_jvm->ipush(call);
+  _interp->_block->set_tail_llvm_block(_interp->_ir_builder.GetInsertBlock());
   return true;
 }
 
@@ -4220,5 +4779,22 @@ bool JeandleIntrinsicLowering::lower_arrayequals(BasicType element_type) {
 
   _interp->_jvm->push(T_BOOLEAN, result);
 
+  return true;
+}
+
+bool JeandleIntrinsicLowering::lower_caller_class() {
+  ciKlass* holder = _interp->_bytecodes.get_declared_method_holder();
+  if (holder == nullptr) {
+    return false;
+  }
+  // Inlinee IR is cached by method, so the original call remains until the
+  // LLVM inline driver can resolve its committed logical caller scope.
+  llvm::InvokeInst* call = _interp->emit_java_call(
+      const_cast<ciMethod*>(_target), holder, _target->signature(), {},
+      /*has_receiver=*/false, /*is_method_handle_invoke=*/false,
+      _interp->_bytecodes.cur_bc_raw(), /*call_does_dispatch=*/false);
+  RETURN_ON_JEANDLE_ERROR(true);
+  call->addFnAttr(llvm::Attribute::get(*_interp->_context, "jeandle-caller-class"));
+  _interp->_jvm->push(T_OBJECT, call);
   return true;
 }

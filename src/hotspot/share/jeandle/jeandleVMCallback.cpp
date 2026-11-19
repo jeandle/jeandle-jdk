@@ -66,6 +66,7 @@
 #include "runtime/globals.hpp"
 #include "runtime/javaThread.hpp"
 #include "runtime/sharedRuntime.hpp"
+#include "runtime/stubRoutines.hpp"
 #include "utilities/globalDefinitions.hpp"
 
 #include <cstdint>
@@ -532,12 +533,104 @@ uintptr_t JeandleVMCallback::get_mirror_klass(int oop_id) {
   return record_klass_metadata(klass);
 }
 
+int JeandleVMCallback::are_same_class_mirrors(int left_oop_id, int right_oop_id) {
+  ciObject* left = oop_by_id(left_oop_id);
+  ciObject* right = oop_by_id(right_oop_id);
+  if (left == nullptr || right == nullptr || !left->is_instance() ||
+      !right->is_instance() ||
+      left->as_instance()->java_mirror_type() == nullptr ||
+      right->as_instance()->java_mirror_type() == nullptr) {
+    return -1;
+  }
+  return left->equals(right) ? 1 : 0;
+}
+
 int JeandleVMCallback::get_klass_layout_helper(uintptr_t klass_ptr) {
   if (klass_ptr == 0) {
     return 0;
   }
   Klass* klass = reinterpret_cast<Klass*>(klass_ptr);
   return klass->layout_helper();
+}
+
+int JeandleVMCallback::get_super_check_offset(uintptr_t klass_ptr) {
+  Klass* klass = reinterpret_cast<Klass*>(klass_ptr);
+  return klass->super_check_offset();
+}
+
+int JeandleVMCallback::get_klass_modifier_flags(uintptr_t klass_ptr) {
+  Klass* klass = reinterpret_cast<Klass*>(klass_ptr);
+  return klass->modifier_flags();
+}
+
+int64_t JeandleVMCallback::get_klass_access_flags(uintptr_t klass_ptr, int mask) {
+  static_assert(llvm::jeandle::ClassQueryAccessFlagsMask ==
+                (JVM_ACC_WRITTEN_FLAGS | JVM_ACC_IS_HIDDEN_CLASS));
+  if (klass_ptr == 0 ||
+      (static_cast<uint32_t>(mask) & ~llvm::jeandle::ClassQueryAccessFlagsMask) != 0) {
+    return -1;
+  }
+  return static_cast<uint32_t>(reinterpret_cast<Klass*>(klass_ptr)->access_flags().as_int()) &
+         static_cast<uint32_t>(mask);
+}
+
+uintptr_t JeandleVMCallback::get_super_klass(uintptr_t klass_ptr) {
+  if (klass_ptr == 0) {
+    return llvm::jeandle::MirrorKlassUnavailable;
+  }
+  VM_ENTRY_MARK;
+  Klass* super = reinterpret_cast<Klass*>(klass_ptr)->super();
+  if (super == nullptr) {
+    return 0;
+  }
+  return record_klass_metadata(ciEnv::current()->get_klass(super));
+}
+
+uintptr_t JeandleVMCallback::get_class_superclass(int oop_id) {
+  ciObject* oop = oop_by_id(oop_id);
+  if (oop == nullptr || oop->is_null_object() || !oop->is_instance()) {
+    return llvm::jeandle::MirrorKlassUnavailable;
+  }
+  ciType* type = oop->as_instance()->java_mirror_type();
+  if (type == nullptr) {
+    return llvm::jeandle::MirrorKlassUnavailable;
+  }
+  if (!type->is_klass()) {
+    return 0;
+  }
+  ciKlass* klass = type->as_klass();
+  if (!klass->is_loaded()) {
+    return llvm::jeandle::MirrorKlassUnavailable;
+  }
+  VM_ENTRY_MARK;
+  Klass* raw = static_cast<Klass*>(klass->constant_encoding());
+  if (raw->is_interface()) {
+    return 0;
+  }
+  Klass* super = raw->is_array_klass() ? vmClasses::Object_klass() : raw->super();
+  return super == nullptr ? 0 : record_klass_metadata(ciEnv::current()->get_klass(super));
+}
+
+int JeandleVMCallback::get_caller_class(int scope_id) {
+  if (scope_id < 0) {
+    return -1;
+  }
+  JeandleCompilation* comp = JeandleCompilation::current();
+  assert(comp != nullptr, "Must be called in compile thread");
+  JeandleInlineTree* tree = comp->inline_tree_for_scope(scope_id);
+  if (tree == nullptr || !tree->method()->caller_sensitive()) {
+    return -1;
+  }
+  // The getCallerClass frame itself is not present in the inline tree.
+  // Its direct Java caller must be CallerSensitive, and subsequent ignored
+  // security frames do not determine the requested caller class.
+  for (tree = tree->caller_tree(); tree != nullptr; tree = tree->caller_tree()) {
+    ciMethod* method = tree->method();
+    if (!method->is_ignored_by_security_stack_walk()) {
+      return comp->compiled_code()->find_or_insert_oop(method->holder()->java_mirror());
+    }
+  }
+  return -1;
 }
 
 llvm::jeandle::ConstantFieldResult
@@ -1182,6 +1275,50 @@ JeandleVMCallback::get_clone_instance_info(uintptr_t klass_ptr,
           std::move(fields)};
 }
 
+// Raw-bit helpers keep NaN payloads and signed zeros intact across the
+// callback boundary; the LLVM pass passes and receives double bit patterns.
+static jdouble libm_arg_bits_to_double(int64_t bits) {
+  jdouble value;
+  memcpy(&value, &bits, sizeof(value));
+  return value;
+}
+
+static int64_t libm_result_to_bits(jdouble value) {
+  int64_t bits;
+  memcpy(&bits, &value, sizeof(bits));
+  return bits;
+}
+
+// Selector values mirror llvm::jeandle::LibmEntry: the callee kind plus the
+// entry the folded call targets. Stub selectors are only produced when the
+// platform generated that stub, so the routine address is non-null there.
+int64_t JeandleVMCallback::evaluate_libm(int entry, int64_t arg_bits, int64_t arg2_bits) {
+  using llvm::jeandle::LibmEntry;
+  using UnaryFn = jdouble (*)(jdouble);
+  using BinaryFn = jdouble (*)(jdouble, jdouble);
+
+  const jdouble x = libm_arg_bits_to_double(arg_bits);
+  const jdouble y = libm_arg_bits_to_double(arg2_bits);
+
+  switch (static_cast<LibmEntry>(entry)) {
+    case LibmEntry::SinStub:   return libm_result_to_bits(reinterpret_cast<UnaryFn>(StubRoutines::dsin())(x));
+    case LibmEntry::SinShared: return libm_result_to_bits(SharedRuntime::dsin(x));
+    case LibmEntry::CosStub:   return libm_result_to_bits(reinterpret_cast<UnaryFn>(StubRoutines::dcos())(x));
+    case LibmEntry::CosShared: return libm_result_to_bits(SharedRuntime::dcos(x));
+    case LibmEntry::TanStub:   return libm_result_to_bits(reinterpret_cast<UnaryFn>(StubRoutines::dtan())(x));
+    case LibmEntry::TanShared: return libm_result_to_bits(SharedRuntime::dtan(x));
+    case LibmEntry::LogStub:   return libm_result_to_bits(reinterpret_cast<UnaryFn>(StubRoutines::dlog())(x));
+    case LibmEntry::LogShared: return libm_result_to_bits(SharedRuntime::dlog(x));
+    case LibmEntry::Log10Stub: return libm_result_to_bits(reinterpret_cast<UnaryFn>(StubRoutines::dlog10())(x));
+    case LibmEntry::Log10Shared: return libm_result_to_bits(SharedRuntime::dlog10(x));
+    case LibmEntry::ExpStub:   return libm_result_to_bits(reinterpret_cast<UnaryFn>(StubRoutines::dexp())(x));
+    case LibmEntry::ExpShared: return libm_result_to_bits(SharedRuntime::dexp(x));
+    case LibmEntry::PowStub:   return libm_result_to_bits(reinterpret_cast<BinaryFn>(StubRoutines::dpow())(x, y));
+    case LibmEntry::PowShared: return libm_result_to_bits(SharedRuntime::dpow(x, y));
+  }
+  return libm_result_to_bits(x);
+}
+
 void JeandleVMCallback::register_callbacks() {
   llvm::jeandle::VMCallbacks callbacks;
   callbacks.IsSubtype = &JeandleVMCallback::is_subtype;
@@ -1204,7 +1341,14 @@ void JeandleVMCallback::register_callbacks() {
   callbacks.GetOopKlass = &JeandleVMCallback::get_oop_klass;
   callbacks.GetKlassConstant = &JeandleVMCallback::get_klass_constant;
   callbacks.GetMirrorKlass = &JeandleVMCallback::get_mirror_klass;
+  callbacks.AreSameClassMirrors = &JeandleVMCallback::are_same_class_mirrors;
   callbacks.GetKlassLayoutHelper = &JeandleVMCallback::get_klass_layout_helper;
+  callbacks.GetSuperCheckOffset = &JeandleVMCallback::get_super_check_offset;
+  callbacks.GetKlassModifierFlags = &JeandleVMCallback::get_klass_modifier_flags;
+  callbacks.GetKlassAccessFlags = &JeandleVMCallback::get_klass_access_flags;
+  callbacks.GetSuperKlass = &JeandleVMCallback::get_super_klass;
+  callbacks.GetClassSuperclass = &JeandleVMCallback::get_class_superclass;
+  callbacks.GetCallerClass = &JeandleVMCallback::get_caller_class;
   callbacks.GetKlassConstantField = &JeandleVMCallback::get_klass_constant_field;
   callbacks.IsKlassInitialized = &JeandleVMCallback::is_klass_initialized;
   callbacks.GetJavaMirror = &JeandleVMCallback::get_java_mirror;
@@ -1213,6 +1357,7 @@ void JeandleVMCallback::register_callbacks() {
   callbacks.IsOkToInline = &JeandleVMCallback::is_ok_to_inline;
   callbacks.RecordInlineResult = &JeandleVMCallback::record_inline_result;
   callbacks.RecordInliningComplete = &JeandleVMCallback::record_inlining_complete;
+  callbacks.EvaluateLibm = &JeandleVMCallback::evaluate_libm;
   callbacks.GetCHAOptInfo = &JeandleVMCallback::get_cha_opt_info;
   callbacks.UpdateCallSite = &JeandleVMCallback::update_call_site;
   callbacks.GetSignatureAccessingKlass = &JeandleVMCallback::get_signature_accessing_klass;
