@@ -73,7 +73,14 @@ class JeandleVMCallback : public AllStatic {
   static uintptr_t   get_oop_klass(int oop_id);
   static uintptr_t   get_klass_constant(uintptr_t klass_ptr);
   static uintptr_t   get_mirror_klass(int oop_id);
+  static int         are_same_class_mirrors(int left_oop_id, int right_oop_id);
   static int         get_klass_layout_helper(uintptr_t klass_ptr);
+  static int         get_super_check_offset(uintptr_t klass_ptr);
+  static int         get_klass_modifier_flags(uintptr_t klass_ptr);
+  static int64_t     get_klass_access_flags(uintptr_t klass_ptr, int mask);
+  static uintptr_t   get_super_klass(uintptr_t klass_ptr);
+  static uintptr_t   get_class_superclass(int oop_id);
+  static int         get_caller_class(int scope_id);
   static bool        is_klass_initialized(uintptr_t klass_ptr);
 
   // Returns the oop id of the java.lang.Class mirror for a VM Klass pointer,
@@ -86,6 +93,10 @@ class JeandleVMCallback : public AllStatic {
   static bool      is_ok_to_inline(int scope_id, int bci, uintptr_t callee_method);
   static bool      record_inline_result(int scope_id, int bci, uintptr_t callee_method, int result);
   static bool      record_inlining_complete();
+  // Evaluates a Jeandle libm entry (llvm::jeandle::LibmEntry selector) on the
+  // exact runtime routine the folded call targets; arguments and result are
+  // raw double bit patterns.
+  static int64_t   evaluate_libm(int entry, int64_t arg_bits, int64_t arg2_bits);
 
   // CHA devirtualization.
   static llvm::jeandle::CHAOptResult get_cha_opt_info(uintptr_t caller_ptr, uintptr_t callee_ptr,

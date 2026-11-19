@@ -330,7 +330,7 @@ JeandleCompilation::JeandleCompilation(llvm::TargetMachine* target_machine,
   }
 
   // Optimize.
-  llvm::jeandle::optimize(*_llvm_module, llvm::OptimizationLevel::O3,
+  llvm::jeandle::optimize(*_llvm_module, _target_machine, llvm::OptimizationLevel::O3,
                           llvm::jeandle::PipelineMode::StubCompilation);
 
   // Verify module in debug builds after optimization.
@@ -1378,7 +1378,7 @@ void JeandleCompilation::compile_java_method() {
   // Optimize.
   {
     JeandleTraceTime tt_optimize("Jeandle LLVM Optimize", llvm_optimizer_timer);
-    llvm::jeandle::optimize(*_llvm_module, llvm::OptimizationLevel::O3,
+    llvm::jeandle::optimize(*_llvm_module, _target_machine, llvm::OptimizationLevel::O3,
                             llvm::jeandle::PipelineMode::MethodCompilation);
   }
 
