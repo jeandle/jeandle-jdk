@@ -81,11 +81,8 @@ public class TestStringCompareFastPaths {
             throw new AssertionError("Missing comparison root: " + name);
         }
         ir = root.group(1);
-        if (name.equals("compareToL") && ir.contains("<32 x i16>")) {
-            throw new AssertionError("Latin1 comparison retains redundant UTF16 vector tier");
-        }
-        if (name.equals("compareToL") && ir.contains("<4 x i16>")) {
-            throw new AssertionError("Latin1 short comparison widens bytes into UTF16 lanes");
+        if (ir.contains("@llvm.vector.reduce.umax.")) {
+            throw new AssertionError("Unexpected byte-maximum reduction in comparison: " + name);
         }
         if (name.startsWith("equals")) {
             if (!ir.contains("load <")
@@ -95,13 +92,7 @@ public class TestStringCompareFastPaths {
             }
             return;
         }
-        boolean latinInteger = name.equals("compareToL");
-        if (latinInteger && (!ir.contains("load i64") || !ir.contains("load i32")
-                || !ir.contains("load i16") || (!ir.contains("@llvm.cttz.") && !ir.contains("@llvm.ctlz."))
-                || Pattern.compile("call[^\\n]*@jeandle\\.string_compare_latin_tail").matcher(ir).find())) {
-            throw new AssertionError("Missing inline integer Latin1 short comparison");
-        }
-        if (!latinInteger && (!ir.contains("load <8 x i") || (!ir.contains("@llvm.cttz.") && !ir.contains("@llvm.ctlz.")))) {
+        if (!ir.contains("load <8 x i") || !ir.contains("@llvm.cttz.")) {
             throw new AssertionError("Missing live vector mismatch recovery: " + name);
         }
         if (Pattern.compile("extractelement <(?:4|8) x i16>[^\\n]*, i(?:32|64) %").matcher(ir).find()) {
@@ -123,14 +114,8 @@ public class TestStringCompareFastPaths {
                 && !Pattern.compile("lshr i64 %n4\\.").matcher(ir).find()) {
             throw new AssertionError("Missing packed four-word mismatch recovery: " + name);
         }
-        if (!latinInteger
-                && !Pattern.compile("@llvm\\.(?:cttz|ctlz)\\.i64\\(i64 %n4\\.").matcher(ir).find()) {
+        if (!Pattern.compile("@llvm\\.(?:cttz|ctlz)\\.i64\\(i64 %n4\\.").matcher(ir).find()) {
             throw new AssertionError("Missing integer four-word mismatch detection: " + name);
-        }
-        if (!name.equals("compareToL")
-                && !Pattern.compile("%vw32\\.length\\.ok[\\w.]* = icmp (?:samesign )?"
-                        + "(?:uge i32 %[\\w.]+, 128|ugt i32 %[\\w.]+, 127)").matcher(ir).find()) {
-            throw new AssertionError("Missing length guard on wide UTF16 comparisons: " + name);
         }
         if (!name.equals("compareToL")
                 && ir.contains("load <32 x i16>")
