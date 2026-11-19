@@ -393,9 +393,9 @@ class AddDerivedOop : public DerivedOopClosure {
   };
 
   virtual void do_derived_oop(derived_base* base, derived_pointer* derived) {
-#if COMPILER2_OR_JVMCI
+#if COMPILER2_OR_JVMCI_OR_JEANDLE
     DerivedPointerTable::add(derived, base);
-#endif // COMPILER2_OR_JVMCI
+#endif // COMPILER2_OR_JVMCI_OR_JEANDLE
   }
 };
 
@@ -877,7 +877,7 @@ void ImmutableOopMapSet::operator delete(void* p) {
 
 //------------------------------DerivedPointerTable---------------------------
 
-#if COMPILER2_OR_JVMCI
+#if COMPILER2_OR_JVMCI_OR_JEANDLE
 
 class DerivedPointerTable::Entry : public CHeapObj<mtCompiler> {
   derived_pointer* _location; // Location of derived pointer, also pointing to base
@@ -976,4 +976,4 @@ void DerivedPointerTable::update_pointers() {
   _active = false;
 }
 
-#endif // COMPILER2_OR_JVMCI
+#endif // COMPILER2_OR_JVMCI_OR_JEANDLE

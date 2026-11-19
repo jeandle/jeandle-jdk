@@ -101,8 +101,10 @@ class ciMethod : public ciMetadata {
 
   // Optional liveness analyzer.
   MethodLiveness* _liveness;
-#if defined(COMPILER2)
+#if defined(COMPILER2) || defined(JEANDLE)
   ciTypeFlow*         _flow;
+#endif // COMPILER2 || JEANDLE
+#ifdef COMPILER2
   BCEscapeAnalyzer*   _bcea;
 #endif
 

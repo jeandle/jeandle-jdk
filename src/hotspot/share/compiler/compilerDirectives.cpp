@@ -596,8 +596,8 @@ void DirectivesStack::init() {
 #if defined(COMPILER1) || INCLUDE_JVMCI
   _default_directives->_c1_store->EnableOption = true;
 #endif
-#ifdef COMPILER2
-  if (CompilerConfig::is_c2_enabled()) {
+#if COMPILER2_OR_JEANDLE
+  if (CompilerConfig::is_high_tier_compiler_enabled()) {
     _default_directives->_c2_store->EnableOption = true;
   }
 #endif

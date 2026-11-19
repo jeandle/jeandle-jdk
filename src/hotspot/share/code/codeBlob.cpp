@@ -498,7 +498,7 @@ DeoptimizationBlob* DeoptimizationBlob::create(
 //----------------------------------------------------------------------------------------------------
 // Implementation of UncommonTrapBlob
 
-#ifdef COMPILER2
+#if COMPILER2_OR_JEANDLE
 UncommonTrapBlob::UncommonTrapBlob(
   CodeBuffer* cb,
   int         size,
@@ -528,7 +528,7 @@ UncommonTrapBlob* UncommonTrapBlob::create(
 }
 
 
-#endif // COMPILER2
+#endif // COMPILER2_OR_JEANDLE
 
 
 //----------------------------------------------------------------------------------------------------

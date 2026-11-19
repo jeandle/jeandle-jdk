@@ -651,12 +651,20 @@ void CompileBroker::compilation_init_phase1(JavaThread* THREAD) {
         _compilers[1] = new JeandleCompiler();
       } else
 #endif // JEANDLE
+#ifdef COMPILER2
       {
         _compilers[1] = new C2Compiler();
       }
+#else
+      {
+        ShouldNotReachHere();
+      }
+#endif // COMPILER2
+#ifdef COMPILER2
       // Register c2 first as c2 CompilerPhaseType idToPhase mapping is explicit.
       // idToPhase mapping for c2 is in opto/phasetype.hpp
       JFR_ONLY(register_jfr_phasetype_serializer(compiler_c2);)
+#endif // COMPILER2
     }
   }
 #endif // COMPILER2_OR_JEANDLE

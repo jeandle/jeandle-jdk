@@ -706,9 +706,9 @@ class CompileReplay : public StackObj {
     } else if (is_c1_compile(comp_level) && !CompilerConfig::is_c1_enabled()) {
       msg = NEW_RESOURCE_ARRAY(char, msg_len);
       jio_snprintf(msg, msg_len, "compilation level %d requires C1", comp_level);
-    } else if (is_c2_compile(comp_level) && !CompilerConfig::is_c2_enabled()) {
+    } else if (is_c2_compile(comp_level) && !CompilerConfig::is_high_tier_compiler_enabled()) {
       msg = NEW_RESOURCE_ARRAY(char, msg_len);
-      jio_snprintf(msg, msg_len, "compilation level %d requires C2", comp_level);
+      jio_snprintf(msg, msg_len, "compilation level %d requires a high-tier compiler", comp_level);
     }
     if (msg != nullptr) {
       report_error(msg);

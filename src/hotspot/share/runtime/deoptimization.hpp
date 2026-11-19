@@ -192,7 +192,7 @@ class Deoptimization : AllStatic {
   // Does the actual work for deoptimizing a single frame
   static void deoptimize_single_frame(JavaThread* thread, frame fr, DeoptReason reason);
 
-#if COMPILER2_OR_JVMCI
+#if COMPILER2_OR_JVMCI_OR_JEANDLE
   // Deoptimize objects, that is reallocate and relock them, just before they
   // escape through JVMTI.  The given vframes cover one physical frame.
   static bool deoptimize_objects_internal(JavaThread* thread, GrowableArray<compiledVFrame*>* chunk,
@@ -208,7 +208,7 @@ class Deoptimization : AllStatic {
   static bool relock_objects(JavaThread* thread, GrowableArray<MonitorInfo*>* monitors,
                              JavaThread* deoptee_thread, frame& fr, int exec_mode, bool realloc_failures);
   static void pop_frames_failed_reallocs(JavaThread* thread, vframeArray* array);
-#endif // COMPILER2_OR_JVMCI
+#endif // COMPILER2_OR_JVMCI_OR_JEANDLE
 
   public:
   static vframeArray* create_vframeArray(JavaThread* thread, frame fr, RegisterMap *reg_map, GrowableArray<compiledVFrame*>* chunk, bool realloc_failures);

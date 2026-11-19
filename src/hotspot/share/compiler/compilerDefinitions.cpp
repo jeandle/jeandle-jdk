@@ -64,8 +64,8 @@ bool CompilationModeFlag::initialize() {
         _mode = Mode::QUICK_ONLY;
       }
     } else if (strcmp(CompilationMode, "high-only") == 0) {
-      if (!CompilerConfig::has_c2() && !CompilerConfig::is_jvmci_compiler()) {
-        print_mode_unavailable("high-only", "there is no c2 or jvmci compiler present");
+      if (!CompilerConfig::has_c2() && !CompilerConfig::is_jeandle_compiler() && !CompilerConfig::is_jvmci_compiler()) {
+        print_mode_unavailable("high-only", "there is no high-tier compiler present");
       } else {
         _mode = Mode::HIGH_ONLY;
       }
@@ -85,7 +85,7 @@ bool CompilationModeFlag::initialize() {
   if (normal()) {
     if (CompilerConfig::is_c1_simple_only()) {
       _mode = Mode::QUICK_ONLY;
-    } else if (CompilerConfig::is_c2_or_jvmci_compiler_only()) {
+    } else if (CompilerConfig::is_high_tier_compiler_only()) {
       _mode = Mode::HIGH_ONLY;
     } else if (CompilerConfig::is_jvmci_compiler_enabled() && CompilerConfig::is_c1_enabled() && !TieredCompilation) {
       warning("Disabling tiered compilation with non-native JVMCI compiler is not recommended, "
@@ -103,7 +103,7 @@ void CompilationModeFlag::print_error() {
     jio_fprintf(defaultStream::error_stream(), "%s quick-only", comma ? "," : "");
     comma = true;
   }
-  if (CompilerConfig::has_c2() || CompilerConfig::has_jvmci()) {
+  if (CompilerConfig::has_c2() || CompilerConfig::has_jeandle() || CompilerConfig::has_jvmci()) {
     jio_fprintf(defaultStream::error_stream(), "%s high-only", comma ? "," : "");
     comma = true;
   }
@@ -230,6 +230,7 @@ bool CompilerConfig::is_compilation_mode_selected() {
   return !FLAG_IS_DEFAULT(TieredCompilation) ||
          !FLAG_IS_DEFAULT(TieredStopAtLevel) ||
          !FLAG_IS_DEFAULT(CompilationMode)
+         JEANDLE_PRESENT(|| !FLAG_IS_DEFAULT(UseJeandleCompiler))
          JVMCI_ONLY(|| !FLAG_IS_DEFAULT(EnableJVMCI)
                     || !FLAG_IS_DEFAULT(UseJVMCICompiler));
 }
@@ -255,7 +256,7 @@ void CompilerConfig::set_legacy_emulation_flags() {
   if (!FLAG_IS_DEFAULT(CompileThreshold)         ||
       !FLAG_IS_DEFAULT(OnStackReplacePercentage) ||
       !FLAG_IS_DEFAULT(InterpreterProfilePercentage)) {
-    if (CompilerConfig::is_c1_only() || CompilerConfig::is_c2_or_jvmci_compiler_only()) {
+    if (CompilerConfig::is_c1_only() || CompilerConfig::is_high_tier_compiler_only()) {
       // This function is called before these flags are validated. In order to not confuse the user with extraneous
       // error messages, we check the validity of these flags here and bail out if any of them are invalid.
       if (!check_legacy_flags()) {
@@ -287,7 +288,7 @@ void CompilerConfig::set_legacy_emulation_flags() {
       FLAG_SET_ERGO(Tier3MinInvocationThreshold, threshold);
       FLAG_SET_ERGO(Tier3CompileThreshold, threshold);
       FLAG_SET_ERGO(Tier3BackEdgeThreshold, osr_threshold);
-      if (CompilerConfig::is_c2_or_jvmci_compiler_only()) {
+      if (CompilerConfig::is_high_tier_compiler_only()) {
         FLAG_SET_ERGO(Tier4InvocationThreshold, threshold);
         FLAG_SET_ERGO(Tier4MinInvocationThreshold, threshold);
         FLAG_SET_ERGO(Tier4CompileThreshold, threshold);
@@ -474,6 +475,14 @@ void CompilerConfig::set_jvmci_specific_flags() {
 #endif // INCLUDE_JVMCI
 
 bool CompilerConfig::check_args_consistency(bool status) {
+#if defined(JEANDLE) && !defined(COMPILER1) && !defined(COMPILER2) && !INCLUDE_JVMCI
+  if (!UseJeandleCompiler && UseCompiler && !is_interpreter_only()) {
+    jio_fprintf(defaultStream::error_stream(),
+                "UseJeandleCompiler cannot be disabled because no other compiler is present.\n");
+    status = false;
+  }
+#endif
+
   // Check lower bounds of the code cache
   // Template Interpreter code is approximately 3X larger in debug builds.
   uint min_code_cache_size = CodeCacheMinimumUseSpace DEBUG_ONLY(* 3);
@@ -583,7 +592,7 @@ void CompilerConfig::ergo_initialize() {
       if (NeverActAsServerClassMachine) {
         set_client_emulation_mode_flags();
       }
-    } else if (!has_c2() && !is_jvmci_compiler()) {
+    } else if (!has_c2() && !is_jeandle_compiler() && !is_jvmci_compiler()) {
       set_client_emulation_mode_flags();
     }
   }

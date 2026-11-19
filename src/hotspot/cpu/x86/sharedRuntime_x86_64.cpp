@@ -2894,7 +2894,7 @@ void SharedRuntime::generate_deopt_blob() {
 #endif
 }
 
-#ifdef COMPILER2
+#if COMPILER2_OR_JEANDLE
 //------------------------------generate_uncommon_trap_blob--------------------
 void SharedRuntime::generate_uncommon_trap_blob() {
   // Allocate space for the code
@@ -3073,7 +3073,7 @@ void SharedRuntime::generate_uncommon_trap_blob() {
   _uncommon_trap_blob =  UncommonTrapBlob::create(&buffer, oop_maps,
                                                  SimpleRuntimeFrame::framesize >> 1);
 }
-#endif // COMPILER2
+#endif // COMPILER2_OR_JEANDLE
 
 //------------------------------generate_handler_blob------
 //
@@ -3721,4 +3721,3 @@ void OptoRuntime::generate_exception_blob() {
   _exception_blob =  ExceptionBlob::create(&buffer, oop_maps, SimpleRuntimeFrame::framesize >> 1);
 }
 #endif // COMPILER2
-

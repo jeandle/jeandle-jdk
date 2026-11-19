@@ -1119,11 +1119,11 @@ bool Universe::should_verify_subset(uint subset) {
 }
 
 void Universe::verify(VerifyOption option, const char* prefix) {
-  COMPILER2_PRESENT(
+#if COMPILER2_OR_JEANDLE
     assert(!DerivedPointerTable::is_active(),
          "DPT should not be active during verification "
          "(of thread stacks below)");
-  )
+#endif
 
   Thread* thread = Thread::current();
   ResourceMark rm(thread);

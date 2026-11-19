@@ -278,8 +278,8 @@
           "Compilation modes: "                                             \
           "default: normal tiered compilation; "                            \
           "quick-only: C1-only mode; "                                      \
-          "high-only: C2/JVMCI-only mode; "                                 \
-          "high-only-quick-internal: C2/JVMCI-only mode, "                  \
+          "high-only: high-tier compiler-only mode; "                       \
+          "high-only-quick-internal: high-tier compiler-only mode, "        \
           "with JVMCI compiler compiled with C1.")                          \
                                                                             \
   product(bool, PrintTieredEvents, false,                                   \
