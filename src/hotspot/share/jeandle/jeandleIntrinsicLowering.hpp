@@ -40,7 +40,9 @@ class ciField;
 class ciInstanceKlass;
 class ciKlass;
 class ciMethod;
+class ciObject;
 class ciSignature;
+class ciType;
 
 // =============================================================================
 // Control-flow facts for a lowered intrinsic call site. Combined into
@@ -250,6 +252,14 @@ class JeandleIntrinsicLowering : public StackObj {
   bool lower_writeback0();           // arch-specific
   bool lower_writeback_sync(vmIntrinsics::ID id); // arch-specific
   bool lower_compare_unsigned(vmIntrinsics::ID id);
+  llvm::Value* klass_value_for_mirror(llvm::Value* mirror) const;
+  bool lower_class_cast();
+  bool lower_caller_class();
+  bool lower_class_is_assignable_from();
+  bool lower_class_boolean_query(vmIntrinsics::ID id);
+  bool lower_class_flags_query(vmIntrinsics::ID id);
+  bool lower_class_is_instance();
+  bool lower_class_get_superclass();
   bool lower_exact_arith(vmIntrinsics::ID id, llvm::Intrinsic::ID overflow_id);
   bool lower_divide_unsigned(vmIntrinsics::ID id);
   bool lower_remainder_unsigned(vmIntrinsics::ID id);
