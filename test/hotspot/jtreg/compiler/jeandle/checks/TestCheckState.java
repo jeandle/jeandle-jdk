@@ -19,9 +19,9 @@
 
 /*
  * @test
- * @summary Versioned checks preserve inline state, monitors, virtual objects, and moving GC
+ * @summary Versioned checks preserve inline state, monitors, virtual objects, and full GC
  * @library /test/lib /
- * @build compiler.jeandle.fileCheck.FileCheck jdk.test.whitebox.WhiteBox
+ * @build compiler.jeandle.checks.CheckLoopShape jdk.test.whitebox.WhiteBox
  * @run driver jdk.test.lib.helpers.ClassFileInstaller jdk.test.whitebox.WhiteBox
  * @run main/othervm -Xbootclasspath/a:. -XX:+UnlockDiagnosticVMOptions -XX:+WhiteBoxAPI
  *      -Xbatch -XX:-TieredCompilation -XX:+UseJeandleCompiler -XX:CompileThreshold=100
@@ -38,7 +38,6 @@
  */
 package compiler.jeandle.checks;
 
-import compiler.jeandle.fileCheck.FileCheck;
 import java.lang.reflect.Method;
 import jdk.test.lib.Asserts;
 import jdk.test.whitebox.WhiteBox;
@@ -105,8 +104,8 @@ public class TestCheckState {
         Method gc = TestCheckState.class.getDeclaredMethod("testGC", int[].class, int.class);
         Asserts.assertTrue(WB.isMethodCompiled(state));
         Asserts.assertTrue(WB.isMethodCompiled(gc));
-        new FileCheck(System.getProperty("user.dir"), gc, true).checkPattern("affine");
-        new FileCheck(System.getProperty("user.dir"), state, true).checkPattern("affine");
+        CheckLoopShape.assertVersioned(gc);
+        CheckLoopShape.assertVersioned(state);
         int before = finalizations;
         Asserts.assertEquals(testState(a, 12), 12049, "virtual fields and array contents after deopt");
         Asserts.assertEquals(finalizations, before + 1);
@@ -117,7 +116,7 @@ public class TestCheckState {
         Asserts.assertEquals(finalizations, before + 2);
         collect = true;
         Asserts.assertEquals(testGC(a, 10), 62);
-        Asserts.assertEquals(collections, 10, "moving collection occurred in compiled loop");
+        Asserts.assertEquals(collections, 10, "full GC requests completed in compiled loop");
         Asserts.assertTrue(WB.isMethodCompiled(gc), "GC loop remains compiled after collection");
         System.out.println("CHECK_STATE_EXECUTED gc=" + collections);
     }

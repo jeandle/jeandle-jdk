@@ -21,7 +21,7 @@
  * @test
  * @summary Loop check optimization preserves zero trips, partial effects, and predicate feedback
  * @library /test/lib /
- * @build compiler.jeandle.fileCheck.FileCheck jdk.test.whitebox.WhiteBox
+ * @build compiler.jeandle.fileCheck.FileCheck compiler.jeandle.checks.CheckLoopShape jdk.test.whitebox.WhiteBox
  * @run driver jdk.test.lib.helpers.ClassFileInstaller jdk.test.whitebox.WhiteBox
  * @run main/othervm -Xbootclasspath/a:. -XX:+UnlockDiagnosticVMOptions -XX:+WhiteBoxAPI
  *      -XX:-OmitStackTraceInFastThrow -Xbatch -XX:-TieredCompilation -XX:+UseJeandleCompiler -XX:CompileThreshold=100
@@ -53,6 +53,7 @@ import jdk.test.whitebox.WhiteBox;
 public class TestLoopChecks {
     private static final WhiteBox WB = WhiteBox.getWhiteBox();
     private static int effects;
+    private static volatile int[] escaped;
 
     public static int testSum(int[] a, int end) {
         int sum = a.length;
@@ -101,6 +102,35 @@ public class TestLoopChecks {
         return sum;
     }
 
+    public static int testDown2(int[] a, int end, int offset) {
+        int sum = 0;
+        for (int i = 0; i > end; i -= 2) {
+            effects++;
+            sum += a[i + offset];
+        }
+        return sum;
+    }
+
+    public static int testDown3(int[] a, int end, int offset) {
+        int sum = 0;
+        for (int i = 0; i > end; i -= 3) {
+            effects++;
+            sum += a[i + offset];
+        }
+        return sum;
+    }
+
+    public static int testKnownLength(int end, int offset) {
+        int[] a = new int[32];
+        escaped = a;
+        int sum = 0;
+        for (int i = 0; i < end; i++) {
+            effects++;
+            sum += a[3 * i + offset];
+        }
+        return sum;
+    }
+
     private static void expectScaleFailure(int[] a, int end, int offset, int count) throws Exception {
         Method target = TestLoopChecks.class.getDeclaredMethod("testScale", int[].class, int.class, int.class);
         WB.enqueueMethodForCompilation(target, 4);
@@ -127,10 +157,21 @@ public class TestLoopChecks {
         return sum;
     }
 
+    private static void assertPairsCompiled() throws Exception {
+        Method pairs = TestLoopChecks.class.getDeclaredMethod("testPairs", int[].class, int[].class, int.class);
+        WB.enqueueMethodForCompilation(pairs, 4);
+        Asserts.assertTrue(WB.isMethodCompiled(pairs), "ordinary testPairs entry compiled before failure");
+    }
+
     public static void main(String[] args) throws Exception {
         int[] a = new int[32];
         java.util.Arrays.fill(a, 3);
+        int[] pairFirst = new int[32];
         for (int n = 0; n < 20000; n++) {
+            Asserts.assertEquals(testPairs(pairFirst, a, 32), 96);
+            Asserts.assertEquals(testDown2(a, -32, 31), 48);
+            Asserts.assertEquals(testDown3(a, -32, 31), 33);
+            Asserts.assertEquals(testKnownLength(10, 1), 0);
             Asserts.assertEquals(testScale(a, 10, 1), 30);
             Asserts.assertEquals(testStrided(a, 0, 10, 1), 12);
             Asserts.assertEquals(testSum(a, 32), 128);
@@ -145,9 +186,37 @@ public class TestLoopChecks {
         before.checkPattern("call i1 @llvm.experimental.widenable.condition");
         FileCheck after = new FileCheck(System.getProperty("user.dir"), method, true);
         after.checkNotPattern("call i1 @llvm.experimental.widenable.condition");
-        new FileCheck(System.getProperty("user.dir"),
-                TestLoopChecks.class.getDeclaredMethod("testScale", int[].class, int.class, int.class), true)
-                .checkPattern("affine");
+        CheckLoopShape.assertVersioned(
+                TestLoopChecks.class.getDeclaredMethod("testScale", int[].class, int.class, int.class));
+        CheckLoopShape.assertVersioned(
+                TestLoopChecks.class.getDeclaredMethod("testDown2", int[].class, int.class, int.class));
+        CheckLoopShape.assertVersioned(
+                TestLoopChecks.class.getDeclaredMethod("testDown3", int[].class, int.class, int.class));
+        CheckLoopShape.assertVersioned(
+                TestLoopChecks.class.getDeclaredMethod("testKnownLength", int.class, int.class));
+        Asserts.assertEquals(testDown2(null, 0, 0), 0);
+        Asserts.assertEquals(testDown3(null, 0, 0), 0);
+        effects = 0;
+        try {
+            testDown2(a, -36, 31);
+            throw new AssertionError("missing negative-stride bounds exception");
+        } catch (ArrayIndexOutOfBoundsException expected) {
+            Asserts.assertEquals(effects, 17);
+        }
+        effects = 0;
+        try {
+            testDown3(a, -36, 31);
+            throw new AssertionError("missing negative-stride bounds exception");
+        } catch (ArrayIndexOutOfBoundsException expected) {
+            Asserts.assertEquals(effects, 12);
+        }
+        effects = 0;
+        try {
+            testKnownLength(12, 1);
+            throw new AssertionError("missing known-length bounds exception");
+        } catch (ArrayIndexOutOfBoundsException expected) {
+            Asserts.assertEquals(effects, 12);
+        }
         Method scaled = TestLoopChecks.class.getDeclaredMethod("testScale", int[].class, int.class, int.class);
         Asserts.assertTrue(WB.isMethodCompiled(scaled));
         Asserts.assertEquals(testScale(null, 0, 0), 0);
@@ -182,6 +251,7 @@ public class TestLoopChecks {
         Asserts.assertEquals(testZero(null, 0), 0);
         Asserts.assertEquals(testZero(null, -1), 0);
         Asserts.assertEquals(testConditional(null, 5, false), 0);
+        assertPairsCompiled();
         int[] first = new int[4];
         try {
             testPairs(first, new int[2], 4);
@@ -192,6 +262,36 @@ public class TestLoopChecks {
             Asserts.assertEquals(first[2], 1);
             Asserts.assertEquals(first[3], 0);
         }
+        assertPairsCompiled();
+        int[] nullSecond = new int[4];
+        try {
+            testPairs(nullSecond, null, 4);
+            throw new AssertionError("missing second-array null exception");
+        } catch (NullPointerException expected) {
+            Asserts.assertEquals(nullSecond[0], 1);
+            Asserts.assertEquals(nullSecond[1], 0);
+            Asserts.assertEquals(nullSecond[2], 0);
+            Asserts.assertEquals(nullSecond[3], 0);
+        }
+        assertPairsCompiled();
+        try {
+            testPairs(new int[0], null, 1);
+            throw new AssertionError("missing first-array bounds exception");
+        } catch (ArrayIndexOutOfBoundsException expected) {
+            // The first access fails before the null second array is used.
+        }
+        assertPairsCompiled();
+        try {
+            testPairs(null, new int[0], 1);
+            throw new AssertionError("missing first-array null exception");
+        } catch (NullPointerException expected) {
+        }
+        assertPairsCompiled();
+        int[] aliased = new int[4];
+        Asserts.assertEquals(testPairs(aliased, aliased, 4), 4);
+        for (int value : aliased) Asserts.assertEquals(value, 1);
+        Asserts.assertEquals(testPairs(null, null, 0), 0);
+        Asserts.assertEquals(testPairs(null, null, -1), 0);
         // Recompile with recorded feedback, then verify no repeated speculation.
         WB.enqueueMethodForCompilation(method, 4);
         Asserts.assertTrue(WB.isMethodCompiled(method));

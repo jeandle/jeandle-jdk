@@ -35,8 +35,10 @@ public class JeandleChecks {
 
     int[] values;
     int[] other;
+    int sequence;
     volatile int[] current;
     static volatile int sink;
+    static volatile int[] escaped;
 
     @Setup
     public void setup() {
@@ -104,6 +106,46 @@ public class JeandleChecks {
         int sum = 0;
         for (int i = 0; i < end; i++) sum += a[3 * i + offset];
         return sum;
+    }
+
+    @Benchmark
+    public int descending() {
+        return descendingKernel(values, -size, size - 1);
+    }
+
+    @CompilerControl(CompilerControl.Mode.DONT_INLINE)
+    public static int descendingKernel(int[] a, int end, int offset) {
+        int sum = 0;
+        for (int i = 0; i > end; i -= 2) sum += a[i + offset];
+        return sum;
+    }
+
+    @Benchmark
+    public int knownLength() {
+        return knownLengthKernel(Math.min((size - 1) / 3, 341), 1);
+    }
+
+    @CompilerControl(CompilerControl.Mode.DONT_INLINE)
+    public static int knownLengthKernel(int end, int offset) {
+        int[] a = new int[1024];
+        escaped = a;
+        int sum = 0;
+        for (int i = 0; i < end; i++) sum += a[3 * i + offset];
+        return sum;
+    }
+
+    @Benchmark
+    public int lengthMerge() {
+        return lengthMergeKernel(values, (sequence++ & 1) == 0);
+    }
+
+    @CompilerControl(CompilerControl.Mode.DONT_INLINE)
+    public static int lengthMergeKernel(int[] a, boolean branch) {
+        int length;
+        if (branch) { length = a.length; touch(a, 1); }
+        else { touch(a, 2); length = a.length; }
+        touch(a, 3);
+        return length + a.length;
     }
 
     @Benchmark
