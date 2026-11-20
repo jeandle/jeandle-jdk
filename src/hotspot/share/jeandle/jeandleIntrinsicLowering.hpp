@@ -337,6 +337,7 @@ class JeandleIntrinsicLowering : public StackObj {
   // UTF16 values in the platform's native byte order.
   bool lower_string_char_access(bool is_store);
   bool lower_string_intrinsic(vmIntrinsics::ID id);
+  bool lower_character_intrinsic(vmIntrinsics::ID id);
   bool lower_arrays_copy_of(bool is_copy_of_range);
   bool lower_object_clone();
   void emit_clone_copy(llvm::Value* src_base,

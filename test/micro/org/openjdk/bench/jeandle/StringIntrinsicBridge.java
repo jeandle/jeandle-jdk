@@ -51,6 +51,25 @@ final class StringIntrinsicBridge {
         ClassWriter writer = new ClassWriter(ClassWriter.COMPUTE_FRAMES | ClassWriter.COMPUTE_MAXS);
         writer.visit(Opcodes.V17, Opcodes.ACC_PUBLIC | Opcodes.ACC_FINAL | Opcodes.ACC_SUPER,
                 NAME.replace('.', '/'), null, "java/lang/Object", null);
+        add(writer, "encodeASCII", "StringCoding", "implEncodeAsciiArray", int.class,
+                char[].class, int.class, byte[].class, int.class, int.class);
+        add(writer, "encodeByteISO", "StringCoding", "implEncodeISOArray", int.class,
+                byte[].class, int.class, byte[].class, int.class, int.class);
+        add(writer, "countPositives", "StringCoding", "countPositives", int.class,
+                byte[].class, int.class, int.class);
+        for (String predicate : new String[] {"isDigit", "isLowerCase", "isUpperCase", "isWhitespace"}) {
+            MethodVisitor method = writer.visitMethod(Opcodes.ACC_PUBLIC | Opcodes.ACC_STATIC,
+                    predicate, "(I)Z", null, null);
+            method.visitCode();
+            method.visitFieldInsn(Opcodes.GETSTATIC, "java/lang/CharacterDataLatin1", "instance",
+                    "Ljava/lang/CharacterDataLatin1;");
+            method.visitVarInsn(Opcodes.ILOAD, 0);
+            method.visitMethodInsn(Opcodes.INVOKEVIRTUAL, "java/lang/CharacterDataLatin1",
+                    predicate, "(I)Z", false);
+            method.visitInsn(Opcodes.IRETURN);
+            method.visitMaxs(0, 0);
+            method.visitEnd();
+        }
         add(writer, "equalsL", "StringLatin1", "equals", boolean.class, byte[].class, byte[].class);
         add(writer, "equalsU", "StringUTF16", "equals", boolean.class, byte[].class, byte[].class);
         add(writer, "compareToL", "StringLatin1", "compareTo", int.class, byte[].class, byte[].class);
@@ -131,33 +150,36 @@ final class StringIntrinsicBridge {
         method.visitEnd();
     }
 
-    private static MethodHandle charSearch(String holder, MethodType type) throws ReflectiveOperationException {
-        String descriptor = "([BIII)I";
+    private static MethodHandle hiddenCall(String holder, String target, MethodType type)
+            throws ReflectiveOperationException {
+        int slash = holder.lastIndexOf('/');
+        String name = holder.substring(0, slash + 1) + "JeandleHiddenIntrinsicBridge";
         ClassWriter writer = new ClassWriter(ClassWriter.COMPUTE_MAXS);
         writer.visit(Opcodes.V17, Opcodes.ACC_FINAL | Opcodes.ACC_SUPER,
-                "java/lang/Jeandle" + holder + "CharBridge", null, "java/lang/Object", null);
+                name, null, "java/lang/Object", null);
+        String descriptor = type.toMethodDescriptorString();
         MethodVisitor method = writer.visitMethod(Opcodes.ACC_PUBLIC | Opcodes.ACC_STATIC,
-                "indexOfChar", descriptor, null, null);
+                "call", descriptor, null, null);
         method.visitAnnotation("Ljdk/internal/vm/annotation/ForceInline;", true).visitEnd();
         method.visitCode();
-        method.visitVarInsn(Opcodes.ALOAD, 0);
-        for (int slot = 1; slot <= 3; slot++) {
-            method.visitVarInsn(Opcodes.ILOAD, slot);
+        int slot = 0;
+        for (Class<?> arg : type.parameterArray()) {
+            Type argument = Type.getType(arg);
+            method.visitVarInsn(argument.getOpcode(Opcodes.ILOAD), slot);
+            slot += argument.getSize();
         }
-        method.visitMethodInsn(Opcodes.INVOKESTATIC, "java/lang/" + holder,
-                "indexOfChar", descriptor, false);
-        method.visitInsn(Opcodes.IRETURN);
+        method.visitMethodInsn(Opcodes.INVOKESTATIC, holder, target, descriptor, false);
+        method.visitInsn(Type.getType(type.returnType()).getOpcode(Opcodes.IRETURN));
         method.visitMaxs(0, 0);
         method.visitEnd();
         writer.visitEnd();
-
         Method bootstrapLookup = TYPE.getDeclaredMethod("lookup");
         bootstrapLookup.setAccessible(true);
         MethodHandles.Lookup lookup = (MethodHandles.Lookup) bootstrapLookup.invoke(null);
-        Class<?> owner = Class.forName("java.lang." + holder);
+        Class<?> owner = Class.forName(holder.replace('/', '.'));
         MethodHandles.Lookup bridge = MethodHandles.privateLookupIn(owner, lookup)
                 .defineHiddenClass(writer.toByteArray(), true, MethodHandles.Lookup.ClassOption.NESTMATE);
-        return bridge.findStatic(bridge.lookupClass(), "indexOfChar", type);
+        return bridge.findStatic(bridge.lookupClass(), "call", type);
     }
 
     static MethodHandle find(String name, Class<?> result, Class<?>... args) {
@@ -167,8 +189,9 @@ final class StringIntrinsicBridge {
                 return MethodHandles.publicLookup().findStatic(TYPE, name, type);
             } catch (NoSuchMethodException absent) {
                 return switch (name) {
-                    case "indexOfL_char" -> charSearch("StringLatin1", type);
-                    case "indexOfU_char" -> charSearch("StringUTF16", type);
+                    case "indexOfL_char" -> hiddenCall("java/lang/StringLatin1", "indexOfChar", type);
+                    case "indexOfU_char" -> hiddenCall("java/lang/StringUTF16", "indexOfChar", type);
+                    case "encodeISO" -> hiddenCall("sun/nio/cs/ISO_8859_1$Encoder", "implEncodeISOArray", type);
                     default -> throw absent;
                 };
             }

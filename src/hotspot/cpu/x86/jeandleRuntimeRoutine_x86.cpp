@@ -249,8 +249,20 @@ void JeandleRuntimeRoutine::generate_zero_heap_words_stub() {
 // SIMD blocks are committed only after validation. Dirty blocks preserve
 // exactly the legal prefix before the first unencodable character.
 void JeandleRuntimeRoutine::generate_string_compress_stub() {
+  generate_character_encoding_stub(_string_compress_stub, false, false);
+}
+
+void JeandleRuntimeRoutine::generate_encode_iso_array_stub() {
+  generate_character_encoding_stub(_encode_iso_array_stub, false, true);
+}
+
+void JeandleRuntimeRoutine::generate_encode_ascii_array_stub() {
+  generate_character_encoding_stub(_encode_ascii_array_stub, true, true);
+}
+
+void JeandleRuntimeRoutine::generate_character_encoding_stub(const char* name, bool ascii, bool return_prefix) {
   ResourceMark rm;
-  CodeBuffer buffer(_string_compress_stub, 2048, 64);
+  CodeBuffer buffer(name, 2048, 64);
   MacroAssembler* masm = new MacroAssembler(&buffer);
   const Register src = c_rarg0;
   const Register dst = c_rarg1;
@@ -258,15 +270,18 @@ void JeandleRuntimeRoutine::generate_string_compress_stub() {
   // c_rarg3 stays distinct from count under both x64 calling conventions;
   // a fixed register choice would alias c_rarg2 on Windows.
   const Register original_count = c_rarg3;
+  const int invalid_mask = ascii ? 0xff80 : 0xff00;
+  const bool avx2 = UseAVX >= 2 && MaxVectorSize >= 32;
+  const bool simd = avx2 || (UseSSE42Intrinsics && MaxVectorSize >= 16);
   Label vector16, vector8, commit8, dirty32, dirty16, dirty8, scalar, scalar_loop, success, failure, done;
   address start = __ pc();
 
   __ movl(original_count, count);
-  if (UseAVX >= 2 && MaxVectorSize >= 32) {
+  if (avx2) {
     Label vector_loop;
     __ cmpl(count, 8);
     __ jcc(Assembler::less, scalar);
-    __ movl(rax, 0xff00);
+    __ movl(rax, invalid_mask);
     __ movdl(xmm3, rax);
     __ vpbroadcastw(xmm3, xmm3, Assembler::AVX_256bit);
     __ bind(vector_loop);
@@ -297,11 +312,11 @@ void JeandleRuntimeRoutine::generate_string_compress_stub() {
     __ addptr(src, 32);
     __ addptr(dst, 16);
     __ subl(count, 16);
-  } else if (UseSSE42Intrinsics) {
+  } else if (simd) {
     Label vector_loop;
     __ cmpl(count, 8);
     __ jcc(Assembler::less, scalar);
-    __ movl(rax, 0xff00ff00);
+    __ movl(rax, invalid_mask | (static_cast<uint32_t>(invalid_mask) << 16));
     __ movdl(xmm3, rax);
     __ pshufd(xmm3, xmm3, 0);
     __ bind(vector_loop);
@@ -321,7 +336,7 @@ void JeandleRuntimeRoutine::generate_string_compress_stub() {
     __ jmp(vector_loop);
   }
 
-  if ((UseAVX >= 2 && MaxVectorSize >= 32) || UseSSE42Intrinsics) {
+  if (simd) {
     __ bind(vector8);
     __ cmpl(count, 8);
     __ jcc(Assembler::less, scalar);
@@ -353,7 +368,7 @@ void JeandleRuntimeRoutine::generate_string_compress_stub() {
   __ align(16);
   __ bind(scalar_loop);
   __ load_unsigned_short(rax, Address(src, 0));
-  __ cmpl(rax, 255);
+  __ cmpl(rax, ascii ? 127 : 255);
   __ jcc(Assembler::above, failure);
   __ movb(Address(dst, 0), rax);
   __ addptr(src, 2);
@@ -364,7 +379,12 @@ void JeandleRuntimeRoutine::generate_string_compress_stub() {
   __ movl(rax, original_count);
   __ jmp(done);
   __ bind(failure);
-  __ xorl(rax, rax);
+  if (return_prefix) {
+    __ movl(rax, original_count);
+    __ subl(rax, count);
+  } else {
+    __ xorl(rax, rax);
+  }
   __ bind(done);
   if (UseAVX > 0) {
     __ vzeroupper();
@@ -373,20 +393,20 @@ void JeandleRuntimeRoutine::generate_string_compress_stub() {
 
   // The first eight words are still in xmm0. Locate the first invalid word
   // and commit only the valid prefix without rereading it one word at a time.
-  if ((UseAVX >= 2 && MaxVectorSize >= 32) || UseSSE42Intrinsics) {
+  if (simd) {
     __ bind(dirty8);
     __ movdl(rax, xmm0);
-    __ testl(rax, 0xff00);
+    __ testl(rax, invalid_mask);
     __ jcc(Assembler::notZero, failure);
     if (UseAVX > 0) {
-      __ vpsrlw(xmm1, xmm0, 8, Assembler::AVX_128bit);
+      __ vpand(xmm1, xmm0, xmm3, Assembler::AVX_128bit);
       __ vpxor(xmm2, xmm2, xmm2, Assembler::AVX_128bit);
       __ vpcmpeqw(xmm1, xmm1, xmm2, Assembler::AVX_128bit);
       __ vpmovmskb(rax, xmm1, Assembler::AVX_128bit);
       __ vpackuswb(xmm0, xmm0, xmm0, Assembler::AVX_128bit);
     } else {
       __ movdqu(xmm1, xmm0);
-      __ psrlw(xmm1, 8);
+      __ pand(xmm1, xmm3);
       __ pxor(xmm2, xmm2);
       __ pcmpeqw(xmm1, xmm2);
       __ pmovmskb(rax, xmm1);
@@ -396,6 +416,9 @@ void JeandleRuntimeRoutine::generate_string_compress_stub() {
     __ andl(rax, 0xffff);
     __ bsfl(rax, rax);
     __ shrl(rax, 1);
+    if (return_prefix) {
+      __ subl(count, rax);
+    }
     __ movq(r11, xmm0);
     Label prefix2, prefix1;
     __ testl(rax, 4);
@@ -415,13 +438,13 @@ void JeandleRuntimeRoutine::generate_string_compress_stub() {
     __ movb(Address(dst, 0), r11);
     __ jmp(failure);
   }
-  if (UseAVX >= 2 && MaxVectorSize >= 32) {
+  if (avx2) {
     __ bind(dirty32);
     __ vptest(xmm0, xmm3, Assembler::AVX_128bit);
     __ jcc(Assembler::notZero, dirty8);
     __ jmp(vector16);
   }
-  if ((UseAVX >= 2 && MaxVectorSize >= 32) || UseSSE42Intrinsics) {
+  if (simd) {
     __ bind(dirty16);
     if (UseAVX > 0) {
       __ vptest(xmm0, xmm3, Assembler::AVX_128bit);
@@ -434,10 +457,74 @@ void JeandleRuntimeRoutine::generate_string_compress_stub() {
   masm->flush();
 
   RuntimeStub* stub = RuntimeStub::new_runtime_stub(
-      _string_compress_stub, &buffer, (int)(__ pc() - start),
+      name, &buffer, (int)(__ pc() - start),
       0 /* frame size */, nullptr /* oop maps */, false);
   address entry = stub->entry_point();
-  _routine_entry[_string_compress_stub] = entry;
+  _routine_entry[name] = entry;
+  _gc_leaf_routines.insert(entry);
+}
+
+// A negative block may return its start: StringCoding accepts any confirmed
+// positive prefix, while all-positive ranges must return their full length.
+void JeandleRuntimeRoutine::generate_count_positives_stub() {
+  ResourceMark rm;
+  CodeBuffer buffer(_count_positives_stub, 1024, 64);
+  MacroAssembler* masm = new MacroAssembler(&buffer);
+  const Register src = c_rarg0;
+  const Register count = c_rarg1;
+  Label vector16, scalar, loop, done;
+  address start = __ pc();
+  __ xorl(rax, rax);
+  if (UseAVX >= 2 && MaxVectorSize >= 32) {
+    Label vector32;
+    __ bind(vector32);
+    __ cmpl(count, 32);
+    __ jcc(Assembler::less, vector16);
+    __ vmovdqu(xmm0, Address(src));
+    __ vpmovmskb(r10, xmm0, Assembler::AVX_256bit);
+    __ testl(r10, r10);
+    __ jcc(Assembler::notZero, done);
+    __ addptr(src, 32);
+    __ subl(count, 32);
+    __ addl(rax, 32);
+    __ jmp(vector32);
+  }
+  __ bind(vector16);
+  if (UseSSE >= 2 && MaxVectorSize >= 16) {
+    Label loop16;
+    __ bind(loop16);
+    __ cmpl(count, 16);
+    __ jcc(Assembler::less, scalar);
+    __ movdqu(xmm0, Address(src));
+    __ pmovmskb(r10, xmm0);
+    __ testl(r10, r10);
+    __ jcc(Assembler::notZero, done);
+    __ addptr(src, 16);
+    __ subl(count, 16);
+    __ addl(rax, 16);
+    __ jmp(loop16);
+  }
+  __ bind(scalar);
+  __ testl(count, count);
+  __ jcc(Assembler::zero, done);
+  __ bind(loop);
+  __ cmpb(Address(src), 0);
+  __ jcc(Assembler::less, done);
+  __ addptr(src, 1);
+  __ addl(rax, 1);
+  __ subl(count, 1);
+  __ jcc(Assembler::notZero, loop);
+  __ bind(done);
+  if (UseAVX > 0) {
+    __ vzeroupper();
+  }
+  __ ret(0);
+  masm->flush();
+  RuntimeStub* stub = RuntimeStub::new_runtime_stub(
+      _count_positives_stub, &buffer, (int)(__ pc() - start),
+      0 /* frame size */, nullptr /* oop maps */, false);
+  address entry = stub->entry_point();
+  _routine_entry[_count_positives_stub] = entry;
   _gc_leaf_routines.insert(entry);
 }
 

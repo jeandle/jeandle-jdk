@@ -2676,6 +2676,42 @@ entry:
   ret void
 }
 
+declare i32 @encode_iso_array_stub(ptr addrspace(1) nocapture readonly align 2,
+                                  ptr addrspace(1) nocapture writeonly, i32) #0 nofree willreturn memory(argmem: readwrite)
+declare i32 @encode_ascii_array_stub(ptr addrspace(1) nocapture readonly align 2,
+                                    ptr addrspace(1) nocapture writeonly, i32) #0 nofree willreturn memory(argmem: readwrite)
+declare i32 @count_positives_stub(ptr addrspace(1) nocapture readonly, i32) #0 nofree willreturn memory(argmem: read)
+
+define private hotspotcc i32 @jeandle.encode_array(ptr addrspace(1) nocapture readonly %src, i32 %srcOff, ptr addrspace(1) nocapture writeonly %dst, i32 %dstOff, i32 %count, i1 %srcBytes, i1 %ascii) noinline optnone "lower-phase"="1" #0 memory(read, argmem: readwrite) {
+entry:
+  %byte.base = load i32, ptr @arrayOopDesc.base_offset_in_bytes.byte
+  %char.base = load i32, ptr @arrayOopDesc.base_offset_in_bytes.char
+  %sb = select i1 %srcBytes, i32 %byte.base, i32 %char.base
+  %sdata = getelementptr i8, ptr addrspace(1) %src, i32 %sb
+  %ddata = getelementptr i8, ptr addrspace(1) %dst, i32 %byte.base
+  %so = zext i32 %srcOff to i64
+  %do = zext i32 %dstOff to i64
+  %sp = getelementptr i16, ptr addrspace(1) %sdata, i64 %so
+  %dp = getelementptr i8, ptr addrspace(1) %ddata, i64 %do
+  br i1 %ascii, label %encode.ascii, label %encode.iso
+encode.ascii:
+  %ascii.result = call i32 @encode_ascii_array_stub(ptr addrspace(1) %sp, ptr addrspace(1) %dp, i32 %count) #0
+  ret i32 %ascii.result
+encode.iso:
+  %iso.result = call i32 @encode_iso_array_stub(ptr addrspace(1) %sp, ptr addrspace(1) %dp, i32 %count) #0
+  ret i32 %iso.result
+}
+
+define private hotspotcc i32 @jeandle.count_positives(ptr addrspace(1) nocapture readonly %src, i32 %offset, i32 %count) noinline optnone "lower-phase"="1" #0 memory(read) {
+entry:
+  %base = load i32, ptr @arrayOopDesc.base_offset_in_bytes.byte
+  %data = getelementptr i8, ptr addrspace(1) %src, i32 %base
+  %off = zext i32 %offset to i64
+  %sp = getelementptr i8, ptr addrspace(1) %data, i64 %off
+  %result = call i32 @count_positives_stub(ptr addrspace(1) %sp, i32 %count) #0
+  ret i32 %result
+}
+
 ; jdk.internal.util.ArraysSupport.vectorizedHashCode as grouped block Horner
 ; updates (all arithmetic wraps mod 2^32 like Java int). The frontend emits
 ; only the five constant basic types below, so the switch folds after inline.
