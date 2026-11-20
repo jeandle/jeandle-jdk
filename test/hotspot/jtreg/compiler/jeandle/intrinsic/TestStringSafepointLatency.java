@@ -37,10 +37,11 @@ import jdk.test.lib.process.ProcessTools;
  * the duration of one search call bounds its contribution to time-to-safepoint
  * (the caller's loop polls between calls). Repetitive text initially matches
  * the fixed filter characters and differs in the middle of the needle.
- * An adaptive filter can reject whole groups of candidates after learning
- * the mismatch position. This case guards against gross regressions in
- * search and GC pause durations; it does not establish a worst-case
- * complexity bound.
+ * The reverse family uses a uniform needle and inserts mismatches at
+ * periodic source positions. Repeated failed confirmations
+ * must reach the linear search fallback. These latency checks guard against
+ * gross search and GC pause regressions; the native tests separately count
+ * code-unit reads to test the algorithm's work bound.
  */
 public class TestStringSafepointLatency {
     // Generous upper bounds; measured values are printed for inspection and
@@ -83,7 +84,14 @@ public class TestStringSafepointLatency {
     private static void runChild() throws Exception {
         String source = "a".repeat(SOURCE_CHARS);
         String needle = "a".repeat(NEEDLE_CHARS / 2) + "b" + "a".repeat(NEEDLE_CHARS - NEEDLE_CHARS / 2 - 1);
-        for (int i = 0; i < 50; i++) {
+        exercise(source, needle);
+        String block = "a".repeat(4095) + "b";
+        exercise(block.repeat(1024), "a".repeat(8192));
+    }
+
+    private static void exercise(String source, String needle) throws Exception {
+        running = true;
+        for (int i = 0; i < 5; i++) {
             sink += search(source, needle);
         }
         if (search(source, needle) != -1) {
