@@ -406,6 +406,16 @@ bool JeandleIntrinsicLowering::is_supported(vmIntrinsics::ID id) {
     case vmIntrinsics::_hashCode:
     case vmIntrinsics::_identityHashCode:
 
+    case vmIntrinsics::_encodeISOArray:
+    case vmIntrinsics::_encodeByteISOArray:
+    case vmIntrinsics::_encodeAsciiArray:
+    case vmIntrinsics::_countPositives:
+    case vmIntrinsics::_isDigit:
+    case vmIntrinsics::_isLowerCase:
+    case vmIntrinsics::_isUpperCase:
+    case vmIntrinsics::_isWhitespace:
+      return true;
+
     // String operations over Latin1 and native-endian UTF16 arrays.
     case vmIntrinsics::_compareToL:
     case vmIntrinsics::_compareToU:
@@ -841,6 +851,16 @@ bool JeandleIntrinsicLowering::lower(vmIntrinsics::ID id, const ciMethod* target
     case vmIntrinsics::_inflateStringC:
     case vmIntrinsics::_inflateStringB:
       return lower_string_intrinsic(id);
+
+    case vmIntrinsics::_encodeISOArray:
+    case vmIntrinsics::_encodeByteISOArray:
+    case vmIntrinsics::_encodeAsciiArray:
+    case vmIntrinsics::_countPositives:
+    case vmIntrinsics::_isDigit:
+    case vmIntrinsics::_isLowerCase:
+    case vmIntrinsics::_isUpperCase:
+    case vmIntrinsics::_isWhitespace:
+      return lower_character_intrinsic(id);
 
     // arraycopy
     case vmIntrinsics::_equalsB:
