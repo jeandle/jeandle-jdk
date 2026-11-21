@@ -1239,12 +1239,22 @@ bool JeandleIntrinsicLowering::lower_base64(vmIntrinsics::ID id) {
   _interp->_jvm->apop();  // receiver, checked by invoke()
 
   if (!encode) {
-    // Leave the final quartet to Java so padding cannot make a vector store
-    // extend beyond the decoded output. decodeBlock may return any prefix.
-    // Small inputs retain at least one full quartet for scalar-only stubs.
+    // Vector stores may extend past their decoded prefix. Leave the final
+    // quartet to Java when the stub can enter such a vector path.
     llvm::Value* length = builder.CreateSub(sl, sp);
+    llvm::Value* needs_tail = builder.CreateICmpSGE(length, builder.getInt32(8));
+#ifdef AMD64
+    // Short x86 inputs store exactly three bytes per quartet. Match both
+    // vector entry thresholds in generate_base64_decodeBlock.
+    bool vbmi = VM_Version::supports_avx512_vbmi() && VM_Version::supports_avx512bw();
+    if (vbmi || VM_Version::supports_avx2()) {
+      needs_tail = builder.CreateICmpSGE(length, builder.getInt32(vbmi ? 32 : 44));
+    } else {
+      needs_tail = builder.getFalse();
+    }
+#endif
     llvm::Value* end = builder.CreateSub(sl, builder.getInt32(4));
-    sl = builder.CreateSelect(builder.CreateICmpSGE(length, builder.getInt32(8)), end, sl);
+    sl = builder.CreateSelect(needs_tail, end, sl);
   }
   llvm::Type* word = native_word_type(*_interp->_context);
   // Stubs receive element0 and independent offsets, including the source end.

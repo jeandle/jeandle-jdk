@@ -100,6 +100,44 @@ public class ChecksumBase64 {
         }
     }
 
+    @State(Scope.Thread)
+    public static class MimeInputs {
+        @Param({"31", "4096", "65536"})
+        public int length;
+        @Param({"bare", "crlf", "noise"})
+        public String separator;
+        public byte[] encoded;
+        public byte[] output;
+        public Base64.Decoder decoder;
+
+        @Setup(Level.Trial)
+        public void setup() {
+            byte[] data = new byte[length];
+            for (int i = 0; i < length; i++) {
+                data[i] = (byte) (i * 37 + length * 11);
+            }
+            byte[] clean = Base64.getEncoder().encode(data);
+            if (separator.equals("crlf")) {
+                encoded = Base64.getMimeEncoder().encode(data);
+            } else if (separator.equals("noise")) {
+                ByteArrayOutputStream bytes = new ByteArrayOutputStream();
+                for (int i = 0; i < clean.length; i++) {
+                    bytes.write(clean[i]);
+                    if (clean[i] != '=' && (i + 1) % 13 == 0) {
+                        bytes.write('\t');
+                        bytes.write(0xff);
+                        bytes.write('!');
+                    }
+                }
+                encoded = bytes.toByteArray();
+            } else {
+                encoded = clean;
+            }
+            output = new byte[length];
+            decoder = Base64.getMimeDecoder();
+        }
+    }
+
     @Benchmark
     public long crc32Byte(Inputs input) {
         input.crc32.update(input.nextByte++);
@@ -171,6 +209,11 @@ public class ChecksumBase64 {
     @Benchmark
     public int decode(TextInputs input) {
         return input.decoder.decode(input.encoded, input.decodeOutput);
+    }
+
+    @Benchmark
+    public int decodeMime(MimeInputs input) {
+        return input.decoder.decode(input.encoded, input.output);
     }
 
     @Benchmark

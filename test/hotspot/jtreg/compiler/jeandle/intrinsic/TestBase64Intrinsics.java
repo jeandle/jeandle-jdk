@@ -41,7 +41,7 @@ public class TestBase64Intrinsics {
     }
 
     public static class Worker {
-        private static final int[] LENGTHS = {0, 1, 2, 3, 4, 7, 8, 15, 16, 23, 24, 31, 32,
+        private static final int[] LENGTHS = {0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 15, 16, 23, 24, 31, 32, 33, 34, 35, 36,
                 47, 48, 63, 64, 75, 76, 77, 255, 256, 4096, 65536};
         private static long result;
 
@@ -109,6 +109,35 @@ public class TestBase64Intrinsics {
             // MIME decoding must resume after a block stops at a non-alphabet byte.
             byte[] noise = "Z m\r\n9v!Y m\tFy".getBytes(StandardCharsets.US_ASCII);
             Asserts.assertEQ(new String(decoders[2].decode(noise), StandardCharsets.US_ASCII), "foobar");
+            for (int length : new int[]{7, 31, 32, 33, 34, 36, 256, 4096}) {
+                byte[] data = new byte[length];
+                for (int i = 0; i < length; i++) {
+                    data[i] = (byte) (i * 37 + length);
+                }
+                byte[] clean = encoders[0].encode(data);
+                for (int stride : new int[]{1, 3, 4, 13, 76}) {
+                    java.io.ByteArrayOutputStream decorated = new java.io.ByteArrayOutputStream();
+                    for (int i = 0; i < clean.length; i++) {
+                        decorated.write(clean[i]);
+                        if (clean[i] != '=' && (i + 1) % stride == 0) {
+                            decorated.write('\r');
+                            decorated.write('\n');
+                            decorated.write(0xff);
+                            decorated.write('!');
+                        }
+                    }
+                    byte[] input = decorated.toByteArray();
+                    byte[] output = new byte[length + 17];
+                    Arrays.fill(output, (byte) 0x5a);
+                    Asserts.assertEQ(decoders[2].decode(input, output), length);
+                    Asserts.assertTrue(Arrays.equals(Arrays.copyOf(output, length), data));
+                    tail(output, length);
+                    byte[] inPlace = input.clone();
+                    Asserts.assertEQ(decoders[2].decode(inPlace, inPlace), length);
+                    Asserts.assertTrue(Arrays.equals(Arrays.copyOf(inPlace, length), data));
+                    consume(output);
+                }
+            }
             System.gc();
             Asserts.assertEQ(encoders[1].encodeToString(new byte[]{(byte) 0xfb, (byte) 0xff, (byte) 0xff}), "-___");
             if (compiled) {
