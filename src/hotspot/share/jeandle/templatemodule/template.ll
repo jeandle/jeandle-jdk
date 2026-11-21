@@ -884,7 +884,7 @@ declare void @StubRoutines_arrayof_jlong_disjoint_arraycopy(
 ; caller overwrites every byte before the array can escape, and
 ; %defer_initialization_membar moves the fast path's publication barrier to
 ; that initializer, which re-issues it once the payload is complete.
-define private hotspotcc ptr addrspace(1) @jeandle.new_array(ptr %array_klass, i32 %length, i32 %size_in_bytes, i32 %zero_start, i32 %length_limit, i1 %uninitialized, i1 %defer_initialization_membar) noinline "lower-phase"="1" "jeandle.not-guaranteed-safepoint" {
+define private hotspotcc nonnull ptr addrspace(1) @jeandle.new_array(ptr %array_klass, i32 %length, i32 %size_in_bytes, i32 %zero_start, i32 %length_limit, i1 %uninitialized, i1 %defer_initialization_membar) noinline "lower-phase"="1" "jeandle.not-guaranteed-safepoint" {
 entry:
   ; Fast-path length cap. %length_limit is a size-derived bound (FastAllocateSizeLimit, scaled
   ; by element size on the caller side) chosen so %size_in_bytes cannot overflow i32 -- it is
@@ -961,8 +961,9 @@ array_post_klass_store:
   ; A tightly coupled initializer overwrites the payload in full before the
   ; array escapes, so its allocation needs no bulk zeroing here.
   %payload_is_empty = icmp eq i32 %zero_start, %size_in_bytes
+  %deferred_payload_is_empty = and i1 %defer_initialization_membar, %payload_is_empty
   %already_initialized = or i1 %uninitialized, %tlab_is_zeroed
-  %skip_clear = or i1 %already_initialized, %payload_is_empty
+  %skip_clear = or i1 %already_initialized, %deferred_payload_is_empty
   br i1 %skip_clear, label %array_after_payload_init, label %array_clear_memory
 
 array_clear_memory:

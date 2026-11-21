@@ -82,6 +82,16 @@ public class JeandleArrayLength {
     }
 
     @Benchmark
+    public int locallyAllocatedReference() {
+        return Array.getLength(new Object[size]);
+    }
+
+    @Benchmark
+    public int locallyAllocatedNonnegative() {
+        return Array.getLength(new int[size & 65535]);
+    }
+
+    @Benchmark
     public int locallyAllocatedPrimitive() {
         return Array.getLength(new int[size]);
     }
