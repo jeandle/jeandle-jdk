@@ -19,14 +19,14 @@
 
 /*
  * @test
- * @summary PEA fresh retry keeps an unavailable nested object real while its
- *          virtual outer holder replays the exact materialized reference
+ * @summary PEA canonicalizes a folded guard before the next round and preserves
+ *          the nested virtual graph through a loop and exact sink replay
  * @library /test/lib /
  * @modules java.base/jdk.internal.misc
  * @build jdk.test.lib.Asserts jdk.test.whitebox.WhiteBox compiler.jeandle.pea.PEATestUtils
  * @run driver jdk.test.lib.helpers.ClassFileInstaller jdk.test.whitebox.WhiteBox
  * @run main/othervm -XX:-UseJeandleCompiler
- *      compiler.jeandle.pea.TestPEALoopKeptRealNestedRefRetry
+ *      compiler.jeandle.pea.TestPEALoopNestedRefCanonicalization
  */
 
 package compiler.jeandle.pea;
@@ -42,9 +42,9 @@ import java.util.regex.Pattern;
 import jdk.internal.misc.Unsafe;
 import jdk.test.lib.Asserts;
 
-public class TestPEALoopKeptRealNestedRefRetry {
+public class TestPEALoopNestedRefCanonicalization {
     private static final String WRAPPER =
-            "compiler.jeandle.pea.TestPEALoopKeptRealNestedRefRetry$TestWrapper";
+            "compiler.jeandle.pea.TestPEALoopNestedRefCanonicalization$TestWrapper";
     private static final String SAFEPOINT_POLL = "jeandle.safepoint_poll";
     private static final String LLVM_LOCAL =
             "(?:%[-A-Za-z$._0-9]+|%\"(?:[^\"\\\\]|\\\\.)*\")";
@@ -52,7 +52,7 @@ public class TestPEALoopKeptRealNestedRefRetry {
 
     public static void main(String[] args) throws Exception {
         Method target = TestWrapper.class.getMethod(
-                "loopKeptRealNestedRefRetry", TestWrapper.Source.class, int.class);
+                "loopNestedRefCanonicalization", TestWrapper.Source.class, int.class);
         Method consume = TestWrapper.class.getDeclaredMethod(
                 "consume", TestWrapper.Outer.class, int.class);
         Method escapeInner = TestWrapper.class.getDeclaredMethod(
@@ -82,7 +82,7 @@ public class TestPEALoopKeptRealNestedRefRetry {
             throws Exception {
         PEATestUtils.PEAReport report = run.report(target);
         Asserts.assertEquals(report.roundCount(), 2,
-                target + ": two outer PEA pipeline rounds expose the unavailable nested state");
+                target + ": two outer PEA rounds canonicalize and virtualize the nested graph");
         report.assertStoppedAtIterationCap();
 
         for (PEATestUtils.PEARound round : report.rounds()) {
@@ -108,59 +108,66 @@ public class TestPEALoopKeptRealNestedRefRetry {
         Asserts.assertNotEquals(outerKey, innerKey,
                 target + ": Outer and Inner have distinct source identities");
 
-        PEATestUtils.PEARound retry = report.round(1);
-        PEATestUtils.IRBody retryBefore = retry.before();
-        PEATestUtils.IRBody after = retry.after();
+        PEATestUtils.PEARound second = report.round(1);
+        PEATestUtils.IRBody retryBefore = second.before();
+        PEATestUtils.IRBody after = second.after();
         retryBefore.assertRetainsExactlyOriginalAllocations(
                 source, outerKey, innerKey);
         after.assertRetainsExactlyOriginalAllocations(source, outerKey, innerKey);
-        retryBefore.assertOccurrenceCount("br i1 true", 1);
+        retryBefore.assertAbsent("br i1 true");
+        retryBefore.assertAbsent(PEATestUtils.MethodId.of(escapeInner).llvmFunctionName());
 
         String sourceInner = allocationResult(retryBefore, innerKey);
         int innerElemsOffset = offset(TestWrapper.Inner.class, "elems");
         FieldStore sourceInnerStore = exactFieldStore(
                 retryBefore, sourceInner, innerElemsOffset, PEATestUtils.referencePointerType());
-        PEATestUtils.IRBlock constantBranch =
-                retryBefore.blockContaining("br i1 true", 0);
-        List<String> branchTargets = constantBranch.conditionalBranchTargets();
-        Asserts.assertNotEquals(branchTargets.get(0), branchTargets.get(1),
-                target + ": the syntactic dead predecessor remains in round-two input");
-        PEATestUtils.IRBlock liveArm =
-                retryBefore.blockByLabel(branchTargets.get(0));
-        Asserts.assertTrue(liveArm.conditionalBranchTargets().contains(
-                        sourceInnerStore.block().label()),
-                target + ": the live arm's null-check successor defines Inner.elems");
-        PEATestUtils.IRBlock deadArm =
-                retryBefore.blockByLabel(branchTargets.get(1));
-        deadArm.assertOccurrenceCount(
-                PEATestUtils.MethodId.of(escapeInner).llvmFunctionName(), 1);
+        PEATestUtils.IRBlock sourceGuard = retryBefore.blockContaining(
+                "icmp ne ptr addrspace(1) %0, null", 0);
+        Matcher nullCondition = Pattern.compile("(" + LLVM_LOCAL
+                + ") = icmp ne ptr addrspace\\(1\\) %0, null")
+                .matcher(String.join("\n", sourceGuard.lines()));
+        Asserts.assertTrue(nullCondition.find(), target + ": source null comparison");
+        String guardCondition = nullCondition.group(1);
+        if (sourceGuard.occurrenceCount("br i1 " + guardCondition + ",") == 0) {
+            Matcher widened = Pattern.compile("(" + LLVM_LOCAL + ") = and i1 "
+                    + Pattern.quote(guardCondition) + ", (" + LLVM_LOCAL + ")")
+                    .matcher(String.join("\n", sourceGuard.lines()));
+            Asserts.assertTrue(widened.find(), target + ": source guard conjunction");
+            sourceGuard.assertPresent(widened.group(2)
+                    + " = call i1 @llvm.experimental.widenable.condition()");
+            guardCondition = widened.group(1);
+        }
+        sourceGuard.assertOccurrenceCount("br i1 " + guardCondition + ",", 1);
+        List<String> guardTargets = sourceGuard.conditionalBranchTargets();
+        Asserts.assertEquals(guardTargets.get(0), sourceInnerStore.block().label(),
+                target + ": the source null-check success edge defines Inner.elems");
+        retryBefore.blockByLabel(guardTargets.get(1))
+                .assertOccurrenceCount("@llvm.experimental.deoptimize", 1);
         assertBranchLocalOopLoad(sourceInnerStore, target);
 
-        Asserts.assertEquals(retry.effectCount("Materialize", "[VO=0]"), 1L,
+        Asserts.assertEquals(second.effectCount("Materialize", "[VO=0]"), 1L,
                 target + ": virtual Outer materializes exactly once at its sink");
-        Asserts.assertEquals(retry.effectCount("Materialize"), 1L,
-                target + ": kept-real Inner has no materialization plan");
-        Asserts.assertEquals(retry.effectCount("Materialize", "[VO=1]"), 0L,
-                target + ": unavailable Inner remains an original real allocation");
-        Asserts.assertEquals(retry.effectCount("EliminateAllocation", "[VO=1]"), 0L,
-                target + ": retry does not eliminate the kept-real Inner allocation");
-        Asserts.assertEquals(retry.effectCount("EliminateStore", "[VO=1]"), 0L,
-                target + ": retry preserves the kept-real Inner initialization store");
-        Asserts.assertEquals(retry.effectCount("EliminateStore", "[VO=0]"), 1L,
+        Asserts.assertEquals(second.effectCount("Materialize", "[VO=1]"), 1L,
+                target + ": virtual Inner materializes exactly once at the same sink");
+        Asserts.assertEquals(second.effectCount("Materialize"), 2L,
+                target + ": both nested objects have exactly one replay plan");
+        Asserts.assertEquals(second.effectCount("EliminateStore", "[VO=1]"), 1L,
+                target + ": Inner.elems remains virtual until the sink");
+        Asserts.assertEquals(second.effectCount("EliminateStore", "[VO=0]"), 1L,
                 target + ": Outer.iterator remains virtual until the sink");
 
         String outerResult = allocationResult(after, outerKey);
         String innerResult = allocationResult(after, innerKey);
         FieldStore retainedInnerStore = exactFieldStore(
                 after, innerResult, innerElemsOffset, PEATestUtils.referencePointerType());
-        Asserts.assertEquals(retainedInnerStore.line(), sourceInnerStore.line(),
-                target + ": retry preserves its input Inner.elems store exactly");
-        Asserts.assertEquals(retainedInnerStore.block().label(),
-                sourceInnerStore.block().label(),
-                target + ": retry keeps Inner.elems on its defining branch");
+        Asserts.assertTrue(PEATestUtils.isEquivalentReferenceOperand(
+                        after, retainedInnerStore.value(), sourceInnerStore.value()),
+                target + ": Inner.elems replays the exact source payload SSA value");
 
         String consumeName = PEATestUtils.MethodId.of(consume).llvmFunctionName();
         PEATestUtils.IRBlock sink = after.blockContaining(consumeName, 0);
+        Asserts.assertEquals(retainedInnerStore.block().label(), sink.label(),
+                target + ": Inner.elems replays only in the sink block");
         int outerIteratorOffset = offset(TestWrapper.Outer.class, "iterator");
         FieldStore outerReplay = exactFieldStore(
                 after, outerResult, outerIteratorOffset, PEATestUtils.referencePointerType());
@@ -169,10 +176,11 @@ public class TestPEALoopKeptRealNestedRefRetry {
         Asserts.assertTrue(PEATestUtils.isEquivalentReferenceOperand(
                         after, outerReplay.value(), innerResult),
                 target + ": Outer.iterator replays the retained Inner SSA value");
+        sink.assertBefore(retainedInnerStore.line(), 0, outerReplay.line(), 0);
         sink.assertBefore(outerReplay.line(), 0, consumeName, 0);
 
         PEATestUtils.PEAEffect materialize =
-                retry.uniqueEffect("Materialize", "[VO=0]");
+                second.uniqueEffect("Materialize", "[VO=0]");
         Asserts.assertTrue(materialize.detail().contains("block=%" + sink.label() + " "),
                 target + ": Outer materialization effect targets the sink block");
         Asserts.assertTrue(materialize.detail().contains(outerResult + " = "),
@@ -180,7 +188,7 @@ public class TestPEALoopKeptRealNestedRefRetry {
 
         PEATestUtils.DeoptBundle loopBundle =
                 uniqueVirtualLoopBundle(after, target);
-        loopBundle.assertVirtualObjectIds(0);
+        loopBundle.assertVirtualObjectIds(0, 1);
         PEATestUtils.VirtualObjectDescriptor outer = loopBundle.virtualObject(0);
         Asserts.assertEquals(outer.kind(), PEATestUtils.DescriptorKind.INSTANCE,
                 target + ": loop descriptor is the virtual Outer instance");
@@ -190,12 +198,30 @@ public class TestPEALoopKeptRealNestedRefRetry {
                 outer.fields().get(outerIteratorOffset);
         Asserts.assertEquals(iterator.basicType(), PEATestUtils.DeoptBasicType.OBJECT,
                 target + ": Outer.iterator deopt basic type");
-        Asserts.assertEquals(iterator.value().kind(),
+        loopBundle.assertVORef(0, outerIteratorOffset, 1);
+        PEATestUtils.VirtualObjectDescriptor inner = loopBundle.virtualObject(1);
+        Asserts.assertEquals(inner.kind(), PEATestUtils.DescriptorKind.INSTANCE,
+                target + ": loop descriptor is the virtual Inner instance");
+        Asserts.assertEquals(inner.fields().keySet(), Set.of(innerElemsOffset),
+                target + ": virtual Inner carries exactly its payload reference");
+        PEATestUtils.VirtualObjectEntry elems = inner.fields().get(innerElemsOffset);
+        Asserts.assertEquals(elems.basicType(), PEATestUtils.DeoptBasicType.OBJECT,
+                target + ": Inner.elems deopt basic type");
+        Asserts.assertEquals(elems.value().kind(),
                 PEATestUtils.DeoptValueKind.MATERIALIZED_OOP,
-                target + ": loop deopt state holds a real Inner oop");
-        Asserts.assertEquals(iterator.value().operand(),
-                "ptr addrspace(1) " + innerResult,
-                target + ": loop deopt state names the retained Inner allocation");
+                target + ": loop deopt state retains the real source payload");
+        String payloadOperand = elems.value().operand();
+        Asserts.assertTrue(payloadOperand.startsWith("ptr addrspace(1) "),
+                target + ": payload descriptor contains a wide oop");
+        String payloadValue = payloadOperand.substring("ptr addrspace(1) ".length());
+        if (PEATestUtils.useCompressedOops()) {
+            after.assertLineCount(payloadValue + " = addrspacecast "
+                    + PEATestUtils.referencePointerType() + " " + sourceInnerStore.value()
+                    + " to ptr addrspace(1)", 1);
+        } else {
+            Asserts.assertEquals(payloadValue, sourceInnerStore.value(),
+                    target + ": loop descriptor names the exact source payload SSA value");
+        }
     }
 
     private static PEATestUtils.DeoptBundle uniqueVirtualLoopBundle(
@@ -318,7 +344,7 @@ public class TestPEALoopKeptRealNestedRefRetry {
             payload.tag = 1234;
             Source source = new Source();
             source.value = payload;
-            int result = loopKeptRealNestedRefRetry(source, 3);
+            int result = loopNestedRefCanonicalization(source, 3);
 
             Asserts.assertEquals(result, 209804,
                     "exact loop and nested-reference result");
@@ -327,7 +353,7 @@ public class TestPEALoopKeptRealNestedRefRetry {
             Asserts.assertNotNull(escapedOuter.iterator,
                     "materialized Outer preserves its Inner reference");
             Asserts.assertNotNull(escapedOuter.iterator.elems,
-                    "retained Inner preserves its branch-local elems field");
+                    "materialized Inner preserves its branch-local elems field");
             Asserts.assertSame(escapedOuter.iterator.elems, payload,
                     "Outer replay reaches the exact source payload through Inner");
             Asserts.assertEquals(escapedOuter.iterator.elems.tag, 1234,
@@ -337,18 +363,16 @@ public class TestPEALoopKeptRealNestedRefRetry {
             System.out.println("PEA-RESULT:" + result);
         }
 
-        public static int loopKeptRealNestedRefRetry(Source source, int trips) {
+        public static int loopNestedRefCanonicalization(Source source, int trips) {
             Guard guard = new Guard();
             guard.zero = 0;
 
             Outer outer = new Outer();
             Inner inner = new Inner();
             int state = 7;
-            // The first PEA round retains inner because the opaque escape is
-            // still present while folding the guard to a literal true branch.
-            // The second round proves the escape arm dead, but source.value is
-            // still defined below that branch and does not statically dominate
-            // the loop poll where outer's nested state is reconstructed.
+            // Folding the virtual guard removes the opaque escape arm before
+            // the next PEA round. Both nested objects can then stay virtual
+            // through the loop and replay their exact references at the sink.
             if (guard.zero != 0) {
                 escapeInner(inner);
                 state = -19;

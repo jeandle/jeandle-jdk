@@ -212,9 +212,10 @@ public class TestPEAStressAndConservativeFallback {
                 before.allocations().get(0).key(),
                 before.allocations().get(1).key());
         before.assertOccurrenceCount(MONITOR_ENTER, 1);
-        before.assertOccurrenceCount(MONITOR_EXIT, 3);
+        // Non-null allocation facts remove the dead null-handler exit.
+        before.assertOccurrenceCount(MONITOR_EXIT, 2);
         after.assertOccurrenceCount(MONITOR_ENTER, 1);
-        after.assertOccurrenceCount(MONITOR_EXIT, 3);
+        after.assertOccurrenceCount(MONITOR_EXIT, 2);
 
         String callee = PEATestUtils.MethodId.of(consumer).llvmFunctionName();
         PEATestUtils.IRBlock call = after.blockContaining("@\"" + callee + "\"", 0);

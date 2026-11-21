@@ -108,11 +108,12 @@ public class TestPEAExceptionHandlerGraphDeopt {
         PEATestUtils.PEAReport report = run.report(target);
         Asserts.assertEquals(report.roundCount(), 2,
                 target + ": default PEA iteration count");
-        Asserts.assertEquals(report.transformChangedRoundCount(), 2,
-                target + ": allocation folding and follow-up CFG cleanup");
-        Asserts.assertEquals(report.transformIdleRoundCount(), 0,
-                target + ": both default rounds perform useful transforms");
-        report.assertStoppedAtIterationCap();
+        Asserts.assertEquals(report.transformChangedRoundCount(), 1,
+                target + ": allocation folding and CFG cleanup complete in round 0");
+        Asserts.assertEquals(report.transformIdleRoundCount(), 1,
+                target + ": round 1 confirms the stable graph");
+        report.assertStoppedAtFixpoint();
+        report.assertFinalTransformIdle();
         PEATestUtils.PEARound first = report.round(0);
         PEATestUtils.PEARound second = report.round(1);
         PEATestUtils.IRBody before = report.round0Before();

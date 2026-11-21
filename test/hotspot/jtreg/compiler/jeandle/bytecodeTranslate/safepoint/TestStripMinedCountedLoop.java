@@ -428,31 +428,28 @@ public class TestStripMinedCountedLoop {
     }
 
     // =========================================================================
-    // countedDecreasing: a decreasing IV cannot prove exclusive no-wrap up
-    // front, so inclusive-loop-versioning clones a slow path behind a no-wrap
-    // guard; the provably-no-wrap fast path is then strip-mined with an
-    // inclusive bound (batch-stride 999 = (N-1) * stride 1). Poll elimination
-    // keeps one poll per loop: outer latch, slow-path clone, plus the return
-    // poll (3 in total).
+    // countedDecreasing: scalar loop canonicalization proves the decrement
+    // cannot wrap. Strip mining clamps the inclusive lower bound directly;
+    // only the outer-latch and return polls remain.
     // =========================================================================
 
     private static void checkCountedDecreasingStructural(String out) {
         String suffix = CLASS + "_countedDecreasing";
         checkPipelineShape(out, suffix);
         String wrapped = findStripMiningAfter(out, suffix, ".outer.latch");
-        Asserts.assertNotNull(wrapped, suffix + ": expected the versioned fast path to be strip-mined");
+        Asserts.assertNotNull(wrapped, suffix + ": expected the decreasing loop to be strip-mined");
         IRDumpParser.assertContains(wrapped, "llvm.smin",
             suffix + ": decreasing IV must be clamped with an SCEV-friendly min");
-        Asserts.assertEquals(IRDumpParser.countPolls(pollElimAfter(out, suffix, 1)), 3,
-            suffix + ": outer-latch poll + slow-path poll + return poll must survive");
+        Asserts.assertEquals(IRDumpParser.countPolls(pollElimAfter(out, suffix, 1)), 2,
+            suffix + ": outer-latch poll and return poll must survive");
     }
 
     private static void checkCountedDecreasingTrace(String out) {
         String suffix = CLASS + "_countedDecreasing";
-        Asserts.assertTrue(IRDumpParser.traceChunkContains(out, suffix, "inclusive-versioning: versioned"),
-            suffix + ": decreasing IV needs inclusive loop versioning before strip-mining");
+        Asserts.assertFalse(IRDumpParser.traceChunkContains(out, suffix, "inclusive-versioning: versioned"),
+            suffix + ": canonical decrement has a proven no-wrap bound");
         Asserts.assertTrue(IRDumpParser.traceChunkContains(out, suffix, "strip-mine: wrapped loop"),
-            suffix + ": the versioned fast path must be strip-mined");
+            suffix + ": the canonical decreasing loop must be strip-mined");
     }
 
     // =========================================================================

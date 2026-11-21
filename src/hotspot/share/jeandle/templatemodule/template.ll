@@ -719,7 +719,7 @@ return_block:
 ; length-header load (e.g. produced by hand-written IR). Non-virtual receivers
 ; are unaffected: the call survives to JavaOperationLower(1) and the same body
 ; is inlined there.
-define hotspotcc i32 @jeandle.arraylength(ptr addrspace(1) nocapture readonly %array_oop) noinline "lower-phase"="1" #0 {
+define hotspotcc noundef range(i32 0, -2147483648) i32 @jeandle.arraylength(ptr addrspace(1) noundef nocapture readonly %array_oop) noinline willreturn memory(read) "lower-phase"="1" #0 {
 entry:
   %length_offset = load i32, ptr @arrayOopDesc.length_offset_in_bytes
   %length_addr = getelementptr inbounds i8, ptr addrspace(1) %array_oop, i32 %length_offset

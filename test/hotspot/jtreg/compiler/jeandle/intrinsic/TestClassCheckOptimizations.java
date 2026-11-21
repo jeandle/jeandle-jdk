@@ -147,11 +147,45 @@ public class TestClassCheckOptimizations {
         String function = definition.group(1);
         Matcher cold = Pattern.compile("(?m)^bci_5_null_check_fail:[^\\r\\n]*\\R"
                 + "((?:[ \\t]+[^\\r\\n]*\\R)+)").matcher(function);
-        require(cold.find(), "Missing receiver-null deopt block: " + method);
+        Pattern mirrorLoad = Pattern.compile("(%[^\\s]+) = load(?: atomic)? ptr addrspace\\(1\\), ptr %");
+        if (!cold.find()) {
+            // Widening can move the receiver check before getClass, so neither
+            // the normal path nor the earlier deopt state needs a mirror.
+            require(!mirrorLoad.matcher(function).find(), "Mirror materialized after guard widening: " + method);
+            Matcher objectCheck = Pattern.compile("(%[^\\s]+) = icmp ne ptr addrspace\\(1\\) %1, null")
+                    .matcher(function);
+            Matcher targetCheck = Pattern.compile("(%[^\\s]+) = icmp ne ptr addrspace\\(1\\) %0, null")
+                    .matcher(function);
+            require(objectCheck.find() && targetCheck.find(), "Missing widened null checks: " + method);
+            String objectOK = Pattern.quote(objectCheck.group(1));
+            String targetOK = Pattern.quote(targetCheck.group(1));
+            Matcher guard = Pattern.compile("(%[^\\s]+) = and i1 (?:" + objectOK + ", " + targetOK
+                    + "|" + targetOK + ", " + objectOK + ")\\R"
+                    + "[ \\t]*br i1 \\1, label %[^\\r\\n]+, label %([-A-Za-z$._0-9]+)")
+                    .matcher(function);
+            require(guard.find(), "Missing combined object and receiver guard: " + method);
+            String failLabel = guard.group(2);
+            Matcher fail = Pattern.compile("(?m)^" + Pattern.quote(failLabel) + ":[^\\r\\n]*\\R"
+                    + "((?:[ \\t]+[^\\r\\n]*\\R)+)").matcher(function);
+            require(fail.find(), "Missing widened deopt block: " + method);
+            String deopt = fail.group(1);
+            Matcher request = Pattern.compile("(%[^\\s]+) = select i1 " + objectOK + ", i32 -139, i32 -10")
+                    .matcher(deopt);
+            require(request.find(), "Widened check must distinguish predicate and null traps: " + method);
+            require(deopt.contains("@__llvm_deoptimize, i32 1, i32 0, i32 " + request.group(1) + ",")
+                    && deopt.stripTrailing().endsWith("unreachable"), "Missing widened deopt call: " + method);
+            int bci = method.equals("originDirect") ? 2 : 1;
+            require(Pattern.compile("\"deopt\"\\([^\\r\\n]*i64 1, i32 " + bci + ", i32 " + bci
+                    + ",[^\\r\\n]*ptr addrspace\\(1\\) %1(?:,|\\))").matcher(deopt).find(),
+                    "Widened deopt must retain the getClass frame and object: " + method);
+            require(deopt.contains("ptr addrspace(1) %0,"), "Widened deopt must retain the target: " + method);
+            Matcher incoming = Pattern.compile("label %" + Pattern.quote(failLabel) + "(?:,|\\s)").matcher(function);
+            require(incoming.find() && !incoming.find(), "Unexpected incoming widened deopt path: " + method);
+            return;
+        }
         String deopt = cold.group(1);
         require(deopt.contains("@__llvm_deoptimize") && deopt.stripTrailing().endsWith("unreachable"),
                 "Mirror materialization must terminate in deopt: " + method);
-        Pattern mirrorLoad = Pattern.compile("(%[^\\s]+) = load(?: atomic)? ptr addrspace\\(1\\), ptr %");
         Matcher mirrors = mirrorLoad.matcher(deopt);
         require(mirrors.find(), "Missing evaluated getClass argument for deopt: " + method);
         Matcher state = Pattern.compile("\"deopt\"\\(([^\\r\\n]*?)\\)(?:, \"| \\])").matcher(deopt);
