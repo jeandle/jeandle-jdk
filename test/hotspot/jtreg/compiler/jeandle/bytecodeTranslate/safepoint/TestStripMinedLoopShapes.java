@@ -381,7 +381,7 @@ public class TestStripMinedLoopShapes {
         assertMined(output, "withContinue");
         assertMined(output, "withEarlyReturn");
         assertUnminedWithPoll(output, "decreasingArray");
-        assertUnminedWithPoll(output, "arrayLength");
+        assertMined(output, "arrayLength");
         assertUnminedWithPoll(output, "withBreak");
 
         Asserts.assertTrue(minedSection(output, "exactBudget").isEmpty(),
@@ -414,9 +414,9 @@ public class TestStripMinedLoopShapes {
             assertTrace(output, method, "strip-mine: wrapped loop");
         }
         assertTrace(output, "strideTwoConstant", "batch-stride=14");
-        assertTrace(output, "decreasingArray", "inclusive loop not versionable");
-        assertTrace(output, "arrayLength", "no canonical integer induction");
-        assertTrace(output, "withBreak", "no supported latch compare");
+        assertTrace(output, "decreasingArray", "no canonical integer induction");
+        assertTrace(output, "arrayLength", "strip-mine: wrapped loop");
+        assertTrace(output, "withBreak", "unsupported loop shape");
         assertTrace(output, "exactBudget", "within budget (short loop)");
     }
 }

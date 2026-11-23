@@ -113,6 +113,8 @@ public class TestPEADeoptImplicitTrap {
         return builder.extraFlags("-D" + SCENARIO_PROPERTY + "=" + scenario.name(),
                         "--add-exports=java.base/jdk.internal.misc=ALL-UNNAMED",
                         "-XX:+JeandleUseProfile",
+                        // Keep original trap BCIs for this reconstruction oracle.
+                        "-XX:-ProfileTraps",
                         "-XX:ProfileMaturityPercentage=0",
                         "-XX:CompileThreshold=20000")
                 .inline(TestWrapper.class.getDeclaredMethod("graphRoot"))
@@ -131,7 +133,7 @@ public class TestPEADeoptImplicitTrap {
 
         Asserts.assertEquals(before.peaAllocCount(), 4,
                 target + ": root, peer, shared child, and object array enter PEA");
-        assertTrapSelection(before, target, scenario, "frontend");
+        assertTrapSelection(before, target, scenario, "pre-PEA");
         assertTrapSelection(after, target, scenario, "final");
         List<Integer> occurrences = trapOccurrences(after, target, scenario, "final");
         int trapOccurrence = occurrences.get(scenario.trapOccurrenceAtBCI);
@@ -165,7 +167,7 @@ public class TestPEADeoptImplicitTrap {
                     DEOPT_CALLEE, occurrences.get(0));
             Asserts.assertEquals(first.rootScope().bci(), scenario.trapBCI,
                     target + ": first " + phase + " bounds-method trap BCI");
-            if (phase.equals("frontend")) {
+            if (phase.equals("pre-PEA")) {
                 assertBoundsFailBlocks(body, target, occurrences);
             }
         }

@@ -75,3 +75,36 @@ The callee IR file is loaded on demand, only when replay executes a
 is executed, the file does not need to exist. When it is needed, a missing or
 invalid file, or a missing callee definition for the recorded method ID, causes
 replay to fail.
+
+### Null and array bounds checks
+
+`-passes=jeandle-array-length-optimization` performs immutable array-length CSE
+and safe loop motion. `-passes=jeandle-check-optimization` runs bounded standard
+LLVM scalar and loop check transforms, then lowers widenable conditions and
+restores canonical loop form. Both operate on Java method compilation modules.
+The JIT schedules them before safepoint strip mining, independently of PEA.
+
+`-jeandle-optimize-checks=false` disables the additional loop/widening transforms;
+scalar cleanup and lowering of temporary widenable conditions still run. The
+expensive stage is capped at 256 guards and 10000 instructions per function;
+LLVM profitability limits also constrain loop cloning. Use
+`-pass-remarks-missed=jeandle-check-optimization` to diagnose the method budget.
+
+
+Cold null and bounds checks may use LLVM widenable branches. A real check
+failure retains its original exception reason; a failure introduced by widening
+uses `predicate / reinterpret` and resumes at the original bytecode state.
+After a predicate failure, subsequent compilation of that method keeps ordinary
+checks. Widening requires trap profiling and an enabled interpreter; hot throws
+and `-XX:-ProfileTraps` retain ordinary checks. Non-speculative elimination and
+array-length folding remain available in those configurations.
+
+`-passes=jeandle-affine-check-versioning` complements the standard transforms
+for affine checks whose index stride differs from the loop controller stride.
+It requires an innermost canonical loop and a dominating array length. It checks
+controller wrap and index endpoints independently in a wider integer, then
+selects a fast loop or the original checked loop. Failed guards preserve the
+original exceptions and partial effects without new deoptimization states.
+The pass versions at most four loops per function, each at most 200 instructions
+and eight candidate checks. Both versions are marked to prevent repeated cloning.
+Use `-jeandle-affine-check-versioning=false` to disable this complementary stage.

@@ -154,9 +154,7 @@ public class TestSymbolicIndexStorePEA {
         Asserts.assertEquals(secondFallback.virtualObjects().size(), 0,
                 target + ": second bounds fallback uses the first materialization");
         PEATestUtils.IRBody finalIR = run.finalIR(target);
-        assertFinalBoundsFallback(finalIR,
-                List.of(finalIR.blockContaining(BOUNDS_COMPARE, 1),
-                        finalIR.blockContaining("_checksumValues", 0)));
+        PEATestUtils.assertMergedIntArrayBounds(finalIR, "_checksumValues");
 
         loadConsumer.assertOccurrenceCount("store atomic", 4);
         for (int replay = 0; replay < 4; replay++) {
@@ -445,7 +443,17 @@ public class TestSymbolicIndexStorePEA {
         Asserts.assertTrue(result.find(),
                 target + ": bounds comparison has an SSA result");
         bounds.assertOccurrenceCount(comparisons.get(0), 1);
-        bounds.assertOccurrenceCount("br i1 " + result.group(1) + ",", 1);
+        String condition = result.group(1);
+        if (bounds.occurrenceCount("br i1 " + condition + ",") == 0) {
+            Matcher widened = Pattern.compile("(" + LLVM_LOCAL + ") = and i1 "
+                    + Pattern.quote(condition) + ", (" + LLVM_LOCAL + ")")
+                    .matcher(String.join("\n", bounds.lines()));
+            Asserts.assertTrue(widened.find(), target + ": bounds guard conjunction");
+            bounds.assertPresent(widened.group(2)
+                    + " = call i1 @llvm.experimental.widenable.condition()");
+            condition = widened.group(1);
+        }
+        bounds.assertOccurrenceCount("br i1 " + condition + ",", 1);
         return bounds;
     }
 

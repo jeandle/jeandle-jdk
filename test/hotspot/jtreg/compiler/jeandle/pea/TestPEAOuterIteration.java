@@ -143,12 +143,12 @@ public class TestPEAOuterIteration {
         cap4.finalAfter().assertRetainsExactlyOriginalAllocations(input);
 
         String escapeName = PEATestUtils.MethodId.of(escape).llvmFunctionName();
-        cap1.round(0).after().assertPresent("br i1 true");
+        cap1.round(0).after().assertLineCount("br i1", 0);
         cap1.round(0).after().assertAbsent("load atomic i32");
-        cap1.round(0).after().assertLineCount("@\"" + escapeName + "\"", 1);
+        cap1.round(0).after().assertAbsent("@\"" + escapeName + "\"");
         Asserts.assertEquals(cap1.round(0).effectCount("Materialize", "[VO=1]"),
                 2L, target + ": candidate replay covers escape and surviving arms");
-        cap2.round(1).before().assertPresent("br i1 true");
+        cap2.round(1).before().assertLineCount("br i1", 0);
         cap2.round(1).before().assertRetainsExactlyOriginalAllocations(
                 input, allocations.get(1).key());
         cap1.finalAfter().assertCrossProcessExactEquals(

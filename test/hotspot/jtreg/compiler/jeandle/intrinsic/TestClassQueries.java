@@ -194,8 +194,9 @@ public class TestClassQueries {
         checkMethodIR(dumpPath, enabled, "queryGetClassAccessFlags",
                 "jdk_internal_reflect_Reflection", "getClassAccessFlags",
                 new Class<?>[] {Class.class}, List.of(
+                        "%check\\.trap_request = select i1 %[-A-Za-z$._0-9]+, i32 -139, i32 -10",
                         "call hotspotcc i32 \\(\\.\\.\\.\\) "
-                                + "@llvm\\.experimental\\.deoptimize\\.i32\\(i32 -10\\)"));
+                                + "@llvm\\.experimental\\.deoptimize\\.i32\\(i32 %check\\.trap_request\\)"));
         if (enabled) {
             checkConstantIR(dumpPath, "constantIsArray", "ret i32 1");
             checkConstantIR(dumpPath, "phiIsArray", "ret i32 1", boolean.class);

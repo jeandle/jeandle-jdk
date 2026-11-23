@@ -105,13 +105,22 @@ public class TestSmallReferenceCopy {
                     optimized.checkPattern("store atomic ptr addrspace\\(" + oopSpace
                             + "\\).*?, ptr addrspace\\(1\\)");
                 }
+            } else if (!name.equals("copyOf9") && reduceInitialCardMarks) {
+                // Length folding also runs without PEA: eight references use
+                // the scalar path when initial card marks may be reduced.
+                optimized.checkNotPattern("call.*@StubRoutines_.*arraycopy");
+                int oopSpace = compressed ? 3 : 1;
+                for (int element = 0; element < 8; element++) {
+                    optimized.checkPattern("%arraycopy\\.load[0-9]* = load atomic(?: volatile)? ptr addrspace\\("
+                            + oopSpace
+                            + "\\), ptr addrspace\\(1\\)");
+                    optimized.checkPattern("store atomic ptr addrspace\\(" + oopSpace
+                            + "\\) %arraycopy\\.load[0-9]*, ptr addrspace\\(1\\)");
+                }
             } else {
-                // PEA off also bypasses its high-tier length folding. The
-                // replacement compilation retains a runtime copy length.
                 optimized.checkPatternAnywhere(
-                        "call void @StubRoutines_(?:arrayof_)?oop_disjoint_arraycopy_uninit");
-                optimized.checkPatternAnywhere("br label %arraycopy\\.result");
-                optimized.checkPattern("^arraycopy\\.result:");
+                        "call void @StubRoutines_(?:arrayof_)?oop_disjoint_arraycopy_uninit\\(.*i64 "
+                        + (name.equals("copyOf9") ? 9 : 8) + "\\)");
             }
             optimized.checkPattern(Platform.isAArch64()
                     ? "call void @llvm\\.aarch64\\.dmb\\(i32 10\\)" : "fence release");

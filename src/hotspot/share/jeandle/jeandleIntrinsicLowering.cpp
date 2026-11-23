@@ -938,6 +938,7 @@ llvm::CallBase* JeandleIntrinsicLowering::emit_callsite(llvm::FunctionCallee cal
     site->setDoesNotThrow();
     apply_memory_attr(site, attrs);
   }
+  RETURN_ON_JEANDLE_ERROR(nullptr);
   annotate_call(site, attrs, is_gc_leaf_entry);
   if (_target != nullptr) {
     attach_java_klass_ret_attr(site,
@@ -2219,6 +2220,7 @@ bool JeandleIntrinsicLowering::lower_java_op(const char* java_op_name,
   }
 
   llvm::CallBase* site = emit_callsite(java_op, llvm::CallingConv::Hotspot_JIT, args, attrs);
+  RETURN_ON_JEANDLE_ERROR(true);
 
   const BasicType result_type =
       JeandleType::actual2computational(sig->return_type()->basic_type());
@@ -3017,6 +3019,7 @@ bool JeandleIntrinsicLowering::lower_new_array() {
                      /*uninitialized=*/builder.getFalse(),
                      /*defer_initialization_membar=*/builder.getFalse()},
                     fast_attrs);
+  RETURN_ON_JEANDLE_ERROR(true);
   // emit_callsite with exception edge moves builder to a new normal_dest block.
   builder.CreateBr(merge_bb);
   llvm::BasicBlock* fast_normal_bb = builder.GetInsertBlock();
@@ -3033,6 +3036,7 @@ bool JeandleIntrinsicLowering::lower_new_array() {
       JeandleRuntimeRoutine::new_array_from_mirror_callee(m),
       llvm::CallingConv::Hotspot_JIT,
       {mirror, length, current_thread}, slow_attrs);
+  RETURN_ON_JEANDLE_ERROR(true);
   builder.CreateBr(merge_bb);
   llvm::BasicBlock* slow_normal_bb = builder.GetInsertBlock();
 
@@ -3307,6 +3311,7 @@ bool JeandleIntrinsicLowering::lower_unsafe_allocate_instance() {
   llvm::CallBase* result = emit_callsite(
       new_instance_op, llvm::CallingConv::Hotspot_JIT,
       {klass, size_in_bytes, needs_slow_path}, allocation_attrs);
+  RETURN_ON_JEANDLE_ERROR(true);
 
   _interp->_jvm->apush(result);
   return true;
@@ -4146,6 +4151,7 @@ bool JeandleIntrinsicLowering::lower_arraycopy() {
        _interp->load_object_klass(src), _interp->load_object_klass(dest),
        src_length_x, dest_length_x},
       arraycopy_attrs);
+  RETURN_ON_JEANDLE_ERROR(true);
   arraycopy_call->addFnAttr(llvm::Attribute::get(
       ctx, llvm::jeandle::Attribute::CopyKind,
       llvm::jeandle::Attribute::CopyKindArrayCopy));

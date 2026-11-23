@@ -976,7 +976,8 @@ void JeandleAbstractInterpreter::initialize_VM_state_from_osr_buffer(JeandleVMSt
     llvm::Value* local_addr = _ir_builder.CreateInBoundsGEP(llvm::Type::getInt8Ty(*_context),
                                                             osr_buffer,
                                                             _ir_builder.getInt64(locals_addr_offset - (index + index_offset) * wordSize));
-    llvm::Value* local = load_from_address(local_addr, local_type, false);
+    // Only live, typed interpreter slots contain initialized Java values.
+    llvm::Value* local = load_from_address(local_addr, local_type, false, true /* is_java_value */);
     initial_jvm->set_locals_at(index, TypedValue(local_type, local));
   }
 
@@ -1582,7 +1583,8 @@ void JeandleAbstractInterpreter::interpret_block(JeandleBasicBlock* block) {
   }
 }
 
-void JeandleAbstractInterpreter::uncommon_trap(Deoptimization::DeoptReason reason, Deoptimization::DeoptAction action, llvm::BasicBlock* insert_block) {
+void JeandleAbstractInterpreter::uncommon_trap(Deoptimization::DeoptReason reason, Deoptimization::DeoptAction action,
+                                                llvm::BasicBlock* insert_block, llvm::Value* original_check) {
   JeandlePreserveReexecuteState reexecute_scope(this);
   _should_reexecute = true;
   auto saved_insert_block = _ir_builder.GetInsertBlock();
@@ -1593,6 +1595,13 @@ void JeandleAbstractInterpreter::uncommon_trap(Deoptimization::DeoptReason reaso
   }
 
   llvm::Value* request = _ir_builder.getInt32(Deoptimization::make_trap_request(reason, action));
+  if (original_check != nullptr) {
+    // A widened condition may fail even when this bytecode's check succeeds.
+    // Record that failed speculation separately, using this original state.
+    llvm::Value* predicate_request = _ir_builder.getInt32(Deoptimization::make_trap_request(
+        Deoptimization::Reason_predicate, Deoptimization::Action_reinterpret));
+    request = _ir_builder.CreateSelect(original_check, predicate_request, request, "check.trap_request");
+  }
 
   // Emit the trap via `llvm.experimental.deoptimize.<ret_type>`. LLVM's
   // optimization passes (CFG-simplify, JumpThreading, CVP/SCCP, InstCombine)
@@ -1608,6 +1617,18 @@ void JeandleAbstractInterpreter::uncommon_trap(Deoptimization::DeoptReason reaso
   llvm::CallInst* call = _ir_builder.CreateCall(
       deopt_decl, {request}, {create_current_deopt_bundle()});
   call->setCallingConv(llvm::CallingConv::Hotspot_JIT);
+  // The reason also classifies VM metadata guards. Only carry permission
+  // from a Java null check, either widened or explicitly marked implicit.
+  bool implicit_null_check = original_check != nullptr;
+  if (!implicit_null_check && insert_block != nullptr) {
+    if (llvm::BasicBlock* pred = insert_block->getSinglePredecessor()) {
+      implicit_null_check = pred->getTerminator()->getMetadata(llvm::LLVMContext::MD_make_implicit) != nullptr;
+    }
+  }
+  if (implicit_null_check && reason == Deoptimization::Reason_null_check && ProfileTraps && UseInterpreter &&
+      action != Deoptimization::Action_none && !builtin_throw_is_hot(reason)) {
+    call->addFnAttr(llvm::Attribute::get(*_context, llvm::jeandle::Metadata::ImplicitNullCheck));
+  }
 
   // LangRef: the block holding this intrinsic must terminate with a `ret`
   // returning the intrinsic's result. Never executed at runtime (the trap
@@ -2632,6 +2653,12 @@ llvm::InvokeInst* JeandleAbstractInterpreter::call_java_op_ex(llvm::StringRef ja
   llvm::Function* java_op_func = _module.getFunction(java_op);
   assert(java_op_func != nullptr, "invalid JavaOp");
   llvm::InvokeInst* invoke_inst = create_call_ex(java_op_func, args, llvm::CallingConv::Hotspot_JIT, deopt_bundle, deoptimize_on_exception);
+  RETURN_ON_JEANDLE_ERROR(nullptr);
+  if (java_op == "jeandle.new_instance" || java_op == "jeandle.new_array") {
+    // Allocation either returns a concrete object or takes the unwind edge.
+    invoke_inst->addRetAttr(llvm::Attribute::NonNull);
+    invoke_inst->addRetAttr(llvm::Attribute::NoUndef);
+  }
   return invoke_inst;
 }
 
@@ -2753,9 +2780,12 @@ void JeandleAbstractInterpreter::do_get_xxx(ciField* field, bool is_static) {
   llvm::Value* value;
   if (is_referent) {
     value = call_java_op("jeandle.reference_get", {receiver});
+    // GC may clear the initialized referent to null. Decoding and the SATB
+    // barrier preserve that Java value without making it non-null.
+    llvm::cast<llvm::CallBase>(value)->addRetAttr(llvm::Attribute::NoUndef);
     bt = T_OBJECT; // The JavaOp performs compressed-oop decoding itself.
   } else {
-    value = load_from_address(addr, bt, is_volatile);
+    value = load_from_address(addr, bt, is_volatile, true /* is_java_value */);
   }
 
   // Attach java-klass metadata to the actual field load before decoding.
@@ -2842,7 +2872,8 @@ llvm::Value* JeandleAbstractInterpreter::compute_static_field_address(ciInstance
                                        _ir_builder.getInt64(offset));
 }
 
-llvm::Value* JeandleAbstractInterpreter::load_from_address(llvm::Value* addr, BasicType type, bool is_volatile) {
+llvm::Value* JeandleAbstractInterpreter::load_from_address(llvm::Value* addr, BasicType type, bool is_volatile,
+                                                          bool is_java_value) {
   llvm::Type* expected_ty = JeandleType::java2llvm(type, *_context);
   llvm::LoadInst* load_inst = nullptr;
   llvm::Value* res_inst = nullptr;
@@ -2872,6 +2903,10 @@ llvm::Value* JeandleAbstractInterpreter::load_from_address(llvm::Value* addr, Ba
       res_inst = load_inst;
       break;
     }
+  }
+
+  if (is_java_value) {
+    load_inst->setMetadata(llvm::LLVMContext::MD_noundef, llvm::MDNode::get(*_context, {}));
   }
 
   if (is_volatile) {
@@ -3214,11 +3249,14 @@ void JeandleAbstractInterpreter::do_new() {
                               {create_current_deopt_bundle()});
   } else {
     llvm::Value* size_in_bytes = _ir_builder.getInt32(Klass::layout_helper_size_in_bytes(layout_helper));
-    new_inst = llvm::cast<llvm::InvokeInst>(
-        call_java_op_ex("jeandle.new_instance",
-                        {klass_ptr, size_in_bytes, _ir_builder.getFalse()},
-                        {create_current_deopt_bundle()}));
+    new_inst = call_java_op_ex("jeandle.new_instance",
+                              {klass_ptr, size_in_bytes, _ir_builder.getFalse()},
+                              {create_current_deopt_bundle()});
   }
+  RETURN_VOID_ON_JEANDLE_ERROR();
+
+  new_inst->addRetAttr(llvm::Attribute::NonNull);
+  new_inst->addRetAttr(llvm::Attribute::NoUndef);
 
   // new always produces an exact type.
   new_inst->addRetAttr(llvm::Attribute::get(*_context,
@@ -3358,6 +3396,7 @@ void JeandleAbstractInterpreter::dispatch_exception_to_handler(llvm::Value* exce
                             {current_method_ptr, _ir_builder.getInt32(handler->catch_klass_index()), exception_klass, current_thread},
                             llvm::CallingConv::Hotspot_JIT);
       _bytecodes.force_bci(cur_bci);
+      RETURN_VOID_ON_JEANDLE_ERROR();
     }
     // if match, the right handler is found, else try the next
     llvm::BasicBlock* match_dest = handler_block->header_llvm_block();
@@ -3466,7 +3505,7 @@ bool JeandleAbstractInterpreter::has_exception_handler() {
 
 // This is a logical copy of GraphKit::builtin_throw
 // TODO: may need to adjust it for Jeandle's features.
-void JeandleAbstractInterpreter::builtin_throw(Deoptimization::DeoptReason reason, llvm::BasicBlock* insert_block) {
+bool JeandleAbstractInterpreter::builtin_throw_is_hot(Deoptimization::DeoptReason reason) {
   bool treat_throw_as_hot = false;
   int cur_bci = _bytecodes.cur_bci();
 
@@ -3486,6 +3525,42 @@ void JeandleAbstractInterpreter::builtin_throw(Deoptimization::DeoptReason reaso
     }
   }
 
+  return treat_throw_as_hot;
+}
+
+llvm::Value* JeandleAbstractInterpreter::create_check_branch(
+    llvm::Value* ok, llvm::BasicBlock* pass, llvm::BasicBlock* fail,
+    Deoptimization::DeoptReason reason) {
+  assert(reason == Deoptimization::Reason_null_check || reason == Deoptimization::Reason_range_check,
+         "only null and bounds checks can be widened");
+  // Predicate traps are recorded per method (including the inlinee scope).
+  // One failure disables further widening for that method. Without feedback
+  // or an interpreter to resume, retain the ordinary throwing check.
+  bool hot = builtin_throw_is_hot(reason);
+  bool widen = ProfileTraps && UseInterpreter && !hot &&
+               trap_count(Deoptimization::Reason_predicate) == 0 &&
+               _method->method_data()->trap_count(Deoptimization::Reason_predicate) == 0;
+  llvm::Value* condition = ok;
+  if (widen) {
+    llvm::Function* wc = llvm::Intrinsic::getOrInsertDeclaration(
+        &_module, llvm::Intrinsic::experimental_widenable_condition);
+    condition = _ir_builder.CreateAnd(ok, _ir_builder.CreateCall(wc), "check.widenable");
+  }
+  llvm::BranchInst* branch = _ir_builder.CreateCondBr(condition, pass, fail);
+  llvm::MDBuilder md_builder(*_context);
+  if (!hot) {
+    branch->setMetadata(llvm::LLVMContext::MD_prof, md_builder.createBranchWeights(1048575, 1));
+  }
+  if (!widen && reason == Deoptimization::Reason_null_check && ProfileTraps && UseInterpreter && !hot) {
+    branch->setMetadata(llvm::LLVMContext::MD_make_implicit, llvm::MDNode::get(*_context, {}));
+  }
+  return widen ? ok : nullptr;
+}
+
+void JeandleAbstractInterpreter::builtin_throw(Deoptimization::DeoptReason reason, llvm::BasicBlock* insert_block,
+                                               llvm::Value* original_check) {
+  bool treat_throw_as_hot = builtin_throw_is_hot(reason);
+  int cur_bci = _bytecodes.cur_bci();
   // If this throw happens frequently, an uncommon trap might cause
   // a performance pothole.  If there is a local exception handler,
   // and if this particular bytecode appears to be deoptimizing often,
@@ -3527,7 +3602,10 @@ void JeandleAbstractInterpreter::builtin_throw(Deoptimization::DeoptReason reaso
       }
 
       llvm::Value* oop_handle = JeandleCompilation::current()->find_or_insert_oop(ex_obj);
-      llvm::Value* value = _ir_builder.CreateLoad(JeandleType::java2llvm(BasicType::T_OBJECT, *_context), oop_handle);
+      llvm::LoadInst* value = _ir_builder.CreateLoad(JeandleType::java2llvm(BasicType::T_OBJECT, *_context), oop_handle);
+      // The strong handle keeps the preconstructed exception alive across GC.
+      value->setMetadata(llvm::LLVMContext::MD_nonnull, llvm::MDNode::get(*_context, {}));
+      value->setMetadata(llvm::LLVMContext::MD_noundef, llvm::MDNode::get(*_context, {}));
 
       int offset = java_lang_Throwable::get_detailMessage_offset();
       llvm::Value* exception_oop_field_addr = compute_instance_field_address(value, offset);
@@ -3549,13 +3627,12 @@ void JeandleAbstractInterpreter::builtin_throw(Deoptimization::DeoptReason reaso
   // Slow path: Bail to interpreter
   ciMethod* m = Deoptimization::reason_is_speculate(reason) ? JeandleCompilation::current()->method() : nullptr;
   Deoptimization::DeoptAction action = Deoptimization::Action_maybe_recompile;
-  // If we have triggered deoptimization too many times,
-  // Immediately invalidate the code using Deoptimization::Action_none.
+  // Keep the code when further recompilation is unlikely to help this hot throw.
   if (treat_throw_as_hot && (_method->method_data()->trap_recompiled_at(cur_bci, m) || too_many_traps(reason))) {
     action = Deoptimization::Action_none;
   }
 
-  uncommon_trap(reason, action, insert_block);
+  uncommon_trap(reason, action, insert_block, original_check);
 }
 
 void JeandleAbstractInterpreter::newarray(int element_type) {
@@ -3885,6 +3962,8 @@ void JeandleAbstractInterpreter::multianewarray() {
   llvm::InvokeInst* result = create_call_ex(callee, args, llvm::CallingConv::Hotspot_JIT,
                                           {create_current_deopt_bundle()});
   RETURN_VOID_ON_JEANDLE_ERROR();
+  result->addRetAttr(llvm::Attribute::NonNull);
+  result->addRetAttr(llvm::Attribute::NoUndef);
   result->addRetAttr(llvm::Attribute::get(*_context,
       llvm::jeandle::Attribute::JavaKlass,
       std::to_string((uintptr_t)array_klass->constant_encoding())));
@@ -4015,16 +4094,10 @@ void JeandleAbstractInterpreter::null_check(llvm::Value* obj) {
   llvm::BasicBlock* null_check_fail = llvm::BasicBlock::Create(*_context,
                                                                "bci_" + std::to_string(cur_bci) + "_null_check_fail",
                                                                _llvm_func);
-  llvm::Value* if_null = _ir_builder.CreateICmp(llvm::CmpInst::ICMP_EQ,
-                                                obj,
-                                                llvm::ConstantPointerNull::get(llvm::cast<llvm::PointerType>(obj->getType())));
-  llvm::BranchInst* null_check_br = _ir_builder.CreateCondBr(if_null, null_check_fail, null_check_pass);
-
-  // Add make.implicit metadata, and the ImplicitNullChecksPass will transform it into an implicit check.
-  llvm::MDNode* make_implicit = llvm::MDNode::get(*_context, {});
-  null_check_br->setMetadata(llvm::LLVMContext::MD_make_implicit, make_implicit);
-
-  builtin_throw(Deoptimization::Reason_null_check, null_check_fail);
+  llvm::Value* ok = _ir_builder.CreateIsNotNull(obj);
+  llvm::Value* original_check = create_check_branch(ok, null_check_pass, null_check_fail,
+                                                   Deoptimization::Reason_null_check);
+  builtin_throw(Deoptimization::Reason_null_check, null_check_fail, original_check);
 
   _ir_builder.SetInsertPoint(null_check_pass);
   _block->set_tail_llvm_block(null_check_pass);
@@ -4087,10 +4160,10 @@ void JeandleAbstractInterpreter::boundary_check(llvm::Value* array_oop, llvm::Va
                                                                    "bci_" + std::to_string(cur_bci) + "_boundary_check_fail",
                                                                    _llvm_func);
   llvm::CallInst* call = call_java_op("jeandle.arraylength", {array_oop});
-  llvm::Value* if_out_of_bounds = _ir_builder.CreateICmp(llvm::CmpInst::ICMP_UGE, index, call);
-  _ir_builder.CreateCondBr(if_out_of_bounds, boundary_check_fail, boundary_check_pass);
-
-  builtin_throw(Deoptimization::Reason_range_check, boundary_check_fail);
+  llvm::Value* ok = _ir_builder.CreateICmpULT(index, call);
+  llvm::Value* original_check = create_check_branch(ok, boundary_check_pass, boundary_check_fail,
+                                                   Deoptimization::Reason_range_check);
+  builtin_throw(Deoptimization::Reason_range_check, boundary_check_fail, original_check);
 
   _ir_builder.SetInsertPoint(boundary_check_pass);
   _block->set_tail_llvm_block(boundary_check_pass);
