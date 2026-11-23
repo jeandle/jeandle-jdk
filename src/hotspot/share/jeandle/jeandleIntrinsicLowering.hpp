@@ -134,6 +134,10 @@ class JeandleIntrinsicLowering : public StackObj {
   // cannot be lowered (caller should fall back to normal invoke).
   bool lower(vmIntrinsics::ID id, const ciMethod* target);
 
+  // Emit a guarded method-entry fast path, retaining the inlinee bytecodes
+  // for inputs outside the intrinsic's supported domain.
+  bool lower_inlinee();
+
   // Is this intrinsic ID one that Jeandle knows how to lower?
   static bool is_supported(vmIntrinsics::ID id);
 
@@ -338,6 +342,7 @@ class JeandleIntrinsicLowering : public StackObj {
   bool lower_string_char_access(bool is_store);
   bool lower_string_intrinsic(vmIntrinsics::ID id);
   bool lower_character_intrinsic(vmIntrinsics::ID id);
+  llvm::Value* lower_character_predicate(vmIntrinsics::ID id, llvm::Value* ch);
   bool lower_arrays_copy_of(bool is_copy_of_range);
   bool lower_object_clone();
   void emit_clone_copy(llvm::Value* src_base,

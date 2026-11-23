@@ -101,6 +101,10 @@ public class TestCharacterMemory {
                     int end = ir.indexOf("\n}", begin);
                     String body = ir.substring(begin, end);
                     if (!body.contains("@" + routine + "(")) continue;
+                    if (!body.contains("load atomic i16")
+                            || !body.matches("(?s).*icmp (?:ugt|ult) i16 .*")) {
+                        throw new AssertionError("missing inline first-character range test: " + file);
+                    }
                     if (body.lines().anyMatch(line -> line.contains("addrspace(1)")
                             && (line.contains("load <") || line.contains("store <")))) {
                         throw new AssertionError("ordinary heap vector memory: " + file);

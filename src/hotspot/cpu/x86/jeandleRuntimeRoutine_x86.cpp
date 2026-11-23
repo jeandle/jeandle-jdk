@@ -464,15 +464,15 @@ void JeandleRuntimeRoutine::generate_character_encoding_stub(const char* name, b
   _gc_leaf_routines.insert(entry);
 }
 
-// A negative block may return its start: StringCoding accepts any confirmed
-// positive prefix, while all-positive ranges must return their full length.
+// Refine dirty blocks from their sign-bit mask so decoding resumes at the
+// first negative byte without rescanning the positive lanes.
 void JeandleRuntimeRoutine::generate_count_positives_stub() {
   ResourceMark rm;
   CodeBuffer buffer(_count_positives_stub, 1024, 64);
   MacroAssembler* masm = new MacroAssembler(&buffer);
   const Register src = c_rarg0;
   const Register count = c_rarg1;
-  Label vector16, scalar, loop, done;
+  Label vector16, scalar, loop, dirty, done;
   address start = __ pc();
   __ xorl(rax, rax);
   if (UseAVX >= 2 && MaxVectorSize >= 32) {
@@ -483,7 +483,7 @@ void JeandleRuntimeRoutine::generate_count_positives_stub() {
     __ vmovdqu(xmm0, Address(src));
     __ vpmovmskb(r10, xmm0, Assembler::AVX_256bit);
     __ testl(r10, r10);
-    __ jcc(Assembler::notZero, done);
+    __ jcc(Assembler::notZero, dirty);
     __ addptr(src, 32);
     __ subl(count, 32);
     __ addl(rax, 32);
@@ -498,7 +498,7 @@ void JeandleRuntimeRoutine::generate_count_positives_stub() {
     __ movdqu(xmm0, Address(src));
     __ pmovmskb(r10, xmm0);
     __ testl(r10, r10);
-    __ jcc(Assembler::notZero, done);
+    __ jcc(Assembler::notZero, dirty);
     __ addptr(src, 16);
     __ subl(count, 16);
     __ addl(rax, 16);
@@ -519,6 +519,13 @@ void JeandleRuntimeRoutine::generate_count_positives_stub() {
     __ vzeroupper();
   }
   __ ret(0);
+  if ((UseAVX >= 2 && MaxVectorSize >= 32) ||
+      (UseSSE >= 2 && MaxVectorSize >= 16)) {
+    __ bind(dirty);
+    __ bsfl(r10, r10);
+    __ addl(rax, r10);
+    __ jmp(done);
+  }
   masm->flush();
   RuntimeStub* stub = RuntimeStub::new_runtime_stub(
       _count_positives_stub, &buffer, (int)(__ pc() - start),

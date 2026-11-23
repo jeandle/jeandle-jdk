@@ -355,7 +355,7 @@ void JeandleRuntimeRoutine::generate_count_positives_stub() {
   CodeBuffer buffer(_count_positives_stub, 1024, 64);
   MacroAssembler* masm = new MacroAssembler(&buffer);
   address start = __ pc();
-  Label vectors, scalar, loop, done;
+  Label vectors, scalar, loop, dirty, done;
   __ uxtw(c_rarg1, c_rarg1);
   __ movw(r2, 0);
   if (MaxVectorSize >= 16) {
@@ -365,7 +365,7 @@ void JeandleRuntimeRoutine::generate_count_positives_stub() {
     __ ld1(v0, __ T16B, Address(__ post(c_rarg0, 16)));
     __ umaxv(v1, __ T16B, v0);
     __ umov(r3, v1, __ B, 0);
-    __ tbnz(r3, 7, done);
+    __ tbnz(r3, 7, dirty);
     __ addw(r2, r2, 16);
     __ subw(c_rarg1, c_rarg1, 16);
     __ b(vectors);
@@ -381,6 +381,23 @@ void JeandleRuntimeRoutine::generate_count_positives_stub() {
   __ bind(done);
   __ movw(r0, r2);
   __ ret(lr);
+  if (MaxVectorSize >= 16) {
+    Label found;
+    __ bind(dirty);
+    // Locate the first sign bit in the loaded bytes without rereading memory.
+    __ umov(r3, v0, __ D, 0);
+    __ andr(r3, r3, 0x8080808080808080);
+    __ cbnz(r3, found);
+    __ umov(r3, v0, __ D, 1);
+    __ andr(r3, r3, 0x8080808080808080);
+    __ addw(r2, r2, 8);
+    __ bind(found);
+    __ rbit(r3, r3);
+    __ clz(r3, r3);
+    __ lsr(r3, r3, 3);
+    __ addw(r2, r2, r3);
+    __ b(done);
+  }
   masm->flush();
   RuntimeStub* stub = RuntimeStub::new_runtime_stub(
       _count_positives_stub, &buffer, (int)(__ pc() - start),

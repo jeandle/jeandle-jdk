@@ -388,7 +388,7 @@ void JeandleRuntimeRoutine::generate_count_positives_stub() {
   const Register src = c_rarg0;
   const Register count = c_rarg1;
   address start = __ pc();
-  Label done;
+  Label negative, done;
   __ zero_extend(count, count, 32);
   __ mv(t3, zr);
   __ beqz(count, done);
@@ -399,7 +399,7 @@ void JeandleRuntimeRoutine::generate_count_positives_stub() {
     __ vle8_v(v1, src);
     __ vmslt_vx(v0, v1, zr);
     __ vfirst_m(t1, v0);
-    __ bgez(t1, done);
+    __ bgez(t1, negative);
     __ add(t3, t3, t0);
     __ add(src, src, t0);
     __ sub(count, count, t0);
@@ -417,6 +417,11 @@ void JeandleRuntimeRoutine::generate_count_positives_stub() {
   __ bind(done);
   __ mv(c_rarg0, t3);
   __ ret();
+  if (UseRVV) {
+    __ bind(negative);
+    __ add(t3, t3, t1);
+    __ j(done);
+  }
   masm->flush();
   RuntimeStub* stub = RuntimeStub::new_runtime_stub(
       _count_positives_stub, &buffer, (int)(__ pc() - start),

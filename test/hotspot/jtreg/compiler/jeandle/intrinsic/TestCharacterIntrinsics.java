@@ -28,7 +28,10 @@ package compiler.jeandle.intrinsic;
 
 import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
+import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
+import java.nio.CharBuffer;
+import java.nio.charset.CodingErrorAction;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -58,9 +61,11 @@ public class TestCharacterIntrinsics {
     private static final boolean LE = ByteOrder.nativeOrder() == ByteOrder.LITTLE_ENDIAN;
     private static final Map<String, Method> METHODS = new HashMap<>();
     private static long digest;
+    private static boolean exactScan;
 
     public static void main(String[] args) throws Throwable {
         if (args.length != 0 && (args[0].equals("child") || args[0].equals("hot-alias"))) {
+            exactScan = args.length > 1 && args[1].equals("exact-scan");
             Class<?> caller = Class.forName(CALLER);
             for (Method method : caller.getMethods()) METHODS.put(method.getName(), method);
             if (args[0].equals("hot-alias")) {
@@ -178,7 +183,8 @@ public class TestCharacterIntrinsics {
                 options.add("-XX:CompileCommand=DisableIntrinsic," + CALLER + "::*," + ids);
             }
         }
-        options.addAll(List.of(TestCharacterIntrinsics.class.getName(), mode.equals("hot-alias") ? "hot-alias" : "child"));
+        options.addAll(List.of(TestCharacterIntrinsics.class.getName(), mode.equals("hot-alias") ? "hot-alias" : "child",
+                List.of("enabled", "sse", "scalar", "pea-off", "flag-off").contains(mode) ? "exact-scan" : "contract-scan"));
         return ProcessTools.executeCommand(ProcessTools.createLimitedTestJavaProcessBuilder(options));
     }
 
@@ -264,6 +270,8 @@ public class TestCharacterIntrinsics {
                 digest = 31 * digest + first;
             }
         }
+        scanPositions();
+        denseEncodingFailures();
         for (int[] range : new int[][] {{0, 0}, {-1, 0}, {Integer.MAX_VALUE, 0},
                 {0, -1}, {1, -1}, {Integer.MAX_VALUE, 2}, {1, Integer.MIN_VALUE}}) {
             byte[] bytes = {1, 2, -1, 4};
@@ -311,6 +319,72 @@ public class TestCharacterIntrinsics {
                 buffer.get(expected);
                 require(Arrays.equals(encoded, expected), "public encoding");
                 digest = 31 * digest + Arrays.hashCode(encoded);
+            }
+        }
+    }
+
+    private static void scanPositions() throws Throwable {
+        for (int n : new int[] {0, 1, 7, 8, 15, 16, 17, 31, 32, 33, 63, 64, 65, 96, 97, 129}) {
+            for (int offset : new int[] {0, 1, 3, 15}) {
+                byte[] source = new byte[offset + n];
+                for (int first = 0; first <= n; first++) {
+                    Arrays.fill(source, (byte) 127);
+                    Arrays.fill(source, 0, offset, (byte) -1);
+                    if (first < n) source[offset + first] = (byte) -128;
+                    int actual = (int) invoke("countPositives", source, offset, n);
+                    require(first == n ? actual == n : 0 <= actual && actual <= first,
+                            "scan range: offset=" + offset + " n=" + n + " first=" + first + " actual=" + actual);
+                    // The native kernels refine a dirty block to its first negative lane.
+                    if (exactScan) require(actual == first,
+                            "scan refinement: offset=" + offset + " n=" + n + " first=" + first + " actual=" + actual);
+                    digest = 31 * digest + first;
+                }
+            }
+        }
+    }
+
+    private static void denseEncodingFailures() throws Throwable {
+        for (int kind = 0; kind < 3; kind++) {
+            for (int n : new int[] {0, 1, 7, 8, 15, 16, 17, 31, 32, 33, 63, 64, 65, 129}) {
+                for (int prefix : new int[] {0, 1, n / 2, n}) {
+                    char[] chars = new char[n + 3];
+                    Arrays.fill(chars, 'x');
+                    if (prefix <= n) Arrays.fill(chars, prefix + 1, n + 1,
+                            (char) (kind == 2 ? 128 : 256));
+                    Object source = kind == 1 ? utf16(chars, true) : chars;
+                    byte[] destination = new byte[n + 5];
+                    Arrays.fill(destination, (byte) 85);
+                    encodeCase(kind, source, 1, destination, 3, n);
+                }
+            }
+        }
+        for (int n : new int[] {16, 1024}) {
+            for (int stride : new int[] {0, 1, 8}) {
+                char[] chars = new char[n];
+                byte[] expected = new byte[n];
+                for (int i = 0; i < n; i++) {
+                    boolean invalid = stride != 0 && i % stride == stride - 1;
+                    chars[i] = invalid ? '\u4e2d' : '\u00e9';
+                    expected[i] = invalid ? (byte) '?' : (byte) 0xe9;
+                }
+                require(Arrays.equals(new String(chars).getBytes(StandardCharsets.ISO_8859_1), expected),
+                        "public ISO replacement: " + n + "/" + stride);
+                var encoder = StandardCharsets.ISO_8859_1.newEncoder()
+                        .onMalformedInput(CodingErrorAction.REPLACE)
+                        .onUnmappableCharacter(CodingErrorAction.REPLACE);
+                byte[] destination = new byte[n + 4];
+                Arrays.fill(destination, (byte) 85);
+                ByteBuffer output = ByteBuffer.wrap(destination, 2, n);
+                CharBuffer input = CharBuffer.wrap(chars);
+                require(encoder.encode(input, output, true).isUnderflow()
+                                && encoder.flush(output).isUnderflow() && !input.hasRemaining()
+                                && output.position() == n + 2,
+                        "ISO encoder positions: " + n + "/" + stride);
+                byte[] expectedDestination = new byte[n + 4];
+                Arrays.fill(expectedDestination, (byte) 85);
+                System.arraycopy(expected, 0, expectedDestination, 2, n);
+                require(Arrays.equals(destination, expectedDestination), "ISO encoder replacement and suffix");
+                digest = 31 * digest + Arrays.hashCode(destination);
             }
         }
     }

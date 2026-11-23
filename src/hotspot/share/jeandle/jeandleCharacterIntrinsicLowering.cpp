@@ -30,6 +30,87 @@
 #include "ci/ciSignature.hpp"
 #include "runtime/deoptimization.hpp"
 
+bool JeandleIntrinsicLowering::lower_inlinee() {
+  const ciMethod* target = _interp->_method;
+  const vmIntrinsics::ID id = target->intrinsic_id();
+  switch (id) {
+    case vmIntrinsics::_isDigit:
+    case vmIntrinsics::_isLowerCase:
+    case vmIntrinsics::_isUpperCase:
+    case vmIntrinsics::_isWhitespace:
+      break;
+    default:
+      return false;
+  }
+  if (target->is_static() || target->is_synchronized() ||
+      !target->check_intrinsic_candidate() ||
+      !_interp->is_intrinsic_enabled(id)) {
+    return false;
+  }
+
+  assert(_interp->_parse_context.is_inlinee() && !_interp->is_osr(), "inlinee entry required");
+  llvm::IRBuilder<>& b = _interp->_ir_builder;
+  llvm::Value* ch = _interp->_llvm_func->getArg(1);
+  if (id != vmIntrinsics::_isDigit) {
+    ch = b.CreateAnd(ch, b.getInt32(0xffff));
+  }
+  llvm::BasicBlock* fast = llvm::BasicBlock::Create(*_interp->_context, "character_intrinsic", _interp->_llvm_func);
+  llvm::BasicBlock* fallback = llvm::BasicBlock::Create(*_interp->_context, "character_bytecodes", _interp->_llvm_func);
+  b.CreateCondBr(b.CreateICmpULE(ch, b.getInt32(255)), fast, fallback);
+  b.SetInsertPoint(fast);
+  _interp->return_current(lower_character_predicate(id, ch));
+
+  // The caller has checked the receiver before dispatch. Unsupported inputs
+  // enter the original bytecodes with unchanged locals and an empty stack;
+  // no synthetic invoke state or method-entry deoptimization is needed.
+  b.SetInsertPoint(fallback);
+  _interp->_block_builder->entry_block()->set_tail_llvm_block(fallback);
+  return true;
+}
+
+llvm::Value* JeandleIntrinsicLowering::lower_character_predicate(vmIntrinsics::ID id, llvm::Value* ch) {
+  llvm::IRBuilder<>& b = _interp->_ir_builder;
+  if (id == vmIntrinsics::_isDigit) {
+    llvm::Value* digit = b.CreateICmpULE(b.CreateSub(ch, b.getInt32('0')), b.getInt32('9' - '0'));
+    return b.CreateZExt(digit, b.getInt32Ty());
+  }
+
+  // One compact immutable property byte lets related predicates share a
+  // load after inlining, while constant characters still fold in LLVM.
+  const char* name = "jeandle.latin1_properties";
+  llvm::GlobalVariable* table = _interp->_module.getGlobalVariable(name);
+  if (table == nullptr) {
+    uint8_t properties[256];
+    for (unsigned c = 0; c < 256; ++c) {
+      const bool lower = (c >= 'a' && c <= 'z') || (c >= 0xdf && c <= 0xf6) ||
+                         (c >= 0xf8) || c == 0xaa || c == 0xb5 || c == 0xba;
+      const bool upper = (c >= 'A' && c <= 'Z') || (c >= 0xc0 && c <= 0xd6) ||
+                         (c >= 0xd8 && c <= 0xde);
+      const bool space = (c >= 9 && c <= 13) || (c >= 0x1c && c <= 0x20);
+      properties[c] = (lower ? 1 : 0) | (upper ? 2 : 0) | (space ? 4 : 0);
+    }
+    llvm::Constant* data = llvm::ConstantDataArray::get(b.getContext(), properties);
+    // ODR linkage coalesces identical tables imported by the inline driver.
+    table = new llvm::GlobalVariable(_interp->_module, data->getType(), true,
+                llvm::GlobalValue::LinkOnceODRLinkage, data, name);
+    table->setUnnamedAddr(llvm::GlobalValue::UnnamedAddr::Global);
+    table->setDSOLocal(true);
+    table->setAlignment(llvm::Align(16));
+  }
+  unsigned mask;
+  switch (id) {
+    case vmIntrinsics::_isLowerCase:  mask = 1; break;
+    case vmIntrinsics::_isUpperCase:  mask = 2; break;
+    case vmIntrinsics::_isWhitespace: mask = 4; break;
+    default: ShouldNotReachHere();
+  }
+  llvm::Value* cell = b.CreateInBoundsGEP(table->getValueType(), table,
+                        {b.getInt64(0), b.CreateZExt(ch, b.getInt64Ty())});
+  llvm::Value* flags = b.CreateLoad(b.getInt8Ty(), cell);
+  llvm::Value* result = b.CreateICmpNE(b.CreateAnd(flags, b.getInt8(mask)), b.getInt8(0));
+  return b.CreateZExt(result, b.getInt32Ty());
+}
+
 bool JeandleIntrinsicLowering::lower_character_intrinsic(vmIntrinsics::ID id) {
   const bool predicate = !_target->is_static();
   const bool digit = id == vmIntrinsics::_isDigit;
@@ -71,47 +152,7 @@ bool JeandleIntrinsicLowering::lower_character_intrinsic(vmIntrinsics::ID id) {
       ch = b.CreateAnd(ch, b.getInt32(0xffff));
       guard(b.CreateICmpUGT(ch, b.getInt32(255)));
     }
-    auto in_range = [&](unsigned lo, unsigned hi) -> llvm::Value* {
-      return b.CreateICmpULE(b.CreateSub(ch, b.getInt32(lo)), b.getInt32(hi - lo));
-    };
-    if (digit) {
-      result = in_range('0', '9');
-    } else {
-      // One compact immutable property byte lets related predicates share a
-      // load after inlining, while constant characters still fold in LLVM.
-      const char* name = "jeandle.latin1_properties";
-      llvm::GlobalVariable* table = _interp->_module.getGlobalVariable(name);
-      if (table == nullptr) {
-        uint8_t properties[256];
-        for (unsigned c = 0; c < 256; ++c) {
-          const bool lower = (c >= 'a' && c <= 'z') || (c >= 0xdf && c <= 0xf6) ||
-                             (c >= 0xf8) || c == 0xaa || c == 0xb5 || c == 0xba;
-          const bool upper = (c >= 'A' && c <= 'Z') || (c >= 0xc0 && c <= 0xd6) ||
-                             (c >= 0xd8 && c <= 0xde);
-          const bool space = (c >= 9 && c <= 13) || (c >= 0x1c && c <= 0x20);
-          properties[c] = (lower ? 1 : 0) | (upper ? 2 : 0) | (space ? 4 : 0);
-        }
-        llvm::Constant* data = llvm::ConstantDataArray::get(b.getContext(), properties);
-        // ODR linkage coalesces identical tables imported by the inline driver.
-        table = new llvm::GlobalVariable(_interp->_module, data->getType(), true,
-                    llvm::GlobalValue::LinkOnceODRLinkage, data, name);
-        table->setUnnamedAddr(llvm::GlobalValue::UnnamedAddr::Global);
-        table->setDSOLocal(true);
-        table->setAlignment(llvm::Align(16));
-      }
-      unsigned mask;
-      switch (id) {
-        case vmIntrinsics::_isLowerCase:  mask = 1; break;
-        case vmIntrinsics::_isUpperCase:  mask = 2; break;
-        case vmIntrinsics::_isWhitespace: mask = 4; break;
-        default: ShouldNotReachHere();
-      }
-      llvm::Value* cell = b.CreateInBoundsGEP(table->getValueType(), table,
-                            {b.getInt64(0), b.CreateZExt(ch, b.getInt64Ty())});
-      llvm::Value* flags = b.CreateLoad(b.getInt8Ty(), cell);
-      result = b.CreateICmpNE(b.CreateAnd(flags, b.getInt8(mask)), b.getInt8(0));
-    }
-    result = b.CreateZExt(result, b.getInt32Ty());
+    result = lower_character_predicate(id, ch);
   } else {
     llvm::Value* count = args[scan ? 2 : 4];
     done = llvm::BasicBlock::Create(*_interp->_context, "character_done", _interp->_llvm_func);

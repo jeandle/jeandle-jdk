@@ -2684,6 +2684,9 @@ declare i32 @count_positives_stub(ptr addrspace(1) nocapture readonly, i32) #0 n
 
 define private hotspotcc i32 @jeandle.encode_array(ptr addrspace(1) nocapture readonly %src, i32 %srcOff, ptr addrspace(1) nocapture writeonly %dst, i32 %dstOff, i32 %count, i1 %srcBytes, i1 %ascii) noinline optnone "lower-phase"="1" #0 memory(read, argmem: readwrite) {
 entry:
+  %nonempty = icmp sgt i32 %count, 0
+  br i1 %nonempty, label %prepare, label %no.prefix
+prepare:
   %byte.base = load i32, ptr @arrayOopDesc.base_offset_in_bytes.byte
   %char.base = load i32, ptr @arrayOopDesc.base_offset_in_bytes.char
   %sb = select i1 %srcBytes, i32 %byte.base, i32 %char.base
@@ -2693,6 +2696,12 @@ entry:
   %do = zext i32 %dstOff to i64
   %sp = getelementptr i16, ptr addrspace(1) %sdata, i64 %so
   %dp = getelementptr i8, ptr addrspace(1) %ddata, i64 %do
+  ; Repeated unmappable characters can fail without entering the native leaf.
+  %first = load atomic i16, ptr addrspace(1) %sp unordered, align 2
+  %limit = select i1 %ascii, i16 127, i16 255
+  %invalid = icmp ugt i16 %first, %limit
+  br i1 %invalid, label %no.prefix, label %encode
+encode:
   br i1 %ascii, label %encode.ascii, label %encode.iso
 encode.ascii:
   %ascii.result = call i32 @encode_ascii_array_stub(ptr addrspace(1) %sp, ptr addrspace(1) %dp, i32 %count) #0
@@ -2700,6 +2709,8 @@ encode.ascii:
 encode.iso:
   %iso.result = call i32 @encode_iso_array_stub(ptr addrspace(1) %sp, ptr addrspace(1) %dp, i32 %count) #0
   ret i32 %iso.result
+no.prefix:
+  ret i32 0
 }
 
 define private hotspotcc i32 @jeandle.count_positives(ptr addrspace(1) nocapture readonly %src, i32 %offset, i32 %count) noinline optnone "lower-phase"="1" #0 memory(read) {
