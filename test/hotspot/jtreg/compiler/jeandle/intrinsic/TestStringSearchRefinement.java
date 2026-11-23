@@ -104,8 +104,12 @@ public class TestStringSearchRefinement {
                 + Pattern.quote(method) + "\\([^\n]*\n(.*?)^\\}").matcher(ir);
         if (!root.find()) return false;
         String body = root.group(1);
+        // The fallback is reached through the runtime-defined address global
+        // (see template.ll), so the optimized IR carries a call to a folded
+        // absolute address instead of a named routine symbol. The budget and
+        // refinement patterns below tie the call to the fallback path.
         return Pattern.compile("(?m)^\\s+%[\\w.]+ = (?:tail )?call i32 "
-                + "@JeandleRuntime_string_indexof_linear\\(").matcher(body).find()
+                + "inttoptr \\(i64 \\d+ to ptr\\)\\(").matcher(body).find()
                 && Pattern.compile("icmp eq i32 %failures\\.next[\\w.]*, 64")
                         .matcher(body).find()
                 && Pattern.compile("%refinement\\.initial[^=\\n]* = phi i32 [^\\n]*\\[ -4, ")

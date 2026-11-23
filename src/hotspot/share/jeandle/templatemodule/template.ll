@@ -189,6 +189,12 @@
 ; baked absolute address (load + inttoptr + indirect call) rather than a PC-relative branch.
 @SharedRuntime.complete_monitor_unlocking_C = external global i64
 
+; Address for the string-indexOf linear fallback (JeandleRuntimeRoutine::string_indexof_linear).
+; Like the monitorexit routine above, it is a libjvm function outside the code cache and a
+; direct routine with reachable=false: the search kernel calls it through this baked absolute
+; address rather than a PC-relative branch to a routine-call relocation.
+@JeandleRuntimeRoutine.string_indexof_linear = external global i64
+
 declare hotspotcc void @jeandle.membar_allocation_init(ptr addrspace(1) captures(none)) nounwind willreturn "gc-leaf-function"
 
 declare hotspotcc void @jeandle.clone_payload(ptr addrspace(1), i64, ptr addrspace(1), i64, i64, i1)
@@ -1758,7 +1764,9 @@ entry:
 
 
 
-declare i32 @JeandleRuntime_string_indexof_linear(ptr addrspace(1) nocapture readonly, i32, ptr addrspace(1) nocapture readonly, i32, i32, i32) #0 memory(argmem: read)
+; The linear fallback above is called through the baked absolute address
+; @JeandleRuntimeRoutine.string_indexof_linear (see the routine address
+; globals near the top of this file).
 
 declare ptr addrspace(1) @memchr(ptr addrspace(1) readonly, i32, i64) #0 nofree willreturn memory(argmem: read)
 
@@ -2542,7 +2550,9 @@ candidate.linear:
   ; full confirmations independently of the refreshable learning budget.
   ; Candidates through index have failed; resume at its successor.
   %linear.from = add i32 %index, 1
-  %linear.result = call i32 @JeandleRuntime_string_indexof_linear(ptr addrspace(1) %sp, i32 %srcCount, ptr addrspace(1) %tp, i32 %tgtCount, i32 %linear.from, i32 %encoding) #0
+  %callee_addr = load i64, ptr @JeandleRuntimeRoutine.string_indexof_linear
+  %callee = inttoptr i64 %callee_addr to ptr
+  %linear.result = call i32 %callee(ptr addrspace(1) nocapture readonly %sp, i32 %srcCount, ptr addrspace(1) nocapture readonly %tp, i32 %tgtCount, i32 %linear.from, i32 %encoding) #0
   ret i32 %linear.result
 candidate.learning:
   %learning.open = icmp slt i32 %refinement.candidate, 0
