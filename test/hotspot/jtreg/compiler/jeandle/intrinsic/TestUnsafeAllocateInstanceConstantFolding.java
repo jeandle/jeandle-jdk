@@ -37,6 +37,7 @@ import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
+import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import java.util.stream.Stream;
 
@@ -61,6 +62,10 @@ public class TestUnsafeAllocateInstanceConstantFolding {
               .shouldContain("TestUnsafeAllocateInstanceConstantFolding PASSED")
               .shouldContain("allocateInstance")
               .shouldContain("is parsed as intrinsic");
+
+        String dynamicIR = Files.readString(findLatestDump(
+                dumpPath, TestWrapper.class, "allocateDynamic", ".ll"));
+        assertExplicitPrimitiveGuard(dynamicIR);
 
         Method constantMethod = TestWrapper.class.getMethod("allocateConstant");
         FileCheck unoptimized = new FileCheck(dumpPath.toString(), constantMethod, false);
@@ -87,9 +92,25 @@ public class TestUnsafeAllocateInstanceConstantFolding {
             return files.filter(Files::isRegularFile)
                         .filter(path -> path.getFileName().toString().startsWith(prefix))
                         .filter(path -> path.getFileName().toString().endsWith(suffix))
+                        .filter(path -> !suffix.equals(".ll") ||
+                                !path.getFileName().toString().endsWith("_optimized.ll"))
                         .max(Comparator.comparing(path -> path.getFileName().toString()))
                         .orElseThrow(() -> new AssertionError(
                                 "No " + suffix + " dump found for " + prefix));
+        }
+    }
+
+    private static void assertExplicitPrimitiveGuard(String ir) {
+        Matcher trap = Pattern.compile(
+                "(?ms)^unsafe_allocate_primitive_trap:[^\\n]*\\n(.*?)\\n\\n").matcher(ir);
+        Asserts.assertTrue(trap.find(), "Missing primitive mirror trap");
+        Matcher attributes = Pattern.compile("#(\\d+)").matcher(trap.group(1));
+        while (attributes.find()) {
+            Matcher definition = Pattern.compile("(?m)^attributes #" +
+                    attributes.group(1) + " = \\{([^\\n]*)\\}").matcher(ir);
+            Asserts.assertTrue(definition.find(), "Missing trap attributes");
+            Asserts.assertFalse(definition.group(1).contains("jeandle-implicit-null-check"),
+                    "VM metadata guards must not inherit Java null-check permissions");
         }
     }
 

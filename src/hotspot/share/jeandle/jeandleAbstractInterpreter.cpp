@@ -1617,7 +1617,15 @@ void JeandleAbstractInterpreter::uncommon_trap(Deoptimization::DeoptReason reaso
   llvm::CallInst* call = _ir_builder.CreateCall(
       deopt_decl, {request}, {create_current_deopt_bundle()});
   call->setCallingConv(llvm::CallingConv::Hotspot_JIT);
-  if (reason == Deoptimization::Reason_null_check && ProfileTraps && UseInterpreter &&
+  // The reason also classifies VM metadata guards. Only carry permission
+  // from a Java null check, either widened or explicitly marked implicit.
+  bool implicit_null_check = original_check != nullptr;
+  if (!implicit_null_check && insert_block != nullptr) {
+    if (llvm::BasicBlock* pred = insert_block->getSinglePredecessor()) {
+      implicit_null_check = pred->getTerminator()->getMetadata(llvm::LLVMContext::MD_make_implicit) != nullptr;
+    }
+  }
+  if (implicit_null_check && reason == Deoptimization::Reason_null_check && ProfileTraps && UseInterpreter &&
       action != Deoptimization::Action_none && !builtin_throw_is_hot(reason)) {
     call->addFnAttr(llvm::Attribute::get(*_context, llvm::jeandle::Metadata::ImplicitNullCheck));
   }
@@ -2645,6 +2653,7 @@ llvm::InvokeInst* JeandleAbstractInterpreter::call_java_op_ex(llvm::StringRef ja
   llvm::Function* java_op_func = _module.getFunction(java_op);
   assert(java_op_func != nullptr, "invalid JavaOp");
   llvm::InvokeInst* invoke_inst = create_call_ex(java_op_func, args, llvm::CallingConv::Hotspot_JIT, deopt_bundle, deoptimize_on_exception);
+  RETURN_ON_JEANDLE_ERROR(nullptr);
   if (java_op == "jeandle.new_instance" || java_op == "jeandle.new_array") {
     // Allocation either returns a concrete object or takes the unwind edge.
     invoke_inst->addRetAttr(llvm::Attribute::NonNull);
@@ -3240,11 +3249,11 @@ void JeandleAbstractInterpreter::do_new() {
                               {create_current_deopt_bundle()});
   } else {
     llvm::Value* size_in_bytes = _ir_builder.getInt32(Klass::layout_helper_size_in_bytes(layout_helper));
-    new_inst = llvm::cast<llvm::InvokeInst>(
-        call_java_op_ex("jeandle.new_instance",
-                        {klass_ptr, size_in_bytes, _ir_builder.getFalse()},
-                        {create_current_deopt_bundle()}));
+    new_inst = call_java_op_ex("jeandle.new_instance",
+                              {klass_ptr, size_in_bytes, _ir_builder.getFalse()},
+                              {create_current_deopt_bundle()});
   }
+  RETURN_VOID_ON_JEANDLE_ERROR();
 
   new_inst->addRetAttr(llvm::Attribute::NonNull);
   new_inst->addRetAttr(llvm::Attribute::NoUndef);
@@ -3387,6 +3396,7 @@ void JeandleAbstractInterpreter::dispatch_exception_to_handler(llvm::Value* exce
                             {current_method_ptr, _ir_builder.getInt32(handler->catch_klass_index()), exception_klass, current_thread},
                             llvm::CallingConv::Hotspot_JIT);
       _bytecodes.force_bci(cur_bci);
+      RETURN_VOID_ON_JEANDLE_ERROR();
     }
     // if match, the right handler is found, else try the next
     llvm::BasicBlock* match_dest = handler_block->header_llvm_block();
