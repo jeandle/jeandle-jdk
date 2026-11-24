@@ -27,6 +27,7 @@ import java.util.Base64;
 import java.util.List;
 
 import jdk.test.lib.Asserts;
+import jdk.test.whitebox.WhiteBox;
 
 public class TestBase64Intrinsics {
     public static void main(String[] args) throws Exception {
@@ -41,9 +42,13 @@ public class TestBase64Intrinsics {
     }
 
     public static class Worker {
-        private static final int[] LENGTHS = {0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 15, 16, 23, 24, 31, 32, 33, 34, 35, 36,
+        private static final int[] LENGTHS = {0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 15, 16, 23, 24, 25, 29, 30, 31, 32, 33, 34, 35, 36,
                 47, 48, 63, 64, 75, 76, 77, 255, 256, 4096, 65536};
         private static long result;
+
+        private enum BufferKind {
+            HEAP, HEAP_SLICE, READ_ONLY_HEAP, DIRECT, READ_ONLY_DIRECT
+        }
 
         public static void main(String[] args) throws Exception {
             Base64.Encoder[] encoders = {Base64.getEncoder(), Base64.getUrlEncoder(), Base64.getMimeEncoder()};
@@ -87,18 +92,20 @@ public class TestBase64Intrinsics {
                         byte[] inPlace = text.clone();
                         Asserts.assertEQ(decoder.decode(inPlace, inPlace), length);
                         Asserts.assertTrue(Arrays.equals(Arrays.copyOf(inPlace, length), data));
-                        for (boolean direct : new boolean[]{false, true}) {
-                            ByteBuffer source = buffer(data, direct);
+                        for (BufferKind kind : BufferKind.values()) {
+                            ByteBuffer source = buffer(data, kind);
                             int limit = source.limit();
                             ByteBuffer bytes = encoder.encode(source);
                             Asserts.assertEQ(source.position(), limit);
+                            Asserts.assertEQ(source.limit(), limit);
                             byte[] actual = new byte[bytes.remaining()];
                             bytes.get(actual);
                             Asserts.assertTrue(Arrays.equals(actual, text));
-                            ByteBuffer input = buffer(text, direct);
+                            ByteBuffer input = buffer(text, kind);
                             limit = input.limit();
                             ByteBuffer restored = decoder.decode(input);
                             Asserts.assertEQ(input.position(), limit);
+                            Asserts.assertEQ(input.limit(), limit);
                             byte[] actualData = new byte[restored.remaining()];
                             restored.get(actualData);
                             Asserts.assertTrue(Arrays.equals(actualData, data));
@@ -143,6 +150,7 @@ public class TestBase64Intrinsics {
             if (compiled) {
                 ChecksumBase64TestSupport.executed(callers);
             }
+            internalPadding(decoders, callers.get(1), compiled);
             for (Base64.Decoder decoder : decoders) {
                 for (String invalid : new String[]{"A", "=AAA", "A===", "AA=A", "Zm9vYg=A"}) {
                     ChecksumBase64TestSupport.throwsType(IllegalArgumentException.class, () -> decoder.decode(invalid));
@@ -166,11 +174,60 @@ public class TestBase64Intrinsics {
             System.out.println("RESULT " + Long.toUnsignedString(result));
         }
 
-        private static ByteBuffer buffer(byte[] bytes, boolean direct) {
-            ByteBuffer buffer = direct ? ByteBuffer.allocateDirect(bytes.length + 13)
-                    : ByteBuffer.allocate(bytes.length + 13);
+        private static ByteBuffer buffer(byte[] bytes, BufferKind kind) {
+            boolean direct = kind == BufferKind.DIRECT || kind == BufferKind.READ_ONLY_DIRECT;
+            ByteBuffer buffer = direct ? ByteBuffer.allocateDirect(bytes.length + 24)
+                    : ByteBuffer.allocate(bytes.length + 24);
+            if (kind == BufferKind.HEAP_SLICE) {
+                buffer.position(11);
+                buffer = buffer.slice();
+                Asserts.assertEQ(buffer.arrayOffset(), 11);
+            }
             buffer.position(7).put(bytes).flip().position(7);
-            return buffer.asReadOnlyBuffer();
+            if (kind == BufferKind.READ_ONLY_HEAP || kind == BufferKind.READ_ONLY_DIRECT) {
+                buffer = buffer.asReadOnlyBuffer();
+            }
+            Asserts.assertEQ(buffer.hasArray(), kind == BufferKind.HEAP || kind == BufferKind.HEAP_SLICE);
+            return buffer;
+        }
+
+        private static void internalPadding(Base64.Decoder[] decoders, Method caller, boolean compiled) {
+            for (int mode = 0; mode < decoders.length; mode++) {
+                Base64.Decoder decoder = decoders[mode];
+                for (int end : new int[]{32, 64, 256}) {
+                    for (int padding : new int[]{1, 2}) {
+                        byte[] input = ("A".repeat(end - padding) + "=".repeat(padding) + "AAAA")
+                                .getBytes(StandardCharsets.US_ASCII);
+                        for (int api = 0; api < 5; api++) {
+                            if (compiled) {
+                                // An expected exception may deoptimize the caller before the next case.
+                                WhiteBox wb = WhiteBox.getWhiteBox();
+                                if (!wb.isMethodCompiled(caller)) {
+                                    ChecksumBase64TestSupport.compile(List.of(caller));
+                                }
+                                Asserts.assertTrue(wb.isMethodCompiled(caller), "compiled padding caller");
+                                Asserts.assertEQ(wb.getMethodCompilationLevel(caller), 4);
+                            }
+                            System.out.println("PADDING mode=" + mode + " end=" + end
+                                    + " padding=" + padding + " api=" + api + " compiled=" + compiled);
+                            int operation = api;
+                            ChecksumBase64TestSupport.throwsType(IllegalArgumentException.class, () -> {
+                                switch (operation) {
+                                    case 0 -> decoder.decode(input, new byte[input.length]);
+                                    case 1 -> decoder.decode(input);
+                                    case 2 -> {
+                                        byte[] inPlace = input.clone();
+                                        decoder.decode(inPlace, inPlace);
+                                    }
+                                    case 3 -> decoder.decode(buffer(input, BufferKind.HEAP));
+                                    case 4 -> decoder.decode(buffer(input, BufferKind.READ_ONLY_HEAP));
+                                    default -> throw new AssertionError(operation);
+                                }
+                            });
+                        }
+                    }
+                }
+            }
         }
 
         private static void consume(byte[] bytes) {

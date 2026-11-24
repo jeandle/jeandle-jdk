@@ -14,6 +14,7 @@ import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.nio.ByteBuffer;
 import java.util.Base64;
+import java.util.Random;
 import java.util.concurrent.TimeUnit;
 import java.util.zip.Adler32;
 import java.util.zip.CRC32;
@@ -67,7 +68,7 @@ public class ChecksumBase64 {
 
     @State(Scope.Thread)
     public static class TextInputs {
-        @Param({"1", "31", "256", "4096", "65536"})
+        @Param({"1", "23", "24", "25", "29", "30", "31", "256", "4096", "65536"})
         public int length;
         @Param({"basic", "url", "mime"})
         public String mode;
@@ -97,6 +98,27 @@ public class ChecksumBase64 {
             encoded = encoder.encode(data);
             encodeOutput = new byte[encoded.length];
             decodeOutput = new byte[data.length];
+        }
+    }
+
+    @State(Scope.Thread)
+    public static class CompressionInputs {
+        @Param({"1", "31", "256", "4096", "65536"})
+        public int length;
+        @Param({"periodic", "random"})
+        public String dataPattern;
+        public byte[] data;
+
+        @Setup(Level.Trial)
+        public void setup() {
+            data = new byte[length + 7];
+            if (dataPattern.equals("random")) {
+                new Random(675).nextBytes(data);
+            } else {
+                for (int i = 0; i < data.length; i++) {
+                    data[i] = (byte) (i * 37 + length * 11);
+                }
+            }
         }
     }
 
@@ -217,7 +239,7 @@ public class ChecksumBase64 {
     }
 
     @Benchmark
-    public byte[] gzipBase64RoundTrip(Inputs input) throws IOException {
+    public byte[] gzipBase64RoundTrip(CompressionInputs input) throws IOException {
         ByteArrayOutputStream bytes = new ByteArrayOutputStream();
         try (GZIPOutputStream gzip = new GZIPOutputStream(bytes)) {
             gzip.write(input.data, 7, input.length);

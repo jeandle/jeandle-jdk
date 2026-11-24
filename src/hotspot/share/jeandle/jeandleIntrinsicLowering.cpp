@@ -1247,24 +1247,20 @@ bool JeandleIntrinsicLowering::lower_base64(vmIntrinsics::ID id) {
   llvm::Value* src = _interp->_jvm->apop();
   _interp->_jvm->apop();  // receiver, checked by invoke()
 
-  if (!encode) {
-    // Vector stores may extend past their decoded prefix. Leave the final
-    // quartet to Java when the stub can enter such a vector path.
-    llvm::Value* length = builder.CreateSub(sl, sp);
-    llvm::Value* needs_tail = builder.CreateICmpSGE(length, builder.getInt32(8));
 #ifdef AMD64
-    // Short x86 inputs store exactly three bytes per quartet. Match both
-    // vector entry thresholds in generate_base64_decodeBlock.
-    bool vbmi = VM_Version::supports_avx512_vbmi() && VM_Version::supports_avx512bw();
-    if (vbmi || VM_Version::supports_avx2()) {
-      needs_tail = builder.CreateICmpSGE(length, builder.getInt32(vbmi ? 32 : 44));
-    } else {
-      needs_tail = builder.getFalse();
-    }
-#endif
+  bool vbmi = VM_Version::supports_avx512_vbmi() && VM_Version::supports_avx512bw();
+  if (!encode && !vbmi && VM_Version::supports_avx2()) {
+    // AVX2 stores 32 bytes for a 24-byte decoded prefix, so reserve output
+    // space when that vector path is possible. MIME uses precise scalar stores.
+    // VBMI uses precise masked stores and needs the true end to handle padding.
+    llvm::Value* length = builder.CreateSub(sl, sp);
+    llvm::Value* needs_tail = builder.CreateAnd(
+        builder.CreateICmpSGE(length, builder.getInt32(44)),
+        builder.CreateICmpEQ(mime, builder.getInt32(0)));
     llvm::Value* end = builder.CreateSub(sl, builder.getInt32(4));
     sl = builder.CreateSelect(needs_tail, end, sl);
   }
+#endif
   llvm::Type* word = native_word_type(*_interp->_context);
   // Stubs receive element0 and independent offsets, including the source end.
   llvm::SmallVector<llvm::Value*, 7> args = {
