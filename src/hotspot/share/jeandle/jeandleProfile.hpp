@@ -73,6 +73,9 @@ class JeandleProfile : public StackObj {
   // transforms (unstable-if prune, guarded devirt) must gate on this.
   bool is_mature() const;
 
+  // Observed method entries, or zero when no trustworthy count is available.
+  uint64_t entry_count() const;
+
   // Single JDK-side entry point for receiver profile maturity, morphism,
   // target resolution, and speculative trap gating.
   DevirtualizationInfo devirtualization_at(ciMethod* callee,

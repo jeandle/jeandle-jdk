@@ -40,6 +40,11 @@
 #include "oops/objArrayKlass.hpp"
 #include "runtime/thread.hpp"
 
+void attach_allocation_result_attrs(llvm::CallBase* call) {
+  call->addRetAttr(llvm::Attribute::NonNull);
+  call->addRetAttr(llvm::Attribute::NoUndef);
+}
+
 // Check if a klass is an interface type that the bytecode verifier does not enforce.
 // This includes interface instance klasses and arrays whose base element is an
 // interface (e.g., MyInterface[], MyInterface[][]). These types should not get

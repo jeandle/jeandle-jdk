@@ -173,7 +173,7 @@ public class TestObjectClone {
                 "invoke.*__jeandle_dynamic_call.*java_lang_Object_clone.*\\[ \"deopt\"\\(i64 0,");
         virtual.checkNotPattern(
                 "invoke.*__jeandle_dynamic_call.*java_lang_Object_clone.*\\[ \"deopt\"\\(i64 1,");
-        virtual.checkNotPattern("invoke hotspotcc nonnull.*__jeandle_dynamic_call.*java_lang_Object_clone");
+        virtual.checkNotPattern("invoke hotspotcc.*nonnull.*__jeandle_dynamic_call.*java_lang_Object_clone");
 
         FileCheck array = new FileCheck(dumpPath.toString(),
                 TestMethods.class.getDeclaredMethod("cloneByteArray", byte[].class), false);

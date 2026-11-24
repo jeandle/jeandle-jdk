@@ -77,7 +77,7 @@ public class TestCloneOverrides {
             FileCheck raw = new FileCheck(dump.toString(),
                     Base.class.getDeclaredMethod(method, Base.class), false);
             raw.checkPatternAnywhere("invoke.*__jeandle_dynamic_call.*java_lang_Object_clone");
-            raw.checkNotPattern("invoke hotspotcc nonnull.*__jeandle_dynamic_call.*java_lang_Object_clone");
+            raw.checkNotPattern("invoke hotspotcc.*nonnull.*__jeandle_dynamic_call.*java_lang_Object_clone");
             raw.checkPatternAnywhere(
                     "invoke.*__jeandle_dynamic_call.*java_lang_Object_clone.*\\[ \"deopt\"\\(i64 0,");
         }

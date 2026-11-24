@@ -26,7 +26,9 @@
  *          because Long has not been resolved.
  * @library /test/lib
  * @build jdk.test.lib.Asserts
- * @run main/othervm -Xbatch -Xcomp -XX:-TieredCompilation -XX:+UseJeandleCompiler TestLongValueOf
+ * @run main/othervm -Xbatch -Xcomp -XX:-TieredCompilation -XX:+UseJeandleCompiler
+ *      -XX:CompileCommand=compileonly,TestLongValueOf::*
+ *      -XX:CompileCommand=compileonly,java.lang.Long*::* TestLongValueOf
  */
 import jdk.test.lib.Asserts;
 

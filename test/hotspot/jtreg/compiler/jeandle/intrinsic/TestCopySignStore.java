@@ -61,7 +61,7 @@ public class TestCopySignStore {
             FileCheck raw = new FileCheck(dump, TestWrapper.class.getMethod(method,
                     arrayType, arrayType, arrayType), false);
             if (isStrict) {
-                raw.check("invoke hotspotcc " + fpType + " @\"java_lang_StrictMath_copySign");
+                raw.checkPattern("invoke hotspotcc .*" + fpType + " @\"java_lang_StrictMath_copySign");
             } else {
                 raw.check("call " + fpType + " @llvm.copysign.");
             }
@@ -73,7 +73,7 @@ public class TestCopySignStore {
             if (isStrict) {
                 optimized.check("fcmp ord " + fpType);
                 optimized.checkPattern("select i1 .*" + fpType + " .*" + fpType + " 1.000000e\\+00");
-                optimized.check("call " + fpType + " @llvm.copysign.");
+                optimized.checkPattern("call (noundef )?" + fpType + " @llvm\\.copysign\\.");
                 optimized.check("store atomic " + fpType);
                 optimized.checkNot("StrictMath_copySign");
             } else if (Platform.isX64()) {

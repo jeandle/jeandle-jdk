@@ -50,6 +50,7 @@ import java.util.stream.Stream;
 import com.sun.management.HotSpotDiagnosticMXBean;
 
 import jdk.test.lib.Asserts;
+import jdk.test.lib.Utils;
 import jdk.test.lib.process.OutputAnalyzer;
 import jdk.test.lib.process.ProcessTools;
 import jdk.test.whitebox.WhiteBox;
@@ -57,7 +58,8 @@ import jdk.test.whitebox.WhiteBox;
 /** Shared exact runner and parser support for Jeandle PEA jtreg tests. */
 public final class PEATestUtils {
     private static final int FULL_OPTIMIZATION_LEVEL = 4;
-    private static final long COMPILE_TIMEOUT_NANOS = TimeUnit.MINUTES.toNanos(5);
+    private static final long COMPILE_TIMEOUT_NANOS = TimeUnit.MILLISECONDS.toNanos(
+            Utils.adjustTimeout(TimeUnit.MINUTES.toMillis(5)));
     private static final String COMPILED_SENTINEL = "PEA-COMPILED:";
     private static final String RESULT_SENTINEL = "PEA-RESULT:";
     private static final String CONFIGURED_TARGETS_PROPERTY =

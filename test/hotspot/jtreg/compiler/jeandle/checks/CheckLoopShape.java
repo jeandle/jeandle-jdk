@@ -38,15 +38,55 @@ final class CheckLoopShape {
     private static final Pattern LABEL = Pattern.compile("^([a-zA-Z0-9_.$-]+):");
     private static final Pattern EDGE = Pattern.compile("label %([a-zA-Z0-9_.$-]+)");
 
-    private static Set<String> reachable(String start, Map<String, List<String>> edges) {
+    private static Set<String> reachable(String start, String stop, Map<String, List<String>> edges) {
         Set<String> visited = new HashSet<>();
         ArrayDeque<String> work = new ArrayDeque<>();
         work.add(start);
         while (!work.isEmpty()) {
             String block = work.removeFirst();
-            if (visited.add(block)) work.addAll(edges.getOrDefault(block, List.of()));
+            if (visited.add(block) && !block.equals(stop)) {
+                work.addAll(edges.getOrDefault(block, List.of()));
+            }
         }
         return visited;
+    }
+
+    static void assertElementLoop(Method method) throws Exception {
+        String prefix = method.getDeclaringClass().getName().replace('.', '_') + "_" + method.getName() + "_";
+        String ir = null;
+        try (var paths = Files.list(Path.of(System.getProperty("user.dir")))) {
+            for (Path path : paths.filter(p -> p.getFileName().toString().startsWith(prefix)
+                    && p.getFileName().toString().endsWith("_optimized.ll"))
+                    .sorted(Comparator.reverseOrder()).toList()) {
+                String text = Files.readString(path);
+                Matcher root = Pattern.compile("(?m)^define .*\\.root[^\\n]*\\n").matcher(text);
+                if (root.find() && !root.group().contains("__jeandle_osr")) {
+                    ir = text.substring(root.end(), text.indexOf("\n}", root.end()));
+                    break;
+                }
+            }
+        }
+        Asserts.assertNotNull(ir, "ordinary root for " + method.getName());
+        Map<String, List<String>> edges = new HashMap<>();
+        Set<String> loads = new HashSet<>();
+        String entry = null;
+        String block = null;
+        for (String line : ir.split("\n")) {
+            Matcher label = LABEL.matcher(line);
+            if (label.find()) {
+                block = label.group(1);
+                if (entry == null) entry = block;
+                edges.put(block, new ArrayList<>());
+            } else if (block != null) {
+                if (line.contains("load atomic i32") && line.contains("%array_element_address")) loads.add(block);
+                Matcher edge = EDGE.matcher(line);
+                while (edge.find()) edges.get(block).add(edge.group(1));
+            }
+        }
+        Set<String> live = reachable(entry, null, edges);
+        Asserts.assertTrue(loads.stream().anyMatch(b -> live.contains(b)
+                && edges.get(b).stream().anyMatch(next -> reachable(next, null, edges).contains(b))),
+                "reachable loop with an array element load in " + method.getName());
     }
 
     static void assertVersioned(Method method) throws Exception {
@@ -89,8 +129,10 @@ final class CheckLoopShape {
             if (!guard.contains(".affine.check")) continue;
             List<String> successors = edges.get(guard);
             if (successors.size() != 2 || !successors.get(1).contains(".affine.slow")) continue;
-            Set<String> fast = reachable(successors.get(0), edges);
-            Set<String> slow = reachable(successors.get(1), edges);
+            // A surrounding loop can revisit the guard on its next iteration.
+            // Compare the two regions only up to that next version decision.
+            Set<String> fast = reachable(successors.get(0), guard, edges);
+            Set<String> slow = reachable(successors.get(1), guard, edges);
             Set<String> fastOnly = new HashSet<>(fast);
             fastOnly.removeAll(slow);
             Set<String> slowOnly = new HashSet<>(slow);

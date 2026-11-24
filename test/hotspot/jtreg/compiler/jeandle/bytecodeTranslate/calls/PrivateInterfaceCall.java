@@ -30,7 +30,8 @@
  * @comment This complements SpecialInterfaceCall which tests invokespecial semantics.
  * @compile PrivateInterfaceCall.java
  * @compile PrivateInterfaceCallI4.jasm
- * @run main/othervm -Xcomp -Xbatch -XX:-TieredCompilation -XX:+UseJeandleCompiler PrivateInterfaceCall
+ * @run main/othervm -Xcomp -Xbatch -XX:-TieredCompilation -XX:+UseJeandleCompiler
+ *      -XX:CompileCommand=compileonly,PrivateInterfaceCall*::* PrivateInterfaceCall
  */
 
 // This is an adaptation of SpecialInterfaceCall to only use private interface methods and with

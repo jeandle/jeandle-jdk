@@ -26,6 +26,8 @@
  * @run main/othervm
  *      -Xbootclasspath/a:.
  *      -XX:-TieredCompilation -Xcomp
+ *      -XX:CompileCommand=compileonly,TestReferenceRefersToDuringConcMark*::*
+ *      -XX:CompileCommand=compileonly,java.lang.ref.Reference::refersTo*
  *      -XX:+UnlockDiagnosticVMOptions -XX:+WhiteBoxAPI
  *      TestReferenceRefersToDuringConcMark
  */

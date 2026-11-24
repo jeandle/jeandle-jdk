@@ -58,10 +58,10 @@ public class TestRound {
 
         FileCheck intChecker = new FileCheck(dumpDir,
                 TestWrapper.class.getMethod("int_round", float.class), true);
-        intChecker.checkPattern("define hotspotcc i32 .*TestRound.*int_round.*");
+        intChecker.checkPattern("define hotspotcc (?:noundef )?i32 .*TestRound.*int_round.*");
         FileCheck longChecker = new FileCheck(dumpDir,
                 TestWrapper.class.getMethod("long_round", double.class), true);
-        longChecker.checkPattern("define hotspotcc i64 .*TestRound.*long_round.*");
+        longChecker.checkPattern("define hotspotcc (?:noundef )?i64 .*TestRound.*long_round.*");
         if (!disabled) {
             intChecker.check("bitcast float");
             intChecker.check("ashr i32");

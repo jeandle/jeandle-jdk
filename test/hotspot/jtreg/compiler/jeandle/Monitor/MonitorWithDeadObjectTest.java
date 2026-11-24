@@ -30,7 +30,7 @@
  *          cause asserts, crashes, or failures when various sub-systems
  *          in the JVM find them.
  * @library /testlibrary /test/lib
- * @run main/othervm/native/timeout=180000 -Xcomp -XX:-TieredCompilation MonitorWithDeadObjectTest 0
+ * @run main/othervm/native/timeout=180000 -Xcomp -XX:-TieredCompilation -XX:CompileCommand=compileonly,MonitorWithDeadObjectTest*::* MonitorWithDeadObjectTest 0
  */
 
 /*
@@ -41,7 +41,7 @@
  *          cause asserts, crashes, or failures when various sub-systems
  *          in the JVM find them.
  * @library /testlibrary /test/lib
- * @run main/othervm/native/timeout=180000 -Xcomp -XX:-TieredCompilation MonitorWithDeadObjectTest 1
+ * @run main/othervm/native/timeout=180000 -Xcomp -XX:-TieredCompilation -XX:CompileCommand=compileonly,MonitorWithDeadObjectTest*::* MonitorWithDeadObjectTest 1
  */
 
 /*
@@ -52,7 +52,7 @@
  *          cause asserts, crashes, or failures when various sub-systems
  *          in the JVM find them.
  * @library /testlibrary /test/lib
- * @run main/othervm/native/timeout=180000 -Xcomp -XX:-TieredCompilation MonitorWithDeadObjectTest 2
+ * @run main/othervm/native/timeout=180000 -Xcomp -XX:-TieredCompilation -XX:CompileCommand=compileonly,MonitorWithDeadObjectTest*::* MonitorWithDeadObjectTest 2
  */
 
 import java.lang.management.ManagementFactory;

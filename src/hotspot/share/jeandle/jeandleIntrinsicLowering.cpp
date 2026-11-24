@@ -3011,6 +3011,7 @@ bool JeandleIntrinsicLowering::lower_new_array() {
                      /*defer_initialization_membar=*/builder.getFalse()},
                     fast_attrs);
   RETURN_ON_JEANDLE_ERROR(true);
+  attach_allocation_result_attrs(fast_call);
   // emit_callsite with exception edge moves builder to a new normal_dest block.
   builder.CreateBr(merge_bb);
   llvm::BasicBlock* fast_normal_bb = builder.GetInsertBlock();
@@ -3028,6 +3029,7 @@ bool JeandleIntrinsicLowering::lower_new_array() {
       llvm::CallingConv::Hotspot_JIT,
       {mirror, length, current_thread}, slow_attrs);
   RETURN_ON_JEANDLE_ERROR(true);
+  attach_allocation_result_attrs(slow_call);
   builder.CreateBr(merge_bb);
   llvm::BasicBlock* slow_normal_bb = builder.GetInsertBlock();
 
@@ -3303,6 +3305,7 @@ bool JeandleIntrinsicLowering::lower_unsafe_allocate_instance() {
       new_instance_op, llvm::CallingConv::Hotspot_JIT,
       {klass, size_in_bytes, needs_slow_path}, allocation_attrs);
   RETURN_ON_JEANDLE_ERROR(true);
+  attach_allocation_result_attrs(result);
 
   _interp->_jvm->apush(result);
   return true;

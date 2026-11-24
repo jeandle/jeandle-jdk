@@ -29,7 +29,8 @@
  * @comment This must be compiled so invokespecial is used
  * @compile -XDdisableVirtualizedPrivateInvoke SpecialInterfaceCall.java
  * @compile SpecialInterfaceCallI4.jasm
- * @run main/othervm -Xcomp -Xbatch -XX:-TieredCompilation -XX:+UseJeandleCompiler SpecialInterfaceCall
+ * @run main/othervm -Xcomp -Xbatch -XX:-TieredCompilation -XX:+UseJeandleCompiler
+ *      -XX:CompileCommand=compileonly,SpecialInterfaceCall*::* SpecialInterfaceCall
  */
 
 import java.lang.invoke.*;

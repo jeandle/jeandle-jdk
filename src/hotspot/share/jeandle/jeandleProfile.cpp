@@ -48,6 +48,16 @@ bool JeandleProfile::is_mature() const {
   return _mdo != nullptr && _mdo->is_mature();
 }
 
+uint64_t JeandleProfile::entry_count() const {
+  if (!has_profile() || !is_mature()) {
+    return 0;
+  }
+  // CI snapshots this count together with the MDO. It substitutes one for
+  // missing counts and max_jint for overflow, so omit those sentinel values.
+  int count = _method->interpreter_invocation_count();
+  return count > 1 && count < max_jint ? static_cast<uint64_t>(count) : 0;
+}
+
 bool JeandleProfile::has_trap_at(int bci,
                                  Deoptimization::DeoptReason reason) const {
   if (_mdo == nullptr) {

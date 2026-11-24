@@ -67,9 +67,11 @@ public class TestPEADeoptReconstructObjectArrays {
                 TestWrapper.Materialized.class);
         Method mix = TestWrapper.class.getDeclaredMethod(
                 "mix", long.class, long.class);
+        Method rotateLeft = Long.class.getMethod(
+                "rotateLeft", long.class, int.class);
         Method[] targets = {never, partialFalse, partialTrue};
         Method[] inlineHelpers = {
-                observeInitialTopology, mutateAndObserve, mix};
+                observeInitialTopology, mutateAndObserve, mix, rotateLeft};
 
         runBuilder(false, targets, requestDeopt, sink, inlineHelpers)
                 .runPEAOnOffEquivalent();

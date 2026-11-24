@@ -25,6 +25,7 @@ package compiler.jeandle.testVmResultGC;
  * @summary Test return of JNI weak global refs from native calls.
  * @run main/othervm/native
  *    -Xcomp -XX:-TieredCompilation -XX:+UseJeandleCompiler
+ *    -XX:CompileCommand=compileonly,compiler.jeandle.testVmResultGC.TestVmResultGC*::*
  *    compiler.jeandle.testVmResultGC.TestVmResultGC
  */
 
@@ -33,6 +34,7 @@ package compiler.jeandle.testVmResultGC;
  * @summary Test return of JNI weak global refs from native calls with Neon disabled.
  * @run main/othervm/native
  *    -Xcomp -XX:-TieredCompilation -XX:+UseJeandleCompiler -XX:-UseNeon
+ *    -XX:CompileCommand=compileonly,compiler.jeandle.testVmResultGC.TestVmResultGC*::*
  *    compiler.jeandle.testVmResultGC.TestVmResultGC
  */
 

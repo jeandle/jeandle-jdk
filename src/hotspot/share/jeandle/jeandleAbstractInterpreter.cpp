@@ -822,6 +822,14 @@ JeandleAbstractInterpreter::JeandleAbstractInterpreter(const JeandleParseContext
                                                        _work_list(),
                                                        _sync_lock(LockValue()),
                                                        _trap_hist(trap_hist) {
+  // Interpreter invocations count ordinary method entries, not OSR or inline
+  // entries. LLVM uses the observation only for optimization profitability.
+  if (_parse_context.is_root() && !is_osr()) {
+    uint64_t count = _profile.entry_count();
+    if (count != 0) {
+      _llvm_func->setEntryCount(count);
+    }
+  }
   // Fill basic blocks with LLVM IR.
   interpret();
 }
@@ -2329,6 +2337,9 @@ llvm::InvokeInst* JeandleAbstractInterpreter::emit_java_call(ciMethod* target,
     assert(return_type == T_OBJECT, "non-null result must be an object");
     invoke->addRetAttr(llvm::Attribute::NonNull);
   }
+  if (return_type != T_VOID) {
+    invoke->addRetAttr(llvm::Attribute::NoUndef);
+  }
 
   // Attach java-klass return type attribute to the call site.
   attach_java_klass_ret_attr(invoke, method_signature->return_type(), *_context);
@@ -2655,9 +2666,7 @@ llvm::InvokeInst* JeandleAbstractInterpreter::call_java_op_ex(llvm::StringRef ja
   llvm::InvokeInst* invoke_inst = create_call_ex(java_op_func, args, llvm::CallingConv::Hotspot_JIT, deopt_bundle, deoptimize_on_exception);
   RETURN_ON_JEANDLE_ERROR(nullptr);
   if (java_op == "jeandle.new_instance" || java_op == "jeandle.new_array") {
-    // Allocation either returns a concrete object or takes the unwind edge.
-    invoke_inst->addRetAttr(llvm::Attribute::NonNull);
-    invoke_inst->addRetAttr(llvm::Attribute::NoUndef);
+    attach_allocation_result_attrs(invoke_inst);
   }
   return invoke_inst;
 }
@@ -3033,6 +3042,7 @@ llvm::Value* JeandleAbstractInterpreter::do_array_load_inner(BasicType basic_typ
   llvm::Value* element_address = compute_array_element_address(basic_type, load_type);
   llvm::LoadInst* load_inst = _ir_builder.CreateLoad(load_type, element_address);
   load_inst->setAtomic(llvm::AtomicOrdering::Unordered);
+  load_inst->setMetadata(llvm::LLVMContext::MD_noundef, llvm::MDNode::get(*_context, {}));
   return load_inst;
 }
 
@@ -3255,8 +3265,7 @@ void JeandleAbstractInterpreter::do_new() {
   }
   RETURN_VOID_ON_JEANDLE_ERROR();
 
-  new_inst->addRetAttr(llvm::Attribute::NonNull);
-  new_inst->addRetAttr(llvm::Attribute::NoUndef);
+  attach_allocation_result_attrs(new_inst);
 
   // new always produces an exact type.
   new_inst->addRetAttr(llvm::Attribute::get(*_context,
@@ -3962,8 +3971,7 @@ void JeandleAbstractInterpreter::multianewarray() {
   llvm::InvokeInst* result = create_call_ex(callee, args, llvm::CallingConv::Hotspot_JIT,
                                           {create_current_deopt_bundle()});
   RETURN_VOID_ON_JEANDLE_ERROR();
-  result->addRetAttr(llvm::Attribute::NonNull);
-  result->addRetAttr(llvm::Attribute::NoUndef);
+  attach_allocation_result_attrs(result);
   result->addRetAttr(llvm::Attribute::get(*_context,
       llvm::jeandle::Attribute::JavaKlass,
       std::to_string((uintptr_t)array_klass->constant_encoding())));

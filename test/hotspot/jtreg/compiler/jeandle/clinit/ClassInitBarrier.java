@@ -39,6 +39,7 @@
  */
 
 import jdk.test.lib.Asserts;
+import jdk.test.lib.Utils;
 
 import java.util.*;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -220,7 +221,7 @@ public class ClassInitBarrier {
     private static void ensureFinished() {
         for (Thread thr : BLOCKED_THREADS) {
             try {
-                thr.join(15_000);
+                thr.join(Utils.adjustTimeout(15_000));
             } catch (InterruptedException e) {
                 throw new Error(e);
             }
@@ -424,7 +425,7 @@ public class ClassInitBarrier {
 
         thr.start();
         try {
-            thr.join(15_000);
+            thr.join(Utils.adjustTimeout(15_000));
             if (thr.isAlive()) {
                 dump(thr);
                 throw new AssertionError("blocked");

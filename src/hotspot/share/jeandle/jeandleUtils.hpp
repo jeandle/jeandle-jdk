@@ -73,6 +73,10 @@ void attach_java_klass_ret_attr(llvm::CallBase* call,
                                 ciType* ret_type,
                                 llvm::LLVMContext& ctx);
 
+// A successful Java allocation returns a defined, non-null object. The call
+// must retain its Java exception continuation.
+void attach_allocation_result_attrs(llvm::CallBase* call);
+
 void apply_vm_flag_feature_overrides(llvm::SubtargetFeatures& features);
 
 bool is_jeandle_compiler_thread(Thread* t);
