@@ -83,13 +83,20 @@ public class TestPEAPrimitiveArrayScalarReplacement {
         PEATestUtils.IRBody before = first.before();
         PEATestUtils.IRBody after = report.finalAfter();
 
-        Asserts.assertEquals(before.allocations().size(), 3,
-                target + ": zero-, one-, and four-element source arrays");
+        PEATestUtils.IRBody frontend = run.frontendIR(target);
+        Asserts.assertEquals(frontend.allocations().size(), 3,
+                target + ": zero-, one-, and four-element frontend arrays");
+        frontend.assertPresent("@jeandle.arraylength");
+        // Only testBoolean drops the empty array before later allocations.
+        // The other methods retain it in those allocations' deopt state.
+        int sourceArrays = target.getName().equals("testBoolean") ? 2 : 3;
+        Asserts.assertEquals(before.allocations().size(), sourceArrays,
+                target + ": exact source arrays reaching PEA");
         for (PEATestUtils.AllocationSite site : before.allocations()) {
             Asserts.assertEquals(site.key().kind(), PEATestUtils.AllocationKind.ARRAY,
                     target + ": primitive allocation kind");
         }
-        Asserts.assertEquals(first.effectCount("EliminateAllocation"), 3L,
+        Asserts.assertEquals(first.effectCount("EliminateAllocation"), (long) sourceArrays,
                 target + ": exact allocation elimination effects");
 
         int sourceStores = before.lineCount("store atomic");
@@ -113,7 +120,7 @@ public class TestPEAPrimitiveArrayScalarReplacement {
         after.assertAbsent(DEOPTIMIZE);
         run.finalIR(target).assertAbsent(LOWERED_DEOPTIMIZE);
         Asserts.assertEquals(first.alwaysEscapes(), 0, target + ": no escaping array");
-        Asserts.assertEquals(first.neverEscapes(), 3,
+        Asserts.assertEquals(first.neverEscapes(), sourceArrays,
                 target + ": every qualified array is NeverEscapes");
         Asserts.assertEquals(first.partiallyEscapes(), 0,
                 target + ": no qualified array is partially escaping");

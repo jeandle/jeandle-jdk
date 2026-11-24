@@ -73,6 +73,7 @@ class JeandleVMCallback : public AllStatic {
   static uintptr_t   get_oop_klass(int oop_id);
   static uintptr_t   get_klass_constant(uintptr_t klass_ptr);
   static uintptr_t   get_mirror_klass(int oop_id);
+  static uintptr_t   get_mirror_array_klass(int oop_id);
   static int         are_same_class_mirrors(int left_oop_id, int right_oop_id);
   static int         get_klass_layout_helper(uintptr_t klass_ptr);
   static int         get_super_check_offset(uintptr_t klass_ptr);
