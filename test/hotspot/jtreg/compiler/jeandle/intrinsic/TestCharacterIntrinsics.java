@@ -81,7 +81,7 @@ public class TestCharacterIntrinsics {
         OutputAnalyzer reference = launch("reference", null, null);
         reference.shouldHaveExitValue(0).shouldContain("Character semantics PASSED");
         String expected = result(reference);
-        for (String mode : List.of("disabled", "enabled", "sse", "scalar", "pea-off", "flag-off", "method-off")) {
+        for (String mode : List.of("disabled", "enabled", "sse", "scalar", "pea-off", "flag-off", "method-off", "encode-off")) {
             if (mode.equals("sse") && !Platform.isX64()) continue;
             Path log = Files.createTempFile("character-" + mode, ".xml");
             Path dump = Files.createTempDirectory("character-" + mode + "-ir");
@@ -98,8 +98,9 @@ public class TestCharacterIntrinsics {
                         "missing compiled wrapper " + target[0] + "; " + log);
                 boolean parsed = text.lines().anyMatch(line -> line.contains(target[1] + "(")
                         && line.contains("is parsed as intrinsic"));
-                if (!List.of("disabled", "flag-off", "method-off").contains(mode) && !parsed) missing.add(target[2]);
+                if (!List.of("disabled", "flag-off", "method-off").contains(mode) && !(mode.equals("encode-off") && target[0].startsWith("encode")) && !parsed) missing.add(target[2]);
                 if (mode.equals("disabled") || mode.equals("method-off") || (mode.equals("flag-off") && target[0].startsWith("is"))) require(!parsed, "disabled intrinsic parsed: " + target[2]);
+                if (mode.equals("encode-off") && target[0].startsWith("encode")) require(!parsed, "encoding flag ignored: " + target[2]);
             }
             require(xml.lines().anyMatch(line -> line.startsWith("<nmethod ")
                     && line.contains("compiler='jeandle'")
@@ -175,6 +176,7 @@ public class TestCharacterIntrinsics {
             }
             options.add("-XX:ControlIntrinsic=" + controls);
             if (mode.equals("sse")) options.add("-XX:UseAVX=0");
+            if (mode.equals("encode-off")) options.add("-XX:-SpecialEncodeISOArray");
             if (mode.equals("scalar")) options.add("-XX:MaxVectorSize=8");
             if (mode.equals("pea-off")) options.add("-XX:JeandleLLVMOptions=-jeandle-pea-iterations=0");
             if (mode.equals("flag-off")) options.add("-XX:-UseCharacterCompareIntrinsics");
@@ -184,7 +186,7 @@ public class TestCharacterIntrinsics {
             }
         }
         options.addAll(List.of(TestCharacterIntrinsics.class.getName(), mode.equals("hot-alias") ? "hot-alias" : "child",
-                List.of("enabled", "sse", "scalar", "pea-off", "flag-off").contains(mode) ? "exact-scan" : "contract-scan"));
+                List.of("enabled", "sse", "scalar", "pea-off", "flag-off", "encode-off").contains(mode) ? "exact-scan" : "contract-scan"));
         return ProcessTools.executeCommand(ProcessTools.createLimitedTestJavaProcessBuilder(options));
     }
 

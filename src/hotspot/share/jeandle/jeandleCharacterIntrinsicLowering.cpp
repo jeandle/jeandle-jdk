@@ -145,6 +145,7 @@ bool JeandleIntrinsicLowering::lower_character_intrinsic(vmIntrinsics::ID id) {
   llvm::Value* result;
   llvm::BasicBlock* done = nullptr;
   llvm::BasicBlock* empty = nullptr;
+  llvm::BasicBlock* rejected = nullptr;
   if (predicate) {
     llvm::Value* ch = args[0];
     if (!digit) {
@@ -165,20 +166,49 @@ bool JeandleIntrinsicLowering::lower_character_intrinsic(vmIntrinsics::ID id) {
     if (scan) {
       guard(b.CreateICmpSLT(count, b.getInt32(0)));
     }
-    auto range = [&](llvm::Value* array, llvm::Value* offset, bool utf16_bytes) {
+    auto array_length = [&](llvm::Value* array, bool utf16_bytes) {
       guard(b.CreateIsNull(array));
       llvm::Value* length = _interp->call_java_op("jeandle.arraylength", {array});
       if (utf16_bytes) {
         length = b.CreateLShr(length, b.getInt32(1));
       }
+      return length;
+    };
+    auto range = [&](llvm::Value* length, llvm::Value* offset) {
       guard(b.CreateICmpSLT(offset, b.getInt32(0)));
       llvm::Value* limit = b.CreateAdd(b.CreateZExt(offset, b.getInt64Ty()), b.CreateZExt(count, b.getInt64Ty()));
       guard(b.CreateICmpUGT(limit, b.CreateZExt(length, b.getInt64Ty())));
     };
     const bool src_bytes = id == vmIntrinsics::_encodeByteISOArray;
-    range(args[0], args[1], src_bytes);
+    llvm::Value* src_length = array_length(args[0], src_bytes);
     if (!scan) {
-      range(args[2], args[3], false);
+      // The bytecodes read the first source character before inspecting the
+      // destination or the rest of the range. An unmappable character returns
+      // zero even when those later arguments would be invalid.
+      guard(b.CreateICmpUGE(args[1], src_length));
+      llvm::Value* first;
+      if (src_bytes) {
+        llvm::CallInst* loaded = _interp->call_java_op("jeandle.string_getchar", {args[0], args[1]});
+        loaded->setDoesNotThrow();
+        const CallSiteAttributeMetadata attrs = {CTRL_NONE, MEM_READ};
+        annotate_call(loaded, attrs);
+        apply_memory_attr(loaded, attrs);
+        first = loaded;
+      } else {
+        llvm::Value* data = array_element0_pointer(args[0], T_CHAR, "character_source");
+        llvm::Value* address = b.CreateGEP(b.getInt16Ty(), data, b.CreateZExt(args[1], b.getInt64Ty()));
+        llvm::LoadInst* loaded = b.CreateAlignedLoad(b.getInt16Ty(), address, llvm::Align(2));
+        loaded->setAtomic(llvm::AtomicOrdering::Unordered);
+        first = loaded;
+      }
+      rejected = b.GetInsertBlock();
+      llvm::BasicBlock* encodable = llvm::BasicBlock::Create(*_interp->_context, "character_encodable", _interp->_llvm_func);
+      b.CreateCondBr(b.CreateICmpUGT(first, b.getInt16(id == vmIntrinsics::_encodeAsciiArray ? 127 : 255)), done, encodable);
+      b.SetInsertPoint(encodable);
+    }
+    range(src_length, args[1]);
+    if (!scan) {
+      range(array_length(args[2], false), args[3]);
       if (src_bytes) {
         // Width-changing forward copies may read their own earlier stores.
         guard(b.CreateICmpEQ(args[0], args[2]));
@@ -208,8 +238,11 @@ bool JeandleIntrinsicLowering::lower_character_intrinsic(vmIntrinsics::ID id) {
     llvm::BasicBlock* last = b.GetInsertBlock();
     b.CreateBr(done);
     b.SetInsertPoint(done);
-    llvm::PHINode* merged = b.CreatePHI(b.getInt32Ty(), 2, "character_result");
+    llvm::PHINode* merged = b.CreatePHI(b.getInt32Ty(), rejected == nullptr ? 2 : 3, "character_result");
     merged->addIncoming(b.getInt32(0), empty);
+    if (rejected != nullptr) {
+      merged->addIncoming(b.getInt32(0), rejected);
+    }
     merged->addIncoming(result, last);
     result = merged;
   }

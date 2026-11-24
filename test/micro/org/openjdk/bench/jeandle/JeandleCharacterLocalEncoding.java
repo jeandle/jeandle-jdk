@@ -320,6 +320,27 @@ public class JeandleCharacterLocalEncoding {
     }
 
     @Benchmark
+    public int utf1664Unbounded(Inputs s) throws Throwable {
+        int seed = s.next();
+        byte[] src = new byte[128];
+        byte[] dst = new byte[64];
+        int value = seed & 511;
+        for (int i = 0; i < 64; i++) {
+            src[2 * i] = (byte) (value >>> (LITTLE ? 0 : 8));
+            src[2 * i + 1] = (byte) (value >>> (LITTLE ? 8 : 0));
+            dst[i] = 7;
+        }
+        if (s.failureMask >= 0 && (seed & s.failureMask) == s.failureMask) {
+            src[64] = (byte) (0x100 >>> (LITTLE ? 0 : 8));
+            src[65] = (byte) (0x100 >>> (LITTLE ? 8 : 0));
+        }
+        int prefix = (int) ISO_BYTES.invokeExact(src, 0, dst, 0, 64);
+        int result = prefix;
+        for (int i = 0; i < 64; i++) result = 31 * result + dst[i];
+        return result;
+    }
+
+    @Benchmark
     public int utf1665(Inputs s) throws Throwable {
         int seed = s.next();
         byte[] src = new byte[130];

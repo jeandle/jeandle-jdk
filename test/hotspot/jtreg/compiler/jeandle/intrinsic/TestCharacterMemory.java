@@ -27,10 +27,12 @@
 package compiler.jeandle.intrinsic;
 
 import java.lang.reflect.Method;
+import java.nio.ByteOrder;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.Arrays;
 import java.util.List;
+import java.util.regex.Pattern;
 import jdk.test.lib.process.ProcessTools;
 
 public class TestCharacterMemory {
@@ -43,6 +45,21 @@ public class TestCharacterMemory {
                     byte[].class, int.class, int.class);
             Method ascii = caller.getMethod("encodeASCII", char[].class, int.class,
                     byte[].class, int.class, int.class);
+            Method isoBytes = caller.getMethod("encodeISOBytes", byte[].class, int.class,
+                    byte[].class, int.class, int.class);
+            byte[] utf16 = new byte[128];
+            byte[] bytes = new byte[64];
+            int high = ByteOrder.nativeOrder() == ByteOrder.LITTLE_ENDIAN ? 1 : 0;
+            for (int i = 0; i < 3000; i++) {
+                utf16[high] = (byte) (i & 1);
+                isoBytes.invoke(null, utf16, 0, bytes, 0, 64);
+            }
+            utf16[high] = 1;
+            for (int i = 0; i < 100; i++) {
+                int prefix = (int) isoBytes.invoke(null, utf16, 0, null,
+                        Integer.MIN_VALUE, Integer.MAX_VALUE);
+                if (prefix != 0) throw new AssertionError("UTF16 first-character rejection");
+            }
             for (Method method : List.of(iso, ascii)) {
                 char[] src = new char[64];
                 Arrays.fill(src, 'x');
@@ -52,6 +69,14 @@ public class TestCharacterMemory {
                 for (int i = 0; i < 3000; i++) {
                     src[0] = (i & 1) == 0 ? valid : invalid;
                     method.invoke(null, src, 0, dst, 1, 64);
+                }
+                // An unmappable first character does not access the destination
+                // or the remainder of the requested source range.
+                src[0] = invalid;
+                for (int i = 0; i < 100; i++) {
+                    int prefix = (int) method.invoke(null, src, 0, null,
+                            Integer.MIN_VALUE, Integer.MAX_VALUE);
+                    if (prefix != 0) throw new AssertionError("first-character rejection");
                 }
                 stop = false;
                 Thread writer = new Thread(() -> {
@@ -85,13 +110,20 @@ public class TestCharacterMemory {
                 TestCharacterMemory.class.getName(), "child");
         output.shouldHaveExitValue(0).shouldContain("Character memory PASSED");
         String xml = Files.readString(log);
-        for (String method : List.of("encodeISO", "encodeASCII")) {
+        var traps = Pattern.compile("<uncommon_trap [^>]*reason='intrinsic_or_type_checked_inlining'[^>]*>.*?</uncommon_trap>",
+                Pattern.DOTALL).matcher(xml);
+        while (traps.find()) {
+            if (traps.group().contains("method='java.lang.JeandleCharacterIntrinsicCaller ")) {
+                throw new AssertionError("first-character rejection deoptimized: " + traps.group());
+            }
+        }
+        for (String method : List.of("encodeISO", "encodeASCII", "encodeISOBytes")) {
             if (xml.lines().noneMatch(line -> line.startsWith("<nmethod ")
                     && line.contains("compiler='jeandle'")
                     && line.contains("method='java.lang.JeandleCharacterIntrinsicCaller " + method + " "))) {
                 throw new AssertionError("missing Jeandle method " + method);
             }
-            String routine = method.equals("encodeISO") ? "encode_iso_array_stub" : "encode_ascii_array_stub";
+            String routine = !method.equals("encodeASCII") ? "encode_iso_array_stub" : "encode_ascii_array_stub";
             boolean found = false;
             try (var files = Files.list(dump)) {
                 for (Path file : files.filter(f -> f.toString().endsWith("_optimized.ll")

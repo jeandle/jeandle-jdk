@@ -19,7 +19,7 @@
 
 /*
  * @test
- * @summary Local 17-element encoding retains scalar replacement and partial-write semantics
+ * @summary Local 17- and 64-element encoding retains scalar replacement and partial-write semantics
  * @library /test/lib /
  * @modules java.base/jdk.internal.misc
  * @build jdk.test.whitebox.WhiteBox compiler.jeandle.pea.PEATestUtils
@@ -42,7 +42,8 @@ public class TestCharacterLocalEncoding {
     public static void main(String[] args) throws Exception {
         Method chars = TestWrapper.class.getMethod("chars17", int.class, boolean.class);
         Method utf16 = TestWrapper.class.getMethod("utf1617", int.class, boolean.class);
-        Method[] targets = {chars, utf16};
+        Method utf1664 = TestWrapper.class.getMethod("utf1664", int.class, boolean.class);
+        Method[] targets = {chars, utf16, utf1664};
         String wrapper = TestWrapper.class.getName();
         String patch = "--patch-module=java.base=character-bridge.jar";
         Method bridge = Class.forName("java.lang.JeandleCharacterIntrinsicCaller")
@@ -92,6 +93,8 @@ public class TestCharacterLocalEncoding {
             int expected = reference(seed, fail);
             int chars = chars17(seed, fail);
             int utf16 = utf1617(seed, fail);
+            Asserts.assertEquals(utf1664(seed, fail), reference64(seed, fail),
+                    "64-character UTF16 symbolic prefix and suffix");
             Asserts.assertEquals(chars, expected, "char[] destination including untouched suffix");
             Asserts.assertEquals(utf16, expected, "UTF16 destination including untouched suffix");
             return chars ^ Integer.rotateLeft(utf16, 7);
@@ -131,10 +134,39 @@ public class TestCharacterLocalEncoding {
             return result;
         }
 
+        public static int utf1664(int seed, boolean fail) throws Throwable {
+            byte[] src = new byte[128];
+            byte[] dst = new byte[64];
+            int value = 'a' + (seed & 7);
+            for (int i = 0; i < 64; i++) {
+                src[2 * i] = (byte) (value >>> (LITTLE ? 0 : 8));
+                src[2 * i + 1] = (byte) (value >>> (LITTLE ? 8 : 0));
+                dst[i] = 7;
+            }
+            if (fail) {
+                src[64] = (byte) (0x100 >>> (LITTLE ? 0 : 8));
+                src[65] = (byte) (0x100 >>> (LITTLE ? 8 : 0));
+            }
+            int prefix = (int) ISO_BYTES.invokeExact(src, 0, dst, 0, 64);
+            int result = prefix;
+            for (int i = 0; i < dst.length; i++) result = 31 * result + dst[i];
+            return result;
+        }
+
         private static int reference(int seed, boolean fail) {
             int prefix = fail ? 8 : 17;
             int result = prefix;
             for (int i = 0; i < 17; i++) {
+                int cell = i < prefix ? 'a' + (seed & 7) : 7;
+                result = 31 * result + cell;
+            }
+            return result;
+        }
+
+        private static int reference64(int seed, boolean fail) {
+            int prefix = fail ? 32 : 64;
+            int result = prefix;
+            for (int i = 0; i < 64; i++) {
                 int cell = i < prefix ? 'a' + (seed & 7) : 7;
                 result = 31 * result + cell;
             }

@@ -25,7 +25,8 @@
  * @build jdk.test.whitebox.WhiteBox compiler.jeandle.pea.PEATestUtils
  * @compile --patch-module java.base=${test.src}/../intrinsic ../intrinsic/java/lang/JeandleCharacterIntrinsicCaller.java
  * @run driver jdk.test.lib.helpers.ClassFileInstaller jdk.test.whitebox.WhiteBox
- * @run main/othervm -XX:-UseJeandleCompiler compiler.jeandle.pea.TestCharacterIntrinsicState
+ * @run driver jdk.test.lib.helpers.ClassFileInstaller -jar character-state-bridge.jar java.lang.JeandleCharacterIntrinsicCaller
+ * @run main/othervm --patch-module=java.base=character-state-bridge.jar -XX:-UseJeandleCompiler compiler.jeandle.pea.TestCharacterIntrinsicState
  */
 package compiler.jeandle.pea;
 
@@ -33,6 +34,7 @@ import java.lang.invoke.MethodHandle;
 import java.lang.invoke.MethodHandles;
 import java.lang.invoke.MethodType;
 import java.lang.reflect.Method;
+import java.nio.ByteOrder;
 import java.util.List;
 import jdk.test.lib.Asserts;
 import jdk.test.whitebox.WhiteBox;
@@ -40,32 +42,50 @@ import jdk.test.whitebox.WhiteBox;
 public class TestCharacterIntrinsicState {
     public static void main(String[] args) throws Exception {
         Method target = TestWrapper.class.getMethod("test");
+        Method utf16 = TestWrapper.class.getMethod("utf1664", int.class, boolean.class);
+        Method[] targets = {target, utf16};
         Method deopt = TestWrapper.class.getDeclaredMethod("requestDeopt");
-        String patch = "--patch-module=java.base=" + System.getProperty("test.class.path");
-        PEATestUtils.behaviorRun(TestWrapper.class.getName(), target)
-                .dontinline(deopt).extraFlags(patch).runPEAOnOffEquivalent();
-        try (var run = PEATestUtils.shapeRun(TestWrapper.class.getName(), target)
-                .dontinline(deopt).extraFlags(patch).keepDumps().run()) {
-            var report = run.report(target);
-            Asserts.assertEquals(report.round0Before().allocationBCIs().size(), 2);
-            Asserts.assertEquals(report.finalAfter().allocationBCIs(), List.of());
-            Asserts.assertEquals(run.finalIR(target).loweredAllocCount(), 0);
-            String call = PEATestUtils.MethodId.of(deopt).llvmFunctionName();
-            report.finalAfter().deoptBundleAtCall(call, 0).assertVirtualObjectIds(0, 1);
+        Method bridge = Class.forName("java.lang.JeandleCharacterIntrinsicCaller")
+                .getMethod("encodeISOBytes", byte[].class, int.class, byte[].class,
+                        int.class, int.class);
+        String patch = "--patch-module=java.base=character-state-bridge.jar";
+        PEATestUtils.behaviorRun(TestWrapper.class.getName(), targets)
+                .dontinline(deopt).inline(bridge).extraFlags(patch).runPEAOnOffEquivalent();
+        try (var run = PEATestUtils.shapeRun(TestWrapper.class.getName(), targets)
+                .dontinline(deopt).inline(bridge).extraFlags(patch).keepDumps().run()) {
+            for (Method method : targets) {
+                var report = run.report(method);
+                Asserts.assertEquals(report.round0Before().allocationBCIs().size(), 2);
+                Asserts.assertEquals(report.finalAfter().allocationBCIs(), List.of());
+                Asserts.assertEquals(run.finalIR(method).loweredAllocCount(), 0);
+                String call = PEATestUtils.MethodId.of(deopt).llvmFunctionName();
+                report.finalAfter().deoptBundleAtCall(call, 0).assertVirtualObjectIds(0, 1);
+            }
         }
     }
 
     public static class TestWrapper {
         private static boolean deoptEnabled;
-        private static final Method TARGET = target();
+        private static final Method TARGET = target("test");
+        private static final Method UTF16_TARGET = target("utf1664", int.class, boolean.class);
+        private static boolean utf16Frame;
+        private static final boolean LITTLE = ByteOrder.nativeOrder() == ByteOrder.LITTLE_ENDIAN;
+        private static final MethodHandle ISO = find("encodeISOBytes", byte[].class, int.class,
+                byte[].class, int.class, int.class);
         private static final MethodHandle ENCODE = find("encodeASCII", char[].class, int.class,
                 byte[].class, int.class, int.class);
         private static final MethodHandle SCAN = find("countPositives", byte[].class, int.class, int.class);
 
         public static void main(String[] args) throws Throwable {
-            for (int i = 0; i < 100; i++) Asserts.assertEquals(test(), 759);
+            for (int i = 0; i < 100; i++) {
+                Asserts.assertEquals(test(), 759);
+                utf1664(i, (i & 1) != 0);
+            }
             deoptEnabled = true;
             PEATestUtils.compileConfiguredTargetsAtLevel4();
+            utf16Frame = true;
+            utf1664(9, true);
+            utf16Frame = false;
             Asserts.assertEquals(test(), 759);
             System.out.println("PEA-RESULT:encoding-state-759");
         }
@@ -83,16 +103,47 @@ public class TestCharacterIntrinsicState {
             return 100 * prefix + 10 * dst[0] + dst[1] + positive;
         }
 
+        public static int utf1664(int seed, boolean fail) throws Throwable {
+            byte[] src = new byte[128];
+            byte[] dst = new byte[64];
+            int value = 'a' + (seed & 7);
+            for (int i = 0; i < 64; i++) {
+                src[2 * i + (LITTLE ? 0 : 1)] = (byte) value;
+                dst[i] = 7;
+            }
+            if (fail) {
+                src[64 + (LITTLE ? 0 : 1)] = 0;
+                src[64 + (LITTLE ? 1 : 0)] = 1;
+            }
+            int prefix = (int) ISO.invokeExact(src, 0, dst, 0, 64);
+            requestDeopt();
+            int expectedPrefix = fail ? 32 : 64;
+            if (prefix != expectedPrefix) throw new AssertionError("UTF16 prefix lost");
+            int low = LITTLE ? 0 : 1;
+            int high = LITTLE ? 1 : 0;
+            int middle = fail ? 256 : value;
+            if ((src[low] & 255) != value || src[high] != 0
+                    || (src[64 + low] & 255) != (middle & 255)
+                    || (src[64 + high] & 255) != middle >>> 8
+                    || (src[126 + low] & 255) != value || src[126 + high] != 0
+                    || (dst[0] & 255) != value || (dst[31] & 255) != value
+                    || (dst[32] & 255) != (fail ? 7 : value)
+                    || (dst[63] & 255) != (fail ? 7 : value)) {
+                throw new AssertionError("UTF16 source or partial destination state lost");
+            }
+            return prefix + dst[63];
+        }
+
         private static void requestDeopt() {
             if (!deoptEnabled) return;
             WhiteBox.getWhiteBox().fullGC();
-            var evidence = PEATestUtils.deoptimizeActiveFrame(TARGET, 2);
+            var evidence = PEATestUtils.deoptimizeActiveFrame(utf16Frame ? UTF16_TARGET : TARGET, 2);
             Asserts.assertTrue(evidence.frameDeoptimized());
             System.out.println("ENCODING-GC-DEOPT:" + evidence);
         }
 
-        private static Method target() {
-            try { return TestWrapper.class.getMethod("test"); }
+        private static Method target(String name, Class<?>... args) {
+            try { return TestWrapper.class.getMethod(name, args); }
             catch (ReflectiveOperationException e) { throw new ExceptionInInitializerError(e); }
         }
 
