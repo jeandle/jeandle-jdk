@@ -33,24 +33,25 @@
  *          address instead (see template.ll and
  *          jeandleRuntimeDefinedJavaOps.cpp). The test compiles
  *          String.indexOf and executes vector hits, an early hit over the
- *          previously corrupted bytes, and the fallback for a miss.
+ *          previously corrupted bytes, and the fallback for misses and late
+ *          matches with Latin1 and UTF16 strings.
  * @requires os.arch == "amd64" | os.arch == "x86_64"
  * @run main/othervm -Xcomp -XX:-TieredCompilation -XX:+UseJeandleCompiler
- *      -XX:+UnlockDiagnosticVMOptions -XX:+ForceUnreachable
+ *      -XX:+UnlockDiagnosticVMOptions -XX:+ForceUnreachable -XX:+CompactStrings
  *      -XX:CompileCommand=compileonly,java.lang.String::indexOf
  *      compiler.jeandle.TestRoutineCallForceUnreachable
  */
 
 package compiler.jeandle;
 
+import java.util.Arrays;
+
 public class TestRoutineCallForceUnreachable {
-    // A match found by the vector path after several confirmed candidates.
+    // A match found by the vector-filtered path.
     private static final String WITH_DOUBLE_SLASH =
             "/usr/local//share//jeandle//lib//llvm//bin//opt";
 
-    // Single slashes act as candidate positions that all fail confirmation,
-    // so the kernel exhausts its confirmation budget and takes the linear
-    // fallback routine before concluding that no double slash exists.
+    // Isolated slashes are rejected by the two-character filter.
     private static final String SINGLE_SLASHES_ONLY =
             "/a/b/c/d/e/f/g/h/i/j/k/l/m/n/o/p/q/r/s/t/u/v/w/x/y/z"
             + "/a/b/c/d/e/f/g/h/i/j/k/l/m/n/o/p/q/r/s/t/u/v/w/x/y/z";
@@ -75,6 +76,44 @@ public class TestRoutineCallForceUnreachable {
         if (sum != expected * 100_000) {
             throw new RuntimeException("unexpected indexOf results: " + sum);
         }
+        // Resolve the UTF16 search path before checking the long inputs.
+        if ("\u1261\u1261".indexOf("\u1261", 0) != 0) {
+            throw new AssertionError("unexpected UTF16 warmup result");
+        }
+        for (String encoding : new String[] {"LL", "UU", "UL"}) {
+            testLinearFallback(encoding);
+        }
         System.out.println("Passed");
+    }
+
+    private static void testLinearFallback(String encoding) {
+        char base = encoding.equals("UU") ? '\u1261' : 'a';
+        char[] source = new char[16384];
+        char[] needle = new char[64];
+        Arrays.fill(source, base);
+        Arrays.fill(needle, base);
+        // Every 64-character candidate contains a mismatch. Its position
+        // varies between candidates, so learning a filter cannot avoid
+        // exhausting the full-confirmation budget.
+        for (int i = 31; i < source.length; i += 32) {
+            source[i] = (char) (base + 1);
+        }
+        if (encoding.equals("UL")) {
+            source[0] = '\u1234';
+        }
+        String target = new String(needle);
+        for (int expected : new int[] {-1, source.length - needle.length}) {
+            if (expected >= 0) {
+                System.arraycopy(needle, 0, source, expected, needle.length);
+            }
+            String input = new String(source);
+            for (int from : new int[] {0, 1, source.length / 2}) {
+                int actual = input.indexOf(target, from);
+                if (actual != expected) {
+                    throw new AssertionError("unexpected indexOf result for " + encoding
+                            + ", from=" + from + ": " + actual + " != " + expected);
+                }
+            }
+        }
     }
 }
