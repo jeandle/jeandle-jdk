@@ -1287,6 +1287,8 @@ void RuntimeDefinedJavaOps::define_global_variables(llvm::Module& template_modul
   define_global("VMOptions.ZeroTLAB",                               int1_type, static_cast<uint64_t>(ZeroTLAB));
   define_global("VMOptions.ReduceBulkZeroing",                      int1_type, static_cast<uint64_t>(ReduceBulkZeroing));
   define_global("VMOptions.ReduceInitialCardMarks",                 int1_type, static_cast<uint64_t>(ReduceInitialCardMarks));
+  define_global("Jeandle.FreshArrayCopyRequiresGCBarriers",          int1_type,
+                static_cast<uint64_t>(copy_requires_gc_barriers(true, T_OBJECT)));
   define_global("VMOptions.AllocateInstancePrefetchLines",          int32_type, static_cast<uint64_t>(AllocateInstancePrefetchLines));
   define_global("VMOptions.AllocatePrefetchLines",                  int32_type, static_cast<uint64_t>(AllocatePrefetchLines));
   define_global("VMOptions.UseCompressedClassPointers",             int1_type, static_cast<uint64_t>(UseCompressedClassPointers));
