@@ -4811,6 +4811,10 @@ latin.load:
   %latin.ptr = getelementptr i8, ptr addrspace(1) %data, i64 %latin.offset
   %latin.v = load <32 x i8>, ptr addrspace(1) %latin.ptr, align 1
   %latin.matches = icmp eq <32 x i8> %latin.v, %byte.splat
+  ; FIXME: Upstream AArch64 LLVM vectorToScalarBitmask corrupts v16i8 masks
+  ; with Neon disabled, losing bits 8-15 in each chunk. This bitcast and the
+  ; string_first_lane* bitcasts can miss matches or return incorrect indices.
+  ; See https://github.com/llvm/llvm-project/issues/238712.
   %latin.bits = bitcast <32 x i1> %latin.matches to i32
   %latin.any = icmp ne i32 %latin.bits, 0
   br i1 %latin.any, label %latin.hit, label %latin.next.block
