@@ -100,6 +100,7 @@ public class TestJeandleDumpIRFilter {
         Path dump = Files.createTempDirectory("jeandle_dump_ir_filter_");
         List<String> command = new ArrayList<>(List.of(
                 "-Xcomp", "-Xbatch", "-XX:-TieredCompilation",
+                "-XX:+UnlockDiagnosticVMOptions",
                 "-XX:+UseJeandleCompiler", "-XX:+CIPrintCompilerName",
                 "-XX:+PrintCompilation",
                 "-XX:CompileCommand=compileonly," + CLASS_NAME + "::hot*",
