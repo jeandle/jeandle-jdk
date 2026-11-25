@@ -47,11 +47,14 @@ public class JeandleCharacterLocalEncoding {
         int cursor;
         int failureMask;
         final char[] externalChars = new char[129];
+        final char[] externalFailingChars = new char[129];
         final byte[] externalDestination = new byte[129];
 
         @Setup public void setup() {
             failureMask = failure.equals("CLEAN") ? -1 : failure.equals("PARTIAL") ? 0 : 7;
             Arrays.fill(externalChars, 'A');
+            Arrays.fill(externalFailingChars, 'A');
+            externalFailingChars[64] = '\u0100';
         }
 
         int next() { return cursor++; }
@@ -419,14 +422,19 @@ public class JeandleCharacterLocalEncoding {
     @Benchmark
     public int localSourceExternalDestination128(Inputs s) throws Throwable {
         char[] src = new char[128];
-        Arrays.fill(src, (char) ('a' + (s.next() & 7)));
+        int seed = s.next();
+        Arrays.fill(src, (char) ('a' + (seed & 7)));
+        if (s.failureMask >= 0 && (seed & s.failureMask) == s.failureMask) src[64] = '\u0100';
         return (int) ASCII.invokeExact(src, 0, s.externalDestination, 0, 128);
     }
 
     @Benchmark
     public int externalSourceLocalDestination128(Inputs s) throws Throwable {
+        int seed = s.next();
+        char[] src = s.failureMask >= 0 && (seed & s.failureMask) == s.failureMask
+                ? s.externalFailingChars : s.externalChars;
         byte[] dst = new byte[128];
-        int prefix = (int) ASCII.invokeExact(s.externalChars, 0, dst, 0, 128);
+        int prefix = (int) ASCII.invokeExact(src, 0, dst, 0, 128);
         int result = prefix;
         for (int i = 0; i < 128; i++) result = 31 * result + dst[i];
         return result;
@@ -437,7 +445,12 @@ public class JeandleCharacterLocalEncoding {
         int seed = s.next();
         char[] local = new char[128];
         Arrays.fill(local, (char) ('a' + (seed & 7)));
-        char[] src = (seed & 1) == 0 ? local : s.externalChars;
+        // Use a different bit sequence for failure and operand selection so
+        // both local and external sources see clean and failing conversions.
+        boolean fail = s.failureMask >= 0 && ((seed >>> 1) & s.failureMask) == s.failureMask;
+        if (fail) local[64] = '\u0100';
+        char[] external = fail ? s.externalFailingChars : s.externalChars;
+        char[] src = (seed & 1) == 0 ? local : external;
         return (int) ASCII.invokeExact(src, 0, s.externalDestination, 0, 128);
     }
 }

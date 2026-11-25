@@ -472,25 +472,30 @@ void JeandleRuntimeRoutine::generate_count_positives_stub() {
   MacroAssembler* masm = new MacroAssembler(&buffer);
   const Register src = c_rarg0;
   const Register count = c_rarg1;
-  Label vector16, scalar, loop, dirty, done;
+  const bool avx2 = UseAVX >= 2 && MaxVectorSize >= 32;
+  const bool simd = UseSSE >= 2 && MaxVectorSize >= 16;
+  Label vector16, scalar, loop4, tail2, tail1, dirty, dirty_word, dirty_avx, done;
   address start = __ pc();
   __ xorl(rax, rax);
-  if (UseAVX >= 2 && MaxVectorSize >= 32) {
-    Label vector32;
-    __ bind(vector32);
+  if (avx2) {
+    Label loop32;
     __ cmpl(count, 32);
     __ jcc(Assembler::less, vector16);
+    __ bind(loop32);
     __ vmovdqu(xmm0, Address(src));
     __ vpmovmskb(r10, xmm0, Assembler::AVX_256bit);
     __ testl(r10, r10);
-    __ jcc(Assembler::notZero, dirty);
+    __ jcc(Assembler::notZero, dirty_avx);
     __ addptr(src, 32);
     __ subl(count, 32);
     __ addl(rax, 32);
-    __ jmp(vector32);
+    __ cmpl(count, 32);
+    __ jcc(Assembler::greaterEqual, loop32);
+    // Only paths that execute YMM instructions need upper-lane cleanup.
+    __ vzeroupper();
   }
   __ bind(vector16);
-  if (UseSSE >= 2 && MaxVectorSize >= 16) {
+  if (simd) {
     Label loop16;
     __ bind(loop16);
     __ cmpl(count, 16);
@@ -507,24 +512,50 @@ void JeandleRuntimeRoutine::generate_count_positives_stub() {
   __ bind(scalar);
   __ testl(count, count);
   __ jcc(Assembler::zero, done);
-  __ bind(loop);
+  __ cmpl(count, 4);
+  __ jcc(Assembler::less, tail2);
+  __ bind(loop4);
+  __ movl(r10, Address(src));
+  __ andl(r10, (int)0x80808080);
+  __ jcc(Assembler::notZero, dirty_word);
+  __ addptr(src, 4);
+  __ subl(count, 4);
+  __ addl(rax, 4);
+  __ cmpl(count, 4);
+  __ jcc(Assembler::greaterEqual, loop4);
+  __ bind(tail2);
+  __ testl(count, 2);
+  __ jcc(Assembler::zero, tail1);
+  __ movzwl(r10, Address(src));
+  __ andl(r10, 0x8080);
+  __ jcc(Assembler::notZero, dirty_word);
+  __ addptr(src, 2);
+  __ addl(rax, 2);
+  __ bind(tail1);
+  __ testl(count, 1);
+  __ jcc(Assembler::zero, done);
   __ cmpb(Address(src), 0);
   __ jcc(Assembler::less, done);
-  __ addptr(src, 1);
   __ addl(rax, 1);
-  __ subl(count, 1);
-  __ jcc(Assembler::notZero, loop);
   __ bind(done);
-  if (UseAVX > 0) {
-    __ vzeroupper();
-  }
   __ ret(0);
-  if ((UseAVX >= 2 && MaxVectorSize >= 32) ||
-      (UseSSE >= 2 && MaxVectorSize >= 16)) {
+  __ bind(dirty_word);
+  __ bsfl(r10, r10);
+  __ shrl(r10, 3);
+  __ addl(rax, r10);
+  __ ret(0);
+  if (simd) {
     __ bind(dirty);
     __ bsfl(r10, r10);
     __ addl(rax, r10);
-    __ jmp(done);
+    __ ret(0);
+  }
+  if (avx2) {
+    __ bind(dirty_avx);
+    __ bsfl(r10, r10);
+    __ addl(rax, r10);
+    __ vzeroupper();
+    __ ret(0);
   }
   masm->flush();
   RuntimeStub* stub = RuntimeStub::new_runtime_stub(

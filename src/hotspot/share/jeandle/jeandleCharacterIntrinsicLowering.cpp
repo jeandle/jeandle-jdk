@@ -28,7 +28,37 @@
 #include "jeandle/__hotspotHeadersBegin__.hpp"
 #include "ci/ciMethod.hpp"
 #include "ci/ciSignature.hpp"
+#include "ci/ciStreams.hpp"
+#include "logging/log.hpp"
 #include "runtime/deoptimization.hpp"
+
+// Locate the character-success branch in the trusted encoding/scan bytecodes.
+// Its taken edge continues; the fallthrough stops at the first failing cell.
+// Decline to use the profile if the bytecode shape is ambiguous or changes.
+static int character_success_branch(ciMethod* target, vmIntrinsics::ID id) {
+  const bool scan = id == vmIntrinsics::_countPositives;
+  const bool ascii = id == vmIntrinsics::_encodeAsciiArray;
+  const int limit = ascii ? 128 : 255;
+  const Bytecodes::Code comparison = scan ? Bytecodes::_ifge :
+                                    ascii ? Bytecodes::_if_icmplt : Bytecodes::_if_icmple;
+  ciBytecodeStream stream(target);
+  Bytecodes::Code previous = Bytecodes::_illegal;
+  bool character_limit = false;
+  int branch_bci = -1;
+  for (Bytecodes::Code code; (code = stream.next()) != ciBytecodeStream::EOBC(); previous = code) {
+    if ((scan ? previous == Bytecodes::_baload : character_limit) && code == comparison) {
+      if (branch_bci != -1) {
+        return -1;
+      }
+      branch_bci = stream.cur_bci();
+    }
+    character_limit = code == Bytecodes::_sipush &&
+                      (previous == Bytecodes::_iload ||
+                       (previous >= Bytecodes::_iload_0 && previous <= Bytecodes::_iload_3)) &&
+                      (short)Bytes::get_Java_u2(stream.cur_bcp() + 1) == limit;
+  }
+  return branch_bci;
+}
 
 bool JeandleIntrinsicLowering::lower_inlinee() {
   const ciMethod* target = _interp->_method;
@@ -128,6 +158,33 @@ bool JeandleIntrinsicLowering::lower_character_intrinsic(vmIntrinsics::ID id) {
     }
   }
 
+  bool check_first_scan_byte = scan;
+  if (!predicate && UseInterpreter && !_interp->is_osr()) {
+    ciMethod* target = const_cast<ciMethod*>(_target);
+    JeandleProfile profile(target);
+    if (profile.is_mature()) {
+      int bci = character_success_branch(target, id);
+      if (bci >= 0) {
+        JeandleProfile::BranchCounts counts = profile.branch_at(bci);
+        if (scan && counts.valid && counts.taken > 0 && counts.not_taken == 0) {
+          // The stub also handles a negative first byte. Avoid a redundant
+          // load/branch when the mature profile has only observed positives.
+          check_first_scan_byte = false;
+          log_debug(jeandle)("scan_profile: bci=%d positives=%u negatives=%u; use stub",
+                             bci, counts.taken, counts.not_taken);
+        } else if (!scan && counts.valid && counts.taken == 0 && counts.not_taken > 0 &&
+                   !_interp->too_many_traps(target, bci, Deoptimization::Reason_unstable_if)) {
+          // Keep ordinary invocation/inlining so the bytecode parser can use
+          // its existing unstable-if trap state and recover a constant prefix.
+          log_debug(jeandle)("encoding_profile: %s.%s bci=%d successes=%u failures=%u; use bytecodes",
+                             target->holder()->name()->as_utf8(), target->name()->as_utf8(),
+                             bci, counts.taken, counts.not_taken);
+          return false;
+        }
+      }
+    }
+  }
+
   llvm::IRBuilder<>& b = _interp->_ir_builder;
   ciSignature* sig = _target->signature();
   const int nargs = sig->count();
@@ -207,6 +264,18 @@ bool JeandleIntrinsicLowering::lower_character_intrinsic(vmIntrinsics::ID id) {
       b.SetInsertPoint(encodable);
     }
     range(src_length, args[1]);
+    if (check_first_scan_byte) {
+      // Validate the whole range before this early return: off + count may
+      // overflow in the bytecodes, in which case the loop need not enter.
+      llvm::Value* data = array_element0_pointer(args[0], T_BYTE, "character_source");
+      llvm::Value* address = b.CreateGEP(b.getInt8Ty(), data, b.CreateZExt(args[1], b.getInt64Ty()));
+      llvm::LoadInst* first = b.CreateAlignedLoad(b.getInt8Ty(), address, llvm::Align(1));
+      first->setAtomic(llvm::AtomicOrdering::Unordered);
+      rejected = b.GetInsertBlock();
+      llvm::BasicBlock* positive = llvm::BasicBlock::Create(*_interp->_context, "character_positive", _interp->_llvm_func);
+      b.CreateCondBr(b.CreateICmpSLT(first, b.getInt8(0)), done, positive);
+      b.SetInsertPoint(positive);
+    }
     if (!scan) {
       range(array_length(args[2], false), args[3]);
       if (src_bytes) {
