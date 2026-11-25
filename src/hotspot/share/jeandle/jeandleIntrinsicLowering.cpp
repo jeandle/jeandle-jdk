@@ -34,6 +34,7 @@
 #include "llvm/Support/ModRef.h"
 
 #include "jeandle/jeandleAbstractInterpreter.hpp"
+#include "jeandle/jeandleCompilation.hpp"
 #include "jeandle/jeandleRuntimeRoutine.hpp"
 #include "jeandle/jeandleType.hpp"
 #include "jeandle/jeandleUtils.hpp"
@@ -58,6 +59,9 @@
 #include "oops/klass.inline.hpp"
 #include "oops/klassVtable.hpp"
 #include "oops/method.hpp"
+#if INCLUDE_JVMTI
+#include "prims/jvmtiThreadState.hpp"
+#endif
 #include "runtime/deoptimization.hpp"
 #include "runtime/globals.hpp"
 #include "runtime/vm_version.hpp"
@@ -292,8 +296,21 @@ bool JeandleIntrinsicLowering::is_supported(vmIntrinsics::ID id) {
     case vmIntrinsics::_Class_cast:
     case vmIntrinsics::_isAssignableFrom:
 
-    // currentThread
+    // Thread and ScopedValue native handles.
+    case vmIntrinsics::_currentCarrierThread:
+    case vmIntrinsics::_setCurrentThread:
+    case vmIntrinsics::_scopedValueCache:
+    case vmIntrinsics::_setScopedValueCache:
     case vmIntrinsics::_currentThread:
+
+#if INCLUDE_JVMTI
+    case vmIntrinsics::_notifyJvmtiVThreadStart:
+    case vmIntrinsics::_notifyJvmtiVThreadEnd:
+    case vmIntrinsics::_notifyJvmtiVThreadMount:
+    case vmIntrinsics::_notifyJvmtiVThreadUnmount:
+    case vmIntrinsics::_notifyJvmtiVThreadHideFrames:
+#endif
+    case vmIntrinsics::_getObjectSize:
 
     // Reference*
     case vmIntrinsics::_Reference_get:
@@ -335,6 +352,7 @@ bool JeandleIntrinsicLowering::is_supported(vmIntrinsics::ID id) {
     // fence
     case vmIntrinsics::_loadFence:
     case vmIntrinsics::_storeFence:
+    case vmIntrinsics::_storeStoreFence:
     case vmIntrinsics::_fullFence:
 
     // Preconditions
@@ -676,6 +694,28 @@ bool JeandleIntrinsicLowering::lower(vmIntrinsics::ID id, const ciMethod* target
       return lower_java_op("jeandle.current_thread_obj",
                            {CTRL_NONE, MEM_READ});
 
+    case vmIntrinsics::_currentCarrierThread:
+      return lower_java_op("jeandle.current_carrier_thread_obj", {CTRL_NONE, MEM_READ});
+    case vmIntrinsics::_scopedValueCache:
+      return lower_java_op("jeandle.scoped_value_cache", {CTRL_NONE, MEM_READ});
+    case vmIntrinsics::_setScopedValueCache:
+      return lower_java_op("jeandle.set_scoped_value_cache", {CTRL_NONE, MEM_READ | MEM_WRITE});
+    case vmIntrinsics::_setCurrentThread:
+      if (!JeandleCompilation::current()->method()->changes_current_thread()) {
+        return false;
+      }
+      return lower_java_op("jeandle.set_current_thread_obj", {CTRL_NONE, MEM_READ | MEM_WRITE});
+#if INCLUDE_JVMTI
+    case vmIntrinsics::_notifyJvmtiVThreadStart:
+    case vmIntrinsics::_notifyJvmtiVThreadEnd:
+    case vmIntrinsics::_notifyJvmtiVThreadMount:
+    case vmIntrinsics::_notifyJvmtiVThreadUnmount:
+    case vmIntrinsics::_notifyJvmtiVThreadHideFrames:
+      return lower_jvmti_notify(id);
+#endif
+    case vmIntrinsics::_getObjectSize:
+      return lower_object_size();
+
     // Class queries
     case vmIntrinsics::_isArray:
     case vmIntrinsics::_isPrimitive:
@@ -752,6 +792,7 @@ bool JeandleIntrinsicLowering::lower(vmIntrinsics::ID id, const ciMethod* target
     // fence
     case vmIntrinsics::_loadFence:
     case vmIntrinsics::_storeFence:
+    case vmIntrinsics::_storeStoreFence:
     case vmIntrinsics::_fullFence:
       return lower_llvm_fence(id);
 
@@ -2256,6 +2297,138 @@ bool JeandleIntrinsicLowering::lower_object_notify(vmIntrinsics::ID id) {
   return true;
 }
 
+bool JeandleIntrinsicLowering::lower_object_size() {
+  llvm::IRBuilder<>& builder = _interp->_ir_builder;
+  llvm::Value* object = _interp->_jvm->peek_value(0).value();
+  _interp->null_check(object);
+  _interp->_jvm->apop();
+  _interp->_jvm->lpop(); // Native agent identifier.
+  _interp->_jvm->apop(); // Instrumentation receiver.
+
+  llvm::Value* klass = _interp->load_object_klass(object);
+  llvm::Value* layout = _interp->call_java_op("jeandle.layout_helper", {klass});
+  llvm::BasicBlock* array = llvm::BasicBlock::Create(*_interp->_context, "object_size.array", _interp->_llvm_func);
+  llvm::BasicBlock* instance = llvm::BasicBlock::Create(*_interp->_context, "object_size.instance", _interp->_llvm_func);
+  llvm::BasicBlock* regular = llvm::BasicBlock::Create(*_interp->_context, "object_size.regular", _interp->_llvm_func);
+  llvm::BasicBlock* mirror = llvm::BasicBlock::Create(*_interp->_context, "object_size.mirror", _interp->_llvm_func);
+  llvm::BasicBlock* merge = llvm::BasicBlock::Create(*_interp->_context, "object_size.merge", _interp->_llvm_func);
+  builder.CreateCondBr(builder.CreateICmpSLT(layout, builder.getInt32(0)), array, instance);
+
+  builder.SetInsertPoint(instance);
+  llvm::Value* mirror_klass = builder.CreateIntToPtr(
+      builder.getInt64(reinterpret_cast<uintptr_t>(vmClasses::Class_klass())), builder.getPtrTy());
+  builder.CreateCondBr(builder.CreateICmpEQ(klass, mirror_klass), mirror, regular);
+
+  builder.SetInsertPoint(regular);
+  llvm::Value* instance_size = builder.CreateZExt(
+      builder.CreateAnd(layout, builder.getInt32(~Klass::_lh_instance_slow_path_bit)), builder.getInt64Ty());
+  builder.CreateBr(merge);
+
+  builder.SetInsertPoint(mirror);
+  // Class mirrors include the represented class's static fields, so their
+  // per-object size in heap words takes precedence over the fixed layout.
+  llvm::Value* mirror_size_address = builder.CreateInBoundsGEP(
+      builder.getInt8Ty(), object, builder.getInt32(java_lang_Class::oop_size_offset()));
+  llvm::LoadInst* mirror_words = builder.CreateLoad(builder.getInt32Ty(), mirror_size_address);
+  mirror_words->setAtomic(llvm::AtomicOrdering::Unordered);
+  mirror_words->setAlignment(llvm::Align(BytesPerInt));
+  llvm::Value* mirror_size = builder.CreateMul(
+      builder.CreateZExt(mirror_words, builder.getInt64Ty()), builder.getInt64(HeapWordSize));
+  builder.CreateBr(merge);
+
+  builder.SetInsertPoint(array);
+  llvm::Value* length = _interp->call_java_op("jeandle.arraylength", {object});
+  llvm::Value* header = builder.CreateAnd(
+      builder.CreateLShr(layout, Klass::_lh_header_size_shift), Klass::_lh_header_size_mask);
+  llvm::Value* shift = builder.CreateAnd(layout, Klass::_lh_log2_element_size_mask);
+  // Array sizes can exceed signed i32 even though their lengths cannot.
+  llvm::Value* body = builder.CreateShl(builder.CreateZExt(length, builder.getInt64Ty()),
+                                        builder.CreateZExt(shift, builder.getInt64Ty()));
+  llvm::Value* size = builder.CreateAdd(builder.CreateZExt(header, builder.getInt64Ty()), body);
+  const uint64_t mask = MinObjAlignmentInBytes - 1;
+  llvm::Value* array_size = builder.CreateAnd(builder.CreateAdd(size, builder.getInt64(mask)), builder.getInt64(~mask));
+  builder.CreateBr(merge);
+
+  builder.SetInsertPoint(merge);
+  _interp->_block->set_tail_llvm_block(merge);
+  llvm::PHINode* result = builder.CreatePHI(builder.getInt64Ty(), 3, "object_size");
+  result->addIncoming(instance_size, regular);
+  result->addIncoming(mirror_size, mirror);
+  result->addIncoming(array_size, array);
+  _interp->_jvm->lpush(result);
+  return true;
+}
+
+#if INCLUDE_JVMTI
+bool JeandleIntrinsicLowering::lower_jvmti_notify(vmIntrinsics::ID id) {
+  const bool is_start = id == vmIntrinsics::_notifyJvmtiVThreadStart;
+  const bool is_end = id == vmIntrinsics::_notifyJvmtiVThreadEnd;
+  const bool is_hide = id == vmIntrinsics::_notifyJvmtiVThreadHideFrames;
+  const bool has_hide_argument = !is_start && !is_end;
+  JeandleRuntimeCalleeFn routine = nullptr;
+  switch (id) {
+    case vmIntrinsics::_notifyJvmtiVThreadStart:
+      routine = JeandleRuntimeRoutine::notify_jvmti_vthread_start_callee; break;
+    case vmIntrinsics::_notifyJvmtiVThreadEnd:
+      routine = JeandleRuntimeRoutine::notify_jvmti_vthread_end_callee; break;
+    case vmIntrinsics::_notifyJvmtiVThreadMount:
+      routine = JeandleRuntimeRoutine::notify_jvmti_vthread_mount_callee; break;
+    case vmIntrinsics::_notifyJvmtiVThreadUnmount:
+      routine = JeandleRuntimeRoutine::notify_jvmti_vthread_unmount_callee; break;
+    case vmIntrinsics::_notifyJvmtiVThreadHideFrames:
+      break;
+    default: ShouldNotReachHere(); return false;
+  }
+
+  llvm::IRBuilder<>& builder = _interp->_ir_builder;
+  llvm::Value* hide = has_hide_argument
+      ? builder.CreateTrunc(_interp->_jvm->ipop(), builder.getInt8Ty())
+      : builder.getInt8(is_end ? 1 : 0);
+  llvm::Value* vthread = _interp->_jvm->apop();
+  if (!DoJVMTIVirtualThreadTransitions) {
+    return true;
+  }
+  llvm::Value* thread = _interp->call_java_op("jeandle.current_thread", {});
+  auto store_bit = [&](llvm::Value* base, int offset) {
+    llvm::Value* address = builder.CreateInBoundsGEP(builder.getInt8Ty(), base, builder.getInt32(offset));
+    llvm::StoreInst* store = builder.CreateStore(hide, address);
+    store->setAtomic(llvm::AtomicOrdering::Unordered);
+    store->setAlignment(llvm::Align(1));
+  };
+  if (is_hide) {
+    store_bit(thread, in_bytes(JavaThread::is_in_tmp_VTMS_transition_offset()));
+    return true;
+  }
+
+  // Agent attachment may change this flag after the method was compiled.
+  llvm::Value* enabled_address = builder.CreateIntToPtr(
+      builder.getInt64(reinterpret_cast<uintptr_t>(&JvmtiVTMSTransitionDisabler::_VTMS_notify_jvmti_events)),
+      builder.getPtrTy());
+  llvm::LoadInst* enabled = builder.CreateLoad(builder.getInt8Ty(), enabled_address);
+  enabled->setAtomic(llvm::AtomicOrdering::Unordered);
+  enabled->setAlignment(llvm::Align(1));
+  llvm::BasicBlock* fast = llvm::BasicBlock::Create(*_interp->_context, "jvmti.no_events", _interp->_llvm_func);
+  llvm::BasicBlock* slow = llvm::BasicBlock::Create(*_interp->_context, "jvmti.notify", _interp->_llvm_func);
+  llvm::BasicBlock* merge = llvm::BasicBlock::Create(*_interp->_context, "jvmti.merge", _interp->_llvm_func);
+  builder.CreateCondBr(builder.CreateICmpEQ(enabled, builder.getInt8(0)), fast, slow);
+
+  builder.SetInsertPoint(fast);
+  store_bit(thread, in_bytes(JavaThread::is_in_VTMS_transition_offset()));
+  store_bit(vthread, java_lang_Thread::is_in_VTMS_transition_offset());
+  builder.CreateBr(merge);
+
+  builder.SetInsertPoint(slow);
+  static constexpr CallSiteAttributeMetadata attrs = {
+      CTRL_NEEDS_EXCEPTION_EDGE, MEM_READ | MEM_WRITE | MEM_NEEDS_GC_STATE};
+  emit_callsite(routine(_interp->_module), llvm::CallingConv::Hotspot_JIT, {vthread, hide, thread}, attrs);
+  builder.CreateBr(merge);
+
+  builder.SetInsertPoint(merge);
+  _interp->_block->set_tail_llvm_block(merge);
+  return true;
+}
+#endif
+
 llvm::Value* JeandleIntrinsicLowering::klass_value_for_mirror(
     llvm::Value* mirror) const {
   return _interp->call_java_op("jeandle.load_mirror_klass", {mirror});
@@ -2653,6 +2826,7 @@ bool JeandleIntrinsicLowering::lower_llvm_fence(vmIntrinsics::ID id) {
   switch (id) {
     case vmIntrinsics::_loadFence:  kind = MemoryBarrierKind::Acquire; break;
     case vmIntrinsics::_storeFence: kind = MemoryBarrierKind::Release; break;
+    case vmIntrinsics::_storeStoreFence: kind = MemoryBarrierKind::StoreStore; break;
     case vmIntrinsics::_fullFence:  kind = MemoryBarrierKind::Full; break;
     default:
       ShouldNotReachHere();

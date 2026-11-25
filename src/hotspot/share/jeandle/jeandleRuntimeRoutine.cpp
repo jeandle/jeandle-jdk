@@ -33,6 +33,9 @@
 #include "runtime/stubRoutines.hpp"
 #include "runtime/frame.hpp"
 #include "runtime/interfaceSupport.inline.hpp"
+#if INCLUDE_JFR
+#include "jfr/jfr.hpp"
+#endif
 #include "runtime/safepoint.hpp"
 #include "runtime/synchronizer.hpp"
 #include "runtime/vframeArray.hpp"
@@ -136,6 +139,12 @@ JRT_ENTRY_NO_ASYNC(void, JeandleRuntimeRoutine::safepoint_handler(JavaThread* cu
     Deoptimization::deoptimize_frame(current, trap_frame.id());
     log_info(exceptions)("deferred async exception at Jeandle safepoint");
   }
+JRT_END
+
+// The JFR update only reads Thread fields and publishes native thread-local
+// state. It neither allocates nor reaches a safepoint.
+JRT_LEAF(void, JeandleRuntimeRoutine::jfr_on_set_current_thread(JavaThread* current, oopDesc* thread_obj))
+  JFR_ONLY(Jfr::on_set_current_thread(current, thread_obj);)
 JRT_END
 
 JRT_BLOCK_ENTRY(void, JeandleRuntimeRoutine::monitor_notify(oopDesc* obj,

@@ -287,6 +287,7 @@ class java_lang_Class : AllStatic {
   // compiler support for class operations
   static int klass_offset()                { CHECK_INIT(_klass_offset); }
   static int array_klass_offset()          { CHECK_INIT(_array_klass_offset); }
+  static int oop_size_offset()             { CHECK_INIT(_oop_size_offset); }
   // Support for classRedefinedCount field
   static int classRedefinedCount(oop the_class_mirror);
   static void set_classRedefinedCount(oop the_class_mirror, int value);

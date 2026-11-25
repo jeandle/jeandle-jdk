@@ -21,7 +21,7 @@
 
 /*
  * @test
- * @summary Test the intrinsic implementation of Unsafe.loadFence, storeFence, and fullFence
+ * @summary Test the intrinsic implementation of Unsafe memory fences
  * @modules java.base/jdk.internal.misc
  * @library /test/lib /
  * @build jdk.test.lib.Asserts
@@ -51,6 +51,8 @@ public class TestMemoryFence {
                 "-XX:JeandleDumpDirectory=" + dumpPath,
                 "-XX:CompileCommand=compileonly," + TestWrapper.class.getName() + "::testLoadFence",
                 "-XX:CompileCommand=compileonly," + TestWrapper.class.getName() + "::testStoreFence",
+                "-XX:CompileCommand=compileonly," + TestWrapper.class.getName() + "::testStoreStoreFence",
+                "-XX:CompileCommand=compileonly," + TestWrapper.class.getName() + "::testStoreStoreFenceWithAllocation",
                 "-XX:CompileCommand=compileonly," + TestWrapper.class.getName() + "::testFullFence",
                 TestWrapper.class.getName()));
 
@@ -73,6 +75,17 @@ public class TestMemoryFence {
         new FileCheck(dumpPath, TestWrapper.class.getMethod("testStoreFence"), true)
                 .checkPattern("fence release");
 
+        new FileCheck(dumpPath, TestWrapper.class.getMethod("testStoreStoreFence"), false)
+                .checkPattern("call hotspotcc void @jeandle\\.membar_storestore\\(\\)");
+        new FileCheck(dumpPath, TestWrapper.class.getMethod("testStoreStoreFence"), true)
+                .checkPattern(System.getProperty("os.arch").equals("aarch64")
+                        ? "call void @llvm\\.aarch64\\.dmb\\(i32 10\\)" : "fence release");
+        var allocationProbe = TestWrapper.class.getMethod("testStoreStoreFenceWithAllocation", int.class);
+        new FileCheck(dumpPath, allocationProbe, true).checkPattern(
+                System.getProperty("os.arch").equals("aarch64")
+                        ? "call void @llvm\\.aarch64\\.dmb\\(i32 10\\)" : "fence release");
+        new FileCheck(dumpPath, allocationProbe, true).checkNotPattern("@new_instance|@jeandle\\.new_instance");
+
         FileCheck fullFenceChecker = new FileCheck(dumpPath,
                 TestWrapper.class.getMethod("testFullFence"), false);
         fullFenceChecker.checkPattern("call hotspotcc void @jeandle\\.membar_full\\(\\)");
@@ -88,6 +101,9 @@ public class TestMemoryFence {
             // Each fence is a no-arg void method on Unsafe, so we just call them
             testLoadFence();
             testStoreFence();
+            testStoreStoreFence();
+            new Cell(); // Initialize the allocation class before the compiled probe.
+            Asserts.assertEQ(testStoreStoreFenceWithAllocation(37), 37);
             testFullFence();
 
             // Functional test: simple store-load ordering with fences
@@ -107,6 +123,19 @@ public class TestMemoryFence {
 
         public static void testFullFence() {
             U.fullFence();
+        }
+
+        public static void testStoreStoreFence() {
+            U.storeStoreFence();
+        }
+
+        static class Cell { int value; }
+
+        public static int testStoreStoreFenceWithAllocation(int value) {
+            Cell cell = new Cell();
+            cell.value = value;
+            U.storeStoreFence();
+            return cell.value;
         }
 
         // Simple multi-threaded test: writer stores a value then issues storeFence,
