@@ -5,7 +5,7 @@ These options are available in the `opt` tool when Jeandle-LLVM is built.
 | Option | Description |
 | --- | --- |
 | ```--jeandle``` | Run the Jeandle pass pipeline. |
-| ```--jeandle-vm-callback-log=<filename>``` | Load a VM callback log file and register replay callbacks. This allows Jeandle passes that depend on VM callbacks to run without the JVM. Entries are consumed sequentially during replay. |
+| ```--jeandle-vm-callback-log=<filename>``` | Load a VM callback log file and register replay callbacks. This allows Jeandle passes that depend on VM callbacks to run without the JVM. During replay, each callback result is resolved by looking up the callback kind and its arguments in the log, so entries may be queried repeatedly and in any order. |
 | ```--jeandle-inline-callee-ir=<filename>``` | Supply callee LLVM IR for Jeandle VM callback replay. Used with `--jeandle-vm-callback-log` to restore callee definitions when replay executes a successful `GetInlineCalleeIR` callback. If omitted, the path is derived from the callback log as described below. |
 
 ## Usage Examples
@@ -75,3 +75,26 @@ The callee IR file is loaded on demand, only when replay executes a
 is executed, the file does not need to exist. When it is needed, a missing or
 invalid file, or a missing callee definition for the recorded method ID, causes
 replay to fail.
+
+## VM Callback Replay Semantics
+
+A callback log stores entries of the form `callback(arguments) = result`;
+it is a set of recorded query results, not a script consumed from start to
+end. When a pass executes a VM callback during replay, Jeandle builds a key
+from the callback kind and its arguments and looks the result up in the
+loaded log:
+
+- The same entry may be queried any number of times, and entries may be
+  queried in any order. The replay sequence does not have to match the order
+  in which the callbacks were recorded.
+- If a callback is invoked with a key that has no corresponding entry in the
+  log, replay fails with a fatal error (`VMCallbackLog missing entry for
+  <callback>(<arguments>)`); no fallback value is substituted.
+- When the log is loaded, an entry whose key and result repeat an earlier
+  entry is accepted and deduplicated. If the same key appears with different
+  results, loading fails with an error (`conflicting result for
+  <callback>`), because such a callback would not be a pure query of its
+  arguments.
+- `GetNewStatepointID` is an id-allocation callback rather than a pure query,
+  so it is never recorded in the log; replay allocates fresh synthetic ids
+  for it instead of looking them up.
