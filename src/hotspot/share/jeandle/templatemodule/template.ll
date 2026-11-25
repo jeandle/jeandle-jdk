@@ -190,6 +190,12 @@
 ; baked absolute address (load + inttoptr + indirect call) rather than a PC-relative branch.
 @SharedRuntime.complete_monitor_unlocking_C = external global i64
 
+; Address for the string-indexOf linear fallback (JeandleRuntimeRoutine::string_indexof_linear).
+; Like the monitorexit routine above, it is a libjvm function outside the code cache and a
+; direct routine with reachable=false: the search kernel calls it through this baked absolute
+; address rather than a PC-relative branch to a routine-call relocation.
+@JeandleRuntimeRoutine.string_indexof_linear = external global i64
+
 declare hotspotcc void @jeandle.membar_allocation_init(ptr addrspace(1) captures(none)) nounwind willreturn "gc-leaf-function"
 
 declare hotspotcc void @jeandle.clone_payload(ptr addrspace(1), i64, ptr addrspace(1), i64, i64, i1)
@@ -1777,6 +1783,10 @@ entry:
 
 
 
+; The linear fallback above is called through the baked absolute address
+; @JeandleRuntimeRoutine.string_indexof_linear (see the routine address
+; globals near the top of this file).
+
 declare ptr addrspace(1) @memchr(ptr addrspace(1) readonly, i32, i64) #0 nofree willreturn memory(argmem: read)
 
 ; Read exactly two complete code units. Mixed-width comparisons widen the
@@ -2047,13 +2057,14 @@ filter:
   %prepared.filter.char = phi i32 [ %last, %pair ], [ %second.char, %second ]
   br label %scan.header
 ; The scan filters candidate positions in vector windows, then confirms each
-; surviving lane with a full needle comparison. Adaptive filtering reduces
-; repeated comparisons but does not establish a linear worst-case bound.
-; The kernel is a leaf routine without safepoint polls, so a long search can
-; delay a safepoint until the call returns.
+; surviving lane with a full needle comparison. Adaptive filtering handles
+; selective interior characters. A fixed budget caps total failed confirmations
+; at 64 before switching to Two-Way, bounding work by O(source + target).
+; This leaf has no safepoint polls.
 scan.header:
   %pos = phi i32 [ %from, %unprepared ], [ %from, %filter ], [ %next, %vector.next ], [ %l64.next.pos, %latin64.next ], [ %empty32.pos, %vector.empty32.next ], [ %empty16.pos, %vector.empty16.next ], [ %empty4.pos, %vector.empty4.next ]
   %refinement.state = phi i32 [ -4, %unprepared ], [ -4, %filter ], [ %refinement.exit, %vector.next ], [ %refinement.state, %latin64.next ], [ %refinement.state, %vector.empty32.next ], [ %refinement.state, %vector.empty16.next ], [ %refinement.state, %vector.empty4.next ]
+  %failures.state = phi i32 [ 0, %unprepared ], [ 0, %filter ], [ %failures.exit, %vector.next ], [ %failures.state, %latin64.next ], [ %failures.state, %vector.empty32.next ], [ %failures.state, %vector.empty16.next ], [ %failures.state, %vector.empty4.next ]
   %filter.offset = phi i32 [ 0, %unprepared ], [ %prepared.filter.offset, %filter ], [ %filter.offset, %vector.next ], [ %filter.offset, %latin64.next ], [ %filter.offset, %vector.empty32.next ], [ %filter.offset, %vector.empty16.next ], [ %filter.offset, %vector.empty4.next ]
   %filter.char = phi i32 [ %first, %unprepared ], [ %prepared.filter.char, %filter ], [ %filter.char, %vector.next ], [ %filter.char, %latin64.next ], [ %filter.char, %vector.empty32.next ], [ %filter.char, %vector.empty16.next ], [ %filter.char, %vector.empty4.next ]
   %remaining = sub i32 %limit, %pos
@@ -2520,6 +2531,7 @@ block.filtered:
 candidate.check:
   %pending = phi i32 [ %candidate.mask, %block.filtered ], [ %cleared, %candidate.next ]
   %refinement.candidate = phi i32 [ %refinement.initial, %block.filtered ], [ %refinement.after.failure, %candidate.next ]
+  %failures.candidate = phi i32 [ %failures.state, %block.filtered ], [ %failures.next, %candidate.next ]
   %any = icmp ne i32 %pending, 0
   br i1 %any, label %candidate, label %vector.next
 candidate:
@@ -2549,6 +2561,19 @@ candidate.result:
   %matched = phi i1 [ %candidate.equal, %candidate.equals ], [ %region.equal, %candidate.ul ], [ %mixed.equal, %candidate.lu ]
   br i1 %matched, label %hit, label %candidate.failed
 candidate.failed:
+  %failures.next = add i32 %failures.candidate, 1
+  %failures.limit = icmp eq i32 %failures.next, 64
+  br i1 %failures.limit, label %candidate.linear, label %candidate.learning
+candidate.linear:
+  ; Allow a learned filter to reach the next vector window, but cap total
+  ; full confirmations independently of the refreshable learning budget.
+  ; Candidates through index have failed; resume at its successor.
+  %linear.from = add i32 %index, 1
+  %callee_addr = load i64, ptr @JeandleRuntimeRoutine.string_indexof_linear
+  %callee = inttoptr i64 %callee_addr to ptr
+  %linear.result = call i32 %callee(ptr addrspace(1) nocapture readonly %sp, i32 %srcCount, ptr addrspace(1) nocapture readonly %tp, i32 %tgtCount, i32 %linear.from, i32 %encoding) #0
+  ret i32 %linear.result
+candidate.learning:
   %learning.open = icmp slt i32 %refinement.candidate, 0
   br i1 %learning.open, label %candidate.budget, label %candidate.next
 candidate.budget:
@@ -2615,7 +2640,7 @@ learning.done:
   %learning.result = phi i32 [ -4, %learning.check ], [ 0, %learning.header ], [ %learning.offset, %learning.found ]
   br label %candidate.next
 candidate.next:
-  %refinement.after.failure = phi i32 [ %refinement.candidate, %candidate.failed ], [ %learning.budget.next, %candidate.budget ], [ %learning.result, %learning.done ]
+  %refinement.after.failure = phi i32 [ %refinement.candidate, %candidate.learning ], [ %learning.budget.next, %candidate.budget ], [ %learning.result, %learning.done ]
   %without.lowest = sub i32 %pending, 1
   %cleared = and i32 %pending, %without.lowest
   br label %candidate.check
@@ -2623,6 +2648,7 @@ hit:
   ret i32 %index
 vector.next:
   %refinement.exit = phi i32 [ %refinement.state, %block.ready ], [ %refinement.candidate, %candidate.check ], [ %refinement.state, %refine.fixed.done ], [ %refinement.state, %third.done ]
+  %failures.exit = phi i32 [ %failures.state, %block.ready ], [ %failures.candidate, %candidate.check ], [ %failures.state, %refine.fixed.done ], [ %failures.state, %third.done ]
   %next = add i32 %block.pos, %block.size
   ; Keep vector preparation behind the width dispatch for scalar searches.
   br label %scan.header, !llvm.loop !1
@@ -4785,6 +4811,10 @@ latin.load:
   %latin.ptr = getelementptr i8, ptr addrspace(1) %data, i64 %latin.offset
   %latin.v = load <32 x i8>, ptr addrspace(1) %latin.ptr, align 1
   %latin.matches = icmp eq <32 x i8> %latin.v, %byte.splat
+  ; FIXME: Upstream AArch64 LLVM vectorToScalarBitmask corrupts v16i8 masks
+  ; with Neon disabled, losing bits 8-15 in each chunk. This bitcast and the
+  ; string_first_lane* bitcasts can miss matches or return incorrect indices.
+  ; See https://github.com/llvm/llvm-project/issues/238712.
   %latin.bits = bitcast <32 x i1> %latin.matches to i32
   %latin.any = icmp ne i32 %latin.bits, 0
   br i1 %latin.any, label %latin.hit, label %latin.next.block

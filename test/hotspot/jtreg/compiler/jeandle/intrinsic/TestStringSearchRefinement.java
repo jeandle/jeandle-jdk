@@ -40,6 +40,9 @@ public class TestStringSearchRefinement {
     private static final int[] LENGTHS = {2, 3, 7, 16, 31, 64, 65, 129};
 
     public static void main(String[] args) throws Exception {
+        if (hasLinearFallback("declare i32 @JeandleRuntime_string_indexof_linear()", "indexOfIL")) {
+            throw new AssertionError("A declaration does not prove a fallback call");
+        }
         if (args.length != 0) {
             exercise();
             System.out.println("String search refinement PASSED");
@@ -77,6 +80,9 @@ public class TestStringSearchRefinement {
                             && path.toString().endsWith("_optimized.ll")).findFirst()
                             .orElseThrow(() -> new AssertionError("Missing search IR: " + method));
                     String ir = Files.readString(irFile);
+                    if (!hasLinearFallback(ir, method)) {
+                        throw new AssertionError("Missing bounded search fallback: " + method);
+                    }
                     // The delayed learning budget survives across vector
                     // windows; a fixed third-character probe has no budget.
                     if (!Pattern.compile("phi i32 [^\\n]*\\[ -4, ").matcher(ir).find()) {
@@ -91,6 +97,23 @@ public class TestStringSearchRefinement {
                 }
             }
         }
+    }
+
+    private static boolean hasLinearFallback(String ir, String method) {
+        var root = Pattern.compile("(?ms)^define[^\n]*@\"java_lang_JeandleStringIntrinsicCaller_"
+                + Pattern.quote(method) + "\\([^\n]*\n(.*?)^\\}").matcher(ir);
+        if (!root.find()) return false;
+        String body = root.group(1);
+        // The fallback is reached through the runtime-defined address global
+        // (see template.ll), so the optimized IR carries a call to a folded
+        // absolute address instead of a named routine symbol. The budget and
+        // refinement patterns below tie the call to the fallback path.
+        return Pattern.compile("(?m)^\\s+%[\\w.]+ = (?:tail )?call i32 "
+                + "inttoptr \\(i64 \\d+ to ptr\\)\\(").matcher(body).find()
+                && Pattern.compile("icmp eq i32 %failures\\.next[\\w.]*, 64")
+                        .matcher(body).find()
+                && Pattern.compile("%refinement\\.initial[^=\\n]* = phi i32 [^\\n]*\\[ -4, ")
+                        .matcher(body).find();
     }
 
     private static void exercise() throws Exception {
@@ -117,6 +140,23 @@ public class TestStringSearchRefinement {
                                 check(method, source, needle, from, sourceWide, targetWide);
                             }
                         }
+                    }
+                }
+            }
+            // Each source period rejects a different candidate position.
+            // This defeats a single learned filter even for a uniform needle.
+            for (int size : new int[] {32, 128, 257, 8192}) {
+                char[] reverseSource = new char[size * 8];
+                char[] reverseNeedle = new char[size];
+                Arrays.fill(reverseSource, base);
+                Arrays.fill(reverseNeedle, base);
+                for (int i = size / 2 - 1; i < reverseSource.length; i += size / 2) {
+                    reverseSource[i] = (char) (base + 1);
+                }
+                for (int hit : new int[] {-1, size * 6}) {
+                    if (hit >= 0) System.arraycopy(reverseNeedle, 0, reverseSource, hit, size);
+                    for (int from : new int[] {0, 1, size, size * 6, size * 6 + 1}) {
+                        check(method, reverseSource, reverseNeedle, from, sourceWide, targetWide);
                     }
                 }
             }

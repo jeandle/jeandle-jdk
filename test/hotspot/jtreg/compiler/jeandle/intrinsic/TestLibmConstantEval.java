@@ -54,14 +54,17 @@ public class TestLibmConstantEval {
 
         for (String name : List.of("sinConstant", "powConstant", "log10Constant")) {
             Method method = Kernel.class.getMethod(name, double.class);
+            String definition = "define hotspotcc double .*_" + name + "\\(D\\)D.*";
             // The raw dump still carries the runtime call before optimization
             // (stub entry or SharedRuntime inttoptr, platform dependent).
             FileCheck raw = new FileCheck(dump, method, false);
+            raw.selectFunction(definition);
             raw.checkPatternAnywhere("call double (@StubRoutines_d|@SharedRuntime_d|inttoptr)");
             // The optimized dump folds the call into a hex double constant.
+            // Unused runtime aliases may remain outside the compiled function.
             FileCheck optimized = new FileCheck(dump, method, true);
-            optimized.checkNot("StubRoutines_d");
-            optimized.checkNot("SharedRuntime_d");
+            optimized.selectFunction(definition);
+            optimized.checkNotPattern("(call|invoke) double");
             optimized.checkPatternAnywhere("fadd double .*0x");
         }
     }
