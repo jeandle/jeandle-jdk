@@ -71,6 +71,7 @@ public class TestChecksumIntrinsics {
             new Adler32().update(new byte[8], 1, 7);
             // Load buffer implementations before installing CHA-dependent callers.
             for (ByteBuffer buffer : new ByteBuffer[]{ByteBuffer.allocate(8),
+                    ByteBuffer.allocate(8).asReadOnlyBuffer(),
                     ByteBuffer.allocateDirect(8), ByteBuffer.allocateDirect(8).slice(),
                     ByteBuffer.allocateDirect(8).asReadOnlyBuffer()}) {
                 new CRC32C().update(buffer.duplicate());
@@ -109,13 +110,13 @@ public class TestChecksumIntrinsics {
                         checksum.update(data, offset, prefix);
                         checksum.update(data, offset + prefix, length - prefix);
                         record(checksum, expected);
-                        for (int kind = 0; kind < 4; kind++) {
-                            ByteBuffer buffer = kind == 0 ? ByteBuffer.wrap(data)
+                        for (int kind = 0; kind < 6; kind++) {
+                            ByteBuffer buffer = kind == 0 || kind >= 4 ? ByteBuffer.wrap(data)
                                     : ByteBuffer.allocateDirect(data.length).put(data).flip();
                             buffer.position(offset).limit(offset + length);
-                            if (kind == 2) {
+                            if (kind == 2 || kind == 4) {
                                 buffer = buffer.slice();
-                            } else if (kind == 3) {
+                            } else if (kind == 3 || kind == 5) {
                                 buffer = buffer.asReadOnlyBuffer();
                             }
                             int limit = buffer.limit();

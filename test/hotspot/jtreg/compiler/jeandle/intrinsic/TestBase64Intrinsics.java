@@ -43,7 +43,8 @@ public class TestBase64Intrinsics {
 
     public static class Worker {
         private static final int[] LENGTHS = {0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 15, 16, 23, 24, 25, 29, 30, 31, 32, 33, 34, 35, 36,
-                47, 48, 63, 64, 75, 76, 77, 255, 256, 4096, 65536};
+                37, 38, 39, 40, 41, 42, 43, 44, 45, 46, 47, 48, 49, 50, 51, 52, 53, 54,
+                63, 64, 75, 76, 77, 255, 256, 4096, 65536};
         private static long result;
 
         private enum BufferKind {

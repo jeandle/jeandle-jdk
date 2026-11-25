@@ -1161,19 +1161,6 @@ bool JeandleIntrinsicLowering::lower_update_checksum(vmIntrinsics::ID id) {
     return false;
   }
 
-  ciField* table_field = nullptr;
-  if (crc32c) {
-    ciInstanceKlass* holder = _target->holder();
-    if (!holder->is_initialized()) {
-      return false;
-    }
-    table_field = holder->get_field_by_name(ciSymbol::make("byteTable"),
-                                             ciSymbol::make("[I"), true);
-    if (table_field == nullptr || !table_field->is_static()) {
-      return false;
-    }
-  }
-
   // Null checks retain the invocation operands for deoptimization.
   if (!direct) {
     _interp->null_check(_interp->_jvm->raw_peek(2).value());
@@ -1199,19 +1186,10 @@ bool JeandleIntrinsicLowering::lower_update_checksum(vmIntrinsics::ID id) {
     data = array_data_pointer(buffer, T_BYTE, offset);
   }
   // Some platform stubs consume the full native register for lengths.
-  llvm::SmallVector<llvm::Value*, 4> args = {
+  // The x86 and AArch64 CRC32C stubs use native tables or CRC instructions.
+  // They do not consume the Java byteTable passed by other compiler callers.
+  llvm::SmallVector<llvm::Value*, 3> args = {
       state, data, builder.CreateZExtOrTrunc(length, native_word_type(*_interp->_context))};
-  if (table_field != nullptr) {
-    llvm::Value* address = _interp->compute_static_field_address(
-        table_field->holder(), table_field->offset_in_bytes());
-    BasicType ref_type = UseCompressedOops ? T_NARROWOOP : T_ARRAY;
-    llvm::Value* table = _interp->load_from_address(address, ref_type, false);
-    if (UseCompressedOops) {
-      table = builder.CreateAddrSpaceCast(
-          table, JeandleType::java2llvm(T_ARRAY, *_interp->_context));
-    }
-    args.push_back(array_element0_pointer(table, T_INT));
-  }
   static constexpr CallSiteAttributeMetadata attrs = {CTRL_NONE, MEM_READ};
   _interp->_jvm->ipush(emit_callsite(callee(_interp->_module), llvm::CallingConv::C,
                                     args, attrs, /*is_gc_leaf_entry=*/true));
@@ -1247,20 +1225,6 @@ bool JeandleIntrinsicLowering::lower_base64(vmIntrinsics::ID id) {
   llvm::Value* src = _interp->_jvm->apop();
   _interp->_jvm->apop();  // receiver, checked by invoke()
 
-#ifdef AMD64
-  bool vbmi = VM_Version::supports_avx512_vbmi() && VM_Version::supports_avx512bw();
-  if (!encode && !vbmi && VM_Version::supports_avx2()) {
-    // AVX2 stores 32 bytes for a 24-byte decoded prefix, so reserve output
-    // space when that vector path is possible. MIME uses precise scalar stores.
-    // VBMI uses precise masked stores and needs the true end to handle padding.
-    llvm::Value* length = builder.CreateSub(sl, sp);
-    llvm::Value* needs_tail = builder.CreateAnd(
-        builder.CreateICmpSGE(length, builder.getInt32(44)),
-        builder.CreateICmpEQ(mime, builder.getInt32(0)));
-    llvm::Value* end = builder.CreateSub(sl, builder.getInt32(4));
-    sl = builder.CreateSelect(needs_tail, end, sl);
-  }
-#endif
   llvm::Type* word = native_word_type(*_interp->_context);
   // Stubs receive element0 and independent offsets, including the source end.
   llvm::SmallVector<llvm::Value*, 7> args = {

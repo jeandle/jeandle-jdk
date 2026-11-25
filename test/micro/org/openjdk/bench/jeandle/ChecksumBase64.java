@@ -54,6 +54,7 @@ public class ChecksumBase64 {
 
         @Setup(Level.Trial)
         public void setup() {
+            JeandleBenchmarkSupport.requireJavaBlackhole();
             data = new byte[length + 19];
             for (int i = 0; i < data.length; i++) {
                 data[i] = (byte) (i * 37 + length * 11);
@@ -68,7 +69,7 @@ public class ChecksumBase64 {
 
     @State(Scope.Thread)
     public static class TextInputs {
-        @Param({"1", "23", "24", "25", "29", "30", "31", "256", "4096", "65536"})
+        @Param({"1", "23", "24", "25", "29", "30", "31", "32", "33", "34", "35", "36", "256", "4096", "65536"})
         public int length;
         @Param({"basic", "url", "mime"})
         public String mode;
@@ -81,6 +82,7 @@ public class ChecksumBase64 {
 
         @Setup(Level.Trial)
         public void setup() {
+            JeandleBenchmarkSupport.requireJavaBlackhole();
             data = new byte[length];
             for (int i = 0; i < data.length; i++) {
                 data[i] = (byte) (i * 37 + length * 11);
@@ -111,6 +113,7 @@ public class ChecksumBase64 {
 
         @Setup(Level.Trial)
         public void setup() {
+            JeandleBenchmarkSupport.requireJavaBlackhole();
             data = new byte[length + 7];
             if (dataPattern.equals("random")) {
                 new Random(675).nextBytes(data);
@@ -134,6 +137,7 @@ public class ChecksumBase64 {
 
         @Setup(Level.Trial)
         public void setup() {
+            JeandleBenchmarkSupport.requireJavaBlackhole();
             byte[] data = new byte[length];
             for (int i = 0; i < length; i++) {
                 data[i] = (byte) (i * 37 + length * 11);
@@ -231,6 +235,11 @@ public class ChecksumBase64 {
     @Benchmark
     public int decode(TextInputs input) {
         return input.decoder.decode(input.encoded, input.decodeOutput);
+    }
+
+    @Benchmark
+    public byte[] decodeAllocated(TextInputs input) {
+        return input.decoder.decode(input.encoded);
     }
 
     @Benchmark

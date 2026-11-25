@@ -18,6 +18,7 @@ import java.util.Set;
 import java.util.regex.Pattern;
 
 import jdk.test.lib.Asserts;
+import jdk.test.lib.Platform;
 import jdk.test.lib.process.OutputAnalyzer;
 import jdk.test.lib.process.ProcessTools;
 import jdk.test.whitebox.WhiteBox;
@@ -32,6 +33,12 @@ final class ChecksumBase64TestSupport {
         check(worker, entries, compileOnly, "enabled", List.of(), Set.of(), result);
         check(worker, entries, compileOnly, "uncompressed-oops",
                 List.of("-XX:-UseCompressedOops"), Set.of(), result);
+        if (Platform.isX64() && entries.stream().anyMatch(e -> e.id().startsWith("_base64_"))) {
+            for (int avx : new int[]{0, 2}) {
+                check(worker, entries, compileOnly, "avx" + avx,
+                        List.of("-XX:UseAVX=" + avx), Set.of(), result);
+            }
+        }
         List<String> families = entries.stream().map(Entry::flag).distinct().toList();
         if (families.size() > 1) {
             for (String flag : families) {
@@ -119,9 +126,7 @@ final class ChecksumBase64TestSupport {
         String parameters = base64
                 ? heap + ", i64, i64, " + heap + ", i64, i64"
                 : "i32, " + data + ", i64";
-        if (id.contains("CRC32C")) {
-            parameters += ", " + heap;
-        } else if (id.equals("_base64_decodeBlock")) {
+        if (id.equals("_base64_decodeBlock")) {
             parameters += ", i64";
         }
         String stub = base64 ? id.substring(1)
