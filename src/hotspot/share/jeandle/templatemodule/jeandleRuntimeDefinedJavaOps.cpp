@@ -680,37 +680,89 @@ DEF_JAVA_OP(get_class, 1, llvm::PointerType::get(context, llvm::jeandle::AddrSpa
   ir_builder.CreateRet(mirror);
 JAVA_OP_END
 
-// Thread.currentThread(): load the java.lang.Thread oop for the current thread.
-// Two-level load via the OopHandle stored in JavaThread::_vthread, identical in
-// structure to jeandle.get_class for Klass::_java_mirror:
-//   1. Materialize the current JavaThread* (r15 / x28 / x23) via jeandle.current_thread.
-//   2. Load the OopHandle pointer at JavaThread + vthread_offset  -> oop* in C heap.
-//   3. Dereference the OopHandle to get the Thread oop in the Java heap.
-// _vthread is the value returned by Thread.currentThread(): the mounted virtual
-// thread, otherwise the carrier thread's _threadObj. Matches C2's
-// inline_native_currentThread() -> generate_virtual_thread().
+// Native OopHandle slots contain wide oops even with compressed heap oops.
+static llvm::Value* current_java_thread(llvm::IRBuilder<>& builder,
+                                        llvm::Module& module) {
+  llvm::CallInst* thread = builder.CreateCall(module.getFunction("jeandle.current_thread"));
+  thread->setCallingConv(llvm::CallingConv::Hotspot_JIT);
+  return thread;
+}
+
+static llvm::Value* thread_oop_handle(llvm::IRBuilder<>& builder,
+                                      llvm::Value* thread, ByteSize offset) {
+  llvm::Value* address = builder.CreateInBoundsGEP(
+      builder.getInt8Ty(), thread, builder.getInt32(in_bytes(offset)));
+  auto* handle = builder.CreateLoad(builder.getPtrTy(), address);
+  handle->setAtomic(llvm::AtomicOrdering::Unordered);
+  handle->setAlignment(llvm::Align(HeapWordSize));
+  return handle;
+}
+
+static llvm::Value* load_native_handle(llvm::IRBuilder<>& builder,
+                                       llvm::Value* handle) {
+  auto* value = builder.CreateLoad(llvm::PointerType::get(
+      builder.getContext(), llvm::jeandle::AddrSpace::JavaHeapAddrSpace), handle);
+  value->setAtomic(llvm::AtomicOrdering::Unordered);
+  value->setAlignment(llvm::Align(HeapWordSize));
+  return value;
+}
+
+static void store_native_handle(llvm::IRBuilder<>& builder, llvm::Module& module,
+                                 llvm::Value* handle, llvm::Value* value) {
+  if (UseG1GC) {
+    llvm::Value* previous = load_native_handle(builder, handle);
+    auto* barrier = builder.CreateCall(module.getFunction("jeandle.g1_pre_barrier_loaded"), {previous});
+    barrier->setCallingConv(llvm::CallingConv::Hotspot_JIT);
+  }
+  // Native roots require SATB but do not belong to the heap card table.
+  auto* store = builder.CreateStore(value, handle);
+  store->setAtomic(llvm::AtomicOrdering::Unordered);
+  store->setAlignment(llvm::Align(HeapWordSize));
+}
+
 DEF_JAVA_OP(current_thread_obj, 1,
             llvm::PointerType::get(context, llvm::jeandle::AddrSpace::JavaHeapAddrSpace))
-  // Step 1: materialize the current JavaThread* via the existing JavaOp.
-  llvm::Function* current_thread_func = template_module.getFunction("jeandle.current_thread");
-  if (!current_thread_func) {
-    RuntimeDefinedJavaOps::set_failed("jeandle.current_thread is not found in template module");
-    return;
-  }
-  llvm::CallInst* jt = ir_builder.CreateCall(current_thread_func);
-  jt->setCallingConv(llvm::CallingConv::Hotspot_JIT);
+  llvm::Value* thread = current_java_thread(ir_builder, template_module);
+  ir_builder.CreateRet(load_native_handle(ir_builder,
+      thread_oop_handle(ir_builder, thread, JavaThread::vthread_offset())));
+JAVA_OP_END
 
-  // Step 2: load the OopHandle (oop*) stored at JavaThread + vthread_offset.
-  llvm::Value* vthread_handle_addr = ir_builder.CreateInBoundsGEP(
-      ir_builder.getInt8Ty(), jt,
-      ir_builder.getInt32(in_bytes(JavaThread::vthread_offset())));
-  llvm::Type* c_heap_ptr_ty = llvm::PointerType::get(context, llvm::jeandle::AddrSpace::CHeapAddrSpace);
-  llvm::Value* oop_handle = ir_builder.CreateLoad(c_heap_ptr_ty, vthread_handle_addr);
+DEF_JAVA_OP(current_carrier_thread_obj, 1,
+            llvm::PointerType::get(context, llvm::jeandle::AddrSpace::JavaHeapAddrSpace))
+  llvm::Value* thread = current_java_thread(ir_builder, template_module);
+  ir_builder.CreateRet(load_native_handle(ir_builder,
+      thread_oop_handle(ir_builder, thread, JavaThread::threadObj_offset())));
+JAVA_OP_END
 
-  // Step 3: dereference the OopHandle to get the java.lang.Thread oop in the Java heap.
-  llvm::Type* thread_oop_ty = llvm::PointerType::get(context, llvm::jeandle::AddrSpace::JavaHeapAddrSpace);
-  llvm::Value* thread_oop = ir_builder.CreateLoad(thread_oop_ty, oop_handle);
-  ir_builder.CreateRet(thread_oop);
+DEF_JAVA_OP(scoped_value_cache, 1,
+            llvm::PointerType::get(context, llvm::jeandle::AddrSpace::JavaHeapAddrSpace))
+  llvm::Value* thread = current_java_thread(ir_builder, template_module);
+  ir_builder.CreateRet(load_native_handle(ir_builder,
+      thread_oop_handle(ir_builder, thread, JavaThread::scopedValueCache_offset())));
+JAVA_OP_END
+
+DEF_JAVA_OP(set_scoped_value_cache, 1, llvm::Type::getVoidTy(context),
+            llvm::PointerType::get(context, llvm::jeandle::AddrSpace::JavaHeapAddrSpace))
+  llvm::Value* thread = current_java_thread(ir_builder, template_module);
+  store_native_handle(ir_builder, template_module,
+      thread_oop_handle(ir_builder, thread, JavaThread::scopedValueCache_offset()), func->getArg(0));
+  ir_builder.CreateRetVoid();
+JAVA_OP_END
+
+DEF_JAVA_OP(set_current_thread_obj, 1, llvm::Type::getVoidTy(context),
+            llvm::PointerType::get(context, llvm::jeandle::AddrSpace::JavaHeapAddrSpace),
+            llvm::PointerType::get(context, llvm::jeandle::AddrSpace::JavaHeapAddrSpace))
+  llvm::Value* thread = current_java_thread(ir_builder, template_module);
+  llvm::Value* object = func->getArg(1);
+  store_native_handle(ir_builder, template_module,
+      thread_oop_handle(ir_builder, thread, JavaThread::vthread_offset()), object);
+#if INCLUDE_JFR
+  llvm::CallInst* update = ir_builder.CreateCall(
+      JeandleRuntimeRoutine::JeandleRuntime_jfr_on_set_current_thread_callee(template_module), {thread, object});
+  update->addFnAttr(llvm::Attribute::get(context, "gc-leaf-function"));
+  update->setDoesNotThrow();
+#endif
+  ir_builder.CreateRetVoid();
 JAVA_OP_END
 
 // Reference.refersTo0 / PhantomReference.refersTo0:
@@ -1089,6 +1141,10 @@ bool RuntimeDefinedJavaOps::define_all(llvm::Module& template_module) {
   define_post_barrier(template_module);
   define_get_class(template_module);
   define_current_thread_obj(template_module);
+  define_current_carrier_thread_obj(template_module);
+  define_scoped_value_cache(template_module);
+  define_set_scoped_value_cache(template_module);
+  define_set_current_thread_obj(template_module);
   define_reference_refers_to(template_module);
   define_reference_get(template_module);
   define_encode_heap_oop(template_module);

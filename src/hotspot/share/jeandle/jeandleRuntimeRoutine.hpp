@@ -44,6 +44,34 @@
 //         ...          ,
 //      argn_type       )
 #define ALL_JEANDLE_INDIRECT_ROUTINES(def)                                          \
+  JVMTI_ONLY(def(notify_jvmti_vthread_start,                                       \
+      SharedRuntime::notify_jvmti_vthread_start,                                   \
+      llvm::Type::getVoidTy(context),                                              \
+      llvm::PointerType::get(context, llvm::jeandle::AddrSpace::JavaHeapAddrSpace),\
+      llvm::Type::getInt8Ty(context),                                              \
+      llvm::PointerType::get(context, llvm::jeandle::AddrSpace::CHeapAddrSpace)))  \
+                                                                                   \
+  JVMTI_ONLY(def(notify_jvmti_vthread_end,                                         \
+      SharedRuntime::notify_jvmti_vthread_end,                                     \
+      llvm::Type::getVoidTy(context),                                              \
+      llvm::PointerType::get(context, llvm::jeandle::AddrSpace::JavaHeapAddrSpace),\
+      llvm::Type::getInt8Ty(context),                                              \
+      llvm::PointerType::get(context, llvm::jeandle::AddrSpace::CHeapAddrSpace)))  \
+                                                                                   \
+  JVMTI_ONLY(def(notify_jvmti_vthread_mount,                                       \
+      SharedRuntime::notify_jvmti_vthread_mount,                                   \
+      llvm::Type::getVoidTy(context),                                              \
+      llvm::PointerType::get(context, llvm::jeandle::AddrSpace::JavaHeapAddrSpace),\
+      llvm::Type::getInt8Ty(context),                                              \
+      llvm::PointerType::get(context, llvm::jeandle::AddrSpace::CHeapAddrSpace)))  \
+                                                                                   \
+  JVMTI_ONLY(def(notify_jvmti_vthread_unmount,                                     \
+      SharedRuntime::notify_jvmti_vthread_unmount,                                 \
+      llvm::Type::getVoidTy(context),                                              \
+      llvm::PointerType::get(context, llvm::jeandle::AddrSpace::JavaHeapAddrSpace),\
+      llvm::Type::getInt8Ty(context),                                              \
+      llvm::PointerType::get(context, llvm::jeandle::AddrSpace::CHeapAddrSpace)))  \
+                                                                                   \
   def(safepoint_handler,                                                            \
       JeandleRuntimeRoutine::safepoint_handler,                                     \
       llvm::Type::getVoidTy(context),                                               \
@@ -179,6 +207,14 @@
 // exceptional control flow. It is emitted with both gc-leaf-function and
 // nounwind so LLVM can skip statepoint rewriting and EH edges for the call.
 #define ALL_JEANDLE_DIRECT_ROUTINES(def)                                            \
+  def(JeandleRuntime_jfr_on_set_current_thread,                                      \
+      JeandleRuntimeRoutine::jfr_on_set_current_thread,                              \
+      false,                                                                        \
+      true,                                                                         \
+      llvm::Type::getVoidTy(context),                                               \
+      llvm::PointerType::get(context, llvm::jeandle::AddrSpace::CHeapAddrSpace),    \
+      llvm::PointerType::get(context, llvm::jeandle::AddrSpace::JavaHeapAddrSpace)) \
+                                                                                    \
   def(os_javaTimeMillis,                                                            \
       os::javaTimeMillis,                                                           \
       false,                                                                        \
@@ -940,6 +976,8 @@ class JeandleRuntimeRoutine : public AllStatic {
   // C/C++ routine implementations:
 
   static void safepoint_handler(JavaThread* current);
+
+  static void jfr_on_set_current_thread(JavaThread* current, oopDesc* thread_obj);
 
   static void monitor_notify(oopDesc* obj, JavaThread* current);
   static void monitor_notify_all(oopDesc* obj, JavaThread* current);
