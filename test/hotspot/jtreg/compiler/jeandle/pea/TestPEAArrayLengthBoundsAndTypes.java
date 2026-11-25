@@ -86,9 +86,10 @@ public class TestPEAArrayLengthBoundsAndTypes {
             for (Method target : targets) {
                 run.report(target).assertFinalTransformIdle();
             }
+            assertRemovedBeforePEA(run, length0);
+            assertRemovedBeforePEA(run, primitiveTypes);
             for (Method target : new Method[] {
-                    length0, length1, length127, length128, constantBounds,
-                    primitiveTypes, objectTypes}) {
+                    length1, length127, length128, constantBounds, objectTypes}) {
                 assertNeverEscapeArray(run, target);
             }
             assertArrayLengthPhi(run, lengthPhi);
@@ -102,6 +103,22 @@ public class TestPEAArrayLengthBoundsAndTypes {
             assertMultiArrayConservative(run, multi);
             assertFailedCheckcast(run, failedCheckcast);
         }
+    }
+
+    private static void assertRemovedBeforePEA(PEATestUtils.RunResult run, Method target)
+            throws Exception {
+        // Length and type folding can remove all object uses before PEA.
+        run.frontendIR(target).assertOccurrenceCount("@jeandle.new_array", 1);
+        run.frontendIR(target).assertPresent(ARRAY_LENGTH);
+        PEATestUtils.PEAReport report = run.report(target);
+        Asserts.assertEquals(report.round0Before().allocations().size(), 0,
+                target + ": unused source array is removed before PEA");
+        Asserts.assertEquals(report.round(0).effectCount("EliminateAllocation"), 0L,
+                target + ": PEA does not claim earlier elimination");
+        report.finalAfter().assertAbsent(ARRAY_LENGTH);
+        report.finalAfter().assertAbsent(DEOPTIMIZE);
+        Asserts.assertEquals(run.finalIR(target).loweredAllocCount(), 0,
+                target + ": no unused allocation reaches lowering");
     }
 
     private static void assertNeverEscapeArray(PEATestUtils.RunResult run, Method target)

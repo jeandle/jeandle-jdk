@@ -1282,11 +1282,16 @@ void RuntimeDefinedJavaOps::define_global_variables(llvm::Module& template_modul
   define_global("G1BarrierSetRuntime.write_ref_field_pre_entry",    int64_type, static_cast<uint64_t>(p2i(CAST_FROM_FN_PTR(address, G1BarrierSetRuntime::write_ref_field_pre_entry))));
   define_global("G1BarrierSetRuntime.write_ref_field_post_entry",   int64_type, static_cast<uint64_t>(p2i(CAST_FROM_FN_PTR(address, G1BarrierSetRuntime::write_ref_field_post_entry))));
   define_global("SharedRuntime.complete_monitor_unlocking_C",       int64_type, static_cast<uint64_t>(p2i(CAST_FROM_FN_PTR(address, SharedRuntime::complete_monitor_unlocking_C))));
+  // Linear fallback of the string-indexOf kernel; the kernel calls it
+  // through this baked absolute address (see template.ll).
+  define_global("JeandleRuntimeRoutine.string_indexof_linear",      int64_type, static_cast<uint64_t>(p2i(CAST_FROM_FN_PTR(address, JeandleRuntimeRoutine::string_indexof_linear))));
 
   define_global("VMOptions.UseTLAB",                                int1_type, static_cast<uint64_t>(UseTLAB));
   define_global("VMOptions.ZeroTLAB",                               int1_type, static_cast<uint64_t>(ZeroTLAB));
   define_global("VMOptions.ReduceBulkZeroing",                      int1_type, static_cast<uint64_t>(ReduceBulkZeroing));
   define_global("VMOptions.ReduceInitialCardMarks",                 int1_type, static_cast<uint64_t>(ReduceInitialCardMarks));
+  define_global("Jeandle.FreshArrayCopyRequiresGCBarriers",          int1_type,
+                static_cast<uint64_t>(copy_requires_gc_barriers(true, T_OBJECT)));
   define_global("VMOptions.AllocateInstancePrefetchLines",          int32_type, static_cast<uint64_t>(AllocateInstancePrefetchLines));
   define_global("VMOptions.AllocatePrefetchLines",                  int32_type, static_cast<uint64_t>(AllocatePrefetchLines));
   define_global("VMOptions.UseCompressedClassPointers",             int1_type, static_cast<uint64_t>(UseCompressedClassPointers));

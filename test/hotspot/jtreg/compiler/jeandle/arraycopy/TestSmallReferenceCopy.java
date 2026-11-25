@@ -108,8 +108,11 @@ public class TestSmallReferenceCopy {
             } else {
                 // PEA off also bypasses its high-tier length folding. The
                 // replacement compilation retains a runtime copy length.
-                optimized.checkPatternAnywhere(
-                        "call void @StubRoutines_(?:arrayof_)?oop_disjoint_arraycopy_uninit");
+                String copyType = reduceInitialCardMarks
+                        ? (compressed ? "jint" : "jlong") : "oop";
+                String suffix = reduceInitialCardMarks ? "" : "_uninit";
+                optimized.checkPatternAnywhere("call void @StubRoutines_(?:arrayof_)?"
+                        + copyType + "_disjoint_arraycopy" + suffix);
                 optimized.checkPatternAnywhere("br label %arraycopy\\.result");
                 optimized.checkPattern("^arraycopy\\.result:");
             }

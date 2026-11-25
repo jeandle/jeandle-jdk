@@ -20,19 +20,18 @@
 
 package compiler.jeandle.testVmResultGC;
 
-/* @test
+/*
+ * AArch64 is excluded pending a fix for the upstream LLVM no-Neon
+ * vectorToScalarBitmask bug, which can corrupt String.indexOf results
+ * during test startup.
+ * See https://github.com/llvm/llvm-project/issues/238712.
+ *
+ * @test
  * @bug 8166188
  * @summary Test return of JNI weak global refs from native calls.
+ * @requires os.arch != "aarch64"
  * @run main/othervm/native
  *    -Xcomp -XX:-TieredCompilation -XX:+UseJeandleCompiler
- *    compiler.jeandle.testVmResultGC.TestVmResultGC
- */
-
-/* @test
- * @requires os.arch=="aarch64"
- * @summary Test return of JNI weak global refs from native calls with Neon disabled.
- * @run main/othervm/native
- *    -Xcomp -XX:-TieredCompilation -XX:+UseJeandleCompiler -XX:-UseNeon
  *    compiler.jeandle.testVmResultGC.TestVmResultGC
  */
 

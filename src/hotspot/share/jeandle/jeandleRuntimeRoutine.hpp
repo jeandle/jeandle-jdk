@@ -810,6 +810,18 @@ def(StubRoutines_generic_arraycopy,                                             
       llvm::Type::getInt64Ty(context),                                              \
       llvm::PointerType::get(context, llvm::jeandle::AddrSpace::CHeapAddrSpace))    \
                                                                                     \
+  def(JeandleRuntime_string_indexof_linear,                                          \
+      JeandleRuntimeRoutine::string_indexof_linear,                                  \
+      false,                                                                        \
+      true,                                                                         \
+      llvm::Type::getInt32Ty(context),                                              \
+      llvm::PointerType::get(context, llvm::jeandle::AddrSpace::JavaHeapAddrSpace), \
+      llvm::Type::getInt32Ty(context),                                              \
+      llvm::PointerType::get(context, llvm::jeandle::AddrSpace::JavaHeapAddrSpace), \
+      llvm::Type::getInt32Ty(context),                                              \
+      llvm::Type::getInt32Ty(context),                                              \
+      llvm::Type::getInt32Ty(context))                                              \
+                                                                                    \
   def(JeandleRuntime_clone,                                                         \
       JeandleRuntimeRoutine::clone,                                                 \
       false,                                                                        \
@@ -915,6 +927,14 @@ class JeandleRuntimeRoutine : public AllStatic {
   static constexpr const char* _##name = #name;
 
   ALL_JEANDLE_ASSEMBLY_ROUTINES(DEF_ASSEMBLY_ROUTINE_NAME);
+
+  // Character-data pointers remain valid throughout this allocation-free
+  // leaf. The string-indexOf kernel in template.ll reaches it through the
+  // runtime-defined address global, so it stays accessible to
+  // jeandleRuntimeDefinedJavaOps.cpp.
+  static jint string_indexof_linear(const uint8_t* src, jint src_count,
+                                    const uint8_t* tgt, jint tgt_count,
+                                    jint from, jint encoding);
 
  private:
   static llvm::StringMap<address> _routine_entry; // All the routines.
