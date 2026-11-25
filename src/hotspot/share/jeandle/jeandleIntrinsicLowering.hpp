@@ -251,6 +251,9 @@ class JeandleIntrinsicLowering : public StackObj {
   bool lower_spin_wait_hint();       // arch-specific
   bool lower_writeback0();           // arch-specific
   bool lower_writeback_sync(vmIntrinsics::ID id); // arch-specific
+  bool lower_big_integer(vmIntrinsics::ID id);
+  llvm::CallBase* emit_big_integer_stub(JeandleRuntimeCalleeFn callee,
+                                        llvm::ArrayRef<llvm::Value*> args);
   bool lower_compare_unsigned(vmIntrinsics::ID id);
   llvm::Value* klass_value_for_mirror(llvm::Value* mirror) const;
   bool lower_class_cast();
@@ -271,7 +274,7 @@ class JeandleIntrinsicLowering : public StackObj {
   llvm::CallBase* emit_crypto_stub(JeandleRuntimeCalleeFn callee,
                                    llvm::ArrayRef<llvm::Value*> args);
   // Descriptor for one Java parameter slot in expect_signature.
-  enum class SigKind { ByteArray, IntArray, LongArray, Int, Object };
+  enum class SigKind { ByteArray, IntArray, LongArray, Int, Long, Object };
   // Validate that sig's parameters match `params` in arity and per-slot
   // kinds, and that the return basic type is `ret`. Array kinds also require
   // the exact array element signature name ("[B"/"[I"/"[J"); a T_ILLEGAL

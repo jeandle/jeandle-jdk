@@ -47,6 +47,7 @@
 #include "ci/ciMethod.hpp"
 #include "ci/ciSignature.hpp"
 #include "ci/ciSymbol.hpp"
+#include "ci/ciTypeArrayKlass.hpp"
 #include "classfile/vmClasses.hpp"
 #include "classfile/javaClasses.hpp"
 #include "classfile/vmIntrinsics.hpp"
@@ -463,6 +464,15 @@ bool JeandleIntrinsicLowering::is_supported(vmIntrinsics::ID id) {
     case vmIntrinsics::_poly1305_processBlocks:
       return true;
 
+    case vmIntrinsics::_multiplyToLen:
+    case vmIntrinsics::_squareToLen:
+    case vmIntrinsics::_mulAdd:
+    case vmIntrinsics::_montgomeryMultiply:
+    case vmIntrinsics::_montgomerySquare:
+    case vmIntrinsics::_bigIntegerRightShiftWorker:
+    case vmIntrinsics::_bigIntegerLeftShiftWorker:
+      return true;
+
     // StringUTF16 trusted single-code-unit access
     case vmIntrinsics::_getCharStringU:
     case vmIntrinsics::_putCharStringU:
@@ -861,6 +871,15 @@ bool JeandleIntrinsicLowering::lower(vmIntrinsics::ID id, const ciMethod* target
     case vmIntrinsics::_sha3_implCompress:
       return lower_digestBase_implCompress(id);
 
+    case vmIntrinsics::_multiplyToLen:
+    case vmIntrinsics::_squareToLen:
+    case vmIntrinsics::_mulAdd:
+    case vmIntrinsics::_montgomeryMultiply:
+    case vmIntrinsics::_montgomerySquare:
+    case vmIntrinsics::_bigIntegerRightShiftWorker:
+    case vmIntrinsics::_bigIntegerLeftShiftWorker:
+      return lower_big_integer(id);
+
     // Multi-block digest compression (per-receiver-algorithm guarded).
     case vmIntrinsics::_digestBase_implCompressMB:
       return lower_digestBase_implCompressMB();
@@ -945,7 +964,7 @@ llvm::CallBase* JeandleIntrinsicLowering::emit_callsite(llvm::FunctionCallee cal
     apply_memory_attr(site, attrs);
   }
   annotate_call(site, attrs, is_gc_leaf_entry);
-  if (_target != nullptr) {
+  if (_target != nullptr && site->getType()->isPointerTy()) {
     attach_java_klass_ret_attr(site,
                                _target->signature()->return_type(),
                                *_interp->_context);
@@ -1063,6 +1082,165 @@ bool JeandleIntrinsicLowering::lower_pow() {
     return true;
   }
   return emit_llvm_builtin(llvm::Intrinsic::pow);
+}
+
+// =============================================================================
+// BigInteger limb operations
+// =============================================================================
+
+llvm::CallBase* JeandleIntrinsicLowering::emit_big_integer_stub(
+    JeandleRuntimeCalleeFn callee_fn, llvm::ArrayRef<llvm::Value*> args) {
+  llvm::FunctionCallee callee = callee_fn(_interp->_module);
+  llvm::SmallVector<llvm::Value*, 6> stub_args(args);
+  for (unsigned i = 0; i < stub_args.size(); ++i) {
+    if (stub_args[i]->getType()->isIntegerTy()) {
+      // Assembler stubs can consume complete registers. Lengths and indices
+      // are nonnegative; a multiplier limb retains its unsigned bit pattern.
+      stub_args[i] = _interp->_ir_builder.CreateZExtOrTrunc(
+          stub_args[i], callee.getFunctionType()->getParamType(i));
+    }
+  }
+  static constexpr CallSiteAttributeMetadata attrs = {CTRL_NONE, MEM_READ | MEM_WRITE};
+  return emit_callsite(callee, llvm::CallingConv::C, stub_args, attrs,
+                       /*is_gc_leaf_entry=*/true);
+}
+
+bool JeandleIntrinsicLowering::lower_big_integer(vmIntrinsics::ID id) {
+  const char* stub_name = nullptr;
+  JeandleRuntimeCalleeFn callee_fn = nullptr;
+  llvm::SmallVector<SigKind, 6> kinds;
+  BasicType return_type = T_ARRAY;
+  switch (id) {
+    case vmIntrinsics::_multiplyToLen:
+      stub_name = "StubRoutines_multiplyToLen";
+      callee_fn = &JeandleRuntimeRoutine::StubRoutines_multiplyToLen_callee;
+      kinds = {SigKind::IntArray, SigKind::Int, SigKind::IntArray, SigKind::Int, SigKind::IntArray};
+      break;
+    case vmIntrinsics::_squareToLen:
+      stub_name = "StubRoutines_squareToLen";
+      callee_fn = &JeandleRuntimeRoutine::StubRoutines_squareToLen_callee;
+      kinds = {SigKind::IntArray, SigKind::Int, SigKind::IntArray, SigKind::Int};
+      break;
+    case vmIntrinsics::_mulAdd:
+      stub_name = "StubRoutines_mulAdd";
+      callee_fn = &JeandleRuntimeRoutine::StubRoutines_mulAdd_callee;
+      kinds = {SigKind::IntArray, SigKind::IntArray, SigKind::Int, SigKind::Int, SigKind::Int};
+      return_type = T_INT;
+      break;
+    case vmIntrinsics::_montgomeryMultiply:
+      stub_name = "StubRoutines_montgomeryMultiply";
+      callee_fn = &JeandleRuntimeRoutine::StubRoutines_montgomeryMultiply_callee;
+      kinds = {SigKind::IntArray, SigKind::IntArray, SigKind::IntArray,
+               SigKind::Int, SigKind::Long, SigKind::IntArray};
+      break;
+    case vmIntrinsics::_montgomerySquare:
+      stub_name = "StubRoutines_montgomerySquare";
+      callee_fn = &JeandleRuntimeRoutine::StubRoutines_montgomerySquare_callee;
+      kinds = {SigKind::IntArray, SigKind::IntArray, SigKind::Int, SigKind::Long, SigKind::IntArray};
+      break;
+    case vmIntrinsics::_bigIntegerRightShiftWorker:
+    case vmIntrinsics::_bigIntegerLeftShiftWorker:
+      if (id == vmIntrinsics::_bigIntegerRightShiftWorker) {
+        stub_name = "StubRoutines_bigIntegerRightShift";
+        callee_fn = &JeandleRuntimeRoutine::StubRoutines_bigIntegerRightShift_callee;
+      } else {
+        stub_name = "StubRoutines_bigIntegerLeftShift";
+        callee_fn = &JeandleRuntimeRoutine::StubRoutines_bigIntegerLeftShift_callee;
+      }
+      kinds = {SigKind::IntArray, SigKind::IntArray, SigKind::Int, SigKind::Int, SigKind::Int};
+      return_type = T_VOID;
+      break;
+    default:
+      return false;
+  }
+  ciSignature* sig = _target->signature();
+  if (!_target->is_static() || !expect_signature(sig, kinds, return_type) ||
+      JeandleRuntimeRoutine::find_routine_entry(stub_name) == nullptr) {
+    return false;
+  }
+
+  // Keep the invocation's original arguments live until any allocation has
+  // completed. Logical peeks skip the second JVM slot of Montgomery's long.
+  llvm::SmallVector<llvm::Value*, 6> args;
+  for (unsigned i = 0; i < kinds.size(); ++i) {
+    args.push_back(_interp->_jvm->peek_value(kinds.size() - i - 1).value());
+  }
+  llvm::IRBuilder<>& b = _interp->_ir_builder;
+  llvm::Value* result = nullptr;
+  switch (id) {
+    case vmIntrinsics::_multiplyToLen: {
+      llvm::Value* required = b.CreateAdd(args[1], args[3], "multiply.required");
+      llvm::Value* z = args[4];
+      llvm::BasicBlock* capacity_bb = llvm::BasicBlock::Create(
+          *_interp->_context, "multiply.capacity", _interp->_llvm_func);
+      llvm::BasicBlock* allocate_bb = llvm::BasicBlock::Create(
+          *_interp->_context, "multiply.allocate", _interp->_llvm_func);
+      llvm::BasicBlock* merge_bb = llvm::BasicBlock::Create(
+          *_interp->_context, "multiply.merge", _interp->_llvm_func);
+      b.CreateCondBr(b.CreateIsNull(z), allocate_bb, capacity_bb);
+      b.SetInsertPoint(capacity_bb);
+      b.CreateCondBr(b.CreateICmpSLT(_interp->emit_array_length(z), required), allocate_bb, merge_bb);
+      b.SetInsertPoint(allocate_bb);
+      llvm::InvokeInst* allocated;
+      {
+        JeandlePreserveReexecuteState reexecute_scope(_interp);
+        _interp->_should_reexecute = true;
+        ciTypeArrayKlass* array_klass = ciTypeArrayKlass::make(T_INT);
+        allocated = _interp->emit_jeandle_newarray(klass_constant_pointer(array_klass), required,
+                                                  nullptr, /*deoptimize_on_exception=*/true);
+        RETURN_ON_JEANDLE_ERROR(true);
+      }
+      llvm::BasicBlock* allocated_bb = b.GetInsertBlock();
+      b.CreateBr(merge_bb);
+      b.SetInsertPoint(merge_bb);
+      _interp->_block->set_tail_llvm_block(merge_bb);
+      llvm::PHINode* z_result = b.CreatePHI(z->getType(), 2, "multiply.result");
+      z_result->addIncoming(z, capacity_bb);
+      z_result->addIncoming(allocated, allocated_bb);
+      result = z_result;
+      // Form derived pointers only after the allocation's possible GC.
+      args = {array_element0_pointer(args[0], T_INT), args[1],
+              array_element0_pointer(args[2], T_INT), args[3],
+              array_element0_pointer(result, T_INT), required};
+      break;
+    }
+    case vmIntrinsics::_squareToLen:
+      result = args[2];
+      args[0] = array_element0_pointer(args[0], T_INT);
+      args[2] = array_element0_pointer(args[2], T_INT);
+      break;
+    case vmIntrinsics::_mulAdd:
+      args[2] = b.CreateSub(_interp->emit_array_length(args[0]), args[2], "mulAdd.offset");
+      args[0] = array_element0_pointer(args[0], T_INT);
+      args[1] = array_element0_pointer(args[1], T_INT);
+      break;
+    case vmIntrinsics::_montgomeryMultiply:
+    case vmIntrinsics::_montgomerySquare:
+      result = args.back();
+      for (unsigned i = 0; i < kinds.size(); ++i) {
+        if (kinds[i] == SigKind::IntArray) {
+          args[i] = array_element0_pointer(args[i], T_INT);
+        }
+      }
+      break;
+    case vmIntrinsics::_bigIntegerRightShiftWorker:
+    case vmIntrinsics::_bigIntegerLeftShiftWorker:
+      args[0] = array_element0_pointer(args[0], T_INT);
+      args[1] = array_element0_pointer(args[1], T_INT);
+      break;
+    default:
+      ShouldNotReachHere();
+  }
+  for (int i = sig->count() - 1; i >= 0; --i) {
+    _interp->_jvm->pop(JeandleType::actual2computational(sig->type_at(i)->basic_type()));
+  }
+  llvm::CallBase* call = emit_big_integer_stub(callee_fn, args);
+  if (return_type == T_ARRAY) {
+    _interp->_jvm->apush(result);
+  } else if (return_type == T_INT) {
+    _interp->_jvm->ipush(call);
+  }
+  return true;
 }
 
 // =============================================================================
@@ -1203,6 +1381,7 @@ bool JeandleIntrinsicLowering::expect_signature(
       case SigKind::IntArray:   basic = T_ARRAY;  array_name = "[I"; break;
       case SigKind::LongArray:  basic = T_ARRAY;  array_name = "[J"; break;
       case SigKind::Int:        basic = T_INT;    array_name = nullptr; break;
+      case SigKind::Long:       basic = T_LONG;   array_name = nullptr; break;
       case SigKind::Object:     basic = T_OBJECT; array_name = nullptr; break;
       default:                  return false;
     }

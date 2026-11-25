@@ -339,6 +339,84 @@
       llvm::Type::getInt32Ty(context),                                              \
       llvm::Type::getInt32Ty(context))                                              \
                                                                                     \
+  def(StubRoutines_multiplyToLen,                                                  \
+      StubRoutines::multiplyToLen(),                                               \
+      true,                                                                        \
+      true,                                                                        \
+      llvm::Type::getVoidTy(context),                                              \
+      llvm::PointerType::get(context, llvm::jeandle::AddrSpace::JavaHeapAddrSpace),\
+      llvm::IntegerType::get(context, BitsPerWord),                                \
+      llvm::PointerType::get(context, llvm::jeandle::AddrSpace::JavaHeapAddrSpace),\
+      llvm::IntegerType::get(context, BitsPerWord),                                \
+      llvm::PointerType::get(context, llvm::jeandle::AddrSpace::JavaHeapAddrSpace),\
+      llvm::IntegerType::get(context, BitsPerWord))                                \
+                                                                                   \
+  def(StubRoutines_squareToLen,                                                    \
+      StubRoutines::squareToLen(),                                                 \
+      true,                                                                        \
+      true,                                                                        \
+      llvm::Type::getVoidTy(context),                                              \
+      llvm::PointerType::get(context, llvm::jeandle::AddrSpace::JavaHeapAddrSpace),\
+      llvm::IntegerType::get(context, BitsPerWord),                                \
+      llvm::PointerType::get(context, llvm::jeandle::AddrSpace::JavaHeapAddrSpace),\
+      llvm::IntegerType::get(context, BitsPerWord))                                \
+                                                                                   \
+  def(StubRoutines_mulAdd,                                                         \
+      StubRoutines::mulAdd(),                                                      \
+      true,                                                                        \
+      true,                                                                        \
+      llvm::Type::getInt32Ty(context),                                             \
+      llvm::PointerType::get(context, llvm::jeandle::AddrSpace::JavaHeapAddrSpace),\
+      llvm::PointerType::get(context, llvm::jeandle::AddrSpace::JavaHeapAddrSpace),\
+      llvm::IntegerType::get(context, BitsPerWord),                                \
+      llvm::IntegerType::get(context, BitsPerWord),                                \
+      llvm::IntegerType::get(context, BitsPerWord))                                \
+                                                                                   \
+  def(StubRoutines_montgomeryMultiply,                                             \
+      StubRoutines::montgomeryMultiply(),                                          \
+      AMD64_ONLY(false) NOT_AMD64(true),                                           \
+      true,                                                                        \
+      llvm::Type::getVoidTy(context),                                              \
+      llvm::PointerType::get(context, llvm::jeandle::AddrSpace::JavaHeapAddrSpace),\
+      llvm::PointerType::get(context, llvm::jeandle::AddrSpace::JavaHeapAddrSpace),\
+      llvm::PointerType::get(context, llvm::jeandle::AddrSpace::JavaHeapAddrSpace),\
+      llvm::IntegerType::get(context, AMD64_ONLY(32) NOT_AMD64(BitsPerWord)),      \
+      llvm::Type::getInt64Ty(context),                                             \
+      llvm::PointerType::get(context, llvm::jeandle::AddrSpace::JavaHeapAddrSpace))\
+                                                                                   \
+  def(StubRoutines_montgomerySquare,                                               \
+      StubRoutines::montgomerySquare(),                                            \
+      AMD64_ONLY(false) NOT_AMD64(true),                                           \
+      true,                                                                        \
+      llvm::Type::getVoidTy(context),                                              \
+      llvm::PointerType::get(context, llvm::jeandle::AddrSpace::JavaHeapAddrSpace),\
+      llvm::PointerType::get(context, llvm::jeandle::AddrSpace::JavaHeapAddrSpace),\
+      llvm::IntegerType::get(context, AMD64_ONLY(32) NOT_AMD64(BitsPerWord)),      \
+      llvm::Type::getInt64Ty(context),                                             \
+      llvm::PointerType::get(context, llvm::jeandle::AddrSpace::JavaHeapAddrSpace))\
+                                                                                   \
+  def(StubRoutines_bigIntegerRightShift,                                           \
+      StubRoutines::bigIntegerRightShift(),                                        \
+      true,                                                                        \
+      true,                                                                        \
+      llvm::Type::getVoidTy(context),                                              \
+      llvm::PointerType::get(context, llvm::jeandle::AddrSpace::JavaHeapAddrSpace),\
+      llvm::PointerType::get(context, llvm::jeandle::AddrSpace::JavaHeapAddrSpace),\
+      llvm::IntegerType::get(context, BitsPerWord),                                \
+      llvm::IntegerType::get(context, BitsPerWord),                                \
+      llvm::IntegerType::get(context, BitsPerWord))                                \
+                                                                                   \
+  def(StubRoutines_bigIntegerLeftShift,                                            \
+      StubRoutines::bigIntegerLeftShift(),                                         \
+      true,                                                                        \
+      true,                                                                        \
+      llvm::Type::getVoidTy(context),                                              \
+      llvm::PointerType::get(context, llvm::jeandle::AddrSpace::JavaHeapAddrSpace),\
+      llvm::PointerType::get(context, llvm::jeandle::AddrSpace::JavaHeapAddrSpace),\
+      llvm::IntegerType::get(context, BitsPerWord),                                \
+      llvm::IntegerType::get(context, BitsPerWord),                                \
+      llvm::IntegerType::get(context, BitsPerWord))                                \
+                                                                                   \
   def(StubRoutines_sha1_implCompress,                                               \
       StubRoutines::sha1_implCompress(),                                            \
       true,                                                                         \
