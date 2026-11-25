@@ -41,6 +41,10 @@
   product(bool, JeandleDumpIR, false,                                       \
           "Dump ir before and after optimization")                          \
                                                                             \
+  product(ccstr, JeandleDumpIRFilter, nullptr,                              \
+          "Dump IR only for Java root methods matching this method "        \
+          "pattern (empty or unset dumps all methods)")                     \
+                                                                            \
   product(ccstr, JeandleDumpDirectory, nullptr,                             \
           "Dump destination for all Jeandle items")                         \
                                                                             \

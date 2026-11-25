@@ -237,6 +237,7 @@ JeandleCompilation::JeandleCompilation(llvm::TargetMachine* target_machine,
                                        _data_layout(data_layout),
                                        _env(env),
                                        _method(method),
+                                       _dump_ir_filter_match(JeandleCompiler::dump_ir_filter_accepts(method)),
                                        _name(method->get_Method()->name_and_sig_as_C_string()),
                                        _entry_bci(entry_bci),
                                        _context(std::make_unique<llvm::LLVMContext>()),
@@ -301,6 +302,7 @@ JeandleCompilation::JeandleCompilation(llvm::TargetMachine* target_machine,
                                        _data_layout(data_layout),
                                        _env(env),
                                        _method(nullptr),
+                                       _dump_ir_filter_match(true),
                                        _name(name),
                                        _entry_bci(-1),
                                        _context(std::move(context)),
@@ -1466,6 +1468,10 @@ void JeandleCompilation::dump_obj() {
 }
 
 void JeandleCompilation::dump_ir(bool optimized) {
+  if (!_dump_ir_filter_match) {
+    return;
+  }
+
   std::string dump_path = construct_dump_path(_llvm_module->getModuleIdentifier(), _comp_start_time, optimized ? "_optimized.ll" : ".ll");
   std::error_code err_code;
   llvm::raw_fd_ostream dump_stream(dump_path, err_code, llvm::sys::fs::OF_TextWithCRLF);

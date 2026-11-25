@@ -31,6 +31,8 @@
 #include "compiler/abstractCompiler.hpp"
 #include "compiler/compilerDirectives.hpp"
 
+class BasicMatcher;
+
 class JeandleCompiler : public AbstractCompiler {
  public:
   // Creation.
@@ -64,9 +66,13 @@ class JeandleCompiler : public AbstractCompiler {
 
   llvm::DataLayout* data_layout() { return &_data_layout; }
 
+  static bool dump_ir_filter_accepts(ciMethod* method);
+
  private:
   // TargetMachine is not multi-thread safe, so make it thread local here.
   static THREAD_LOCAL llvm::TargetMachine* _target_machine;
+  static BasicMatcher* _dump_ir_filter;
+  static bool _dump_ir_filter_valid;
 
   llvm::DataLayout _data_layout;
 
@@ -74,6 +80,8 @@ class JeandleCompiler : public AbstractCompiler {
   std::unique_ptr<llvm::MemoryBuffer> _template_buffer;
 
   bool initialize_template_buffer();
+
+  void initialize_dump_ir_filter();
 
   bool initialize_commandline_options();
 
