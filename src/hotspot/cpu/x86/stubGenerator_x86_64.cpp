@@ -2641,22 +2641,14 @@ address StubGenerator::generate_base64_decodeBlock() {
   }   // End of if(avx512_vbmi)
 
   if (VM_Version::supports_avx2()) {
-    Label L_tailProc, L_topLoop, L_enterLoop, L_storeLast, L_noPadding;
+    Label L_tailProc, L_topLoop, L_enterLoop;
 
     __ cmpl(isMIME, 0);
     __ jcc(Assembler::notEqual, L_lastChunk);
 
     // Check for buffer too small (for algorithm)
-    __ subl(length, 0x20);
+    __ subl(length, 0x2c);
     __ jcc(Assembler::less, L_tailProc);
-
-    // Leave an atom containing terminal padding for the Java decoder.
-    __ lea(r13, Address(source, start_offset, Address::times_1));
-    __ cmpb(Address(r13, length, Address::times_1, 31), '=');
-    __ jcc(Assembler::notEqual, L_noPadding);
-    __ subl(length, 4);
-    __ jcc(Assembler::less, L_tailProc);
-    __ bind(L_noPadding);
 
     __ shll(isURL, 2);
 
@@ -2689,13 +2681,12 @@ address StubGenerator::generate_base64_decodeBlock() {
     __ vpmaddwd(xmm0, xmm0, xmm6, Assembler::AVX_256bit);
     __ vpshufb(xmm0, xmm0, xmm13, Assembler::AVX_256bit);
     __ vpermd(xmm0, xmm12, xmm0, Assembler::AVX_256bit);
-    // Only use a wide store if another complete input vector remains.
-    // The final vector produces exactly 24 bytes, including near padding.
-    __ subl(length, 0x20);
-    __ jcc(Assembler::less, L_storeLast);
+    // Store the output bytes
     __ vmovdqu(Address(dest, dp, Address::times_1, 0), xmm0);
     __ addptr(source, 0x20);
     __ addptr(dest, 0x18);
+    __ subl(length, 0x20);
+    __ jcc(Assembler::less, L_tailProc);
 
     __ bind(L_enterLoop);
 
@@ -2724,18 +2715,10 @@ address StubGenerator::generate_base64_decodeBlock() {
     __ vpaddb(xmm0, xmm0, xmm1, Assembler::AVX_256bit); // Handle 2F / 5F
     __ vpshufb(xmm0, xmm8, xmm0, Assembler::AVX_256bit);
     __ jcc(Assembler::equal, L_topLoop);  // Fall through on error
-    __ jmp(L_tailProc);
-
-    __ bind(L_storeLast);
-    __ movdqu(Address(dest, dp, Address::times_1, 0), xmm0);
-    __ vextracti128(xmm0, xmm0, 1);
-    __ movq(Address(dest, dp, Address::times_1, 16), xmm0);
-    __ addptr(source, 0x20);
-    __ addptr(dest, 0x18);
 
     __ bind(L_tailProc);
 
-    __ addl(length, 0x20);
+    __ addl(length, 0x2c);
 
     __ vzeroupper();
   }

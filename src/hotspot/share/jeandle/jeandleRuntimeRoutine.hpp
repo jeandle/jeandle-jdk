@@ -905,7 +905,8 @@ def(StubRoutines_generic_arraycopy,                                             
   def(deopt_blob)                          \
   def(zero_heap_words_stub)                \
   def(string_compress_stub)               \
-  def(string_inflate_stub)
+  def(string_inflate_stub)                 \
+  def(base64_decode_stub)
 
 
 // JeandleRuntimeRoutine contains C/C++/Assembly routines and Hotspot routines that can be called from Jeandle compiled code.
@@ -991,6 +992,26 @@ class JeandleRuntimeRoutine : public AllStatic {
   static constexpr const char* _##name = #name;
 
   ALL_JEANDLE_ASSEMBLY_ROUTINES(DEF_ASSEMBLY_ROUTINE_NAME);
+
+  // Base64 decode kernel owned by Jeandle. It has the ABI of
+  // StubRoutines::base64_decodeBlock and, for valid input, never stores more
+  // bytes than it reports. Only x86 registers it, and only where the shared
+  // stub would run its AVX2 loop; callers fall back to
+  // StubRoutines_base64_decodeBlock_callee.
+  static llvm::FunctionCallee base64_decode_stub_callee(llvm::Module& target_module) {
+    llvm::LLVMContext& context = target_module.getContext();
+    llvm::PointerType* heap =
+        llvm::PointerType::get(context, llvm::jeandle::AddrSpace::JavaHeapAddrSpace);
+    llvm::IntegerType* word = llvm::IntegerType::get(context, BitsPerWord);
+    llvm::FunctionType* func_type = llvm::FunctionType::get(
+        llvm::Type::getInt32Ty(context), {heap, word, word, heap, word, word, word}, false);
+    llvm::FunctionCallee callee = target_module.getOrInsertFunction(_base64_decode_stub, func_type);
+    llvm::Function* func = llvm::cast<llvm::Function>(callee.getCallee());
+    func->setCallingConv(llvm::CallingConv::C);
+    func->addFnAttr(llvm::Attribute::NoUnwind);
+    func->addFnAttr(llvm::Attribute::get(context, "gc-leaf-function"));
+    return callee;
+  }
 
  private:
   static llvm::StringMap<address> _routine_entry; // All the routines.

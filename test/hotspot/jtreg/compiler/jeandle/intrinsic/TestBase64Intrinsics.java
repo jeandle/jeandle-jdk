@@ -37,7 +37,7 @@ public class TestBase64Intrinsics {
                         "call[^\\n]*@StubRoutines_base64_encodeBlock\\("),
                 new ChecksumBase64TestSupport.Entry("_base64_decodeBlock", "UseBASE64Intrinsics",
                         "java.util.Base64$Decoder", "decodeBlock", "java_util_Base64$Decoder_decode0([BII[B)I",
-                        "call[^\\n]*@StubRoutines_base64_decodeBlock\\(")),
+                        "call[^\\n]*@(?:StubRoutines_base64_decodeBlock|base64_decode_stub)\\(")),
                 "java/util/Base64$Encoder.encode0", "java/util/Base64$Decoder.decode0");
     }
 

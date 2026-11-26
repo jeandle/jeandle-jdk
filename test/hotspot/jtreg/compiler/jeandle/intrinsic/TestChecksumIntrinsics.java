@@ -44,7 +44,8 @@ public class TestChecksumIntrinsics {
 
     public static void main(String[] args) throws Exception {
         ChecksumBase64TestSupport.run(Worker.class, List.of(
-                entry("_updateCRC32", "UseCRC32Intrinsics", "CRC32", "update", "crc32.byte.value"),
+                entry("_updateCRC32", "UseCRC32Intrinsics", "CRC32", "update",
+                        "crc32\\.byte\\.value[^\\n]*!invariant\\.load"),
                 entry("_updateBytesCRC32", "UseCRC32Intrinsics", "CRC32", "updateBytes0",
                         "call[^\\n]*@StubRoutines_updateBytesCRC32\\("),
                 entry("_updateByteBufferCRC32", "UseCRC32Intrinsics", "CRC32", "updateByteBuffer0",

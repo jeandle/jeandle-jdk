@@ -270,9 +270,14 @@ class JeandleIntrinsicLowering : public StackObj {
   bool lower_digestBase_implCompress(vmIntrinsics::ID id);
   bool lower_digestBase_implCompressMB();
 
-  // ---- shared crypto-intrinsic helpers ----
+  // ---- shared stub-intrinsic helpers ----
   llvm::CallBase* emit_crypto_stub(JeandleRuntimeCalleeFn callee,
                                    llvm::ArrayRef<llvm::Value*> args);
+  // HotSpot leaf stubs access only memory reachable from their pointer
+  // arguments (read, plus write when `writes`) and VM-owned constant tables
+  // that IR cannot name. Input and output buffers may alias, so no argument
+  // is marked noalias.
+  static void set_stub_memory_effects(llvm::CallBase* call, bool writes);
   // Descriptor for one Java parameter slot in expect_signature.
   enum class SigKind { ByteArray, IntArray, LongArray, Int, Long, Boolean, Object };
   // Validate that sig's parameters match `params` in arity and per-slot

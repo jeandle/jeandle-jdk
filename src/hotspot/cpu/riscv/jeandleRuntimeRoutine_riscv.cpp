@@ -403,3 +403,6 @@ void JeandleRuntimeRoutine::generate_string_inflate_stub() {
   _routine_entry[_string_inflate_stub] = entry;
   _gc_leaf_routines.insert(entry);
 }
+
+// Base64 decoding keeps using the shared StubRoutines::base64_decodeBlock.
+void JeandleRuntimeRoutine::generate_base64_decode_stub() {}

@@ -33,7 +33,10 @@ final class ChecksumBase64TestSupport {
         check(worker, entries, compileOnly, "enabled", List.of(), Set.of(), result);
         check(worker, entries, compileOnly, "uncompressed-oops",
                 List.of("-XX:-UseCompressedOops"), Set.of(), result);
-        if (Platform.isX64() && entries.stream().anyMatch(e -> e.id().startsWith("_base64_"))) {
+        // UseAVX=0 retires the Adler32 stub while keeping the CLMUL/SSE4.2 CRC
+        // stubs; UseAVX=2 selects the AVX2 CRC32C/Adler32 kernels and the AVX2
+        // Base64 loops instead of the AVX-512 ones.
+        if (Platform.isX64()) {
             for (int avx : new int[]{0, 2}) {
                 check(worker, entries, compileOnly, "avx" + avx,
                         List.of("-XX:UseAVX=" + avx), Set.of(), result);
@@ -98,13 +101,20 @@ final class ChecksumBase64TestSupport {
             Asserts.assertEQ(log.matcher(output.getOutput()).find(), enabled,
                     entry.id() + " intrinsic recognition in " + mode);
             StringBuilder ir = new StringBuilder();
+            boolean memoryEffects = false;
             try (var paths = Files.list(dump)) {
                 for (Path path : paths.filter(p -> p.getFileName().toString()
                         .startsWith(entry.irOwner().split("\\(", 2)[0])).filter(p -> p.toString().endsWith(".ll"))
                         .toList()) {
                     String module = Files.readString(path);
-                    if (module.contains("@\"" + entry.irOwner() + ".")) {
-                        ir.append(module);
+                    if (!module.contains("@\"" + entry.irOwner() + ".")) {
+                        continue;
+                    }
+                    ir.append(module);
+                    // Attribute group numbers are per module, so check memory
+                    // effects inside each module before concatenating.
+                    if (enabled && !entry.id().equals("_updateCRC32")) {
+                        memoryEffects |= callHasMemoryEffects(module, entry.id());
                     }
                 }
             }
@@ -112,13 +122,29 @@ final class ChecksumBase64TestSupport {
             Asserts.assertEQ(Pattern.compile(entry.irPattern()).matcher(ir).find(), enabled,
                     entry.id() + " emitted implementation in " + mode + " at " + dump);
             if (enabled && !entry.id().equals("_updateCRC32")) {
-                checkStubAbi(ir.toString(), entry.id());
+                checkStubAbi(ir.toString(), entry.id(), mode);
+                Asserts.assertTrue(memoryEffects,
+                        entry.id() + " argmem-only stub memory effects in " + mode + " at " + dump);
             }
             System.out.println("PATH " + mode + " " + entry.id() + " " + enabled + " " + dump);
         }
     }
 
-    private static void checkStubAbi(String ir, String id) {
+    // Callee symbols of a stub intrinsic. Decoding prefers Jeandle's own
+    // kernel, which replaces the shared stub where the CPU lacks AVX-512 VBMI.
+    private static List<String> stubs(String id) {
+        boolean base64 = id.startsWith("_base64_");
+        String stub = base64 ? id.substring(1)
+                : id.contains("CRC32C") ? "updateBytesCRC32C"
+                : id.contains("Adler32") ? "updateBytesAdler32" : "updateBytesCRC32";
+        if (id.contains("ByteBuffer")) {
+            stub += "_direct";
+        }
+        return id.equals("_base64_decodeBlock")
+                ? List.of("base64_decode_stub", "StubRoutines_" + stub) : List.of("StubRoutines_" + stub);
+    }
+
+    private static void checkStubAbi(String ir, String id, String mode) {
         boolean base64 = id.startsWith("_base64_");
         boolean direct = id.contains("ByteBuffer");
         String heap = "ptr addrspace(1)";
@@ -129,15 +155,18 @@ final class ChecksumBase64TestSupport {
         if (id.equals("_base64_decodeBlock")) {
             parameters += ", i64";
         }
-        String stub = base64 ? id.substring(1)
-                : id.contains("CRC32C") ? "updateBytesCRC32C"
-                : id.contains("Adler32") ? "updateBytesAdler32" : "updateBytesCRC32";
-        if (direct) {
-            stub += "_direct";
+        // UseAVX=2 masks AVX-512 VBMI, so x64 decoding always takes Jeandle's kernel.
+        String required = id.equals("_base64_decodeBlock") && mode.equals("avx2")
+                ? "base64_decode_stub" : null;
+        boolean declared = false;
+        for (String stub : stubs(id)) {
+            boolean found = Pattern.compile("declare (?:void|i32) "
+                    + Pattern.quote("@" + stub + "(" + parameters + ")")).matcher(ir).find();
+            Asserts.assertTrue(!stub.equals(required) || found,
+                    "native-word stub ABI for " + id + " in " + mode);
+            declared |= found;
         }
-        Pattern declaration = Pattern.compile("declare (?:void|i32) "
-                + Pattern.quote("@StubRoutines_" + stub + "(" + parameters + ")"));
-        Asserts.assertTrue(declaration.matcher(ir).find(), "native-word stub ABI for " + id);
+        Asserts.assertTrue(declared, "native-word stub ABI for " + id);
         if (!base64 && !direct) {
             // The Java offset must be extended before the array header is added.
             Pattern address = Pattern.compile("(%[a-zA-Z0-9_.]+) = sext i32 [^\\n]+ to i64\\n"
@@ -146,6 +175,27 @@ final class ChecksumBase64TestSupport {
                     + "%[a-zA-Z0-9_.]+, i64 \\2");
             Asserts.assertTrue(address.matcher(ir).find(), "native-width array offset for " + id);
         }
+    }
+
+    // The stub call carries an attribute group whose memory effect must be
+    // argmem-only (read for checksums, read/write for Base64) plus read-only
+    // inaccessible memory for the VM-owned constant tables.
+    private static boolean callHasMemoryEffects(String module, String id) {
+        boolean base64 = id.startsWith("_base64_");
+        String memory = base64 ? "memory(argmem: readwrite, inaccessiblemem: read)"
+                : "memory(argmem: read, inaccessiblemem: read)";
+        for (String stub : stubs(id)) {
+            java.util.regex.Matcher call = Pattern.compile(
+                    "call[^\\n]*@" + Pattern.quote(stub + "(") + "[^\\n]*?(#[0-9]+)[^\\n]*")
+                    .matcher(module);
+            while (call.find()) {
+                if (Pattern.compile(Pattern.quote(call.group(1) + " = {") + "[^}]*" + Pattern.quote(memory))
+                        .matcher(module).find()) {
+                    return true;
+                }
+            }
+        }
+        return false;
     }
 
     private static String result(OutputAnalyzer output) {

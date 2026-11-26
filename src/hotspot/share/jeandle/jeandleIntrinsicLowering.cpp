@@ -1106,7 +1106,9 @@ bool JeandleIntrinsicLowering::lower_update_crc32() {
       builder.getInt64((intptr_t)StubRoutines::crc_table_addr()), table_type);
   llvm::Value* element = builder.CreateInBoundsGEP(
       builder.getInt32Ty(), table, builder.CreateZExt(index, native_word_type(*_interp->_context)));
-  llvm::Value* value = builder.CreateLoad(builder.getInt32Ty(), element, "crc32.byte.value");
+  llvm::LoadInst* value = builder.CreateLoad(builder.getInt32Ty(), element, "crc32.byte.value");
+  // The table is a const array fixed before any Java code runs.
+  value->setMetadata(llvm::LLVMContext::MD_invariant_load, llvm::MDNode::get(*_interp->_context, {}));
   _interp->_jvm->ipush(builder.CreateNot(
       builder.CreateXor(value, builder.CreateLShr(crc, builder.getInt32(8)))));
   return true;
@@ -1191,15 +1193,26 @@ bool JeandleIntrinsicLowering::lower_update_checksum(vmIntrinsics::ID id) {
   llvm::SmallVector<llvm::Value*, 3> args = {
       state, data, builder.CreateZExtOrTrunc(length, native_word_type(*_interp->_context))};
   static constexpr CallSiteAttributeMetadata attrs = {CTRL_NONE, MEM_READ};
-  _interp->_jvm->ipush(emit_callsite(callee(_interp->_module), llvm::CallingConv::C,
-                                    args, attrs, /*is_gc_leaf_entry=*/true));
+  llvm::CallBase* call = emit_callsite(callee(_interp->_module), llvm::CallingConv::C,
+                                       args, attrs, /*is_gc_leaf_entry=*/true);
+  set_stub_memory_effects(call, /*writes=*/false);
+  _interp->_jvm->ipush(call);
   return true;
 }
 
 bool JeandleIntrinsicLowering::lower_base64(vmIntrinsics::ID id) {
   bool encode = id == vmIntrinsics::_base64_encodeBlock;
+  // Jeandle's decode kernel is only registered where it replaces the shared
+  // stub (see JeandleRuntimeRoutine::generate_base64_decode_stub).
   const char* stub_name = encode ? "StubRoutines_base64_encodeBlock"
-                                 : "StubRoutines_base64_decodeBlock";
+                                 : JeandleRuntimeRoutine::_base64_decode_stub;
+  JeandleRuntimeCalleeFn callee = encode
+      ? &JeandleRuntimeRoutine::StubRoutines_base64_encodeBlock_callee
+      : &JeandleRuntimeRoutine::base64_decode_stub_callee;
+  if (!encode && JeandleRuntimeRoutine::find_routine_entry(stub_name) == nullptr) {
+    stub_name = "StubRoutines_base64_decodeBlock";
+    callee = &JeandleRuntimeRoutine::StubRoutines_base64_decodeBlock_callee;
+  }
   bool signature_ok = encode
       ? expect_signature(_target->signature(),
                          {SigKind::ByteArray, SigKind::Int, SigKind::Int,
@@ -1234,12 +1247,10 @@ bool JeandleIntrinsicLowering::lower_base64(vmIntrinsics::ID id) {
   if (!encode) {
     args.push_back(builder.CreateZExtOrTrunc(mime, word));
   }
-  JeandleRuntimeCalleeFn callee = encode
-      ? &JeandleRuntimeRoutine::StubRoutines_base64_encodeBlock_callee
-      : &JeandleRuntimeRoutine::StubRoutines_base64_decodeBlock_callee;
   static constexpr CallSiteAttributeMetadata attrs = {CTRL_NONE, MEM_READ | MEM_WRITE};
   llvm::CallBase* result = emit_callsite(callee(_interp->_module), llvm::CallingConv::C,
                                         args, attrs, /*is_gc_leaf_entry=*/true);
+  set_stub_memory_effects(result, /*writes=*/true);
   if (!encode) {
     _interp->_jvm->ipush(result);
   }
@@ -1349,8 +1360,15 @@ bool JeandleIntrinsicLowering::lower_digestBase_implCompress(vmIntrinsics::ID id
 }
 
 // =============================================================================
-// Shared crypto-intrinsic helpers
+// Shared stub-intrinsic helpers
 // =============================================================================
+
+void JeandleIntrinsicLowering::set_stub_memory_effects(llvm::CallBase* call, bool writes) {
+  call->setMemoryEffects(llvm::MemoryEffects::argMemOnly(
+                             writes ? llvm::ModRefInfo::ModRef : llvm::ModRefInfo::Ref)
+                             .getWithModRef(llvm::MemoryEffects::Location::InaccessibleMem,
+                                            llvm::ModRefInfo::Ref));
+}
 
 llvm::CallBase* JeandleIntrinsicLowering::emit_crypto_stub(
     JeandleRuntimeCalleeFn callee, llvm::ArrayRef<llvm::Value*> args) {
@@ -1358,11 +1376,7 @@ llvm::CallBase* JeandleIntrinsicLowering::emit_crypto_stub(
       CTRL_NONE, MEM_READ | MEM_WRITE};
   llvm::CallBase* call = emit_callsite(callee(_interp->_module), llvm::CallingConv::C,
                                       args, attrs, /*is_gc_leaf_entry=*/true);
-  // Crypto stubs update only the buffers and state passed by address. Their
-  // masks and round constants are VM-owned tables inaccessible to LLVM IR.
-  // Keep argument memory read/write: input and output buffers may alias.
-  call->setMemoryEffects(llvm::MemoryEffects::inaccessibleOrArgMemOnly()
-      .getWithModRef(llvm::MemoryEffects::Location::InaccessibleMem, llvm::ModRefInfo::Ref));
+  set_stub_memory_effects(call, /*writes=*/true);
   return call;
 }
 
