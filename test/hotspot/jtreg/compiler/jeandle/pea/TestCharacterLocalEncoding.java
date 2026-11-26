@@ -35,7 +35,6 @@ import java.lang.invoke.MethodHandles;
 import java.lang.invoke.MethodType;
 import java.lang.reflect.Method;
 import java.nio.ByteOrder;
-import java.util.List;
 import jdk.test.lib.Asserts;
 
 public class TestCharacterLocalEncoding {
@@ -43,7 +42,8 @@ public class TestCharacterLocalEncoding {
         Method chars = TestWrapper.class.getMethod("chars17", int.class, boolean.class);
         Method utf16 = TestWrapper.class.getMethod("utf1617", int.class, boolean.class);
         Method utf1664 = TestWrapper.class.getMethod("utf1664", int.class, boolean.class);
-        Method[] targets = {chars, utf16, utf1664};
+        Method utf1665 = TestWrapper.class.getMethod("utf1665", int.class, boolean.class);
+        Method[] targets = {chars, utf16, utf1664, utf1665};
         String wrapper = TestWrapper.class.getName();
         String patch = "--patch-module=java.base=character-bridge.jar";
         Method bridge = Class.forName("java.lang.JeandleCharacterIntrinsicCaller")
@@ -57,14 +57,15 @@ public class TestCharacterLocalEncoding {
                         target + ": source and destination reach PEA");
                 Asserts.assertTrue(report.round0Before().lineCount("store atomic") > 0,
                         target + ": runtime contents reach PEA");
-                Asserts.assertEquals(report.finalAfter().allocationBCIs(), List.of(),
-                        target + ": both local arrays are scalar replaced");
-                Asserts.assertEquals(run.finalIR(target).loweredAllocCount(), 0,
-                        target + ": no allocation after lowering");
+                int remaining = target.equals(utf1665) ? 1 : 0;
+                Asserts.assertEquals(report.finalAfter().allocationBCIs().size(), remaining,
+                        target + ": bounded local arrays are scalar replaced");
+                Asserts.assertEquals(run.finalIR(target).loweredAllocCount(), remaining,
+                        target + ": only the oversized source remains allocated");
                 run.finalIR(target).assertAbsent("encode_ascii_array_stub");
                 run.finalIR(target).assertAbsent("encode_iso_array_stub");
                 System.out.println("LOCAL-ENCODING-SCALAR:" + target.getName()
-                        + ":before=2:after=0:lowered=0");
+                        + ":before=2:after=" + remaining + ":lowered=" + remaining);
             }
             System.out.println("LOCAL-ENCODING-DUMPS:" + run.dumpDir());
         }
@@ -91,6 +92,8 @@ public class TestCharacterLocalEncoding {
 
         private static int check(int seed, boolean fail) throws Throwable {
             int expected = reference(seed, fail);
+            Asserts.assertEquals(utf1665(seed, fail), reference65(seed, fail),
+                    "65-character concrete UTF16 source and scalar destination");
             int chars = chars17(seed, fail);
             int utf16 = utf1617(seed, fail);
             Asserts.assertEquals(utf1664(seed, fail), reference64(seed, fail),
@@ -153,6 +156,25 @@ public class TestCharacterLocalEncoding {
             return result;
         }
 
+        public static int utf1665(int seed, boolean fail) throws Throwable {
+            byte[] src = new byte[130];
+            byte[] dst = new byte[65];
+            int value = 'a' + (seed & 7);
+            for (int i = 0; i < 65; i++) {
+                src[2 * i] = (byte) (value >>> (LITTLE ? 0 : 8));
+                src[2 * i + 1] = (byte) (value >>> (LITTLE ? 8 : 0));
+                dst[i] = 7;
+            }
+            if (fail) {
+                src[2 * (seed % 65)] = (byte) (0x100 >>> (LITTLE ? 0 : 8));
+                src[2 * (seed % 65) + 1] = (byte) (0x100 >>> (LITTLE ? 8 : 0));
+            }
+            int prefix = (int) ISO_BYTES.invokeExact(src, 0, dst, 0, 65);
+            int result = prefix;
+            for (int i = 0; i < dst.length; i++) result = 31 * result + dst[i];
+            return result;
+        }
+
         private static int reference(int seed, boolean fail) {
             int prefix = fail ? 8 : 17;
             int result = prefix;
@@ -167,6 +189,16 @@ public class TestCharacterLocalEncoding {
             int prefix = fail ? 32 : 64;
             int result = prefix;
             for (int i = 0; i < 64; i++) {
+                int cell = i < prefix ? 'a' + (seed & 7) : 7;
+                result = 31 * result + cell;
+            }
+            return result;
+        }
+
+        private static int reference65(int seed, boolean fail) {
+            int prefix = fail ? seed % 65 : 65;
+            int result = prefix;
+            for (int i = 0; i < 65; i++) {
                 int cell = i < prefix ? 'a' + (seed & 7) : 7;
                 result = 31 * result + cell;
             }

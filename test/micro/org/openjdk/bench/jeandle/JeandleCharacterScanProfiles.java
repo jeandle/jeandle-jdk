@@ -39,7 +39,7 @@ public class JeandleCharacterScanProfiles {
             byte[].class, int.class, int.class);
 
     @Param({"FIRST", "MIXED"}) public String initialProfile;
-    @Param({"16", "1024"}) public int length;
+    @Param({"1", "2", "7", "16", "1024"}) public int length;
     private byte[] clean;
     private byte[] nonAscii;
     private int sequence;
@@ -49,13 +49,17 @@ public class JeandleCharacterScanProfiles {
         Arrays.fill(clean, (byte) 'A');
         nonAscii = clean.clone();
         nonAscii[0] = (byte) 0xce;
-        nonAscii[1] = (byte) 0xb1;
+        if (length > 1) {
+            nonAscii[1] = (byte) 0xb1;
+        }
         if ((int) SCAN.invokeExact(clean, 0, length) != length
                 || (int) SCAN.invokeExact(nonAscii, 0, length) != 0) {
             throw new AssertionError("scan prefix");
         }
         String decoded = new String(nonAscii, StandardCharsets.UTF_8);
-        if (decoded.length() != length - 1 || decoded.charAt(0) != '\u03b1') {
+        int expectedLength = length == 1 ? 1 : length - 1;
+        char expectedFirst = length == 1 ? '\ufffd' : '\u03b1';
+        if (decoded.length() != expectedLength || decoded.charAt(0) != expectedFirst) {
             throw new AssertionError("UTF-8 fixture");
         }
         for (int i = 0; i < 20000; i++) {

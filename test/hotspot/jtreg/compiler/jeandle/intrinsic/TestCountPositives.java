@@ -28,6 +28,7 @@
  */
 package compiler.jeandle.intrinsic;
 
+import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -75,6 +76,9 @@ public class TestCountPositives {
             check(scan, null, 0, -5, -5);
             check(scan, new byte[] {1, -1}, 1, Integer.MAX_VALUE, Integer.MAX_VALUE);
             check(scan, new byte[] {-1}, 0, 2, 0);
+            checkThrows(scan, null, 0, 1, NullPointerException.class);
+            checkThrows(scan, new byte[] {1}, -1, 1, ArrayIndexOutOfBoundsException.class);
+            checkThrows(scan, new byte[] {1}, 1, 1, ArrayIndexOutOfBoundsException.class);
             System.out.println("COUNT POSITIVES PASSED checks=" + checks);
             return;
         }
@@ -123,6 +127,16 @@ public class TestCountPositives {
                 }
                 System.out.println(profile + "/" + mode + " evidence: " + dumps);
             }
+        }
+    }
+
+    private static void checkThrows(Method method, byte[] src, int off, int n,
+                                    Class<? extends Throwable> expected) throws Exception {
+        try {
+            method.invoke(null, src, off, n);
+            throw new AssertionError("Expected " + expected.getName());
+        } catch (InvocationTargetException e) {
+            if (!expected.isInstance(e.getCause())) throw e;
         }
     }
 
