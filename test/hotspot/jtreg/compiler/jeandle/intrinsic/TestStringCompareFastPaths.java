@@ -32,6 +32,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.Arrays;
 import java.util.regex.Pattern;
+import java.util.stream.IntStream;
 
 import jdk.test.lib.process.ProcessTools;
 
@@ -39,8 +40,7 @@ public class TestStringCompareFastPaths {
     private static final String CALLER = "java.lang.JeandleStringIntrinsicCaller";
     private static final String[] METHODS = {"compareToL", "compareToU", "compareToLU", "compareToUL",
                                              "equalsL", "equalsU"};
-    private static final int[] LENGTHS = {0, 1, 2, 3, 4, 5, 7, 8, 9, 15, 16, 17,
-                                        31, 32, 33, 63, 64, 65, 129};
+    private static final int[] LENGTHS = IntStream.range(0, 161).toArray();
 
     public static void main(String[] args) throws Exception {
         if (args.length != 0) {
@@ -76,6 +76,14 @@ public class TestStringCompareFastPaths {
     }
 
     private static void checkIR(String name, String ir) {
+        var root = Pattern.compile("(?ms)^define [^\\n]*\\.root\"[^\\n]*\\{\\n(.*?)^}").matcher(ir);
+        if (!root.find()) {
+            throw new AssertionError("Missing comparison root: " + name);
+        }
+        ir = root.group(1);
+        if (ir.contains("@llvm.vector.reduce.umax.")) {
+            throw new AssertionError("Unexpected byte-maximum reduction in comparison: " + name);
+        }
         if (name.startsWith("equals")) {
             if (!ir.contains("load <")
                     || !Pattern.compile("icmp eq ptr addrspace\\(1\\) %[\\w.]+, %[\\w.]+")
@@ -141,10 +149,21 @@ public class TestStringCompareFastPaths {
                 }
                 for (int lane = 0; lane < length; lane++) {
                     char original = chars[lane];
+                    chars[lane] ^= 1;
+                    check(method, left, encode(chars, bu), au, bu);
+                    check(method, encode(chars, au), encode(originalChars, bu), au, bu);
+                    chars[lane] = original;
                     chars[lane] ^= 0x80;
                     right = encode(chars, bu);
                     check(method, left, right, au, bu);
                     check(method, encode(chars, au), encode(originalChars, bu), au, bu);
+                    if (lane + 1 < length) {
+                        char last = chars[length - 1];
+                        chars[length - 1] = 255;
+                        check(method, left, encode(chars, bu), au, bu);
+                        check(method, encode(chars, au), encode(originalChars, bu), au, bu);
+                        chars[length - 1] = last;
+                    }
                     if (bu) {
                         chars[lane] = (char) (original + 0x8000);
                         check(method, left, encode(chars, true), au, true);
@@ -157,7 +176,14 @@ public class TestStringCompareFastPaths {
                 }
                 if (length != 0) {
                     check(method, left, encode(Arrays.copyOf(chars, length - 1), bu), au, bu);
+                    check(method, encode(Arrays.copyOf(chars, length - 1), au), right, au, bu);
                 }
+                char[] extremes = new char[length];
+                byte[] zeroLeft = encode(extremes, au);
+                byte[] zeroRight = encode(extremes, bu);
+                Arrays.fill(extremes, (char) 255);
+                check(method, zeroLeft, encode(extremes, bu), au, bu);
+                check(method, encode(extremes, au), zeroRight, au, bu);
                 // Genuine wide values exercise unsigned code units in both
                 // directions, independently of the common Latin1 fixture.
                 if (au && bu) {

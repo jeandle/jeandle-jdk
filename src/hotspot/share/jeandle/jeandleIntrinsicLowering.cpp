@@ -302,6 +302,8 @@ bool JeandleIntrinsicLowering::is_supported(vmIntrinsics::ID id) {
 
     // newArray
     case vmIntrinsics::_newArray:
+    case vmIntrinsics::_getLength:
+    case vmIntrinsics::_allocateUninitializedArray:
 
     // Unsafe.allocateInstance
     case vmIntrinsics::_allocateInstance:
@@ -722,6 +724,10 @@ bool JeandleIntrinsicLowering::lower(vmIntrinsics::ID id, const ciMethod* target
     // newArray
     case vmIntrinsics::_newArray:
       return lower_new_array();
+    case vmIntrinsics::_getLength:
+      return lower_reflect_array_length();
+    case vmIntrinsics::_allocateUninitializedArray:
+      return lower_unsafe_allocate_array();
 
     // Unsafe.allocateInstance
     case vmIntrinsics::_allocateInstance:
@@ -3156,14 +3162,7 @@ bool JeandleIntrinsicLowering::lower_new_array() {
 
   // Klass-load block: acquire-load the cached array_klass from the mirror.
   builder.SetInsertPoint(klass_load_bb);
-  llvm::GlobalVariable* offset_gv =
-      m.getGlobalVariable("java_lang_Class.array_klass_offset", /*AllowInternal=*/true);
-  llvm::Value* offset = builder.CreateLoad(builder.getInt32Ty(), offset_gv);
-  llvm::Value* klass_field_addr =
-      builder.CreateInBoundsGEP(builder.getInt8Ty(), mirror, offset);
-  llvm::LoadInst* klass = builder.CreateLoad(c_heap_ptr_ty, klass_field_addr);
-  klass->setAtomic(llvm::AtomicOrdering::Acquire);
-  klass->setAlignment(llvm::Align(sizeof(void*)));
+  llvm::Value* klass = _interp->call_java_op("jeandle.load_mirror_array_klass", {mirror});
   llvm::Value* klass_is_null = builder.CreateICmpEQ(
       klass, llvm::ConstantPointerNull::get(c_heap_ptr_ty));
   builder.CreateCondBr(klass_is_null, slow_bb, fast_bb);
@@ -3183,30 +3182,14 @@ bool JeandleIntrinsicLowering::lower_new_array() {
   llvm::Value* log2_esize = builder.CreateAnd(layout_helper, builder.getInt32(0x1f));
   llvm::Value* size_in_bytes = _interp->emit_array_size_in_bytes(
       length, log2_esize, base_offset, MinObjAlignmentInBytes - 1);
-  // Fast-path length cap, mirroring C2's reflective array path: the unscaled
-  // FastAllocateSizeLimit bounds the byte size to <= FastAllocateSizeLimit << LogBytesPerLong
-  // (~1MB) for any element type, so size_in_bytes cannot overflow i32. Larger reflective arrays
-  // fall to the slow path.
-  // TODO: this cap is a flat limit on element count, applied the same way regardless of element
-  // type. Because it isn't scaled by element size, it effectively assumes every element is 8
-  // bytes wide, so arrays of smaller elements (byte[], or reference arrays under compressed oops)
-  // fall back to the slow path far earlier than their real byte size requires. The constant-klass
-  // bytecode path (emit_jeandle_newarray) already scales it by element size:
-  //     FastAllocateSizeLimit << (LogBytesPerLong - log2_esize)
-  // We can do the same here using the log2_esize decoded just above -- one shift, covers every
-  // element type, no extra branching.
-  //
-  // Going further like C2 (speculatively assuming a reference array so the whole layout folds to
-  // constants) isn't worth it here: C2's real gain comes from optimizing the code after the
-  // allocation -- folding a trailing arraycopy's address math and deleting the now-redundant
-  // zeroing. Neither is reachable for us: the zeroing lives inside the opaque jeandle.new_array
-  // helper, and this reflection site just returns the array with no copy to merge with.
-  //
-  // If that after-allocation win is ever worth pursuing, the path forward is not C2's guard but
-  // making the zeroing removable at the call site: expose it as stores the optimizer can see (or
-  // flag the region as already-zeroed) so a following overwrite can delete it, and let the
-  // allocation fuse with the arraycopy.
-  llvm::Value* length_limit = builder.getInt32((int)FastAllocateSizeLimit);
+  // Bound fast allocations by byte size, using the same element-width
+  // scaling as bytecode newarray. The layout helper bounds the shift to
+  // [0, LogBytesPerLong]; the unsigned length guard also rejects negatives.
+  llvm::Value* length_limit_shift = builder.CreateSub(
+      builder.getInt32(LogBytesPerLong), log2_esize, "new_array.length_limit_shift");
+  llvm::Value* length_limit = builder.CreateShl(
+      builder.getInt32((int)FastAllocateSizeLimit), length_limit_shift,
+      "new_array.length_limit");
 
   static constexpr CallSiteAttributeMetadata fast_attrs =
       {CTRL_NEEDS_EXCEPTION_EDGE, MEM_READ | MEM_WRITE};
@@ -3243,6 +3226,100 @@ bool JeandleIntrinsicLowering::lower_new_array() {
   result->addIncoming(fast_call, fast_normal_bb);
   result->addIncoming(slow_call, slow_normal_bb);
 
+  _interp->_jvm->apush(result);
+  return true;
+}
+
+bool JeandleIntrinsicLowering::lower_reflect_array_length() {
+  if (_interp->too_many_traps(_interp->_method, _interp->_bytecodes.cur_bci(),
+                              Deoptimization::Reason_intrinsic)) {
+    return false;
+  }
+
+  JeandlePreserveReexecuteState reexecute_scope(_interp);
+  _interp->_should_reexecute = true;
+  llvm::Value* array = _interp->_jvm->raw_peek(0).value();
+  _interp->null_check(array);
+  llvm::BasicBlock* non_array = generate_non_array_guard(_interp->load_object_klass(array), nullptr);
+  if (non_array != nullptr) {
+    // Reexecute Array.getLength so non-arrays receive IllegalArgumentException.
+    if (_interp->_ir_builder.GetInsertBlock() == nullptr) {
+      _interp->_ir_builder.SetInsertPoint(non_array);
+      _interp->_block->set_tail_llvm_block(non_array);
+      _interp->uncommon_trap(Deoptimization::Reason_intrinsic,
+                             Deoptimization::Action_maybe_recompile);
+      _interp->_block->set(JeandleBasicBlock::always_uncommon_trap);
+      return true;
+    }
+    _interp->uncommon_trap(Deoptimization::Reason_intrinsic,
+                           Deoptimization::Action_maybe_recompile, non_array);
+  }
+  llvm::Value* length = _interp->emit_array_length(array);
+  _interp->_jvm->apop();
+  _interp->_jvm->ipush(length);
+  _interp->_block->set_tail_llvm_block(_interp->_ir_builder.GetInsertBlock());
+  return true;
+}
+
+bool JeandleIntrinsicLowering::lower_unsafe_allocate_array() {
+  llvm::IRBuilder<>& b = _interp->_ir_builder;
+  llvm::LLVMContext& ctx = b.getContext();
+  llvm::Function* f = _interp->_llvm_func;
+  llvm::Value* length = _interp->_jvm->raw_peek(0).value();
+  llvm::Value* mirror = _interp->_jvm->raw_peek(1).value();
+  llvm::Value* receiver = _interp->_jvm->raw_peek(2).value();
+  llvm::BasicBlock* slow = llvm::BasicBlock::Create(ctx, "unsafe_array_slow", f);
+  llvm::BasicBlock* done = llvm::BasicBlock::Create(ctx, "unsafe_array_done", f);
+
+  // The public wrapper validates arguments. The private implementation returns
+  // null for void and nonprimitive mirrors, including a null mirror.
+  generate_slow_guard(b.CreateIsNull(mirror), slow);
+  llvm::Value* klass = _interp->call_java_op("jeandle.load_mirror_array_klass", {mirror});
+  generate_slow_guard(b.CreateIsNull(klass), slow);
+  generate_objArray_guard(klass, slow);
+
+  llvm::Value* fast_result = nullptr;
+  llvm::BasicBlock* fast_control = nullptr;
+  if (b.GetInsertBlock() != nullptr) {
+    // Only primitive payloads may remain uninitialized across a safepoint.
+    // Keep the invoke operands live for reexecution if allocation fails.
+    JeandlePreserveReexecuteState reexecute_scope(_interp);
+    _interp->_should_reexecute = true;
+    fast_result = _interp->emit_jeandle_newarray(
+        klass, length, nullptr, true /* deoptimize_on_exception */,
+        true /* uninitialized */);
+    RETURN_ON_JEANDLE_ERROR(true);
+    fast_control = b.GetInsertBlock();
+    b.CreateBr(done);
+  }
+
+  _interp->_jvm->ipop();
+  _interp->_jvm->apop();
+  _interp->_jvm->apop();
+  b.SetInsertPoint(slow);
+  llvm::CallBase* slow_result;
+  {
+    JeandlePreserveReexecuteState reexecute_scope(_interp);
+    _interp->_should_reexecute = false;
+    slow_result = _interp->emit_java_call(
+        const_cast<ciMethod*>(_target), _interp->_bytecodes.get_declared_method_holder(),
+        _target->signature(), {receiver, mirror, length},
+        true /* has_receiver */, false /* is_method_handle_invoke */,
+        _interp->_bytecodes.cur_bc_raw(), false /* call_does_dispatch */,
+        false /* deoptimize_on_exception */, false /* result_is_non_null */);
+  }
+  RETURN_ON_JEANDLE_ERROR(true);
+  llvm::BasicBlock* slow_control = b.GetInsertBlock();
+  b.CreateBr(done);
+
+  b.SetInsertPoint(done);
+  llvm::PHINode* result = b.CreatePHI(slow_result->getType(), fast_result == nullptr ? 1 : 2,
+                                     "unsafe_array_result");
+  result->addIncoming(slow_result, slow_control);
+  if (fast_result != nullptr) {
+    result->addIncoming(fast_result, fast_control);
+  }
+  _interp->_block->set_tail_llvm_block(done);
   _interp->_jvm->apush(result);
   return true;
 }
@@ -4482,23 +4559,15 @@ void JeandleIntrinsicLowering::emit_clone_copy(llvm::Value* src_base,
 
 // Jeandle counterpart of C2 LibraryCallKit::copy_to_clone().
 //
-// C2 marks the just-created allocation initialization as complete, emits
-// access_clone(), then places a StoreStore/CPUOrder memory barrier. Jeandle
-// cannot model AllocateNode/InitializeNode memory slices here yet. Jeandle
-// represents array and instance payload copies as clone-array/clone-instance
-// calls and expands them to collector-correct stubs later; allocation-
-// initialization fusion remains a separate backend task.
+// C2 completes allocation initialization with access_clone() and a publication
+// barrier. Jeandle retains clone-array/clone-instance operations for PEA and
+// CopySpecialization. The latter can transfer array initialization to a
+// proven complete, uninterrupted payload copy before expanding the operation.
 void JeandleIntrinsicLowering::copy_clone_payload(llvm::Value* obj,
                                                  llvm::Value* alloc_obj,
                                                  llvm::Value* obj_size,
                                                  bool is_array) {
   assert(obj_size != nullptr, "clone size must be available");
-
-  // TODO: Match C2's ReduceBulkZeroing path. Jeandle must expose the fresh
-  // allocation behind alloc_obj, verify that an array clone has a statically
-  // known array source type, mark the allocation complete, and record a
-  // complete_with_arraycopy initialization so the clone copy can own payload
-  // initialization instead of zeroing the same memory first.
 
   emit_clone_copy(obj, alloc_obj, obj_size, is_array);
   RETURN_VOID_ON_JEANDLE_ERROR();
@@ -4570,10 +4639,9 @@ bool JeandleIntrinsicLowering::lower_object_clone() {
       llvm::Value* obj_length =
           _interp->emit_array_length(obj);
       llvm::Value* array_size = nullptr;
-      // TODO: Defer the fast allocation's AllocationInit to copy completion.
-      // Keep publication deferral independent of zeroing: GC-aware copy paths
-      // and PEA-retained allocations must be initialized at safepoints.
-      // Preserve the VM slow allocation's own publication protocol.
+      // Keep initialized storage through PEA. CopySpecialization can transfer
+      // initialization to a complete copy after proving no intervening
+      // safepoint or observation; the slow allocator retains its own protocol.
       llvm::InvokeInst* alloc_obj = _interp->emit_jeandle_newarray(
           obj_klass, obj_length, &array_size,
           true /* deoptimize_on_exception */);
@@ -4826,6 +4894,13 @@ bool JeandleIntrinsicLowering::lower_arrays_copy_of(bool is_copy_of_range) {
   if (!_interp->too_many_traps(_interp->_method,
                               _interp->_bytecodes.cur_bci(),
                               Deoptimization::Reason_class_check)) {
+    llvm::BasicBlock* class_check =
+        llvm::BasicBlock::Create(ctx, "copyof_class_check", f);
+    llvm::BasicBlock* class_check_pass =
+        llvm::BasicBlock::Create(ctx, "copyof_class_check_pass", f);
+    // An empty copy cannot fail a store check, even for incompatible arrays.
+    b.CreateCondBr(b.CreateICmpEQ(moved, b.getInt32(0)), class_check_pass, class_check);
+    b.SetInsertPoint(class_check);
     llvm::BasicBlock* class_check_fail =
         llvm::BasicBlock::Create(ctx, "copyof_class_check_fail", f);
     llvm::Value* is_subtype = _interp->call_java_op(
@@ -4840,13 +4915,14 @@ bool JeandleIntrinsicLowering::lower_arrays_copy_of(bool is_copy_of_range) {
     } else {
       class_check_fail->eraseFromParent();
     }
+    b.CreateBr(class_check_pass);
+    b.SetInsertPoint(class_check_pass);
     validated = true;
   }
 
-  // TODO: Defer fast-allocation publication to copy completion independently
-  // of zeroing. Bulk-zeroing elimination must preserve null padding, handle
-  // zero-length and checked/slow copies, and keep PEA-retained allocations
-  // GC-safe with correct default slots before replay.
+  // Keep default slots available to PEA and checked copies. The post-PEA
+  // CopySpecialization pass can transfer initialization to a validated copy
+  // and clear only its uncopied tail before publication.
   llvm::InvokeInst* newcopy = _interp->emit_jeandle_newarray(
       klass_node, length);
   RETURN_ON_JEANDLE_ERROR(true);

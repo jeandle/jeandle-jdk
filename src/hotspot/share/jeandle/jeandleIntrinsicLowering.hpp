@@ -334,6 +334,8 @@ class JeandleIntrinsicLowering : public StackObj {
   bool lower_chacha20_block();
   bool lower_poly1305_process_blocks();
   bool lower_new_array();
+  bool lower_reflect_array_length();
+  bool lower_unsafe_allocate_array();
   bool lower_unsafe_allocate_instance();
   bool lower_object_notify(vmIntrinsics::ID id);
   bool lower_vectorized_mismatch();

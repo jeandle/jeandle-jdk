@@ -60,14 +60,18 @@ public class TestArraysCopyOfIntrinsic {
         runComparison("G1 compressed", "-XX:+UseG1GC");
         runComparison("G1 uncompressed", "-XX:+UseG1GC", "-XX:-UseCompressedOops");
         runComparison("Serial", "-XX:+UseSerialGC");
+        runCase(true, true, "-XX:+UseG1GC", "-XX:-ReduceInitialCardMarks");
+        runCase(true, true, "-XX:+UseSerialGC", "-XX:-ReduceInitialCardMarks");
         compare(runCase(true, true, "-XX:+UseG1GC"),
                 runCase(true, false, "-XX:+UseG1GC"),
                 "ReduceBulkZeroing stub selection");
         runCheckcastCase(true, "-XX:+UseG1GC");
         runCheckcastCase(true, "-XX:+UseSerialGC");
         runCheckcastCase(false, "-XX:+UseG1GC");
-        runBarrierCase("-XX:+UseG1GC", 200_000, "-XX:G1HeapRegionSize=1m");
-        runBarrierCase("-XX:+UseSerialGC", 1_024, "-XX:PretenureSizeThreshold=64");
+        runBarrierCase("-XX:+UseG1GC", 200_000, false, "-XX:G1HeapRegionSize=1m");
+        runBarrierCase("-XX:+UseSerialGC", 1_024, false, "-XX:PretenureSizeThreshold=64");
+        runBarrierCase("-XX:+UseG1GC", 200_000, true, "-XX:G1HeapRegionSize=1m");
+        runBarrierCase("-XX:+UseSerialGC", 1_024, true, "-XX:PretenureSizeThreshold=64");
     }
 
     private static void runComparison(String label, String... gcOptions) throws Exception {
@@ -83,10 +87,13 @@ public class TestArraysCopyOfIntrinsic {
 
     private static RunResult runCase(boolean enabled, boolean reduceBulkZeroing,
                                      String... gcOptions) throws Exception {
+        boolean reduceInitialCardMarks = !List.of(gcOptions).contains("-XX:-ReduceInitialCardMarks");
+        boolean wideOops = List.of(gcOptions).contains("-XX:-UseCompressedOops");
         Path dump = Files.createTempDirectory("jeandle_copyof_");
         ArrayList<String> command = new ArrayList<>(List.of(
                 "-Xbatch", "-Xcomp", "-XX:-TieredCompilation",
                 "-XX:-BackgroundCompilation", "-XX:+UseJeandleCompiler",
+                "-XX:+ReduceInitialCardMarks",
                 reduceBulkZeroing ? "-XX:+ReduceBulkZeroing" : "-XX:-ReduceBulkZeroing",
                 "-Xlog:jeandle=debug", "-XX:+JeandleDumpIR",
                 "-XX:JeandleDumpDirectory=" + dump,
@@ -144,7 +151,17 @@ public class TestArraysCopyOfIntrinsic {
                 || containsOptimizedMethod(
                         dump, "copyOfRangeExact",
                         "call void @StubRoutines_arrayof_oop_disjoint_arraycopy_uninit(");
-        boolean expectUninitialized = enabled && reduceBulkZeroing;
+        boolean expectPrimitive = enabled && reduceBulkZeroing && reduceInitialCardMarks;
+        String primitive = wideOops ? "jlong" : "jint";
+        for (String method : List.of("copyOfExact", "copyOfRangeExact")) {
+            boolean usesPrimitive = containsOptimizedMethod(dump, method,
+                    "call void @StubRoutines_arrayof_" + primitive + "_disjoint_arraycopy(")
+                    || containsOptimizedMethod(dump, method,
+                            "call void @StubRoutines_" + primitive + "_disjoint_arraycopy(");
+            Asserts.assertEquals(usesPrimitive, expectPrimitive,
+                    "unexpected barrier-free stub for " + method);
+        }
+        boolean expectUninitialized = enabled && reduceBulkZeroing && !reduceInitialCardMarks;
         Asserts.assertEquals(expectUninitialized, copyOfUninitialized,
                 "unexpected Arrays.copyOf uninitialized-disjoint stub call");
         Asserts.assertEquals(expectUninitialized, copyOfRangeUninitialized,
@@ -257,13 +274,14 @@ public class TestArraysCopyOfIntrinsic {
     }
 
     private static void runBarrierCase(String gcOption, int length,
-                                       String... allocationOptions) throws Exception {
+                                       boolean reduceInitialCardMarks, String... allocationOptions) throws Exception {
         ArrayList<String> command = new ArrayList<>(List.of(
                 "-Xbootclasspath/a:.", "-Xms64m", "-Xmx64m",
                 "-Xbatch", "-Xcomp", "-XX:-TieredCompilation",
                 "-XX:-BackgroundCompilation", "-XX:+UseJeandleCompiler",
                 "-XX:+UnlockDiagnosticVMOptions", "-XX:+WhiteBoxAPI",
-                "-XX:-ReduceInitialCardMarks", "-XX:-UseTLAB",
+                reduceInitialCardMarks ? "-XX:+ReduceInitialCardMarks" : "-XX:-ReduceInitialCardMarks",
+                "-XX:-UseTLAB",
                 "-Dcopyof.barrier.length=" + length,
                 "-Xlog:jeandle=debug,gc=debug",
                 "-XX:CompileCommand=compileonly,compiler.jeandle.arraycopy.TestArraysCopyOfIntrinsic$Workload::copyOfExact",

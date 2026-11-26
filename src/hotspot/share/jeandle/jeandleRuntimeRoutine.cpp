@@ -20,6 +20,7 @@
 
 #include "jeandle/jeandleCompilation.hpp"
 #include "jeandle/jeandleRuntimeRoutine.hpp"
+#include "jeandle/jeandleStringSearch.hpp"
 
 #include "jeandle/__hotspotHeadersBegin__.hpp"
 #include "classfile/javaClasses.hpp"
@@ -95,6 +96,24 @@ static bool check_jeandle_compiled_frame(JavaThread* thread) {
   return true;
 }
 #endif // ASSERT
+
+JRT_LEAF(jint, JeandleRuntimeRoutine::string_indexof_linear(const uint8_t* src, jint src_count,
+                                                            const uint8_t* tgt, jint tgt_count,
+                                                            jint from, jint encoding))
+  if ((encoding & 1) != 0) {
+    const uint16_t* wide_src = reinterpret_cast<const uint16_t*>(src);
+    if ((encoding & 2) != 0) {
+      return JeandleStringSearch::index_of(wide_src, src_count,
+          reinterpret_cast<const uint16_t*>(tgt), tgt_count, from);
+    }
+    return JeandleStringSearch::index_of(wide_src, src_count, tgt, tgt_count, from);
+  }
+  if ((encoding & 2) != 0) {
+    return JeandleStringSearch::index_of(src, src_count,
+        reinterpret_cast<const uint16_t*>(tgt), tgt_count, from);
+  }
+  return JeandleStringSearch::index_of(src, src_count, tgt, tgt_count, from);
+JRT_END
 
 JRT_ENTRY_NO_ASYNC(void, JeandleRuntimeRoutine::safepoint_handler(JavaThread* current))
   RegisterMap r_map(current,

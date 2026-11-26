@@ -52,7 +52,7 @@ public class JeandleStringSearchCounterexample {
     public int needleLength;
     @Param({"LL", "UU", "UL"})
     public String encoding;
-    @Param({"SECOND_MISS", "SECOND_LAST", "MIDDLE_MISS", "PERIODIC_MISS", "PERIODIC_LAST"})
+    @Param({"SECOND_MISS", "SECOND_LAST", "MIDDLE_MISS", "PERIODIC_MISS", "PERIODIC_LAST", "REVERSE_MISS", "REVERSE_LAST"})
     public String position;
 
     private static final int STATES = 8;
@@ -90,6 +90,12 @@ public class JeandleStringSearchCounterexample {
                 needle[distinguishing] = (char) (prefix + 2);
                 needle[needleLength - 1] = suffix;
             }
+            if (position.startsWith("REVERSE")) {
+                if (needleLength < 4) throw new IllegalArgumentException("reverse needle too short");
+                Arrays.fill(source, prefix);
+                Arrays.fill(needle, prefix);
+                for (int i = needleLength / 2 - 1; i < length; i += needleLength / 2) source[i] = suffix;
+            }
             if (encoding.equals("UL")) source[0] = '\u1234';
             if (last) System.arraycopy(needle, 0, source, length - needleLength, needleLength);
             strings[state] = new String(source);
@@ -103,6 +109,42 @@ public class JeandleStringSearchCounterexample {
                 throw new AssertionError("search fixture: " + direct + "/" + api + " != " + expected);
             }
         }
+        if (position.startsWith("REVERSE")) primeSearch();
+    }
+
+    // Compile the same entry points with a short reverse-periodic fixture.
+    // A long miss can otherwise make too few calls to compile during warmup.
+    private void primeSearch() throws Throwable {
+        int savedLength = length;
+        int savedNeedleLength = needleLength;
+        String[] savedStrings = strings.clone();
+        String[] savedTargets = targets.clone();
+        byte[][] savedSources = sources.clone();
+        byte[][] savedNeedles = needles.clone();
+        length = 256;
+        needleLength = 128;
+        char[] source = ("a".repeat(63) + "b").repeat(4).toCharArray();
+        char[] needle = "a".repeat(128).toCharArray();
+        if (encoding.equals("UL")) source[0] = '\u1234';
+        if (encoding.equals("UU")) {
+            for (int i = 0; i < source.length; i++) source[i] += 0x100;
+            for (int i = 0; i < needle.length; i++) needle[i] += 0x100;
+        }
+        for (int i = 0; i < STATES; i++) {
+            strings[i] = new String(source);
+            targets[i] = new String(needle);
+            sources[i] = encode(source, !encoding.equals("LL"));
+            needles[i] = encode(needle, encoding.equals("UU"));
+        }
+        for (int i = 0; i < 20000; i++) {
+            if (publicSearch() != -1 || helperSearch() != -1) throw new AssertionError("warmup fixture");
+        }
+        length = savedLength;
+        needleLength = savedNeedleLength;
+        System.arraycopy(savedStrings, 0, strings, 0, STATES);
+        System.arraycopy(savedTargets, 0, targets, 0, STATES);
+        System.arraycopy(savedSources, 0, sources, 0, STATES);
+        System.arraycopy(savedNeedles, 0, needles, 0, STATES);
     }
 
     @Benchmark
