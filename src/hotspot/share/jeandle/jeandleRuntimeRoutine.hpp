@@ -339,6 +339,85 @@
       llvm::Type::getInt32Ty(context),                                              \
       llvm::Type::getInt32Ty(context))                                              \
                                                                                     \
+  def(StubRoutines_updateBytesCRC32,                                                \
+      StubRoutines::updateBytesCRC32(),                                             \
+      true,                                                                         \
+      true,                                                                         \
+      llvm::Type::getInt32Ty(context),                                              \
+      llvm::Type::getInt32Ty(context),                                              \
+      llvm::PointerType::get(context, llvm::jeandle::AddrSpace::JavaHeapAddrSpace), \
+      llvm::IntegerType::get(context, BitsPerWord))                                 \
+                                                                                    \
+  def(StubRoutines_updateBytesCRC32_direct,                                         \
+      StubRoutines::updateBytesCRC32(),                                             \
+      true,                                                                         \
+      true,                                                                         \
+      llvm::Type::getInt32Ty(context),                                              \
+      llvm::Type::getInt32Ty(context),                                              \
+      llvm::PointerType::get(context, llvm::jeandle::AddrSpace::CHeapAddrSpace),    \
+      llvm::IntegerType::get(context, BitsPerWord))                                 \
+                                                                                    \
+  def(StubRoutines_updateBytesCRC32C,                                               \
+      StubRoutines::updateBytesCRC32C(),                                            \
+      true,                                                                         \
+      true,                                                                         \
+      llvm::Type::getInt32Ty(context),                                              \
+      llvm::Type::getInt32Ty(context),                                              \
+      llvm::PointerType::get(context, llvm::jeandle::AddrSpace::JavaHeapAddrSpace), \
+      llvm::IntegerType::get(context, BitsPerWord))                                 \
+                                                                                    \
+  def(StubRoutines_updateBytesCRC32C_direct,                                        \
+      StubRoutines::updateBytesCRC32C(),                                            \
+      true,                                                                         \
+      true,                                                                         \
+      llvm::Type::getInt32Ty(context),                                              \
+      llvm::Type::getInt32Ty(context),                                              \
+      llvm::PointerType::get(context, llvm::jeandle::AddrSpace::CHeapAddrSpace),    \
+      llvm::IntegerType::get(context, BitsPerWord))                                 \
+                                                                                    \
+  def(StubRoutines_updateBytesAdler32,                                              \
+      StubRoutines::updateBytesAdler32(),                                           \
+      true,                                                                         \
+      true,                                                                         \
+      llvm::Type::getInt32Ty(context),                                              \
+      llvm::Type::getInt32Ty(context),                                              \
+      llvm::PointerType::get(context, llvm::jeandle::AddrSpace::JavaHeapAddrSpace), \
+      llvm::IntegerType::get(context, BitsPerWord))                                 \
+                                                                                    \
+  def(StubRoutines_updateBytesAdler32_direct,                                       \
+      StubRoutines::updateBytesAdler32(),                                           \
+      true,                                                                         \
+      true,                                                                         \
+      llvm::Type::getInt32Ty(context),                                              \
+      llvm::Type::getInt32Ty(context),                                              \
+      llvm::PointerType::get(context, llvm::jeandle::AddrSpace::CHeapAddrSpace),    \
+      llvm::IntegerType::get(context, BitsPerWord))                                 \
+                                                                                    \
+  def(StubRoutines_base64_encodeBlock,                                              \
+      StubRoutines::base64_encodeBlock(),                                           \
+      true,                                                                         \
+      true,                                                                         \
+      llvm::Type::getVoidTy(context),                                               \
+      llvm::PointerType::get(context, llvm::jeandle::AddrSpace::JavaHeapAddrSpace), \
+      llvm::IntegerType::get(context, BitsPerWord),                                 \
+      llvm::IntegerType::get(context, BitsPerWord),                                 \
+      llvm::PointerType::get(context, llvm::jeandle::AddrSpace::JavaHeapAddrSpace), \
+      llvm::IntegerType::get(context, BitsPerWord),                                 \
+      llvm::IntegerType::get(context, BitsPerWord))                                 \
+                                                                                    \
+  def(StubRoutines_base64_decodeBlock,                                              \
+      StubRoutines::base64_decodeBlock(),                                           \
+      true,                                                                         \
+      true,                                                                         \
+      llvm::Type::getInt32Ty(context),                                              \
+      llvm::PointerType::get(context, llvm::jeandle::AddrSpace::JavaHeapAddrSpace), \
+      llvm::IntegerType::get(context, BitsPerWord),                                 \
+      llvm::IntegerType::get(context, BitsPerWord),                                 \
+      llvm::PointerType::get(context, llvm::jeandle::AddrSpace::JavaHeapAddrSpace), \
+      llvm::IntegerType::get(context, BitsPerWord),                                 \
+      llvm::IntegerType::get(context, BitsPerWord),                                 \
+      llvm::IntegerType::get(context, BitsPerWord))                                 \
+                                                                                    \
   def(StubRoutines_sha1_implCompress,                                               \
       StubRoutines::sha1_implCompress(),                                            \
       true,                                                                         \
@@ -838,7 +917,8 @@ def(StubRoutines_generic_arraycopy,                                             
   def(deopt_blob)                          \
   def(zero_heap_words_stub)                \
   def(string_compress_stub)               \
-  def(string_inflate_stub)
+  def(string_inflate_stub)                 \
+  def(base64_decode_stub)
 
 
 // JeandleRuntimeRoutine contains C/C++/Assembly routines and Hotspot routines that can be called from Jeandle compiled code.
@@ -924,6 +1004,26 @@ class JeandleRuntimeRoutine : public AllStatic {
   static constexpr const char* _##name = #name;
 
   ALL_JEANDLE_ASSEMBLY_ROUTINES(DEF_ASSEMBLY_ROUTINE_NAME);
+
+  // Base64 decode kernel owned by Jeandle. It has the ABI of
+  // StubRoutines::base64_decodeBlock and, for valid input, never stores more
+  // bytes than it reports. Only x86 registers it, and only where the shared
+  // stub would run its AVX2 loop; callers fall back to
+  // StubRoutines_base64_decodeBlock_callee.
+  static llvm::FunctionCallee base64_decode_stub_callee(llvm::Module& target_module) {
+    llvm::LLVMContext& context = target_module.getContext();
+    llvm::PointerType* heap =
+        llvm::PointerType::get(context, llvm::jeandle::AddrSpace::JavaHeapAddrSpace);
+    llvm::IntegerType* word = llvm::IntegerType::get(context, BitsPerWord);
+    llvm::FunctionType* func_type = llvm::FunctionType::get(
+        llvm::Type::getInt32Ty(context), {heap, word, word, heap, word, word, word}, false);
+    llvm::FunctionCallee callee = target_module.getOrInsertFunction(_base64_decode_stub, func_type);
+    llvm::Function* func = llvm::cast<llvm::Function>(callee.getCallee());
+    func->setCallingConv(llvm::CallingConv::C);
+    func->addFnAttr(llvm::Attribute::NoUnwind);
+    func->addFnAttr(llvm::Attribute::get(context, "gc-leaf-function"));
+    return callee;
+  }
 
   // Character-data pointers remain valid throughout this allocation-free
   // leaf. The string-indexOf kernel in template.ll reaches it through the

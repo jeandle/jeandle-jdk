@@ -469,3 +469,231 @@ void JeandleRuntimeRoutine::generate_string_inflate_stub() {
   _routine_entry[_string_inflate_stub] = entry;
   _gc_leaf_routines.insert(entry);
 }
+
+// C ABI (SysV): (byte[] src, i64 sp, i64 sl, byte[] dst, i64 dp, i64 isURL,
+//     i64 isMIME) -> bytes written, the contract of
+// StubRoutines::base64_decodeBlock. The arrays address element 0 and isMIME
+// is the seventh argument, on the stack.
+//
+// The kernel is the AVX2 decoder of the shared stub with a 32-character
+// threshold. For valid input it stores exactly the bytes it reports and
+// leaves the atom holding terminal padding to the Java decoder; after an
+// invalid vector it may leave up to 8 zero bytes past the reported length,
+// as the shared stub does. CPUs with AVX-512 VBMI keep the shared stub, whose
+// AVX-512 kernel is at least as fast as this loop (its generator tests the
+// same features), so this routine is only registered where the shared stub
+// would run its AVX2 loop. The lookup tables are generated under
+// UseBASE64Intrinsics before this routine.
+void JeandleRuntimeRoutine::generate_base64_decode_stub() {
+  if (!UseBASE64Intrinsics || !VM_Version::supports_avx2()
+      || (VM_Version::supports_avx512_vbmi() && VM_Version::supports_avx512bw())) {
+    return;
+  }
+
+  ResourceMark rm;
+  CodeBuffer buffer(_base64_decode_stub, 2048, 64);
+  MacroAssembler* masm = new MacroAssembler(&buffer);
+
+  const Register source = c_rarg0;
+  const Register start_offset = c_rarg1;
+  const Register end_offset = c_rarg2;
+  const Register dest = c_rarg3;
+  const Register dp = c_rarg4;
+  const Register isURL = c_rarg5;
+  const Register isMIME = rbx;
+  const Register length = r14;
+  const Register tables = r13;
+  const Register decode_table = r11;
+
+  Label L_tailProc, L_topLoop, L_enterLoop, L_storeLast, L_noPadding;
+  Label L_lastChunk, L_forceLoop, L_bottomLoop, L_exit;
+
+  address start = __ pc();
+
+  __ enter();
+  // Save callee-saved registers before using them
+  __ push(r13);
+  __ push(r14);
+  __ push(r15);
+  __ push(rbx);
+
+  __ movl(isMIME, Address(rbp, 2 * wordSize));
+  __ movl(length, end_offset);
+  __ subl(length, start_offset);
+  __ push(dest);          // Saved for the return value
+
+  __ cmpl(isMIME, 0);
+  __ jcc(Assembler::notEqual, L_lastChunk);
+
+  // Check for buffer too small (for algorithm)
+  __ subl(length, 0x20);
+  __ jcc(Assembler::less, L_tailProc);
+
+  // Leave an atom containing terminal padding for the Java decoder.
+  __ lea(rax, Address(source, start_offset, Address::times_1));
+  __ cmpb(Address(rax, length, Address::times_1, 31), '=');
+  __ jcc(Assembler::notEqual, L_noPadding);
+  __ subl(length, 4);
+  __ jcc(Assembler::less, L_tailProc);
+  __ bind(L_noPadding);
+
+  __ shll(isURL, 2);
+
+  // Algorithm adapted from https://arxiv.org/abs/1704.00605, "Faster Base64
+  // Encoding and Decoding using AVX2 Instructions".  URL modifications added.
+
+  // Set up constants
+  __ lea(tables, ExternalAddress(StubRoutines::x86::base64_AVX2_decode_tables_addr()));
+  // 2F or 5F
+  __ vpbroadcastd(xmm4, Address(tables, isURL, Address::times_1), Assembler::AVX_256bit);
+  // -1 or -4
+  __ vpbroadcastd(xmm10, Address(tables, isURL, Address::times_1, 0x08), Assembler::AVX_256bit);
+  __ vmovdqu(xmm12, Address(tables, 0x10));  // permute
+  __ vmovdqu(xmm13, Address(tables, 0x30)); // shuffle
+  __ vpbroadcastd(xmm7, Address(tables, 0x50), Assembler::AVX_256bit);  // merge
+  __ vpbroadcastd(xmm6, Address(tables, 0x54), Assembler::AVX_256bit);  // merge mult
+
+  __ lea(tables, ExternalAddress(StubRoutines::x86::base64_AVX2_decode_LUT_tables_addr()));
+  __ shll(isURL, 4);
+  __ vmovdqu(xmm11, Address(tables, isURL, Address::times_1, 0x00));  // lut_lo
+  __ vmovdqu(xmm8, Address(tables, isURL, Address::times_1, 0x20)); // lut_roll
+  __ shrl(isURL, 6);  // restore isURL
+  __ vmovdqu(xmm9, Address(tables, 0x80));  // lut_hi
+  __ jmp(L_enterLoop);
+
+  __ align32();
+  __ bind(L_topLoop);
+  // Add in the offset value (roll) to get 6-bit out values
+  __ vpaddb(xmm0, xmm0, xmm2, Assembler::AVX_256bit);
+  // Merge and permute the output bits into appropriate output byte lanes
+  __ vpmaddubsw(xmm0, xmm0, xmm7, Assembler::AVX_256bit);
+  __ vpmaddwd(xmm0, xmm0, xmm6, Assembler::AVX_256bit);
+  __ vpshufb(xmm0, xmm0, xmm13, Assembler::AVX_256bit);
+  __ vpermd(xmm0, xmm12, xmm0, Assembler::AVX_256bit);
+  // Only use a wide store if another complete input vector remains.
+  // The final vector produces exactly 24 bytes.
+  __ subl(length, 0x20);
+  __ jcc(Assembler::less, L_storeLast);
+  __ vmovdqu(Address(dest, dp, Address::times_1, 0), xmm0);
+  __ addptr(source, 0x20);
+  __ addptr(dest, 0x18);
+
+  __ bind(L_enterLoop);
+
+  // Load in encoded string (32 bytes)
+  __ vmovdqu(xmm2, Address(source, start_offset, Address::times_1, 0x0));
+  // Extract the high nibble for indexing into the lut tables.  High 4 bits are don't care.
+  __ vpsrld(xmm1, xmm2, 0x4, Assembler::AVX_256bit);
+  __ vpand(xmm1, xmm4, xmm1, Assembler::AVX_256bit);
+  // Extract the low nibble. 5F/2F will isolate the low-order 4 bits.  High 4 bits are don't care.
+  __ vpand(xmm3, xmm2, xmm4, Assembler::AVX_256bit);
+  // Check for special-case (0x2F or 0x5F (URL))
+  __ vpcmpeqb(xmm0, xmm4, xmm2, Assembler::AVX_256bit);
+  // Get the bitset based on the low nibble.  vpshufb uses low-order 4 bits only.
+  __ vpshufb(xmm3, xmm11, xmm3, Assembler::AVX_256bit);
+  // Get the bit value of the high nibble
+  __ vpshufb(xmm5, xmm9, xmm1, Assembler::AVX_256bit);
+  // Make sure 2F / 5F shows as valid
+  __ vpandn(xmm3, xmm0, xmm3, Assembler::AVX_256bit);
+  // Make adjustment for roll index.  For non-URL, this is a no-op,
+  // for URL, this adjusts by -4.  This is to properly index the
+  // roll value for 2F / 5F.
+  __ vpand(xmm0, xmm0, xmm10, Assembler::AVX_256bit);
+  // If the and of the two is non-zero, we have an invalid input character
+  __ vptest(xmm3, xmm5);
+  // Extract the "roll" value - value to add to the input to get 6-bit out value
+  __ vpaddb(xmm0, xmm0, xmm1, Assembler::AVX_256bit); // Handle 2F / 5F
+  __ vpshufb(xmm0, xmm8, xmm0, Assembler::AVX_256bit);
+  __ jcc(Assembler::equal, L_topLoop);  // Fall through on error
+  __ jmp(L_tailProc);
+
+  __ bind(L_storeLast);
+  __ movdqu(Address(dest, dp, Address::times_1, 0), xmm0);
+  __ vextracti128(xmm0, xmm0, 1);
+  __ movq(Address(dest, dp, Address::times_1, 16), xmm0);
+  __ addptr(source, 0x20);
+  __ addptr(dest, 0x18);
+
+  __ bind(L_tailProc);
+
+  __ addl(length, 0x20);
+
+  __ vzeroupper();
+
+  // Use non-AVX code to decode 4-byte chunks into 3 bytes of output. r11
+  // holds the decoding table; r13 (tables), rdx (end offset) and r9 (isURL)
+  // are free by now.
+
+  const Register byte1 = r13;
+  const Register byte2 = r15;
+  const Register byte3 = rdx;
+  const Register byte4 = r9;
+
+  __ bind(L_lastChunk);
+
+  __ shrl(length, 2);    // Multiple of 4 bytes only - length is # 4-byte chunks
+  __ cmpl(length, 0);
+  __ jcc(Assembler::lessEqual, L_exit);
+
+  __ shll(isURL, 8);    // index into decode table based on isURL
+  __ lea(decode_table, ExternalAddress(StubRoutines::x86::base64_decoding_table_addr()));
+  __ addptr(decode_table, isURL);
+  __ jmp(L_bottomLoop);
+
+  __ align32();
+  __ bind(L_forceLoop);
+  __ shll(byte1, 18);
+  __ shll(byte2, 12);
+  __ shll(byte3, 6);
+  __ orl(byte1, byte2);
+  __ orl(byte1, byte3);
+  __ orl(byte1, byte4);
+
+  __ addptr(source, 4);
+
+  __ movb(Address(dest, dp, Address::times_1, 2), byte1);
+  __ shrl(byte1, 8);
+  __ movb(Address(dest, dp, Address::times_1, 1), byte1);
+  __ shrl(byte1, 8);
+  __ movb(Address(dest, dp, Address::times_1, 0), byte1);
+
+  __ addptr(dest, 3);
+  __ decrementl(length, 1);
+  __ jcc(Assembler::zero, L_exit);
+
+  __ bind(L_bottomLoop);
+  __ load_unsigned_byte(byte1, Address(source, start_offset, Address::times_1, 0x00));
+  __ load_unsigned_byte(byte2, Address(source, start_offset, Address::times_1, 0x01));
+  __ load_signed_byte(byte1, Address(decode_table, byte1));
+  __ load_signed_byte(byte2, Address(decode_table, byte2));
+  __ load_unsigned_byte(byte3, Address(source, start_offset, Address::times_1, 0x02));
+  __ load_unsigned_byte(byte4, Address(source, start_offset, Address::times_1, 0x03));
+  __ load_signed_byte(byte3, Address(decode_table, byte3));
+  __ load_signed_byte(byte4, Address(decode_table, byte4));
+
+  __ mov(rax, byte1);
+  __ orl(rax, byte2);
+  __ orl(rax, byte3);
+  __ orl(rax, byte4);
+  __ jcc(Assembler::positive, L_forceLoop);
+
+  __ bind(L_exit);
+  __ pop(rax);             // Get original dest value
+  __ subptr(dest, rax);      // Number of bytes converted
+  __ movptr(rax, dest);
+  __ pop(rbx);
+  __ pop(r15);
+  __ pop(r14);
+  __ pop(r13);
+  __ leave();
+  __ ret(0);
+
+  masm->flush();
+
+  RuntimeStub* stub = RuntimeStub::new_runtime_stub(
+      _base64_decode_stub, &buffer, (int)(__ pc() - start),
+      0 /* frame size */, nullptr /* oop maps */, false);
+  address entry = stub->entry_point();
+  _routine_entry[_base64_decode_stub] = entry;
+  _gc_leaf_routines.insert(entry);
+}

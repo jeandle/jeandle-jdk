@@ -1422,6 +1422,8 @@ nmethod* CompileBroker::compile_method(const methodHandle& method, int osr_bci,
   // some prerequisites that are compiler specific
   if (comp->is_c2() || comp->is_jvmci()) {
     method->constants()->resolve_string_constants(CHECK_AND_CLEAR_NONASYNC_NULL);
+  }
+  if (comp->is_c2() || comp->is_jvmci() || comp->is_jeandle()) {
     // Resolve all classes seen in the signature of the method
     // we are compiling.
     Method::load_signature_classes(method, CHECK_AND_CLEAR_NONASYNC_NULL);
