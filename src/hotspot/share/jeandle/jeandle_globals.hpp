@@ -91,6 +91,9 @@
   product(bool, JeandleEliminateLocks, true,                                \
           "Enable lock elimination in Jeandle PEA")                         \
                                                                             \
+  product(bool, JeandleLockCoarsening, true,                                \
+          "Coarsen adjacent balanced monitor regions in Jeandle")           \
+                                                                            \
   product(uintx, JeandleLoopStripMiningIter, 0,                             \
           "Number of iterations between safepoint polls in strip-mined "    \
           "counted loops (0 disables strip mining).")                       \
