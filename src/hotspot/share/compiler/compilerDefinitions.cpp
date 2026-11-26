@@ -657,6 +657,9 @@ void CompilerConfig::ergo_initialize() {
     if (!EliminateLocks && JeandleEliminateLocks) {
       FLAG_SET_ERGO(JeandleEliminateLocks, false);
     }
+    if (!EliminateLocks && JeandleLockCoarsening) {
+      FLAG_SET_ERGO(JeandleLockCoarsening, false);
+    }
 #endif // COMPILER2
 
 #ifndef PRODUCT
