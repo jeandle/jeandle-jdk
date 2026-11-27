@@ -20,7 +20,6 @@
 /*
  * @test
  * @summary Filter Jeandle IR dumps by the Java root method
- * @bug 680
  * @library /test/lib /
  * @run driver compiler.jeandle.TestJeandleDumpIRFilter
  */
