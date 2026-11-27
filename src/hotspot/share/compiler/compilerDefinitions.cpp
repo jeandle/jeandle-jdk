@@ -651,6 +651,9 @@ void CompilerConfig::ergo_initialize() {
       FLAG_SET_DEFAULT(InlineSmallCode, 1500);
     }
 #ifdef COMPILER2
+    if (FLAG_IS_DEFAULT(UseCharacterCompareIntrinsics)) {
+      FLAG_SET_DEFAULT(UseCharacterCompareIntrinsics, true);
+    }
     if (!DoEscapeAnalysis && JeandleDoPEA) {
       FLAG_SET_ERGO(JeandleDoPEA, false);
     }

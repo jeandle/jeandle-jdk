@@ -297,8 +297,20 @@ void JeandleRuntimeRoutine::generate_zero_heap_words_stub() {
 
 // C ABI: (UTF16 source, Latin1 destination, i32 count) -> count or zero.
 void JeandleRuntimeRoutine::generate_string_compress_stub() {
+  generate_character_encoding_stub(_string_compress_stub, false, false);
+}
+
+void JeandleRuntimeRoutine::generate_encode_iso_array_stub() {
+  generate_character_encoding_stub(_encode_iso_array_stub, false, true);
+}
+
+void JeandleRuntimeRoutine::generate_encode_ascii_array_stub() {
+  generate_character_encoding_stub(_encode_ascii_array_stub, true, true);
+}
+
+void JeandleRuntimeRoutine::generate_character_encoding_stub(const char* name, bool ascii, bool return_prefix) {
   ResourceMark rm;
-  CodeBuffer buffer(_string_compress_stub, 1024, 64);
+  CodeBuffer buffer(name, 1024, 64);
   MacroAssembler* masm = new MacroAssembler(&buffer);
   const Register src = c_rarg0;
   const Register dst = c_rarg1;
@@ -312,7 +324,7 @@ void JeandleRuntimeRoutine::generate_string_compress_stub() {
   __ beqz(count, success);
   if (UseRVV) {
     Label vector_loop;
-    __ mv(t1, 255);
+    __ mv(t1, ascii ? 127 : 255);
     __ bind(vector_loop);
     __ vsetvli(t0, count, Assembler::e16, Assembler::m2);
     __ vle16_v(v2, src);
@@ -323,14 +335,22 @@ void JeandleRuntimeRoutine::generate_string_compress_stub() {
     __ vsetvli(t0, count, Assembler::e8);
     __ vncvt_x_x_w(v1, v2, Assembler::v0_t);
     __ vse8_v(v1, dst, Assembler::v0_t);
-    __ bgez(t2, failure);
+    if (return_prefix) {
+      Label valid;
+      __ bltz(t2, valid);
+      __ sub(count, count, t2);
+      __ j(failure);
+      __ bind(valid);
+    } else {
+      __ bgez(t2, failure);
+    }
     __ sub(count, count, t0);
     __ add(dst, dst, t0);
     __ shadd(src, t0, src, t2, 1);
     __ bnez(count, vector_loop);
   } else {
     Label scalar_loop;
-    __ mv(t1, 255);
+    __ mv(t1, ascii ? 127 : 255);
     __ bind(scalar_loop);
     __ lhu(t0, Address(src));
     __ bltu(t1, t0, failure);
@@ -344,16 +364,70 @@ void JeandleRuntimeRoutine::generate_string_compress_stub() {
   __ mv(c_rarg0, original_count);
   __ j(done);
   __ bind(failure);
-  __ mv(c_rarg0, zr);
+  if (return_prefix) {
+    __ sub(c_rarg0, original_count, count);
+  } else {
+    __ mv(c_rarg0, zr);
+  }
   __ bind(done);
   __ ret();
   masm->flush();
 
   RuntimeStub* stub = RuntimeStub::new_runtime_stub(
-      _string_compress_stub, &buffer, (int)(__ pc() - start),
+      name, &buffer, (int)(__ pc() - start),
       0 /* frame size */, nullptr /* oop maps */, false);
   address entry = stub->entry_point();
-  _routine_entry[_string_compress_stub] = entry;
+  _routine_entry[name] = entry;
+  _gc_leaf_routines.insert(entry);
+}
+
+void JeandleRuntimeRoutine::generate_count_positives_stub() {
+  ResourceMark rm;
+  CodeBuffer buffer(_count_positives_stub, 1024, 64);
+  MacroAssembler* masm = new MacroAssembler(&buffer);
+  const Register src = c_rarg0;
+  const Register count = c_rarg1;
+  address start = __ pc();
+  Label negative, done;
+  __ zero_extend(count, count, 32);
+  __ mv(t3, zr);
+  __ beqz(count, done);
+  if (UseRVV) {
+    Label loop;
+    __ bind(loop);
+    __ vsetvli(t0, count, Assembler::e8);
+    __ vle8_v(v1, src);
+    __ vmslt_vx(v0, v1, zr);
+    __ vfirst_m(t1, v0);
+    __ bgez(t1, negative);
+    __ add(t3, t3, t0);
+    __ add(src, src, t0);
+    __ sub(count, count, t0);
+    __ bnez(count, loop);
+  } else {
+    Label loop;
+    __ bind(loop);
+    __ lb(t0, Address(src));
+    __ bltz(t0, done);
+    __ addi(t3, t3, 1);
+    __ addi(src, src, 1);
+    __ addi(count, count, -1);
+    __ bnez(count, loop);
+  }
+  __ bind(done);
+  __ mv(c_rarg0, t3);
+  __ ret();
+  if (UseRVV) {
+    __ bind(negative);
+    __ add(t3, t3, t1);
+    __ j(done);
+  }
+  masm->flush();
+  RuntimeStub* stub = RuntimeStub::new_runtime_stub(
+      _count_positives_stub, &buffer, (int)(__ pc() - start),
+      0 /* frame size */, nullptr /* oop maps */, false);
+  address entry = stub->entry_point();
+  _routine_entry[_count_positives_stub] = entry;
   _gc_leaf_routines.insert(entry);
 }
 

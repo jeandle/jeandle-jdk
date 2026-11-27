@@ -320,6 +320,93 @@ void JeandleRuntimeRoutine::generate_string_compress_stub() {
   _gc_leaf_routines.insert(entry);
 }
 
+void JeandleRuntimeRoutine::generate_encode_iso_array_stub() {
+  generate_character_encoding_stub(_encode_iso_array_stub, false, true);
+}
+
+void JeandleRuntimeRoutine::generate_encode_ascii_array_stub() {
+  generate_character_encoding_stub(_encode_ascii_array_stub, true, true);
+}
+
+void JeandleRuntimeRoutine::generate_character_encoding_stub(const char* name, bool ascii, bool return_prefix) {
+  ResourceMark rm;
+  CodeBuffer buffer(name, 2048, 64);
+  MacroAssembler* masm = new MacroAssembler(&buffer);
+  address start = __ pc();
+  __ uxtw(r3, c_rarg2);
+  __ mov(r2, c_rarg0);
+  __ encode_iso_array(r2, c_rarg1, r3, r0, ascii, v0, v1, v2, v3, v4, v5);
+  if (!return_prefix) {
+    __ cmpw(r0, r3);
+    __ cselw(r0, r0, zr, Assembler::EQ);
+  }
+  __ ret(lr);
+  masm->flush();
+  RuntimeStub* stub = RuntimeStub::new_runtime_stub(
+      name, &buffer, (int)(__ pc() - start),
+      0 /* frame size */, nullptr /* oop maps */, false);
+  address entry = stub->entry_point();
+  _routine_entry[name] = entry;
+  _gc_leaf_routines.insert(entry);
+}
+
+void JeandleRuntimeRoutine::generate_count_positives_stub() {
+  ResourceMark rm;
+  CodeBuffer buffer(_count_positives_stub, 1024, 64);
+  MacroAssembler* masm = new MacroAssembler(&buffer);
+  address start = __ pc();
+  Label vectors, scalar, loop, dirty, done;
+  __ uxtw(c_rarg1, c_rarg1);
+  __ movw(r2, 0);
+  if (MaxVectorSize >= 16) {
+    __ bind(vectors);
+    __ cmpw(c_rarg1, 16);
+    __ br(Assembler::LT, scalar);
+    __ ld1(v0, __ T16B, Address(__ post(c_rarg0, 16)));
+    __ umaxv(v1, __ T16B, v0);
+    __ umov(r3, v1, __ B, 0);
+    __ tbnz(r3, 7, dirty);
+    __ addw(r2, r2, 16);
+    __ subw(c_rarg1, c_rarg1, 16);
+    __ b(vectors);
+  }
+  __ bind(scalar);
+  __ cbzw(c_rarg1, done);
+  __ bind(loop);
+  __ ldrb(r3, Address(__ post(c_rarg0, 1)));
+  __ tbnz(r3, 7, done);
+  __ addw(r2, r2, 1);
+  __ subsw(c_rarg1, c_rarg1, 1);
+  __ br(Assembler::NE, loop);
+  __ bind(done);
+  __ movw(r0, r2);
+  __ ret(lr);
+  if (MaxVectorSize >= 16) {
+    Label found;
+    __ bind(dirty);
+    // Locate the first sign bit in the loaded bytes without rereading memory.
+    __ umov(r3, v0, __ D, 0);
+    __ andr(r3, r3, 0x8080808080808080);
+    __ cbnz(r3, found);
+    __ umov(r3, v0, __ D, 1);
+    __ andr(r3, r3, 0x8080808080808080);
+    __ addw(r2, r2, 8);
+    __ bind(found);
+    __ rbit(r3, r3);
+    __ clz(r3, r3);
+    __ lsr(r3, r3, 3);
+    __ addw(r2, r2, r3);
+    __ b(done);
+  }
+  masm->flush();
+  RuntimeStub* stub = RuntimeStub::new_runtime_stub(
+      _count_positives_stub, &buffer, (int)(__ pc() - start),
+      0 /* frame size */, nullptr /* oop maps */, false);
+  address entry = stub->entry_point();
+  _routine_entry[_count_positives_stub] = entry;
+  _gc_leaf_routines.insert(entry);
+}
+
 // C ABI: (Latin1 source, UTF16 destination, i32 count) -> void.
 // Keep the entire operation in this leaf rather than calling the large-copy
 // helper used by byte_array_inflate. All vector stores use halfword elements.

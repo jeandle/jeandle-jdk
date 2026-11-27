@@ -838,7 +838,10 @@ def(StubRoutines_generic_arraycopy,                                             
   def(deopt_blob)                          \
   def(zero_heap_words_stub)                \
   def(string_compress_stub)               \
-  def(string_inflate_stub)
+  def(string_inflate_stub)                \
+  def(encode_iso_array_stub)              \
+  def(encode_ascii_array_stub)            \
+  def(count_positives_stub)
 
 
 // JeandleRuntimeRoutine contains C/C++/Assembly routines and Hotspot routines that can be called from Jeandle compiled code.
@@ -975,6 +978,8 @@ class JeandleRuntimeRoutine : public AllStatic {
   static jint instanceof_unloaded_or_null(Method* method, int cp_index, Klass* ex_klass, JavaThread* current);
 
   // Assembly routine implementations:
+
+  static void generate_character_encoding_stub(const char* name, bool ascii, bool return_prefix);
 
 #define DEF_GENERATE_ASSEMBLY_ROUTINE(name) \
   static void generate_##name();

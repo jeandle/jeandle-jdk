@@ -1137,6 +1137,17 @@ void JeandleAbstractInterpreter::interpret() {
 
   // Create branch from the entry block.
   _ir_builder.SetInsertPoint(_block_builder->entry_block()->tail_llvm_block());
+  if (_parse_context.is_inlinee()) {
+    // LLVM may resolve a virtual target only after parsing its caller. At
+    // this boundary the concrete method and its entry locals are available.
+    JeandleIntrinsicLowering lowering(this);
+    if (lowering.lower_inlinee() && log_is_enabled(Debug, jeandle)) {
+      ResourceMark rm;
+      stringStream ss;
+      _method->print_name(&ss);
+      log_debug(jeandle)("Method `%s` is parsed as intrinsic inlinee", ss.as_string());
+    }
+  }
   _ir_builder.CreateBr(current->header_llvm_block());
 
   bool merged = current->merge_VM_state_from(_block_builder->entry_block()->VM_state(),
@@ -2315,9 +2326,7 @@ llvm::InvokeInst* JeandleAbstractInterpreter::emit_java_call(ciMethod* target,
   return invoke;
 }
 
-bool JeandleAbstractInterpreter::try_lower_intrinsic(const ciMethod* target) {
-  const vmIntrinsics::ID id = target->intrinsic_id();
-
+bool JeandleAbstractInterpreter::is_intrinsic_enabled(vmIntrinsics::ID id) {
   // 1) Is this an intrinsic Jeandle can lower?
   if (!JeandleIntrinsicLowering::is_supported(id)) return false;
 
@@ -2329,6 +2338,15 @@ bool JeandleAbstractInterpreter::try_lower_intrinsic(const ciMethod* target) {
         return false;
       }
     }
+  }
+
+  return true;
+}
+
+bool JeandleAbstractInterpreter::try_lower_intrinsic(const ciMethod* target) {
+  const vmIntrinsics::ID id = target->intrinsic_id();
+  if (!is_intrinsic_enabled(id)) {
+    return false;
   }
 
   // 3) Lower. Trap throttling is intrinsic-specific: a lowering may decline,

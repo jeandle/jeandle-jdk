@@ -412,6 +412,7 @@ class JeandleAbstractInterpreter : public StackObj {
   void lookup_switch();
   void table_switch();
   void invoke();
+  static bool is_intrinsic_enabled(vmIntrinsics::ID id);
   bool try_lower_intrinsic(const ciMethod* target);
 
   // Emit a Java call with pre-built argument values. Does NOT touch the JVM
