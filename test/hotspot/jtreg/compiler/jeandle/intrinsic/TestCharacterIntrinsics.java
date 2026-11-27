@@ -20,9 +20,11 @@
 /*
  * @test
  * @summary Character and encoding intrinsic paths, prefix writes and Java fallback
- * @library /test/lib
+ * @library /test/lib /
+ * @build compiler.jeandle.intrinsic.CharacterIntrinsicTestSupport
  * @compile --patch-module java.base=${test.src} java/lang/JeandleCharacterIntrinsicCaller.java
  * @run main/othervm/timeout=600 compiler.jeandle.intrinsic.TestCharacterIntrinsics
+ * @run main/othervm/timeout=600 -Dtest.disableEncodingIntrinsics=true compiler.jeandle.intrinsic.TestCharacterIntrinsics
  */
 package compiler.jeandle.intrinsic;
 
@@ -65,6 +67,7 @@ public class TestCharacterIntrinsics {
 
     public static void main(String[] args) throws Throwable {
         if (args.length != 0 && (args[0].equals("child") || args[0].equals("hot-alias"))) {
+            CharacterIntrinsicTestSupport.reportEncodingSupport();
             exactScan = args.length > 1 && args[1].equals("exact-scan");
             Class<?> caller = Class.forName(CALLER);
             for (Method method : caller.getMethods()) METHODS.put(method.getName(), method);
@@ -90,6 +93,7 @@ public class TestCharacterIntrinsics {
             output.shouldHaveExitValue(0).shouldContain(expected);
             String xml = Files.readString(log);
             String text = output.getOutput();
+            boolean encodingEnabled = CharacterIntrinsicTestSupport.encodingEnabled(output);
             List<String> missing = new ArrayList<>();
             for (String[] target : TARGETS) {
                 require(xml.lines().anyMatch(line -> line.startsWith("<nmethod ")
@@ -98,9 +102,11 @@ public class TestCharacterIntrinsics {
                         "missing compiled wrapper " + target[0] + "; " + log);
                 boolean parsed = text.lines().anyMatch(line -> line.contains(target[1] + "(")
                         && line.contains("is parsed as intrinsic"));
-                if (!List.of("disabled", "flag-off", "method-off").contains(mode) && !(mode.equals("encode-off") && target[0].startsWith("encode")) && !parsed) missing.add(target[2]);
-                if (mode.equals("disabled") || mode.equals("method-off") || (mode.equals("flag-off") && target[0].startsWith("is"))) require(!parsed, "disabled intrinsic parsed: " + target[2]);
-                if (mode.equals("encode-off") && target[0].startsWith("encode")) require(!parsed, "encoding flag ignored: " + target[2]);
+                boolean enabled = !List.of("disabled", "method-off").contains(mode)
+                        && !(mode.equals("flag-off") && target[0].startsWith("is"))
+                        && (!target[0].startsWith("encode") || encodingEnabled);
+                if (enabled && !parsed) missing.add(target[2]);
+                if (!enabled) require(!parsed, "disabled intrinsic parsed: " + target[2]);
             }
             require(xml.lines().anyMatch(line -> line.startsWith("<nmethod ")
                     && line.contains("compiler='jeandle'")
@@ -144,6 +150,7 @@ public class TestCharacterIntrinsics {
         OutputAnalyzer output = launch("hot-alias", log, dump);
         Files.writeString(Path.of(log + ".stdout"), output.getOutput());
         output.shouldHaveExitValue(0).shouldContain("Hot alias PASSED");
+        boolean encodingEnabled = CharacterIntrinsicTestSupport.encodingEnabled(output);
         String xml = Files.readString(log);
         var traps = Pattern.compile("<uncommon_trap [^>]*reason='intrinsic_or_type_checked_inlining'[^>]*>.*?</uncommon_trap>",
                 Pattern.DOTALL).matcher(xml);
@@ -151,11 +158,12 @@ public class TestCharacterIntrinsics {
         while (traps.find()) {
             if (traps.group().contains("method='" + CALLER + " encodeISOBytes ")) count++;
         }
-        require(count > 0 && count <= 8, "hot alias kept deoptimizing: " + count + "; " + log);
+        require(encodingEnabled ? count > 0 && count <= 8 : count == 0,
+                "unexpected hot alias traps: " + count + "; " + log);
         require(xml.lines().filter(line -> line.startsWith("<nmethod ")
                 && line.contains("compiler='jeandle'")
-                && line.contains("method='" + CALLER + " encodeISOBytes ")).count() >= 2,
-                "hot alias did not recompile the guarded caller: " + log);
+                && line.contains("method='" + CALLER + " encodeISOBytes ")).count() >= (encodingEnabled ? 2 : 1),
+                "missing hot alias compilation/recompilation: " + log);
         System.out.println("hot-alias: " + log + "; traps=" + count + "; IR: " + dump);
     }
 
@@ -185,6 +193,7 @@ public class TestCharacterIntrinsics {
                 options.add("-XX:CompileCommand=DisableIntrinsic," + CALLER + "::*," + ids);
             }
         }
+        CharacterIntrinsicTestSupport.configureChild(options);
         options.addAll(List.of(TestCharacterIntrinsics.class.getName(), mode.equals("hot-alias") ? "hot-alias" : "child",
                 List.of("enabled", "sse", "scalar", "pea-off", "flag-off", "encode-off").contains(mode) ? "exact-scan" : "contract-scan"));
         return ProcessTools.executeCommand(ProcessTools.createLimitedTestJavaProcessBuilder(options));

@@ -22,9 +22,11 @@
  * @summary Failing encoder profiles retain bytecode specialization and recover on profile changes
  * @library /test/lib /
  * @build jdk.test.whitebox.WhiteBox
+ * @build compiler.jeandle.intrinsic.CharacterIntrinsicTestSupport
  * @compile --patch-module java.base=${test.src} java/lang/JeandleCharacterIntrinsicCaller.java
  * @run driver jdk.test.lib.helpers.ClassFileInstaller jdk.test.whitebox.WhiteBox
  * @run main/othervm/timeout=360 -XX:-UseJeandleCompiler compiler.jeandle.intrinsic.TestCharacterEncodingProfile
+ * @run main/othervm/timeout=360 -XX:-UseJeandleCompiler -Dtest.disableEncodingIntrinsics=true compiler.jeandle.intrinsic.TestCharacterEncodingProfile
  */
 package compiler.jeandle.intrinsic;
 
@@ -82,11 +84,13 @@ public class TestCharacterEncodingProfile {
                     "-Xlog:jeandle=debug", "-XX:CompileCommand=compileonly," + CLASS + "::encode*",
                     "-XX:CompileCommand=inline," + BRIDGE + "::*"));
             if (mode.equals("no-profile")) flags.add("-XX:-JeandleUseProfile");
+            CharacterIntrinsicTestSupport.configureChild(flags);
             flags.addAll(List.of(CLASS, mode, dumps.toString()));
             OutputAnalyzer output = ProcessTools.executeCommand(
                     ProcessTools.createLimitedTestJavaProcessBuilder(flags));
             Files.writeString(dumps.resolve("stdout.log"), output.getOutput());
             output.shouldHaveExitValue(0).shouldContain("ENCODING PROFILE PASSED " + mode);
+            boolean encodingEnabled = CharacterIntrinsicTestSupport.encodingEnabled(output);
             String xml = Files.readString(log);
             for (String name : List.of("encodeBytes", "encodeChars", "encodeASCII")) {
                 if (!xml.lines().anyMatch(line -> line.startsWith("<nmethod ")
@@ -104,7 +108,7 @@ public class TestCharacterEncodingProfile {
                     encoderTraps++;
                 }
             }
-            if (encoderTraps > 8 || mode.equals("dense") && encoderTraps != 3) {
+            if (encoderTraps > 8 || encodingEnabled && mode.equals("dense") && encoderTraps != 3) {
                 throw new AssertionError("Unexpected encoder profile traps: " + encoderTraps + "; " + dumps);
             }
             System.out.println(mode + " evidence: " + dumps);
@@ -112,6 +116,7 @@ public class TestCharacterEncodingProfile {
     }
 
     private static void exercise(String mode, Path dumps) throws Throwable {
+        boolean encodingEnabled = CharacterIntrinsicTestSupport.reportEncodingSupport();
         byte[] dst = new byte[16];
         if (mode.equals("shared")) {
             char[] chars = new char[16];
@@ -148,7 +153,7 @@ public class TestCharacterEncodingProfile {
                 String body = ir.substring(begin, ir.indexOf("\n}", begin));
                 boolean stub = body.contains("@encode_iso_array_stub(")
                         || body.contains("@encode_ascii_array_stub(");
-                if (stub == mode.equals("dense")) {
+                if (stub != (encodingEnabled && !mode.equals("dense"))) {
                     throw new AssertionError("Wrong encoding specialization for " + mode + ": " + file);
                 }
             }

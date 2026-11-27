@@ -20,9 +20,11 @@
 /*
  * @test
  * @summary Character encoders read indivisible char elements under concurrent mutation
- * @library /test/lib
+ * @library /test/lib /
+ * @build compiler.jeandle.intrinsic.CharacterIntrinsicTestSupport
  * @compile --patch-module java.base=${test.src} java/lang/JeandleCharacterIntrinsicCaller.java
  * @run main/othervm/timeout=180 compiler.jeandle.intrinsic.TestCharacterMemory
+ * @run main/othervm/timeout=180 -Dtest.disableEncodingIntrinsics=true compiler.jeandle.intrinsic.TestCharacterMemory
  */
 package compiler.jeandle.intrinsic;
 
@@ -30,6 +32,7 @@ import java.lang.reflect.Method;
 import java.nio.ByteOrder;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
 import java.util.regex.Pattern;
@@ -40,6 +43,7 @@ public class TestCharacterMemory {
 
     public static void main(String[] args) throws Exception {
         if (args.length != 0) {
+            CharacterIntrinsicTestSupport.reportEncodingSupport();
             Class<?> caller = Class.forName("java.lang.JeandleCharacterIntrinsicCaller");
             Method iso = caller.getMethod("encodeISO", char[].class, int.class,
                     byte[].class, int.class, int.class);
@@ -100,15 +104,18 @@ public class TestCharacterMemory {
         }
         Path log = Files.createTempFile("character-memory", ".xml");
         Path dump = Files.createTempDirectory("character-memory-ir");
-        var output = ProcessTools.executeTestJava(
+        var options = new ArrayList<>(List.of(
                 "--patch-module=java.base=" + System.getProperty("test.class.path"),
                 "-Xbatch", "-XX:-TieredCompilation", "-XX:CompileThreshold=100",
                 "-XX:+UseJeandleCompiler", "-XX:+UnlockDiagnosticVMOptions",
                 "-XX:+LogCompilation", "-XX:LogFile=" + log,
                 "-XX:+JeandleDumpIR", "-XX:JeandleDumpDirectory=" + dump,
                 "-XX:CompileCommand=compileonly,java.lang.JeandleCharacterIntrinsicCaller::*",
-                TestCharacterMemory.class.getName(), "child");
+                TestCharacterMemory.class.getName(), "child"));
+        CharacterIntrinsicTestSupport.configureChild(options);
+        var output = ProcessTools.executeTestJava(options.toArray(String[]::new));
         output.shouldHaveExitValue(0).shouldContain("Character memory PASSED");
+        boolean encodingEnabled = CharacterIntrinsicTestSupport.encodingEnabled(output);
         String xml = Files.readString(log);
         var traps = Pattern.compile("<uncommon_trap [^>]*reason='intrinsic_or_type_checked_inlining'[^>]*>.*?</uncommon_trap>",
                 Pattern.DOTALL).matcher(xml);
@@ -132,6 +139,13 @@ public class TestCharacterMemory {
                     int begin = ir.indexOf("define hotspotcc");
                     int end = ir.indexOf("\n}", begin);
                     String body = ir.substring(begin, end);
+                    if (!encodingEnabled) {
+                        if (body.contains("@" + routine + "(")) {
+                            throw new AssertionError("disabled encoder reached native leaf: " + file);
+                        }
+                        found = true;
+                        continue;
+                    }
                     if (!body.contains("@" + routine + "(")) continue;
                     if (!body.contains("load atomic i16")
                             || !body.matches("(?s).*icmp (?:ugt|ult) i16 .*")) {
@@ -144,7 +158,7 @@ public class TestCharacterMemory {
                     found = true;
                 }
             }
-            if (!found) throw new AssertionError("missing opaque native leaf " + routine);
+            if (!found) throw new AssertionError("missing encoding path for " + method);
         }
         System.out.println("Character memory evidence: " + log + "; " + dump);
     }
