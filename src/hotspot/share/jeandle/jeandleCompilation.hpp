@@ -315,6 +315,7 @@ class JeandleCompilation : public StackObj {
   llvm::DataLayout* _data_layout;
   ciEnv* _env;
   ciMethod* _method;
+  bool _dump_ir_filter_match;
   const std::string _name;
   int _entry_bci;
   std::unique_ptr<llvm::LLVMContext> _context;

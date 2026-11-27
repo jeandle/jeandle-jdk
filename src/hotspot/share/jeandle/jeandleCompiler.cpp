@@ -36,8 +36,12 @@
 #include "jeandle/templatemodule/jeandleRuntimeDefinedJavaOps.hpp"
 
 #include "jeandle/__hotspotHeadersBegin__.hpp"
+#include "compiler/methodMatcher.hpp"
 #include "runtime/arguments.hpp"
 #include "runtime/globals_extension.hpp"
+#include "runtime/handles.inline.hpp"
+#include "runtime/os.hpp"
+#include "runtime/thread.hpp"
 
 void compiler_stubs_init(bool in_compiler_thread);
 
@@ -61,6 +65,8 @@ void install_jeandle_llvm_fatal_error_handler() {
 } // anonymous namespace
 
 THREAD_LOCAL llvm::TargetMachine* JeandleCompiler::_target_machine = nullptr;
+BasicMatcher* JeandleCompiler::_dump_ir_filter = nullptr;
+bool JeandleCompiler::_dump_ir_filter_valid = true;
 
 bool JeandleCompiler::initialize_target_machine() {
   llvm::Triple target_triple = llvm::Triple(llvm::sys::getProcessTriple());
@@ -107,6 +113,8 @@ void JeandleCompiler::initialize() {
 
   // Per JeandleCompiler initialization:
   if (should_perform_init()) {
+    initialize_dump_ir_filter();
+
     llvm::DataLayout target_data_layout = _target_machine->createDataLayout();
     std::string data_layout_string = target_data_layout.getStringRepresentation();
     if (UseCompressedOops) {
@@ -144,6 +152,38 @@ void JeandleCompiler::initialize() {
     JeandleVMCallback::register_callbacks();
     set_state(initialized);
   }
+}
+
+void JeandleCompiler::initialize_dump_ir_filter() {
+  if (JeandleDumpIRFilter == nullptr || JeandleDumpIRFilter[0] == '\0') {
+    return;
+  }
+
+  // BasicMatcher canonicalizes its input in place and retains only Symbols.
+  char* pattern = os::strdup_check_oom(JeandleDumpIRFilter, mtCompiler);
+  const char* error_msg = nullptr;
+  _dump_ir_filter = BasicMatcher::parse_method_pattern(pattern, error_msg, false);
+  os::free(pattern);
+
+  if (_dump_ir_filter == nullptr) {
+    assert(error_msg != nullptr, "invalid method pattern must have an error message");
+    _dump_ir_filter_valid = false;
+    warning("Invalid JeandleDumpIRFilter pattern '%s': %s; Java method IR dumping is disabled",
+            JeandleDumpIRFilter, error_msg);
+  }
+}
+
+bool JeandleCompiler::dump_ir_filter_accepts(ciMethod* method) {
+  assert(method != nullptr, "IR dump filter only applies to Java root methods");
+  if (!_dump_ir_filter_valid) {
+    return false;
+  }
+  if (_dump_ir_filter == nullptr) {
+    return true;
+  }
+
+  methodHandle handle(Thread::current(), method->get_Method());
+  return _dump_ir_filter->match(handle);
 }
 
 void JeandleCompiler::compile_method(ciEnv* env, ciMethod* target, int entry_bci, bool install_code, DirectiveSet* directive) {
